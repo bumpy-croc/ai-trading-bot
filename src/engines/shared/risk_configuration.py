@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import DEFAULT_BREAKEVEN_BUFFER, DEFAULT_BREAKEVEN_THRESHOLD
+
 if TYPE_CHECKING:
     from src.position_management.dynamic_risk import DynamicRiskConfig
     from src.position_management.time_exits import TimeExitPolicy
@@ -142,25 +144,32 @@ def build_trailing_stop_policy(
         )
 
         if activation and (dist_pct is not None or atr_mult is not None or params_has_distance):
-            return TrailingStopPolicy(
-                activation_threshold=float(activation),
-                trailing_distance_pct=(
-                    float(dist_pct)
-                    if dist_pct is not None
-                    else (
-                        float(params.trailing_distance_pct)
-                        if params and params.trailing_distance_pct is not None
-                        else None
-                    )
-                ),
-                atr_multiplier=float(atr_mult) if atr_mult is not None else None,
-                breakeven_threshold=(
-                    float(breakeven_threshold) if breakeven_threshold is not None else 0.02
-                ),
-                breakeven_buffer=(
-                    float(breakeven_buffer) if breakeven_buffer is not None else 0.001
-                ),
-            )
+            try:
+                return TrailingStopPolicy(
+                    activation_threshold=float(activation),
+                    trailing_distance_pct=(
+                        float(dist_pct)
+                        if dist_pct is not None
+                        else (
+                            float(params.trailing_distance_pct)
+                            if params and params.trailing_distance_pct is not None
+                            else None
+                        )
+                    ),
+                    atr_multiplier=float(atr_mult) if atr_mult is not None else None,
+                    breakeven_threshold=(
+                        float(breakeven_threshold) if breakeven_threshold is not None else DEFAULT_BREAKEVEN_THRESHOLD
+                    ),
+                    breakeven_buffer=(
+                        float(breakeven_buffer) if breakeven_buffer is not None else DEFAULT_BREAKEVEN_BUFFER
+                    ),
+                )
+            except (TypeError, ValueError) as e:
+                logger.warning(
+                    "Failed to build TrailingStopPolicy due to invalid configuration values: %s",
+                    e,
+                )
+                return None
 
     return None
 
@@ -209,11 +218,17 @@ def build_time_exit_policy(
         exit_days = time_cfg.get("exit_days")
 
         if max_holding is not None:
-            return TimeExitPolicy(
-                max_holding_hours=int(max_holding),
-                exit_time=exit_time_str,
-                exit_days=exit_days,
-            )
+            try:
+                return TimeExitPolicy(
+                    max_holding_hours=int(max_holding),
+                    exit_time=exit_time_str,
+                    exit_days=exit_days,
+                )
+            except (TypeError, ValueError) as e:
+                logger.warning(
+                    "Failed to build TimeExitPolicy due to invalid max_holding_hours: %s", e
+                )
+                return None
 
     return None
 

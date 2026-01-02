@@ -81,7 +81,7 @@ class MockDataProvider(DataProvider):
         if self.data is None:
             self._ensure_data(start=start, end=end, timeframe=timeframe)
         # Ensure coverage for the requested range
-        if self.data is not None:
+        if self.data is not None and len(self.data) > 0:
             data_start, data_end = self.data.index.min(), self.data.index.max()
             if start < data_start or (end and end > data_end):
                 self._ensure_data(start=start, end=end, timeframe=timeframe)

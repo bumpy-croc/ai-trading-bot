@@ -197,6 +197,18 @@ class TestPnLCalculationParity:
         )
         live_engine.data_provider.get_current_price = Mock(return_value=exit_price)
 
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
+
         balance_before_entry = live_engine.current_balance
         # Execute entry via modular handler API
         live_engine._execute_entry(
@@ -275,6 +287,18 @@ class TestPnLCalculationParity:
         )
         live_engine.data_provider.get_current_price = Mock(return_value=exit_price)
 
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
+
         # Execute entry via modular handler API
         live_engine._execute_entry(
             symbol="BTCUSDT",
@@ -334,6 +358,18 @@ class TestPnLCalculationParity:
             resume_from_last_balance=False,
         )
         live_engine.data_provider.get_current_price = Mock(return_value=exit_price)
+
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
 
         # Execute entry via modular handler API
         live_engine._execute_entry(
@@ -515,6 +551,18 @@ class TestMultipleTradesParity:
         )
         live_engine.data_provider.get_current_price = Mock(return_value=100.0)
 
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
+
         # Trade 1: Long 100 -> 105 (+5%)
         live_engine._execute_entry(
             symbol="BTCUSDT",
@@ -588,6 +636,18 @@ class TestMultipleTradesParity:
             resume_from_last_balance=False,
         )
         live_engine.data_provider.get_current_price = Mock(return_value=100.0)
+
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
 
         # Trade 1: Win (+5%)
         live_engine._execute_entry(
@@ -792,6 +852,18 @@ class TestPositionSizingParity:
             fee_rate=0.0,
             slippage_rate=0.0,
             resume_from_last_balance=False,
+        )
+
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
         )
 
         # Try to open 50% position via _execute_entry - should be capped to 10%

@@ -14,6 +14,27 @@ import os
 import sys
 
 
+def _is_system_message(text: str) -> bool:
+    """Check if a message is system-generated and should be skipped."""
+    if not text:
+        return True
+
+    # Skip caveat messages
+    if text.startswith("Caveat:"):
+        return True
+
+    # Skip messages that are only bash tags (input/output from shell commands)
+    stripped = text.strip()
+    if stripped.startswith("<bash-") and stripped.endswith(">"):
+        return True
+
+    # Skip messages that are just bash output tags
+    if stripped.startswith("<bash-stdout>") or stripped.startswith("<bash-stderr>"):
+        return True
+
+    return False
+
+
 def parse_transcript(transcript_path: str) -> tuple[str | None, str | None]:
     """
     Parse transcript to get initial user prompt and last assistant message.
@@ -36,30 +57,46 @@ def parse_transcript(transcript_path: str) -> tuple[str | None, str | None]:
                     entry_type = entry.get("type")
 
                     # Capture first user message as initial prompt
-                    if entry_type == "human" and initial_prompt is None:
+                    # Handle both "human" (old format) and "user" (current format)
+                    if entry_type in ("human", "user") and initial_prompt is None:
                         message = entry.get("message", {})
                         content = message.get("content", [])
-                        text_parts = []
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                text_parts.append(part.get("text", ""))
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        if text_parts:
-                            initial_prompt = "\n".join(text_parts)
+
+                        # Handle both string content and array content
+                        if isinstance(content, str):
+                            text = content
+                        else:
+                            # Legacy format: content is array of objects
+                            text_parts = []
+                            for part in content:
+                                if isinstance(part, dict) and part.get("type") == "text":
+                                    text_parts.append(part.get("text", ""))
+                                elif isinstance(part, str):
+                                    text_parts.append(part)
+                            text = "\n".join(text_parts)
+
+                        # Skip system-generated messages
+                        if text and not _is_system_message(text):
+                            initial_prompt = text
 
                     # Keep updating last assistant message
                     elif entry_type == "assistant":
                         message = entry.get("message", {})
                         content = message.get("content", [])
-                        text_parts = []
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                text_parts.append(part.get("text", ""))
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        if text_parts:
-                            last_assistant_content = "\n".join(text_parts)
+
+                        # Handle both string content and array content
+                        if isinstance(content, str):
+                            if content:
+                                last_assistant_content = content
+                        else:
+                            text_parts = []
+                            for part in content:
+                                if isinstance(part, dict) and part.get("type") == "text":
+                                    text_parts.append(part.get("text", ""))
+                                elif isinstance(part, str):
+                                    text_parts.append(part)
+                            if text_parts:
+                                last_assistant_content = "\n".join(text_parts)
 
                 except json.JSONDecodeError:
                     continue

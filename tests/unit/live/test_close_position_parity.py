@@ -12,6 +12,22 @@ from src.strategies.components import (
     Strategy,
     StrategyRuntime,
 )
+from tests.mocks import MockDatabaseManager
+
+
+@pytest.fixture(autouse=True)
+def mock_database_manager(monkeypatch):
+    """Mock the DatabaseManager for all tests in this module."""
+    # Create a factory that sets fallback balance from initial_balance
+    original_init = MockDatabaseManager.__init__
+
+    def patched_init(self, database_url=None):
+        original_init(self, database_url)
+        # Default fallback balance for tests - will be overwritten by trading session creation
+        self._fallback_balance = 1_000.0  # Default test balance
+
+    monkeypatch.setattr(MockDatabaseManager, "__init__", patched_init)
+    monkeypatch.setattr("src.engines.live.trading_engine.DatabaseManager", MockDatabaseManager)
 
 
 @pytest.mark.parametrize(

@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from src.config.constants import (
+    DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES,
+    DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT,
+    DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE,
+)
 from src.data_providers.exchange_interface import (
     AccountBalance,
     ExchangeInterface,
@@ -75,7 +80,7 @@ class AccountSynchronizer:
             # Check if we should sync (avoid too frequent syncs)
             if not force and self.last_sync_time:
                 time_since_last_sync = datetime.now(UTC) - self.last_sync_time
-                if time_since_last_sync < timedelta(minutes=5):  # Minimum 5 minutes between syncs
+                if time_since_last_sync < timedelta(minutes=DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES):
                     logger.info("Skipping sync - too recent")
                     return SyncResult(
                         success=True,
@@ -146,12 +151,32 @@ class AccountSynchronizer:
             # Find USDT balance (our primary currency)
             usdt_balance = None
             for balance in exchange_balances:
+                # Validate balance object before accessing attributes
+                if balance is None:
+                    logger.warning("Skipping None balance object from exchange")
+                    continue
+                if not hasattr(balance, "asset") or not hasattr(balance, "total"):
+                    logger.warning("Skipping malformed balance object: %s", balance)
+                    continue
                 if balance.asset == "USDT":
                     usdt_balance = balance
                     break
 
             if usdt_balance:
-                exchange_balance = usdt_balance.total
+                # Validate total is numeric
+                if usdt_balance.total is None or not isinstance(
+                    usdt_balance.total, (int, float)
+                ):
+                    logger.error(
+                        "Invalid USDT balance total: %s (type=%s) - skipping sync",
+                        usdt_balance.total,
+                        type(usdt_balance.total).__name__,
+                    )
+                    return SyncResult(
+                        success=False,
+                        message=f"Invalid balance data from exchange: total={usdt_balance.total}",
+                    )
+                exchange_balance = float(usdt_balance.total)
 
                 # Check for significant discrepancy
                 balance_diff = abs(exchange_balance - current_db_balance)
@@ -159,7 +184,7 @@ class AccountSynchronizer:
                     (balance_diff / current_db_balance * 100) if current_db_balance > 0 else 0
                 )
 
-                if balance_diff_pct > 1.0:  # More than 1% difference
+                if balance_diff_pct > DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT:
                     logger.warning(
                         f"Balance discrepancy detected: DB=${current_db_balance:.2f} vs Exchange=${exchange_balance:.2f} (diff: {balance_diff_pct:.2f}%)"
                     )
@@ -213,11 +238,24 @@ class AccountSynchronizer:
 
                 if db_pos:
                     # Position exists in both - check for updates
-                    if (
-                        abs(exchange_pos.size - db_pos["size"]) > 0.0001
-                    ):  # Significant size difference
+                    # Validate sizes are numeric before comparison to prevent TypeError
+                    exchange_size = exchange_pos.size
+                    db_size = db_pos["size"]
+
+                    if not isinstance(exchange_size, (int, float)) or not isinstance(
+                        db_size, (int, float)
+                    ):
+                        logger.warning(
+                            "Skipping position sync with non-numeric size: "
+                            "exchange_size=%s (type=%s), db_size=%s (type=%s)",
+                            exchange_size,
+                            type(exchange_size).__name__,
+                            db_size,
+                            type(db_size).__name__,
+                        )
+                    elif abs(exchange_size - db_size) > DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE:
                         logger.info(
-                            f"Position size updated: {exchange_pos.symbol} {exchange_pos.side} - {db_pos['size']} -> {exchange_pos.size}"
+                            f"Position size updated: {exchange_pos.symbol} {exchange_pos.side} - {db_size} -> {exchange_size}"
                         )
                         # Update position in database
                         self.db_manager.update_position(

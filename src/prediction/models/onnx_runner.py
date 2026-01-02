@@ -14,12 +14,21 @@ from typing import Any
 import numpy as np
 import onnxruntime as ort
 
+from src.infrastructure.timeout import TimeoutError, run_with_timeout
+
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
 from .execution_providers import get_preferred_providers
 
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
+
+# Model loading timeout protection (seconds)
+MODEL_LOAD_TIMEOUT = 60.0  # 60 seconds for model loading
+METADATA_LOAD_TIMEOUT = 10.0  # 10 seconds for metadata file read
+
+# Inference timeout protection (seconds)
+INFERENCE_TIMEOUT = 5.0  # 5 seconds for a single inference call
 
 
 @dataclass
@@ -58,27 +67,98 @@ class OnnxRunner:
         self._load_model()
 
     def _load_model(self) -> None:
-        """Load ONNX model and metadata"""
-        try:
-            # Load ONNX session with the best available execution providers
-            providers = get_preferred_providers()
-            self.session = ort.InferenceSession(self.model_path, providers=providers)
+        """Load ONNX model and metadata with timeout protection.
 
-            # Load model metadata
+        Raises:
+            TimeoutError: If model loading exceeds timeout.
+            RuntimeError: If model loading fails for other reasons.
+        """
+        session = None
+        try:
+            # Load ONNX session with timeout protection (guards against corrupted files or slow I/O)
+            providers = get_preferred_providers()
+
+            def _create_session():
+                return ort.InferenceSession(self.model_path, providers=providers)
+
+            session = run_with_timeout(
+                _create_session,
+                timeout_seconds=MODEL_LOAD_TIMEOUT,
+                operation_name=f"ONNX model loading ({os.path.basename(self.model_path)})",
+            )
+
+            # Load model metadata with timeout protection
             self.model_metadata = self._load_metadata()
 
+            # Only assign session on full success to prevent partial initialization
+            self.session = session
+
+        except TimeoutError as e:
+            # Clean up partially initialized session
+            if session is not None:
+                del session
+            raise RuntimeError(
+                f"Model loading timed out after {MODEL_LOAD_TIMEOUT}s for {self.model_path}. "
+                f"The model file may be corrupted or the disk is slow."
+            ) from e
         except Exception as e:
+            # Clean up partially initialized session
+            if session is not None:
+                del session
             raise RuntimeError(f"Failed to load model {self.model_path}: {e}") from e
 
+    def __del__(self):
+        """Ensure ONNX session cleanup on garbage collection.
+
+        Prevents file descriptor leaks from repeated model loading failures.
+        """
+        if hasattr(self, "session") and self.session is not None:
+            try:
+                del self.session
+            except Exception:
+                pass  # Best effort cleanup
+
     def _load_metadata(self) -> dict[str, Any]:
-        """Load model metadata from JSON file"""
+        """Load model metadata from JSON file with timeout protection.
+
+        Returns:
+            Metadata dict or defaults if file not found.
+
+        Raises:
+            TimeoutError: If metadata loading exceeds timeout.
+        """
         metadata_path = self.model_path.replace(".onnx", "_metadata.json")
         try:
-            with open(metadata_path) as f:
-                return json.load(f)
+
+            def _read_metadata():
+                with open(metadata_path) as f:
+                    data = json.load(f)
+                    # Validate metadata is a dictionary
+                    if not isinstance(data, dict):
+                        logging.warning(
+                            "Metadata file %s contains non-dict JSON (type: %s) - using defaults",
+                            metadata_path,
+                            type(data).__name__,
+                        )
+                        return {"sequence_length": 120, "feature_count": 5, "normalization_params": {}}
+                    return data
+
+            return run_with_timeout(
+                _read_metadata,
+                timeout_seconds=METADATA_LOAD_TIMEOUT,
+                operation_name=f"metadata loading ({os.path.basename(metadata_path)})",
+            )
         except FileNotFoundError:
             # Return default metadata if file doesn't exist
+            logging.info("No metadata file found for %s, using defaults", self.model_path)
             return {"sequence_length": 120, "feature_count": 5, "normalization_params": {}}
+        except TimeoutError as e:
+            logging.error(
+                "Metadata loading timed out after %.1fs for %s",
+                METADATA_LOAD_TIMEOUT,
+                metadata_path,
+            )
+            raise
 
     def predict(self, features: np.ndarray) -> ModelPrediction:
         """Run prediction on features with optional caching"""
@@ -103,12 +183,36 @@ class OnnxRunner:
             input_data = self._prepare_input(features)
 
             # Get input name dynamically from ONNX session
-            input_name = self.session.get_inputs()[0].name
+            # Validate model has at least one input to prevent IndexError
+            inputs = self.session.get_inputs()
+            if not inputs:
+                raise RuntimeError(
+                    f"Model {self.model_path} has no inputs defined. Cannot run inference."
+                )
+            input_name = inputs[0].name
 
-            # Run inference
-            output = self.session.run(None, {input_name: input_data})
+            # Run inference with timeout protection (guards against model hangs)
+            def _run_inference():
+                return self.session.run(None, {input_name: input_data})
+
+            try:
+                output = run_with_timeout(
+                    _run_inference,
+                    timeout_seconds=INFERENCE_TIMEOUT,
+                    operation_name=f"ONNX inference ({os.path.basename(self.model_path)})",
+                )
+            except TimeoutError as e:
+                raise RuntimeError(
+                    f"Inference timed out after {INFERENCE_TIMEOUT}s for {self.model_path}. "
+                    f"The model may be stuck or the input triggered pathological behavior."
+                ) from e
 
             # Process output
+            # Validate model returned at least one output to prevent IndexError
+            if not output or len(output) == 0:
+                raise RuntimeError(
+                    f"Model {self.model_path} returned empty output. Expected at least one output tensor."
+                )
             prediction = self._process_output(output[0])
 
             inference_time = time.time() - start_time
@@ -234,13 +338,20 @@ class OnnxRunner:
 
     def _process_output(self, output: np.ndarray) -> dict[str, Any]:
         """Process model output into prediction"""
+        # Validate output is not empty before indexing
+        if output.size == 0:
+            raise ValueError("Model output tensor is empty - cannot extract prediction")
+
         # Extract scalar prediction
         if output.shape == (1, 1, 1):
             pred = output[0][0][0]
         elif output.shape == (1, 1):
             pred = output[0][0]
         else:
-            pred = output.flatten()[0]
+            flattened = output.flatten()
+            if len(flattened) == 0:
+                raise ValueError("Flattened model output is empty - cannot extract prediction")
+            pred = flattened[0]
 
         # Denormalize prediction if needed
         if self.model_metadata and self.model_metadata.get("price_normalization"):
@@ -255,6 +366,12 @@ class OnnxRunner:
     def _denormalize_price(self, pred: float) -> float:
         """Denormalize price prediction"""
         price_params = self.model_metadata["price_normalization"]
+        # Validate required normalization parameters exist
+        if "std" not in price_params or "mean" not in price_params:
+            logging.warning(
+                "Price normalization params missing 'std' or 'mean' - returning raw prediction"
+            )
+            return pred
         return pred * price_params["std"] + price_params["mean"]
 
     def _calculate_confidence(self, pred: float) -> float:

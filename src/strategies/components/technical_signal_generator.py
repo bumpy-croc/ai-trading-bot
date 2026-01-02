@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from src.config.constants import DEFAULT_ATR_PERIOD
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
 from src.tech.indicators.core import (
@@ -48,7 +49,7 @@ class TechnicalSignalGenerator(SignalGenerator):
         ma_long: int = 50,
         bb_period: int = 20,
         bb_std_dev: float = 2.0,
-        atr_period: int = 14,
+        atr_period: int = DEFAULT_ATR_PERIOD,
     ):
         """
         Initialize Technical Signal Generator

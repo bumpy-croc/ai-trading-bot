@@ -47,6 +47,17 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+
+# Query timeout categories for differentiated timeout handling
+class QueryTimeout:
+    """Query timeout values (in milliseconds) for different operation types."""
+
+    CRITICAL_READ = 5000  # 5s - Balance, positions, active session (trading loop critical path)
+    WRITE = 15000  # 15s - Trades, positions, orders (needs durability)
+    ANALYTICS = 60000  # 60s - Performance metrics, reports (non-critical)
+    DEFAULT = 30000  # 30s - Fallback for uncategorized queries
+
+
 if TYPE_CHECKING:  # pragma: no cover
     # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
     # Import only for static analysis; guarded to avoid hard runtime dependency.
@@ -79,6 +90,7 @@ class DatabaseManager:
         self.engine: _Engine | None = None
         self.session_factory = None
         self._current_session_id: int | None = None
+        self._is_postgres: bool = False  # Set during _init_database
 
         # Initialize database connection
         self._init_database()
@@ -152,6 +164,7 @@ class DatabaseManager:
         # Accept SQLite strictly for unit tests (fast path)
         is_sqlite = self.database_url.startswith("sqlite:")
         is_postgres = self.database_url.startswith("postgresql")
+        self._is_postgres = is_postgres  # Store for later use (e.g., dialect-specific commands)
 
         if not (is_sqlite or is_postgres):
             # Keep error message compatible with tests expectations
@@ -270,15 +283,27 @@ class DatabaseManager:
 
         return {
             "poolclass": QueuePool,
-            "pool_size": 5,
-            "max_overflow": 10,
+            # Increased from 5 to 10 for concurrent operations (main loop + OrderTracker + health checks)
+            "pool_size": 10,
+            # Increased from 10 to 20 to handle burst load without exhaustion
+            "max_overflow": 20,
+            # Add timeout to prevent indefinite blocking when pool is exhausted
+            "pool_timeout": 30,  # Wait max 30s for available connection
             "pool_pre_ping": True,
             "pool_recycle": 3600,  # 1 hour
             "echo": False,  # Set to True for SQL debugging
             "connect_args": {
                 "sslmode": ssl_mode,
-                "connect_timeout": 10,
+                "connect_timeout": 10,  # Connection timeout in seconds
                 "application_name": "ai-trading-bot",
+                # Query timeout to prevent slow queries from blocking trading loop
+                # This sets statement_timeout for all queries in this connection
+                "options": "-c statement_timeout=30000",  # 30 seconds in milliseconds
+                # TCP keepalive for long-lived connections to detect stale connections
+                "keepalives": 1,
+                "keepalives_idle": 30,  # Start keepalive after 30s idle
+                "keepalives_interval": 10,  # Send keepalive every 10s
+                "keepalives_count": 5,  # Drop connection after 5 failed keepalives
             },
         }
 
@@ -323,6 +348,94 @@ class DatabaseManager:
             raise
         finally:
             session.close()
+
+    @contextmanager
+    def get_session_with_timeout(
+        self, timeout_ms: int = QueryTimeout.DEFAULT
+    ) -> Generator[Session, None, None]:
+        """
+        Get a database session with query-specific timeout.
+
+        Sets statement_timeout for this session to prevent long-running queries
+        from blocking critical operations. Timeout is automatically reset after session.
+
+        Args:
+            timeout_ms: Statement timeout in milliseconds.
+                       Use QueryTimeout constants for standard categories.
+
+        Yields:
+            SQLAlchemy session with configured timeout
+
+        Example:
+            with db.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
+                balance = session.query(AccountBalance).first()
+        """
+        if self.session_factory is None:
+            raise ValueError("Session factory not initialized")
+
+        # Validate timeout_ms is a positive integer to prevent SQL injection
+        # All callers use QueryTimeout constants, but this provides defense in depth
+        if not isinstance(timeout_ms, int) or timeout_ms <= 0:
+            raise ValueError(
+                f"timeout_ms must be a positive integer, got {type(timeout_ms).__name__}: {timeout_ms}"
+            )
+
+        # Check pool health before acquiring connection for critical operations
+        # This provides early warning if pool is near exhaustion
+        if timeout_ms <= QueryTimeout.CRITICAL_READ:
+            self.check_pool_health()
+
+        session = self.session_factory()
+        try:
+            # Set statement_timeout for this session using SET LOCAL (transaction-scoped)
+            # This overrides the connection-level default timeout
+            # Safe to use f-string here because timeout_ms is validated as positive int above
+            # Note: SET LOCAL is PostgreSQL-specific; SQLite doesn't support this syntax
+            if self._is_postgres:
+                session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            yield session
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Database session error (timeout={timeout_ms}ms): {e}")
+            raise
+        finally:
+            session.close()
+
+    def check_pool_health(self) -> dict[str, int]:
+        """Check database connection pool health and warn if near exhaustion.
+
+        Returns:
+            Dictionary with pool statistics (size, checked_out, overflow, etc.)
+        """
+        if self.engine is None:
+            return {"error": "Engine not initialized"}
+
+        pool = self.engine.pool
+
+        # SQLite StaticPool doesn't have size/checkedout/overflow methods
+        # Skip pool health check for non-PostgreSQL databases
+        if not self._is_postgres:
+            return {"info": "Pool health check skipped for SQLite"}
+
+        stats = {
+            "size": pool.size(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "total_available": pool.size() - pool.checkedout() + (20 - pool.overflow()),
+        }
+
+        # Warn if pool is >80% utilized (high contention risk)
+        utilization_pct = (stats["checked_out"] / (pool.size() + 20)) * 100
+        if utilization_pct > 80:
+            logger.warning(
+                "Database pool near exhaustion: %d/%d connections in use (%.1f%% utilization). "
+                "High contention risk - critical operations may block.",
+                stats["checked_out"],
+                pool.size() + 20,
+                utilization_pct,
+            )
+
+        return stats
 
     def test_connection(self) -> bool:
         """
@@ -655,7 +768,8 @@ class DatabaseManager:
         Returns:
             Trade ID
         """
-        with self.get_session() as session:
+        # Use WRITE timeout - trade logging requires durability guarantees
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             # Convert string enums if necessary
             if isinstance(side, str):
                 side = PositionSide[side.upper()]
@@ -704,8 +818,20 @@ class DatabaseManager:
             session.add(trade)
             try:
                 session.commit()
-            except IntegrityError:
-                # Handle any integrity errors
+            except IntegrityError as ie:
+                # Rollback on integrity errors (duplicate keys, constraint violations)
+                session.rollback()
+                logger.error(
+                    f"IntegrityError logging trade for {symbol}: {ie}. Transaction rolled back."
+                )
+                raise
+            except Exception as e:
+                # Rollback on any other database errors
+                session.rollback()
+                logger.error(
+                    f"Failed to log trade for {symbol}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
                 raise
 
             logger.info(
@@ -753,7 +879,8 @@ class DatabaseManager:
         Returns:
             Position ID
         """
-        with self.get_session() as session:
+        # Use WRITE timeout - position logging requires durability guarantees
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             # Convert string enum if necessary
             if isinstance(side, str):
                 side = PositionSide[side.upper()]
@@ -789,22 +916,15 @@ class DatabaseManager:
             if breakeven_triggered is not None:
                 position.breakeven_triggered = bool(breakeven_triggered)
 
-            # * Phase 1: Create and commit position first
-            session.add(position)
+            # * ATOMIC OPERATION: Create position and entry order in single transaction
+            # Use nested transaction (SAVEPOINT) for atomicity
             try:
-                session.commit()
-            except IntegrityError:
-                # Handle any integrity errors (no order_id constraint to worry about anymore)
-                raise
+                session.add(position)
 
-            logger.info(
-                f"Logged position #{position.id}: {symbol} {side.value} @ ${entry_price:.2f}"
-            )
+                # Flush to get position.id without committing
+                session.flush()
 
-            # * Phase 2: Auto-create ENTRY order for the position within same session
-            try:
-                # Use the entry_order_id as exchange_order_id
-
+                # Create ENTRY order for the position
                 entry_order = Order(
                     position_id=position.id,
                     order_type=OrderType.ENTRY,
@@ -821,21 +941,32 @@ class DatabaseManager:
                     strategy_name=strategy_name,
                     session_id=position.session_id,
                 )
-
                 session.add(entry_order)
-                session.commit()  # Commit the order
+
+                # Single atomic commit for both position and order
+                session.commit()
 
                 logger.info(
-                    f"Auto-created ENTRY order #{entry_order.id} for position #{position.id}"
+                    f"Logged position #{position.id}: {symbol} {side.value} @ ${entry_price:.2f} "
+                    f"with ENTRY order #{entry_order.id}"
                 )
 
-            except Exception as exc:
-                # Don't fail position creation if order creation fails
-                # Position is already committed, so we log the failure but don't rollback
-                logger.warning(
-                    f"Failed to auto-create ENTRY order for position #{position.id}: {exc}"
+            except IntegrityError as ie:
+                # Rollback on integrity errors (duplicate keys, constraint violations)
+                session.rollback()
+                logger.error(
+                    f"IntegrityError creating position/order for {symbol}: {ie}. Transaction rolled back."
                 )
-                # Note: No rollback needed since position was committed separately
+                raise
+
+            except Exception as exc:
+                # Rollback on any other errors
+                session.rollback()
+                logger.error(
+                    f"Failed to create position/order for {symbol}: {exc}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
             return position.id
 
@@ -943,7 +1074,15 @@ class DatabaseManager:
             if mae_time is not None:
                 position.mae_time = mae_time
 
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to update position {position_id}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
     def close_position(
         self,
@@ -968,10 +1107,17 @@ class DatabaseManager:
             if pnl is not None:
                 position.unrealized_pnl = pnl
 
-            session.commit()
-
-            logger.info(f"Closed position #{position_id}")
-            return True
+            try:
+                session.commit()
+                logger.info(f"Closed position #{position_id}")
+                return True
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to close position {position_id}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                return False
 
     def get_pending_orders(self, session_id: int | None = None) -> list[dict]:
         """Get all pending orders for a session."""
@@ -1266,7 +1412,8 @@ class DatabaseManager:
 
     def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions with their associated orders."""
-        with self.get_session() as session:
+        # Use CRITICAL_READ timeout - position queries are in trading loop critical path
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
             # Use string comparison for robustness against enum issues
             query = session.query(Position).filter(Position.status == "OPEN")
 
@@ -1399,7 +1546,8 @@ class DatabaseManager:
         session_id: int | None = None,
     ) -> dict:
         """Get performance metrics for a specific period."""
-        with self.get_session() as session:
+        # Use ANALYTICS timeout - performance metrics are not time-critical
+        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
             # Query trades within the period
             query = session.query(Trade)
 
@@ -1629,7 +1777,8 @@ class DatabaseManager:
         if not session_id:
             return 0.0
 
-        with self.get_session() as session:
+        # Use CRITICAL_READ timeout - balance queries are in trading loop critical path
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
             return AccountBalance.get_current_balance(session_id, session)
 
     def update_balance(
@@ -1646,7 +1795,8 @@ class DatabaseManager:
             return False
 
         try:
-            with self.get_session() as session:
+            # Use WRITE timeout - balance updates need durability guarantees
+            with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
                 AccountBalance.update_balance(
                     session_id, new_balance, update_reason, updated_by, session
                 )
@@ -1662,7 +1812,8 @@ class DatabaseManager:
         if not session_id:
             return []
 
-        with self.get_session() as session:
+        # Use ANALYTICS timeout - balance history is non-critical read
+        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
             balances = (
                 session.query(AccountBalance)
                 .filter(AccountBalance.session_id == session_id)
@@ -1719,7 +1870,8 @@ class DatabaseManager:
 
     def get_active_session_id(self) -> int | None:
         """Get the current active session ID"""
-        with self.get_session() as session:
+        # Use CRITICAL_READ timeout - session lookup is critical for engine startup
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
             active_session = (
                 session.query(TradingSession)
                 .filter(TradingSession.is_active)
@@ -1755,6 +1907,336 @@ class DatabaseManager:
             )
 
         return success
+
+    @contextmanager
+    def atomic_balance_update(
+        self,
+        balance_change: float,
+        reason: str,
+        updated_by: str = "system",
+        session_id: int | None = None,
+        correlation_id: str | None = None,
+    ) -> Generator[dict[str, float], None, None]:
+        """
+        Context manager for atomic balance updates with full audit trail.
+
+        Ensures balance changes are committed atomically with proper logging.
+        Records both old and new balances in AccountHistory for audit trail.
+
+        Args:
+            balance_change: Amount to add/subtract from balance (can be negative)
+            reason: Description of why balance is changing
+            updated_by: Who/what is making the change
+            session_id: Trading session ID (uses current if not provided)
+            correlation_id: Optional ID to correlate balance change with trade/order
+
+        Yields:
+            dict with 'old_balance', 'new_balance', 'change' keys
+
+        Raises:
+            ValueError: If session not found or balance would go negative
+            SQLAlchemyError: If database operation fails
+
+        Example:
+            with db.atomic_balance_update(-100.0, "entry_fee", "trading_engine") as result:
+                # Balance has been updated atomically
+                logger.info(f"Balance: ${result['old_balance']:.2f} -> ${result['new_balance']:.2f}")
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            raise ValueError("No active trading session for balance update")
+
+        if self.session_factory is None:
+            raise ValueError("Session factory not initialized")
+
+        session = None
+        try:
+            # Create session directly (not using context manager since we're in a generator)
+            # Apply WRITE timeout for critical balance updates
+            session = self.session_factory()
+            if self._is_postgres:
+                session.execute(text(f"SET LOCAL statement_timeout = {QueryTimeout.WRITE}"))
+
+            # Begin nested transaction (SAVEPOINT) for atomicity
+            with session.begin_nested():
+                # Get current balance with row-level lock to prevent concurrent updates
+                current_balance = AccountBalance.get_current_balance(session_id, session)
+
+                new_balance = current_balance + balance_change
+
+                # Validate balance won't go negative
+                if new_balance < 0:
+                    raise ValueError(
+                        f"Balance update would result in negative balance: "
+                        f"${current_balance:.2f} + ${balance_change:.2f} = ${new_balance:.2f}"
+                    )
+
+                # Create new AccountBalance entry
+                balance_entry = AccountBalance(
+                    session_id=session_id,
+                    total_balance=new_balance,
+                    available_balance=new_balance,  # Simplified - could subtract reserved
+                    reserved_balance=0.0,
+                    base_currency="USD",
+                    last_updated=datetime.now(UTC),
+                    updated_by=updated_by,
+                    update_reason=reason,
+                )
+                session.add(balance_entry)
+
+                # Create AccountHistory entry for audit trail
+                # Get latest equity (balance + unrealized P&L) - simplified as balance for now
+                history_entry = AccountHistory(
+                    timestamp=datetime.now(UTC),
+                    balance=Decimal(str(new_balance)),
+                    equity=Decimal(str(new_balance)),
+                    margin_used=Decimal("0.0"),
+                    margin_available=Decimal(str(new_balance)),
+                    total_pnl=Decimal("0.0"),  # Would be calculated from session
+                    daily_pnl=(
+                        Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0")
+                    ),
+                    drawdown=Decimal("0.0"),
+                )
+                session.add(history_entry)
+
+                # Log with comprehensive details for audit
+                logger.info(
+                    "💰 BALANCE UPDATE [%s]: $%.2f -> $%.2f (change: %+.2f) | Reason: %s | By: %s%s",
+                    session_id,
+                    current_balance,
+                    new_balance,
+                    balance_change,
+                    reason,
+                    updated_by,
+                    f" | Correlation: {correlation_id}" if correlation_id else "",
+                )
+
+                # Prepare result dict
+                result = {
+                    "old_balance": current_balance,
+                    "new_balance": new_balance,
+                    "change": balance_change,
+                }
+
+                # Yield control back to caller with result
+                # Transaction is still open - caller can perform additional operations
+                yield result
+
+            # SAVEPOINT committed successfully - now commit the outer transaction
+            session.commit()
+
+        except ValueError as ve:
+            # Validation error - rollback and re-raise
+            if session:
+                session.rollback()
+            logger.error("Balance update validation failed: %s", ve)
+            raise
+
+        except SQLAlchemyError as se:
+            # Database error - rollback and re-raise
+            if session:
+                session.rollback()
+            logger.error(
+                "Balance update failed for session %s: %s | Change: %+.2f | Reason: %s",
+                session_id,
+                se,
+                balance_change,
+                reason,
+            )
+            raise
+
+        except Exception as e:
+            # Unexpected error - rollback and re-raise
+            if session:
+                session.rollback()
+            logger.critical(
+                "Unexpected error during balance update for session %s: %s",
+                session_id,
+                e,
+                exc_info=True,
+            )
+            raise
+
+        finally:
+            # Ensure session is closed
+            if session:
+                session.close()
+
+    @contextmanager
+    def atomic_position_reconciliation(
+        self,
+        position_db_id: int,
+        realized_pnl: float,
+        exit_price: float,
+        exit_reason: str,
+        trade_data: dict[str, Any],
+        session_id: int | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
+        """
+        Context manager for atomic position reconciliation with exchange.
+
+        Performs balance update, trade logging, and position closure in a single transaction.
+        Ensures all database operations succeed or fail together, preventing inconsistent state.
+
+        Args:
+            position_db_id: Database ID of position to reconcile
+            realized_pnl: Realized P&L from position closure
+            exit_price: Exit price for the position
+            exit_reason: Reason for position closure (e.g., "stop_loss_offline")
+            trade_data: Dict with trade details (symbol, side, size, entry_price, etc.)
+            session_id: Trading session ID (uses current if not provided)
+
+        Yields:
+            dict with 'new_balance', 'trade_id', 'position_closed' keys
+
+        Raises:
+            ValueError: If validation fails or balance would go negative
+            SQLAlchemyError: If database operation fails
+
+        Example:
+            trade_data = {"symbol": "BTCUSDT", "side": PositionSide.LONG, ...}
+            with db.atomic_position_reconciliation(
+                position_db_id=123,
+                realized_pnl=-50.0,
+                exit_price=45000.0,
+                exit_reason="stop_loss_offline",
+                trade_data=trade_data
+            ) as result:
+                # All DB operations committed atomically
+                # Now safe to update in-memory state
+                position_tracker.remove_position(order_id)
+                risk_manager.close_position(symbol)
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            raise ValueError("No active trading session for position reconciliation")
+
+        db_session = None
+        try:
+            # Use a single session for the entire atomic operation
+            db_session = next(self.get_session_with_timeout(QueryTimeout.WRITE))
+
+            # Begin nested transaction (SAVEPOINT) for atomicity
+            with db_session.begin_nested():
+                # 1. Atomic balance update
+                current_balance = AccountBalance.get_current_balance(session_id, db_session)
+                new_balance = current_balance + realized_pnl
+
+                # Validate balance won't go negative
+                if new_balance < 0:
+                    raise ValueError(
+                        f"Position reconciliation would result in negative balance: "
+                        f"${current_balance:.2f} + ${realized_pnl:.2f} = ${new_balance:.2f}"
+                    )
+
+                # Create balance entry
+                balance_entry = AccountBalance(
+                    session_id=session_id,
+                    total_balance=new_balance,
+                    available_balance=new_balance,
+                    reserved_balance=0.0,
+                    base_currency="USD",
+                    last_updated=datetime.now(UTC),
+                    updated_by="live_engine_reconciliation",
+                    update_reason=f"reconciliation_{trade_data.get('symbol', 'unknown')}",
+                )
+                db_session.add(balance_entry)
+
+                # 2. Log trade
+                side = trade_data["side"]
+                if isinstance(side, str):
+                    side = PositionSide[side.upper()]
+
+                trade = Trade(
+                    symbol=trade_data["symbol"],
+                    side=side,
+                    source=TradeSource.LIVE,
+                    entry_price=trade_data["entry_price"],
+                    exit_price=exit_price,
+                    size=trade_data["size"],
+                    quantity=trade_data.get("quantity"),
+                    entry_time=trade_data["entry_time"],
+                    exit_time=datetime.now(UTC),
+                    pnl=realized_pnl,
+                    pnl_percent=trade_data.get("pnl_percent", 0.0),
+                    commission=trade_data.get("commission", 0.0),
+                    exit_reason=exit_reason,
+                    strategy_name=trade_data.get("strategy_name", "unknown"),
+                    stop_loss=trade_data.get("stop_loss"),
+                    take_profit=trade_data.get("take_profit"),
+                    session_id=session_id,
+                )
+                db_session.add(trade)
+                db_session.flush()  # Get trade ID
+
+                # 3. Close position in database
+                position = db_session.query(Position).filter(Position.id == position_db_id).first()
+                if position:
+                    position.status = PositionStatus.CLOSED
+                    position.exit_price = exit_price
+                    position.exit_time = datetime.now(UTC)
+                    position.pnl = realized_pnl
+                    position.pnl_percent = trade_data.get("pnl_percent", 0.0)
+                    position.exit_reason = exit_reason
+
+                logger.info(
+                    "Atomic reconciliation: Balance %.2f -> %.2f (PnL: %+.2f) | Trade ID: %s | Position: %s",
+                    current_balance,
+                    new_balance,
+                    realized_pnl,
+                    trade.id,
+                    trade_data["symbol"],
+                )
+
+                # Prepare result dict
+                result = {
+                    "old_balance": current_balance,
+                    "new_balance": new_balance,
+                    "trade_id": trade.id,
+                    "position_closed": position is not None,
+                }
+
+                # Yield control back to caller with result
+                # Transaction is still open - caller can check result before commit
+                yield result
+
+            # SAVEPOINT committed successfully - now commit the outer transaction
+            db_session.commit()
+
+        except ValueError as ve:
+            # Validation error - rollback and re-raise
+            if db_session:
+                db_session.rollback()
+            logger.error("Position reconciliation validation failed: %s", ve)
+            raise
+
+        except SQLAlchemyError as se:
+            # Database error - rollback and re-raise
+            if db_session:
+                db_session.rollback()
+            logger.error(
+                "Position reconciliation failed for position %s: %s",
+                position_db_id,
+                se,
+            )
+            raise
+
+        except Exception as e:
+            # Unexpected error - rollback and re-raise
+            if db_session:
+                db_session.rollback()
+            logger.critical(
+                "Unexpected error during position reconciliation: %s",
+                e,
+                exc_info=True,
+            )
+            raise
+
+        finally:
+            # Ensure session is closed
+            if db_session:
+                db_session.close()
 
     # ========== CONNECTION MANAGEMENT ==========
 
@@ -2270,7 +2752,15 @@ class DatabaseManager:
             position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
             position.last_partial_exit_price = Decimal(str(price))
             position.last_update = datetime.now(UTC)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to apply partial exit for position {position_id}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
     def apply_scale_in_update(
         self,
@@ -2302,7 +2792,15 @@ class DatabaseManager:
             position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
             position.last_scale_in_price = Decimal(str(price))
             position.last_update = datetime.now(UTC)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to apply scale-in for position {position_id}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
     # ==========================================
     # Order Management Methods (Phase 2)

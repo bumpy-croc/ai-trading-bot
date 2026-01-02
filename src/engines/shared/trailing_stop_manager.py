@@ -7,10 +7,15 @@ backtesting and live trading engines.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
+
+from src.config.constants import DEFAULT_ATR_PERIOD, DEFAULT_BREAKEVEN_BUFFER
+from src.engines.shared.models import normalize_side
+from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
     from src.engines.shared.models import BasePosition
@@ -86,10 +91,26 @@ class TrailingStopManager:
 
         # Get position details
         entry_price = position.entry_price
-        side = self._get_side_str(position)
+        side = normalize_side(getattr(position, "side", None))
         current_stop = getattr(position, "stop_loss", None) or getattr(
             position, "trailing_stop_price", None
         )
+
+        # Validate entry_price to prevent division by zero
+        if entry_price <= 0 or not math.isfinite(entry_price):
+            logger.error(
+                "Invalid entry_price %.8f for trailing stop calculation - cannot update",
+                entry_price,
+            )
+            return TrailingStopUpdate(updated=False)
+
+        # Validate current_price to prevent corrupt calculations
+        if current_price <= 0 or not math.isfinite(current_price):
+            logger.error(
+                "Invalid current_price %.8f for trailing stop calculation - cannot update",
+                current_price,
+            )
+            return TrailingStopUpdate(updated=False)
 
         # Calculate position-level PnL percentage (not sized by position fraction)
         # This provides consistent risk management regardless of position size
@@ -114,15 +135,6 @@ class TrailingStopManager:
 
         return trailing_result
 
-    def _get_side_str(self, position: Any) -> str:
-        """Get the side as a lowercase string."""
-        side = getattr(position, "side", None)
-        if side is None:
-            return "long"
-        if hasattr(side, "value"):
-            return side.value.lower()
-        return str(side).lower()
-
     def _check_breakeven(
         self,
         position: Any,
@@ -144,17 +156,18 @@ class TrailingStopManager:
             TrailingStopUpdate with result (does NOT modify position).
         """
         breakeven_threshold = getattr(self.policy, "breakeven_threshold", None)
-        breakeven_buffer = getattr(self.policy, "breakeven_buffer", 0.001)
+        breakeven_buffer = getattr(self.policy, "breakeven_buffer", DEFAULT_BREAKEVEN_BUFFER)
 
         if breakeven_threshold is None or breakeven_threshold <= 0:
             return TrailingStopUpdate(updated=False)
 
         if pnl_pct >= breakeven_threshold:
-            # Calculate breakeven stop price
-            if side == "long":
-                new_stop = entry_price * (1 + breakeven_buffer)
-            else:
-                new_stop = entry_price * (1 - breakeven_buffer)
+            # Calculate breakeven stop price using shared calculator
+            new_stop = PriceTargetCalculator.breakeven(
+                entry_price=entry_price,
+                buffer_pct=breakeven_buffer,
+                side=side,
+            )
 
             # Return result without modifying position - caller is responsible
             # for applying the update via position_tracker
@@ -278,7 +291,9 @@ class TrailingStopManager:
 
         return None
 
-    def _get_atr(self, df: pd.DataFrame, index: int, period: int = 14) -> float | None:
+    def _get_atr(
+        self, df: pd.DataFrame, index: int, period: int = DEFAULT_ATR_PERIOD
+    ) -> float | None:
         """Get ATR value from DataFrame.
 
         Args:

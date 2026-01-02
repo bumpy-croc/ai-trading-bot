@@ -12,6 +12,8 @@ import os
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import DEFAULT_CONFIDENCE_SCORE
+
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
     from src.database.models import TradeSource
@@ -385,7 +387,7 @@ class LiveEventLogger:
         timeframe: str,
         action_taken: str,
         signal_strength: float = 0.0,
-        confidence_score: float = 0.5,
+        confidence_score: float = DEFAULT_CONFIDENCE_SCORE,
         position_size: float | None = None,
         indicators: dict | None = None,
         sentiment_data: dict | None = None,
@@ -441,7 +443,7 @@ class LiveEventLogger:
         timeframe: str,
         action_taken: str,
         signal_strength: float = 0.0,
-        confidence_score: float = 0.5,
+        confidence_score: float = DEFAULT_CONFIDENCE_SCORE,
         position_size: float | None = None,
         indicators: dict | None = None,
         sentiment_data: dict | None = None,

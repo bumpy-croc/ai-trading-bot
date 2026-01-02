@@ -12,16 +12,17 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_MARKET_DATA_LIMIT,
+    DEFAULT_MARKET_DATA_STALENESS_THRESHOLD,
+    DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS,
+)
+
 if TYPE_CHECKING:
     from src.data_providers.base import DataProvider
     from src.sentiment.base import SentimentDataProvider
 
 logger = logging.getLogger(__name__)
-
-# Default configuration values
-DEFAULT_DATA_LIMIT = 500
-DEFAULT_SENTIMENT_LOOKBACK_HOURS = 4
-DEFAULT_DATA_FRESHNESS_THRESHOLD = 3600  # 1 hour in seconds
 
 
 class MarketDataHandler:
@@ -39,9 +40,9 @@ class MarketDataHandler:
         self,
         data_provider: DataProvider,
         sentiment_provider: SentimentDataProvider | None = None,
-        data_limit: int = DEFAULT_DATA_LIMIT,
-        data_freshness_threshold: int = DEFAULT_DATA_FRESHNESS_THRESHOLD,
-        sentiment_lookback_hours: int = DEFAULT_SENTIMENT_LOOKBACK_HOURS,
+        data_limit: int = DEFAULT_MARKET_DATA_LIMIT,
+        data_freshness_threshold: int = DEFAULT_MARKET_DATA_STALENESS_THRESHOLD,
+        sentiment_lookback_hours: int = DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS,
     ) -> None:
         """Initialize market data handler.
 

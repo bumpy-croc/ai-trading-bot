@@ -9,8 +9,10 @@ This module provides unified implementations for common trading engine functiona
 - Risk configuration
 - Partial operations management
 - Performance tracking
+- Correlation-based position sizing
 """
 
+from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.cost_calculator import CostCalculator, CostResult
 from src.engines.shared.dynamic_risk_handler import (
     DynamicRiskAdjustment,
@@ -25,6 +27,7 @@ from src.engines.shared.models import (
     PositionSide,
     ScaleInResult,
     Trade,
+    normalize_side,
 )
 from src.engines.shared.partial_operations_manager import (
     PartialExitDecision,
@@ -48,6 +51,10 @@ from src.engines.shared.risk_configuration import (
     get_risk_parameters,
     merge_dynamic_risk_config,
 )
+from src.engines.shared.strategy_exit_checker import (
+    StrategyExitChecker,
+    StrategyExitResult,
+)
 from src.engines.shared.trailing_stop_manager import (
     TrailingStopManager,
     TrailingStopUpdate,
@@ -57,6 +64,7 @@ __all__ = [
     # Models
     "PositionSide",
     "OrderStatus",
+    "normalize_side",
     "BasePosition",
     "BaseTrade",
     "Position",
@@ -67,6 +75,9 @@ __all__ = [
     # Trailing stop management
     "TrailingStopManager",
     "TrailingStopUpdate",
+    # Strategy exit checking
+    "StrategyExitChecker",
+    "StrategyExitResult",
     # Dynamic risk handling
     "DynamicRiskHandler",
     "DynamicRiskAdjustment",
@@ -89,4 +100,6 @@ __all__ = [
     # Performance tracking
     "PerformanceTracker",
     "PerformanceMetrics",
+    # Correlation handling
+    "CorrelationHandler",
 ]

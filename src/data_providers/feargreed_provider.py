@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from src.infrastructure.network_retry import with_network_retry
+
 from .sentiment_provider import SentimentDataProvider
 
 logger = logging.getLogger(__name__)
@@ -53,12 +55,25 @@ class FearGreedProvider(SentimentDataProvider):
             return 0.0
         return float(np.mean(values))
 
+    @with_network_retry(max_retries=3, base_delay=2.0, max_delay=30.0)
     def _load_data(self) -> None:
         try:
             params = {"limit": 0, "format": "json"}
-            resp = requests.get(self.BASE_URL, params=params, timeout=20)
+            # Use tuple timeout: (connect_timeout, read_timeout)
+            # Prevents indefinite hangs on DNS failures or TCP handshake issues
+            resp = requests.get(self.BASE_URL, params=params, timeout=(5, 20))
             resp.raise_for_status()
             payload = resp.json()
+
+            # Validate JSON response is a dictionary before accessing keys
+            if not isinstance(payload, dict):
+                logger.error(
+                    "FearGreedProvider: API returned non-dict JSON (type: %s). Expected dict with 'data' key.",
+                    type(payload).__name__
+                )
+                self.data = pd.DataFrame()
+                return
+
             records = payload.get("data", [])
             if not records:
                 logger.warning("FearGreedProvider: empty dataset received")
@@ -185,6 +200,11 @@ class FearGreedProvider(SentimentDataProvider):
         idx = self.data.index.get_indexer([date], method="ffill")
         if idx.size == 0 or idx[0] < 0:
             return self._neutral()
+
+        # Validate index is within DataFrame bounds to prevent wrong data from circular indexing
+        if idx[0] >= len(self.data):
+            return self._neutral()
+
         row = self.data.iloc[idx[0]]
         return {c: float(row[c]) for c in self.data.columns if c.startswith("sentiment_")}
 

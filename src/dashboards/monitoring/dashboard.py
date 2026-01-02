@@ -286,17 +286,32 @@ class MonitoringDashboard:
                 logger.error(f"Error getting orders for position {position_id}: {e}")
                 return jsonify({"error": str(e)}), 500
 
+        def _validate_limit(limit: int | None, default: int = 50, max_limit: int = 1000) -> int:
+            """Validate and clamp limit parameter to prevent DoS attacks."""
+            if limit is None or limit <= 0:
+                return default
+            # Clamp to maximum to prevent excessive database queries
+            return min(limit, max_limit)
+
+        def _validate_offset(offset: int | None, default: int = 0) -> int:
+            """Validate offset parameter to ensure non-negative values."""
+            if offset is None or offset < 0:
+                return default
+            return offset
+
         @self.app.route("/api/trades")
         def get_recent_trades():
             """Get recent trades"""
-            limit = request.args.get("limit", 50, type=int)
+            limit_raw = request.args.get("limit", 50, type=int)
+            limit = _validate_limit(limit_raw, default=50, max_limit=1000)
             trades = self._get_recent_trades(limit)
             return jsonify(trades)
 
         @self.app.route("/api/partial-trades")
         def get_partial_trades():
             """Get recent partial trades (partial exits and scale-ins)"""
-            limit = request.args.get("limit", 50, type=int)
+            limit_raw = request.args.get("limit", 50, type=int)
+            limit = _validate_limit(limit_raw, default=50, max_limit=1000)
             partial_trades = self._get_partial_trades(limit)
             return jsonify(partial_trades)
 
@@ -384,8 +399,13 @@ class MonitoringDashboard:
         @self.app.route("/api/optimizer/cycles")
         def get_optimizer_cycles():
             """List recent optimizer cycles."""
-            limit = request.args.get("limit", 50, type=int)
-            offset = request.args.get("offset", 0, type=int)
+            limit_raw = request.args.get("limit", 50, type=int)
+            offset_raw = request.args.get("offset", 0, type=int)
+
+            # Validate parameters to prevent DoS attacks
+            limit = _validate_limit(limit_raw, default=50, max_limit=1000)
+            offset = _validate_offset(offset_raw, default=0)
+
             try:
                 rows = self.db_manager.fetch_optimization_cycles(limit=limit, offset=offset)
                 return jsonify({"items": rows, "count": len(rows)})

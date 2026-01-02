@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from src.config.constants import (
@@ -11,6 +12,7 @@ from src.config.constants import (
     DEFAULT_CORRELATION_THRESHOLD,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
+    DEFAULT_EXPOSURE_PRECISION_DECIMALS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
 )
 
@@ -68,8 +70,11 @@ class CorrelationEngine:
         # Align and restrict to window
         end_time = None
         for s in price_series_by_symbol.values():
-            if not s.empty:
-                end_time = max(end_time or s.index.max(), s.index.max())
+            # Check both that series is not empty and index is not empty before calling .max()
+            # Empty index raises ValueError on .max() call
+            if not s.empty and len(s.index) > 0:
+                series_max = s.index.max()
+                end_time = max(end_time or series_max, series_max)
         if end_time is None:
             return pd.DataFrame()
         start_time = end_time - timedelta(days=self.config.correlation_window_days)
@@ -107,6 +112,11 @@ class CorrelationEngine:
 
         # Use returns for correlation robustness
         returns = prices.pct_change().dropna(how="any")
+        # Replace inf/-inf values from pct_change (when price goes to/from zero)
+        # Inf values corrupt correlation calculations
+        returns = returns.replace([np.inf, -np.inf], np.nan).dropna(how="any")
+        if returns.empty or returns.shape[0] < self.config.sample_min_size:
+            return pd.DataFrame()
         corr = returns.corr()
         self._last_matrix = corr
         self._last_update_at = now or datetime.now(UTC)
@@ -165,7 +175,7 @@ class CorrelationEngine:
                 info = positions.get(sym)
                 if info:
                     total += float(info.get("size", 0.0))
-            exposures[tuple(sorted(group))] = round(total, 8)
+            exposures[tuple(sorted(group))] = round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         return exposures
 
     def compute_size_reduction_factor(
@@ -236,7 +246,7 @@ class CorrelationGroupManager:
                     present.append(s)
                     total += float(positions[s].get("size", 0.0))
             out[name] = {
-                "total_exposure": round(total, 8),
+                "total_exposure": round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS),
                 "position_count": len(present),
                 "symbols": present,
                 "last_updated": datetime.now(UTC).isoformat(),

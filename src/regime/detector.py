@@ -127,7 +127,20 @@ class RegimeDetector:
         # Set R² to 0 for cases where var_y is effectively zero (constant y values)
         r2_vals[near_zero_var_y] = 0.0
 
+        # Validate array bounds before assignment to prevent index out of bounds errors
         start_idx = window - 1
+        expected_length = n - start_idx  # Length of slopes[start_idx:]
+        actual_length = len(slope_vals)
+
+        if actual_length != expected_length:
+            raise RuntimeError(
+                f"Array length mismatch in OLS calculation: "
+                f"expected {expected_length} values for slopes[{start_idx}:], "
+                f"but computed {actual_length} slope values. "
+                f"n={n}, window={window}. This indicates a bug in rolling window calculation."
+            )
+
+        # Safe assignment after validation
         slopes[start_idx:] = slope_vals
         r2s[start_idx:] = r2_vals
 
@@ -259,7 +272,16 @@ class RegimeDetector:
         ts = trend_score.copy()
         ts_mean = ts.rolling(252, min_periods=cfg.slope_window).mean()
         ts_std = ts.rolling(252, min_periods=cfg.slope_window).std(ddof=0)
-        z = (ts - ts_mean) / ts_std.replace(0, np.nan)
+
+        # Robust division: handle zero, near-zero, NaN, and inf in std
+        # Use threshold to prevent division by very small numbers that might be numerical noise
+        std_threshold = 1e-9
+        ts_std_safe = ts_std.copy()
+        # Replace zeros, near-zeros, NaN, and inf with NaN to prevent corrupt confidence scores
+        invalid_std = (ts_std_safe.abs() < std_threshold) | ts_std_safe.isna() | np.isinf(ts_std_safe)
+        ts_std_safe[invalid_std] = np.nan
+
+        z = (ts - ts_mean) / ts_std_safe
         conf = z.abs().clip(0, 3) / 3.0
         out["regime_confidence"] = conf
         return out
