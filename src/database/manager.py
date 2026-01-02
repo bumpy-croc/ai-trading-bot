@@ -822,12 +822,17 @@ class DatabaseManager:
             except IntegrityError as ie:
                 # Rollback on integrity errors (duplicate keys, constraint violations)
                 session.rollback()
-                logger.error(f"IntegrityError logging trade for {symbol}: {ie}. Transaction rolled back.")
+                logger.error(
+                    f"IntegrityError logging trade for {symbol}: {ie}. Transaction rolled back."
+                )
                 raise
             except Exception as e:
                 # Rollback on any other database errors
                 session.rollback()
-                logger.error(f"Failed to log trade for {symbol}: {e}. Transaction rolled back.", exc_info=True)
+                logger.error(
+                    f"Failed to log trade for {symbol}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
                 raise
 
             logger.info(
@@ -1856,8 +1861,10 @@ class DatabaseManager:
             trades = session.query(Trade).filter(Trade.session_id == session_id).all()
 
             # Calculate current balance from initial balance + total PnL
-            total_pnl = sum(trade.pnl for trade in trades)
-            current_balance = trading_session.initial_balance + total_pnl
+            # Convert to float since Numeric columns return Decimal
+            total_pnl = float(sum(trade.pnl for trade in trades))
+            initial = float(trading_session.initial_balance)
+            current_balance = initial + total_pnl
 
             # Update the balance tracking
             self.update_balance(current_balance, "recovered_from_trades", "system", session_id)
@@ -1948,9 +1955,7 @@ class DatabaseManager:
         with ExitStack() as stack:
             try:
                 # Enter the session context - ExitStack handles cleanup
-                session = stack.enter_context(
-                    self.get_session_with_timeout(QueryTimeout.WRITE)
-                )
+                session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
 
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with session.begin_nested():
@@ -1988,7 +1993,9 @@ class DatabaseManager:
                         margin_used=Decimal("0.0"),
                         margin_available=Decimal(str(new_balance)),
                         total_pnl=Decimal("0.0"),  # Would be calculated from session
-                        daily_pnl=Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0"),
+                        daily_pnl=(
+                            Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0")
+                        ),
                         drawdown=Decimal("0.0"),
                     )
                     session.add(history_entry)
@@ -2103,9 +2110,7 @@ class DatabaseManager:
         with ExitStack() as stack:
             try:
                 # Enter the session context - ExitStack handles cleanup
-                db_session = stack.enter_context(
-                    self.get_session_with_timeout(QueryTimeout.WRITE)
-                )
+                db_session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
 
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with db_session.begin_nested():
@@ -2161,7 +2166,9 @@ class DatabaseManager:
                     db_session.flush()  # Get trade ID
 
                     # 3. Close position in database
-                    position = db_session.query(Position).filter(Position.id == position_db_id).first()
+                    position = (
+                        db_session.query(Position).filter(Position.id == position_db_id).first()
+                    )
                     if position:
                         position.status = PositionStatus.CLOSED
                         position.exit_price = exit_price
