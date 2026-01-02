@@ -639,7 +639,7 @@ class StrategyLineageTracker:
                         "generation_distance": desc["generation"]
                         - self.strategies[strategy_id]["generation"],
                         "related_changes": len(related_changes),
-                        "impact_types": list(set(c.change_type.value for c in related_changes)),
+                        "impact_types": list({c.change_type.value for c in related_changes}),
                     }
                 )
 
