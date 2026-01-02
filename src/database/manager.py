@@ -90,6 +90,7 @@ class DatabaseManager:
         self.engine: _Engine | None = None
         self.session_factory = None
         self._current_session_id: int | None = None
+        self._is_postgres: bool = False  # Set during _init_database
 
         # Initialize database connection
         self._init_database()
@@ -163,6 +164,7 @@ class DatabaseManager:
         # Accept SQLite strictly for unit tests (fast path)
         is_sqlite = self.database_url.startswith("sqlite:")
         is_postgres = self.database_url.startswith("postgresql")
+        self._is_postgres = is_postgres  # Store for later use in session timeouts
 
         if not (is_sqlite or is_postgres):
             # Keep error message compatible with tests expectations
@@ -388,7 +390,7 @@ class DatabaseManager:
             # Set statement_timeout for PostgreSQL sessions (not supported by SQLite)
             # This overrides the connection-level default timeout
             # Safe to use f-string here because timeout_ms is validated as positive int above
-            if self.engine and self.engine.dialect.name == "postgresql":
+            if self._is_postgres:
                 session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
             yield session
         except Exception as e:
@@ -822,12 +824,17 @@ class DatabaseManager:
             except IntegrityError as ie:
                 # Rollback on integrity errors (duplicate keys, constraint violations)
                 session.rollback()
-                logger.error(f"IntegrityError logging trade for {symbol}: {ie}. Transaction rolled back.")
+                logger.error(
+                    f"IntegrityError logging trade for {symbol}: {ie}. Transaction rolled back."
+                )
                 raise
             except Exception as e:
                 # Rollback on any other database errors
                 session.rollback()
-                logger.error(f"Failed to log trade for {symbol}: {e}. Transaction rolled back.", exc_info=True)
+                logger.error(
+                    f"Failed to log trade for {symbol}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
                 raise
 
             logger.info(
@@ -1948,9 +1955,7 @@ class DatabaseManager:
         with ExitStack() as stack:
             try:
                 # Enter the session context - ExitStack handles cleanup
-                session = stack.enter_context(
-                    self.get_session_with_timeout(QueryTimeout.WRITE)
-                )
+                session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
 
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with session.begin_nested():
@@ -1988,7 +1993,9 @@ class DatabaseManager:
                         margin_used=Decimal("0.0"),
                         margin_available=Decimal(str(new_balance)),
                         total_pnl=Decimal("0.0"),  # Would be calculated from session
-                        daily_pnl=Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0"),
+                        daily_pnl=(
+                            Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0")
+                        ),
                         drawdown=Decimal("0.0"),
                     )
                     session.add(history_entry)
@@ -2103,9 +2110,7 @@ class DatabaseManager:
         with ExitStack() as stack:
             try:
                 # Enter the session context - ExitStack handles cleanup
-                db_session = stack.enter_context(
-                    self.get_session_with_timeout(QueryTimeout.WRITE)
-                )
+                db_session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
 
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with db_session.begin_nested():
@@ -2161,7 +2166,9 @@ class DatabaseManager:
                     db_session.flush()  # Get trade ID
 
                     # 3. Close position in database
-                    position = db_session.query(Position).filter(Position.id == position_db_id).first()
+                    position = (
+                        db_session.query(Position).filter(Position.id == position_db_id).first()
+                    )
                     if position:
                         position.status = PositionStatus.CLOSED
                         position.exit_price = exit_price

@@ -20,6 +20,7 @@ Risk Management:
 - Dynamic position sizing based on confidence
 """
 
+from src.config.constants import DEFAULT_STRATEGY_MIN_CONFIDENCE
 from src.strategies.components import (
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
@@ -72,7 +73,7 @@ def create_ensemble_weighted_strategy(
     # Create weighted voting signal generator
     signal_generator = WeightedVotingSignalGenerator(
         generators=generators,
-        min_confidence=0.3,
+        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         consensus_threshold=0.6,
     )
 
@@ -87,7 +88,7 @@ def create_ensemble_weighted_strategy(
     # Create aggressive position sizer
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=BASE_POSITION_SIZE,
-        min_confidence=0.3,
+        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
     )
 
     # Create regime detector

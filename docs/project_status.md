@@ -1,6 +1,6 @@
 # Project Status
 
-> **Last Updated**: 2025-12-22
+> **Last Updated**: 2026-01-01
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
@@ -73,21 +73,18 @@ Implementing PSB (Plan, Setup, Build) system improvements for better development
 
 ## Last Session Summary
 
-**Date**: 2025-12-22
+**Date**: 2026-01-01
 
 **Work Completed**:
-- Analyzed PSB (Plan, Setup, Build) framework from Avthar's video
-- Created comprehensive PSB system analysis (`docs/PSB_SYSTEM_ANALYSIS.md`)
-- Implementing automated documentation system
+- Aligned live exit-condition evaluation order with backtest parity
+- Ensured filled live exits always close positions despite large price deviations
+- Added unit coverage for filled-exit deviation handling and exit ordering
 
 **Ended At**:
-- Creating core automated docs (changelog.md, project_status.md, architecture.md)
+- Live exit handler parity fixes and regression tests
 
 **Next Steps**:
-- Complete architecture.md
-- Add regression prevention section to CLAUDE.md
-- Create `/update-docs` slash command
-- Test the new documentation workflow
+- Run unit tests for live engine changes
 
 ---
 

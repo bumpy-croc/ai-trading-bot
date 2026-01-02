@@ -491,7 +491,7 @@ class TestStrategyRegistry:
         with pytest.raises(StrategyValidationError):
             registry.register_strategy("not_a_strategy", {})
 
-        # Test strategy with empty name raises ValueError during construction
+        # Test strategy with empty name - Strategy validates during __init__
         with pytest.raises(ValueError, match="Strategy name must be a non-empty string"):
             Strategy(
                 name="",

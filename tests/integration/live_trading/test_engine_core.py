@@ -128,6 +128,20 @@ class TestLiveTradingEngine:
             fee_rate=0.0,
             slippage_rate=0.0,
         )
+
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         engine._execute_entry(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -239,6 +253,20 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(
             strategy=mock_strategy, data_provider=mock_data_provider, max_position_size=0.1
         )
+
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         engine._execute_entry(
             symbol="BTCUSDT",
             side=PositionSide.LONG,

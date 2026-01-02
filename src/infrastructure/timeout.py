@@ -156,6 +156,7 @@ def run_with_timeout(
             result.append(func(*args, **kwargs))
         except BaseException as e:
             # Catch BaseException to handle SystemExit, KeyboardInterrupt, etc.
+            # This ensures exception list is always populated if func fails
             exception.append(e)
 
     thread = threading.Thread(target=target, daemon=True)

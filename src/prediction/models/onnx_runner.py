@@ -28,6 +28,9 @@ from .execution_providers import get_preferred_providers
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
 
+# Metadata load timeout (fixed, not configurable - metadata files are small)
+METADATA_LOAD_TIMEOUT = 10.0
+
 
 def _get_model_load_timeout() -> float:
     """Get model load timeout from config or default."""
@@ -37,10 +40,6 @@ def _get_model_load_timeout() -> float:
 def _get_inference_timeout() -> float:
     """Get inference timeout from config or default."""
     return get_config().get_float("INFERENCE_TIMEOUT_SECONDS", DEFAULT_INFERENCE_TIMEOUT)
-
-
-# Metadata load timeout (fixed, not configurable - metadata files are small)
-METADATA_LOAD_TIMEOUT = 10.0
 
 
 @dataclass

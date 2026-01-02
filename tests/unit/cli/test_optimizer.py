@@ -3,13 +3,12 @@
 import argparse
 import json
 import uuid
-from datetime import datetime
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
-from cli.commands.optimizer import _handle, PROJECT_ROOT
+from cli.commands.optimizer import _handle
+from src.infrastructure.runtime.paths import get_project_root
 
 
 class TestOptimizerHandle:
@@ -33,16 +32,15 @@ class TestOptimizerHandle:
         )
 
     @pytest.fixture
-    def temp_output_path(self, tmp_path):
-        """Provides a temporary output path within the project directory for testing."""
-        # Create a unique test output path within artifacts directory
-        test_dir = PROJECT_ROOT / "artifacts" / "test_output"
-        test_dir.mkdir(parents=True, exist_ok=True)
-        output_file = test_dir / f"test_report_{uuid.uuid4().hex[:8]}.json"
-        yield str(output_file)
-        # Cleanup
-        if output_file.exists():
-            output_file.unlink()
+    def temp_output_path(self):
+        """Provides a temporary output path within the project directory."""
+        project_root = get_project_root()
+        unique_name = f"test_optimizer_{uuid.uuid4().hex[:8]}.json"
+        output_path = project_root / "artifacts" / unique_name
+        yield output_path
+        # Cleanup after test
+        if output_path.exists():
+            output_path.unlink()
 
     @pytest.fixture
     def mock_experiment_result(self):
@@ -62,8 +60,7 @@ class TestOptimizerHandle:
     ):
         """Test that baseline experiment runs successfully."""
         # Arrange
-        default_args.output = temp_output_path
-        output_path = Path(temp_output_path)
+        default_args.output = str(temp_output_path)
 
         with (
             patch("src.optimizer.runner.ExperimentRunner") as mock_runner_class,
@@ -84,15 +81,14 @@ class TestOptimizerHandle:
             # Assert
             assert result == 0
             mock_runner.run.assert_called_once()
-            assert output_path.exists()
+            assert temp_output_path.exists()
 
     def test_generates_suggestions_from_analyzer(
         self, default_args, mock_experiment_result, temp_output_path
     ):
         """Test that suggestions are generated from performance analyzer."""
         # Arrange
-        default_args.output = temp_output_path
-        output_path = Path(temp_output_path)
+        default_args.output = str(temp_output_path)
 
         mock_suggestion = Mock()
         mock_suggestion.target = "risk_per_trade"
@@ -119,9 +115,9 @@ class TestOptimizerHandle:
 
             # Assert
             assert result == 0
-            assert output_path.exists()
+            assert temp_output_path.exists()
 
-            with open(output_path, "r") as f:
+            with open(temp_output_path) as f:
                 report = json.load(f)
                 assert len(report["suggestions"]) == 1
                 assert report["suggestions"][0]["target"] == "risk_per_trade"
@@ -131,7 +127,7 @@ class TestOptimizerHandle:
     ):
         """Test that validation is skipped when no_validate flag is set."""
         # Arrange
-        default_args.output = temp_output_path
+        default_args.output = str(temp_output_path)
         default_args.no_validate = True
 
         with (

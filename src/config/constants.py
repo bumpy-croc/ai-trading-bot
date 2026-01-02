@@ -56,9 +56,30 @@ DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 
 # Error Handling Constants
 DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
+DEFAULT_MAX_CONSECUTIVE_ERRORS = 10  # Maximum errors before shutdown
+
+# Health Monitor Constants (distinct from CPU optimization intervals)
+DEFAULT_HEALTH_BASE_CHECK_INTERVAL = 60  # Base health check interval in seconds
+DEFAULT_HEALTH_MIN_CHECK_INTERVAL = 10  # Minimum health check interval (aggressive recovery)
+DEFAULT_HEALTH_MAX_CHECK_INTERVAL = 300  # Maximum health check interval
+
+# Core Trading Defaults (used across backtest and live engines)
+DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss
+DEFAULT_MIN_STOP_LOSS_PCT = 0.01  # 1% minimum stop loss
+DEFAULT_MAX_STOP_LOSS_PCT = 0.20  # 20% maximum stop loss
+DEFAULT_TAKE_PROFIT_PCT = 0.04  # 4% take profit
+DEFAULT_MAX_POSITION_SIZE = 0.1  # 10% max position size
+DEFAULT_BASE_RISK_PER_TRADE = 0.02  # 2% risk per trade
+DEFAULT_MAX_RISK_PER_TRADE = 0.03  # 3% maximum risk per trade
+DEFAULT_MAX_DAILY_RISK = 0.06  # 6% maximum daily risk
+DEFAULT_MAX_CORRELATED_RISK = 0.10  # 10% maximum risk for correlated positions
+DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
+DEFAULT_FEE_RATE = 0.001  # 0.1% trading fee
+DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
 
 # Trading Engine Constants
 DEFAULT_MAX_HOLDING_HOURS = 336  # 14 days
+DEFAULT_MAX_FILLED_PRICE_DEVIATION = 0.5  # 50% max deviation for suspicious fill detection
 DEFAULT_END_OF_DAY_FLAT = False
 DEFAULT_WEEKEND_FLAT = False
 DEFAULT_MARKET_TIMEZONE = "UTC"
@@ -73,6 +94,51 @@ DEFAULT_REGIME_ADJUST_POSITION_SIZE: bool = False
 DEFAULT_REGIME_HYSTERESIS_K: int = 3
 DEFAULT_REGIME_MIN_DWELL: int = 12
 DEFAULT_REGIME_MIN_CONFIDENCE: float = 0.5
+DEFAULT_REGIME_LOOKBACK_BUFFER: int = 5  # Additional lookback buffer for regime detection
+DEFAULT_REGIME_CHECK_FREQUENCY: int = 50  # Check regime every N candles
+DEFAULT_REGIME_WARMUP_CANDLES: int = 60  # Minimum candles before first regime check
+DEFAULT_REGIME_MIN_DATA_LENGTH: int = 60  # Minimum dataframe length for regime analysis
+
+# Timeframe-specific regime detection configurations
+# Each timeframe has tuned parameters for optimal regime detection
+DEFAULT_REGIME_CONFIG_1H = {
+    "slope_window": 30,
+    "hysteresis_k": 3,
+    "min_dwell": 10,
+    "trend_threshold": 0.001,
+}
+DEFAULT_REGIME_CONFIG_4H = {
+    "slope_window": 20,
+    "hysteresis_k": 2,
+    "min_dwell": 5,
+    "trend_threshold": 0.002,
+}
+DEFAULT_REGIME_CONFIG_1D = {
+    "slope_window": 15,
+    "hysteresis_k": 2,
+    "min_dwell": 3,
+    "trend_threshold": 0.003,
+}
+
+# Prediction/Signal Defaults
+DEFAULT_CONFIDENCE_SCORE: float = 0.5  # Default confidence when not provided by strategy
+
+# Regime Position Size Multipliers (by market condition)
+DEFAULT_REGIME_MULTIPLIER_BULL_LOW_VOL = 1.0  # Full size in ideal conditions
+DEFAULT_REGIME_MULTIPLIER_BULL_HIGH_VOL = 0.7  # Reduced in volatile bull
+DEFAULT_REGIME_MULTIPLIER_BEAR_LOW_VOL = 0.8  # Reduced in bear market
+DEFAULT_REGIME_MULTIPLIER_BEAR_HIGH_VOL = 0.5  # Much reduced in volatile bear
+DEFAULT_REGIME_MULTIPLIER_RANGE_LOW_VOL = 0.6  # Reduced in range market
+DEFAULT_REGIME_MULTIPLIER_RANGE_HIGH_VOL = 0.3  # Very reduced in volatile range
+
+# Regime Strategy Switching Defaults
+DEFAULT_REGIME_SWITCH_COOLDOWN_MINUTES = 60  # Cooldown between switches
+DEFAULT_REGIME_MIN_DURATION_BARS = 15  # Minimum bars before switching
+DEFAULT_REGIME_TIMEFRAME_AGREEMENT = 0.6  # Require 60% agreement across timeframes
+DEFAULT_REGIME_TRANSITION_SIZE_MULTIPLIER = 0.5  # Size multiplier during transitions
+DEFAULT_REGIME_MAX_DRAWDOWN_SWITCH = 0.15  # Switch to defensive if drawdown > 15%
+DEFAULT_REGIME_TIMEFRAME_WEIGHTS = {"1h": 1.0, "4h": 1.5, "1d": 2.0}  # Higher timeframes weighted more
+DEFAULT_REGIME_TIMEFRAMES = ["1h", "4h", "1d"]  # Timeframes for multi-timeframe analysis
 
 # CPU Optimization Constants
 DEFAULT_CHECK_INTERVAL = 60  # Base check interval in seconds
@@ -82,6 +148,23 @@ DEFAULT_PERFORMANCE_MONITOR_INTERVAL = 30  # Performance monitoring interval
 DEFAULT_SLEEP_POLL_INTERVAL = 0.5  # Sleep polling interval (reduced from 0.1s)
 DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 1800  # Account snapshot interval (30 minutes)
 DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 2 minutes
+DEFAULT_MARKET_DATA_STALENESS_THRESHOLD = 3600  # Consider market data stale after 1 hour
+DEFAULT_MARKET_DATA_LIMIT = 500  # Default number of candles to fetch
+
+# Thread and Request Timeout Constants
+DEFAULT_THREAD_JOIN_TIMEOUT = 30  # Timeout for main thread join in seconds
+DEFAULT_ORDER_TRACKER_TIMEOUT = 10  # Timeout for order tracker thread join
+DEFAULT_REQUEST_TIMEOUT = 10  # Timeout for HTTP requests (webhooks, etc.)
+DEFAULT_ORDER_POLL_INTERVAL = 5  # Seconds between order status checks
+
+# Account Synchronization Constants
+DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES = 5  # Minimum minutes between account syncs
+DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT = 1.0  # Log warning if discrepancy exceeds 1%
+DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE = 0.0001  # Tolerance for position size changes
+
+# Time Window Constants
+DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS = 4  # Apply live sentiment to last N hours of candles
+DEFAULT_RECENT_TRADE_LOOKBACK_HOURS = 1  # Consider trades as "recent" for activity checks
 
 # Trailing stop fallback (used in safety mode when ATR is unavailable)
 DEFAULT_FALLBACK_TRAILING_PCT = 0.01  # 1% trailing distance as conservative fallback
@@ -99,7 +182,40 @@ DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01  # 1% daily volatility
 DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)  # (high_vol, low_vol)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 
+# Dynamic Risk Performance Adjustment Constants
+DEFAULT_RECOVERY_SCALING_FACTOR = 2.0  # Scale factor for recovery from drawdown
+DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT = 0.2  # Progressive stop loss tightening per threshold
+
+# Performance Score Calculation
+DEFAULT_PERFORMANCE_WIN_RATE_WEIGHT = 0.6  # Weight for win rate in score
+DEFAULT_PERFORMANCE_PROFIT_FACTOR_WEIGHT = 0.4  # Weight for profit factor in score
+DEFAULT_PERFORMANCE_PROFIT_FACTOR_DIVISOR = 2.0  # Normalization for profit factor
+
+# Performance Score Thresholds
+DEFAULT_PERFORMANCE_POOR_THRESHOLD = 0.3  # Below this is poor performance
+DEFAULT_PERFORMANCE_GOOD_THRESHOLD = 0.7  # Above this is good performance
+
+# Poor Performance Adjustments
+DEFAULT_POOR_PERF_POSITION_FACTOR = 0.6
+DEFAULT_POOR_PERF_STOP_TIGHTENING = 1.2
+DEFAULT_POOR_PERF_DAILY_RISK_FACTOR = 0.7
+
+# Good Performance Adjustments
+DEFAULT_GOOD_PERF_POSITION_FACTOR = 1.2
+DEFAULT_GOOD_PERF_STOP_TIGHTENING = 0.9
+DEFAULT_GOOD_PERF_DAILY_RISK_FACTOR = 1.1
+
+# Volatility Adjustment Stop Loss Factors
+DEFAULT_HIGH_VOL_STOP_TIGHTENING = 1.1
+DEFAULT_LOW_VOL_STOP_TIGHTENING = 0.9
+
+# Performance Metric Fallback Values
+DEFAULT_WIN_RATE_FALLBACK = 0.5
+DEFAULT_PROFIT_FACTOR_FALLBACK = 1.0
+DEFAULT_VOLATILITY_FALLBACK = 0.02
+
 # Partial operations defaults (partial exits and scale-ins)
+DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE = 10  # Defense-in-depth limit for partial exits per cycle
 DEFAULT_PARTIAL_EXIT_TARGETS = [0.03, 0.06, 0.10]  # 3%, 6%, 10%
 DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]  # 25%, 25%, 50% of original size
 DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]  # 2%, 5%
@@ -135,3 +251,29 @@ DEFAULT_MODEL_LOAD_TIMEOUT = 60.0  # Timeout for loading ML models (ONNX, Keras)
 DEFAULT_INFERENCE_TIMEOUT = 30.0  # Timeout for model inference
 DEFAULT_API_REQUEST_TIMEOUT = 30.0  # Timeout for external API requests
 DEFAULT_DATA_FETCH_TIMEOUT = 60.0  # Timeout for historical data fetches
+
+# Numeric Precision Constants
+DEFAULT_EPSILON = 1e-9  # Small value for floating point comparisons
+DEFAULT_SYMBOL_STEP_SIZE = 0.00001  # Fallback step size for quantity rounding
+DEFAULT_BASIS_BALANCE_FALLBACK = 10000.0  # Fallback balance when entry_balance unavailable
+DEFAULT_EXPOSURE_PRECISION_DECIMALS = 8  # Decimal places for exposure/position size rounding
+
+# Retry Configuration Constants
+DEFAULT_STOP_LOSS_MAX_RETRIES = 3  # Maximum retry attempts for stop-loss placement
+DEFAULT_STOP_LOSS_RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
+DEFAULT_RETRY_BACKOFF_MULTIPLIER = 2  # Exponential backoff multiplier
+
+# Regime Multiplier Fallback
+DEFAULT_REGIME_UNKNOWN_MULTIPLIER = 0.5  # Conservative multiplier for unknown regimes
+
+# Strategy Confidence Thresholds
+DEFAULT_STRATEGY_MIN_CONFIDENCE = 0.3  # Standard minimum confidence for signal generation
+DEFAULT_STRATEGY_MIN_CONFIDENCE_AGGRESSIVE = 0.2  # Lower threshold for aggressive strategies
+DEFAULT_STRATEGY_MIN_CONFIDENCE_CONSERVATIVE = 0.4  # Higher threshold for conservative sizers
+
+# Strategy Position Sizing Base Fractions
+DEFAULT_STRATEGY_BASE_FRACTION = 0.2  # Default base fraction for ML strategies
+DEFAULT_STRATEGY_BASE_FRACTION_SMALL = 0.04  # Smaller base fraction for conservative strategies
+
+# Confidence Scale Factors
+DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM = 8  # Scale factor for momentum-based confidence

@@ -45,6 +45,20 @@ class TestRiskIntegration:
             risk_parameters=risk_parameters,
             max_position_size=0.05,
         )
+
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="ml_basic",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         engine._execute_entry(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -80,6 +94,20 @@ class TestRiskIntegration:
         if not LIVE_TRADING_AVAILABLE:
             pytest.skip("Live trading components not available")
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
+
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         max_positions = engine.risk_manager.get_max_concurrent_positions()
         for i in range(max_positions + 2):
             engine._execute_entry(

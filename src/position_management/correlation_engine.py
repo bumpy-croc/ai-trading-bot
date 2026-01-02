@@ -12,6 +12,7 @@ from src.config.constants import (
     DEFAULT_CORRELATION_THRESHOLD,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
+    DEFAULT_EXPOSURE_PRECISION_DECIMALS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
 )
 
@@ -174,7 +175,7 @@ class CorrelationEngine:
                 info = positions.get(sym)
                 if info:
                     total += float(info.get("size", 0.0))
-            exposures[tuple(sorted(group))] = round(total, 8)
+            exposures[tuple(sorted(group))] = round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         return exposures
 
     def compute_size_reduction_factor(
@@ -245,7 +246,7 @@ class CorrelationGroupManager:
                     present.append(s)
                     total += float(positions[s].get("size", 0.0))
             out[name] = {
-                "total_exposure": round(total, 8),
+                "total_exposure": round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS),
                 "position_count": len(present),
                 "symbols": present,
                 "last_updated": datetime.now(UTC).isoformat(),

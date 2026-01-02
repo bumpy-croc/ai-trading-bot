@@ -16,6 +16,11 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import (
+    DEFAULT_FEE_RATE,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_SYMBOL_STEP_SIZE,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
@@ -76,8 +81,8 @@ class LiveExecutionEngine:
 
     def __init__(
         self,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         enable_live_trading: bool = False,
         exchange_interface: Any = None,
     ) -> None:
@@ -132,50 +137,6 @@ class LiveExecutionEngine:
     def reset_tracking(self) -> None:
         """Reset fee and slippage tracking."""
         self._cost_calculator.reset_totals()
-
-    def apply_entry_slippage(self, price: float, side: PositionSide) -> float:
-        """Apply slippage to entry price (price moves against us).
-
-        Slippage models the cost of market impact and adverse selection that occurs
-        when entering a position, ensuring realistic backtest and live trading results.
-
-        This method is kept for backward compatibility. New code should use
-        the shared CostCalculator via calculate_entry_costs.
-
-        Args:
-            price: Base price before slippage.
-            side: Position side (LONG or SHORT).
-
-        Returns:
-            Price after slippage applied.
-        """
-        # Use simple calculation to preserve backward compatibility
-        if side == PositionSide.LONG:
-            return price * (1 + self.slippage_rate)
-        else:
-            return price * (1 - self.slippage_rate)
-
-    def apply_exit_slippage(self, price: float, side: PositionSide) -> float:
-        """Apply slippage to exit price (price moves against us).
-
-        Exit slippage accounts for market impact costs when closing positions,
-        ensuring P&L calculations reflect realistic execution conditions.
-
-        This method is kept for backward compatibility. New code should use
-        the shared CostCalculator via calculate_exit_costs.
-
-        Args:
-            price: Base price before slippage.
-            side: Position side (LONG or SHORT).
-
-        Returns:
-            Price after slippage applied.
-        """
-        # Use simple calculation to preserve backward compatibility
-        if side == PositionSide.LONG:
-            return price * (1 - self.slippage_rate)
-        else:
-            return price * (1 + self.slippage_rate)
 
     def calculate_entry_fee(self, position_value: float) -> float:
         """Calculate entry fee for a position.

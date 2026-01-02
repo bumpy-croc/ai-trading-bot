@@ -8,12 +8,20 @@ from typing import Any
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_ATR_PERIOD,
+    DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_BREAKEVEN_BUFFER,
     DEFAULT_BREAKEVEN_THRESHOLD,
     DEFAULT_CORRELATION_THRESHOLD,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
+    DEFAULT_EXPOSURE_PRECISION_DECIMALS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
+    DEFAULT_MAX_CORRELATED_RISK,
+    DEFAULT_MAX_DAILY_RISK,
+    DEFAULT_MAX_DRAWDOWN,
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_MAX_RISK_PER_TRADE,
     DEFAULT_MAX_SCALE_INS,
     DEFAULT_PARTIAL_EXIT_SIZES,
     DEFAULT_PARTIAL_EXIT_TARGETS,
@@ -24,21 +32,22 @@ from src.config.constants import (
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
 from src.tech.indicators.core import calculate_atr
+from src.utils.price_targets import PriceTargetCalculator
 
 
 @dataclass
 class RiskParameters:
     """Risk management parameters"""
 
-    base_risk_per_trade: float = 0.02  # 2% risk per trade
-    max_risk_per_trade: float = 0.03  # 3% maximum risk per trade
-    max_position_size: float = 0.25  # 25% maximum position size (fraction of balance)
-    max_daily_risk: float = 0.06  # 6% maximum daily risk (fraction of balance)
-    max_correlated_risk: float = 0.10  # 10% maximum risk for correlated positions
-    max_drawdown: float = 0.20  # 20% maximum drawdown (fraction)
+    base_risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE  # 2% risk per trade
+    max_risk_per_trade: float = DEFAULT_MAX_RISK_PER_TRADE  # 3% maximum risk per trade
+    max_position_size: float = DEFAULT_MAX_POSITION_SIZE  # Maximum position size (fraction of balance)
+    max_daily_risk: float = DEFAULT_MAX_DAILY_RISK  # 6% maximum daily risk (fraction of balance)
+    max_correlated_risk: float = DEFAULT_MAX_CORRELATED_RISK  # 10% maximum risk for correlated positions
+    max_drawdown: float = DEFAULT_MAX_DRAWDOWN  # 20% maximum drawdown (fraction)
     position_size_atr_multiplier: float = 1.0
     default_take_profit_pct: float | None = None  # if None, engine/strategy may supply
-    atr_period: int = 14
+    atr_period: int = DEFAULT_ATR_PERIOD
     # Time exit config (optional; strategies may override)
     time_exits: dict | None = None
     # Partial operations (defaults can be overridden by strategies)
@@ -185,13 +194,12 @@ class RiskManager:
 
     def calculate_stop_loss(self, entry_price: float, atr: float, side: str = "long") -> float:
         """Calculate adaptive stop loss level (ATR-based)"""
-        atr_multiple = self.params.position_size_atr_multiplier
-        stop_distance = atr * atr_multiple
-
-        if side == "long":
-            return entry_price - stop_distance
-        else:  # short
-            return entry_price + stop_distance
+        return PriceTargetCalculator.stop_loss_atr(
+            entry_price=entry_price,
+            atr=atr,
+            multiplier=self.params.position_size_atr_multiplier,
+            side=side,
+        )
 
     # NEW HIGHER-LEVEL API (fraction-based + SL/TP policies)
     def calculate_position_fraction(
@@ -381,11 +389,11 @@ class RiskManager:
 
         if stop_loss_pct is not None:
             try:
-                stop_loss_pct_float = float(stop_loss_pct)
-                if side == "long":
-                    sl_price = entry_price * (1 - stop_loss_pct_float)
-                else:
-                    sl_price = entry_price * (1 + stop_loss_pct_float)
+                sl_price = PriceTargetCalculator.stop_loss(
+                    entry_price=entry_price,
+                    pct=float(stop_loss_pct),
+                    side=side,
+                )
             except (TypeError, ValueError) as e:
                 logging.warning(
                     "Invalid stop_loss_pct value '%s' (type: %s) - cannot convert to float: %s. "
@@ -410,11 +418,11 @@ class RiskManager:
 
         if take_profit_pct is not None:
             try:
-                take_profit_pct_float = float(take_profit_pct)
-                if side == "long":
-                    tp_price = entry_price * (1 + take_profit_pct_float)
-                else:
-                    tp_price = entry_price * (1 - take_profit_pct_float)
+                tp_price = PriceTargetCalculator.take_profit(
+                    entry_price=entry_price,
+                    pct=float(take_profit_pct),
+                    side=side,
+                )
             except (TypeError, ValueError) as e:
                 logging.warning(
                     "Invalid take_profit_pct value '%s' (type: %s) - cannot convert to float: %s. "
@@ -504,7 +512,7 @@ class RiskManager:
                 exposure = sum(
                     float(pos.get("size", 0.0)) for s, pos in positions_snapshot.items() if s in sym_set
                 )
-                return round(float(exposure), 8)
+                return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
             thr = float(self.params.correlation_threshold if threshold is None else threshold)
             cols = [c for c in corr_matrix.columns if c in sym_set]
@@ -553,13 +561,13 @@ class RiskManager:
             # If no groups formed (all singletons), fall back to sum of the specified symbols
             if max_exposure == 0.0 and len(groups) == len(cols):
                 max_exposure = sum(float(positions_snapshot.get(s, {}).get("size", 0.0)) for s in cols)
-            return round(max_exposure, 8)
+            return round(max_exposure, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         except Exception:
             # Fail-safe
             exposure = sum(
                 float(pos.get("size", 0.0)) for s, pos in positions_snapshot.items() if s in symbols
             )
-            return round(float(exposure), 8)
+            return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
     def get_max_concurrent_positions(self) -> int:
         """Return the maximum number of concurrent positions allowed."""
