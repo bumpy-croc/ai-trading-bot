@@ -55,7 +55,7 @@ class Signal:
     def _validate_signal(self):
         """Validate signal parameters are within acceptable bounds"""
         if not isinstance(self.direction, SignalDirection):
-            raise ValueError(
+            raise TypeError(
                 f"direction must be a SignalDirection enum, got {type(self.direction)}"
             )
 
@@ -66,7 +66,7 @@ class Signal:
             raise ValueError(f"confidence must be between 0.0 and 1.0, got {self.confidence}")
 
         if not isinstance(self.metadata, dict):
-            raise ValueError(f"metadata must be a dictionary, got {type(self.metadata)}")
+            raise TypeError(f"metadata must be a dictionary, got {type(self.metadata)}")
 
 
 class SignalGenerator(ABC):
