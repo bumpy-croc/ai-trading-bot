@@ -78,7 +78,8 @@ class S3ArtifactManager:
             ArtifactSyncError: If upload fails
         """
         self._ensure_client()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
 
         timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
         s3_prefix = f"training-data/{symbol}/{timeframe}/{timestamp}"
@@ -125,7 +126,8 @@ class S3ArtifactManager:
             ArtifactSyncError: If download fails
         """
         self._ensure_client()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
 
         bucket, prefix = self._parse_s3_uri(s3_uri)
 
@@ -223,7 +225,8 @@ class S3ArtifactManager:
             ArtifactSyncError: If upload fails
         """
         self._ensure_client()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
 
         s3_prefix = f"models/{symbol}/{model_type}/{version_id}"
 
@@ -262,7 +265,8 @@ class S3ArtifactManager:
             List of version IDs sorted by date (newest first)
         """
         self._ensure_client()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
 
         prefix = f"models/{symbol}/{model_type}/"
 
