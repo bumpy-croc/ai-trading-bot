@@ -261,7 +261,7 @@ LOG_JSON=true  # Enable structured logging
    git checkout -b feature/your-feature
    ```
 
-2. **Write code** following conventions (see CODE.md for full details):
+2. **Write code** guidelines and conventions in CODE.md **MUST BE FOLLOWED AT ALL TIMES**:
    - **Functions**: Keep concise, self-evident purpose, always include docstrings
    - **Types**: Use type hints, avoid `Any` where possible
    - **Variables**: Use descriptive names, extract magic numbers to constants
