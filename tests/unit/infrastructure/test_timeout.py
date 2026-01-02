@@ -8,11 +8,9 @@ Tests cover:
 - Platform compatibility
 """
 
-import platform
 import signal
 import threading
 import time
-from unittest.mock import Mock, patch
 
 import pytest
 
@@ -127,6 +125,7 @@ class TestWithTimeoutDecorator:
     )
     def test_decorator_uses_function_name_as_default(self):
         """Test decorator uses function name if no operation_name given."""
+
         # This test verifies the default behavior - hard to test directly
         # but we can verify the decorator works without operation_name
         @with_timeout(5.0)

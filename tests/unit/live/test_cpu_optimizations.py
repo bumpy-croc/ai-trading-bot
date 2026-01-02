@@ -36,7 +36,8 @@ class MockTradingEngine:
             [
                 p
                 for p in self.positions.values()
-                if hasattr(p, "entry_time") and p.entry_time > datetime.now(UTC) - timedelta(hours=1)
+                if hasattr(p, "entry_time")
+                and p.entry_time > datetime.now(UTC) - timedelta(hours=1)
             ]
         )
         if recent_trades > 0:

@@ -559,9 +559,7 @@ class LivePositionTracker:
                     order_id,
                     e,
                 )
-                raise RuntimeError(
-                    f"Partial-exit persistence failed for order {order_id}"
-                ) from e
+                raise RuntimeError(f"Partial-exit persistence failed for order {order_id}") from e
 
         return PartialExitResult(
             realized_pnl=partial_exit_result.realized_pnl,

@@ -5,7 +5,6 @@ Tests forward-looking accuracy, persistence metrics, transition analysis,
 and confidence calibration computations.
 """
 
-from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -78,7 +77,7 @@ def synthetic_annotated_df() -> pd.DataFrame:
         elif regime_idx == 1:  # trend_down
             current_price *= 0.998
         else:  # range
-            current_price *= (1 + np.random.uniform(-0.001, 0.001))
+            current_price *= 1 + np.random.uniform(-0.001, 0.001)
         prices.append(current_price)
 
     prices = np.array(prices)
@@ -323,9 +322,7 @@ class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
     def test_empty_dataframe(self):
-        df = pd.DataFrame(
-            columns=["close", "trend_label", "vol_label", "regime_confidence"]
-        )
+        df = pd.DataFrame(columns=["close", "trend_label", "vol_label", "regime_confidence"])
         with pytest.raises(ValueError):
             RegimeAssessment(df)
 

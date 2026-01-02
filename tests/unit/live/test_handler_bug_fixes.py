@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -51,7 +51,7 @@ class TestExitFeeCalculation:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="test-order-123",
         )
@@ -99,7 +99,7 @@ class TestExitFeeCalculation:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="test-order-456",
         )
@@ -149,7 +149,7 @@ class TestTakeProfitLimitPricing:
             side=PositionSide.LONG,
             size=0.5,
             entry_price=90.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="tp-order-long",
         )
@@ -191,7 +191,7 @@ class TestTakeProfitLimitPricing:
             side=PositionSide.SHORT,
             size=0.5,
             entry_price=100.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="tp-order-short",
         )
@@ -231,7 +231,7 @@ class TestExitConditionOrdering:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             order_id="order-exit-1",
             stop_loss=95.0,
         )
@@ -276,7 +276,7 @@ class TestPositionTrackerThreadSafety:
                         side=PositionSide.LONG,
                         size=0.1,
                         entry_price=50000.0 + i,
-                        entry_time=datetime.now(timezone.utc),
+                        entry_time=datetime.now(UTC),
                         order_id=f"open-{i}",
                     )
                     tracker.open_position(position)
@@ -333,7 +333,7 @@ class TestPositionTrackerThreadSafety:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             order_id="test-1",
         )
         tracker.open_position(position)

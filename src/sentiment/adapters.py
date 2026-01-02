@@ -40,7 +40,7 @@ def merge_historical_sentiment(
             "Failed to merge historical sentiment for %s: %s. Returning data without sentiment.",
             symbol,
             e,
-            exc_info=True
+            exc_info=True,
         )
         return df
 
@@ -67,7 +67,7 @@ def apply_live_sentiment(
         logger.warning(
             "Failed to apply live sentiment: %s. Returning data without recent sentiment updates.",
             e,
-            exc_info=True
+            exc_info=True,
         )
         return df
     return df

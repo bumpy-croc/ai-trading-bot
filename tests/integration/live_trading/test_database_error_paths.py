@@ -40,9 +40,7 @@ def test_engine_survives_update_position_failure(
         initial_balance=1000.0,
     )
     # Initialize balance in the database (mirrors what start() does)
-    engine.db_manager.update_balance(
-        1000.0, "session_start", "system", engine.trading_session_id
-    )
+    engine.db_manager.update_balance(1000.0, "session_start", "system", engine.trading_session_id)
 
     engine._execute_entry(
         symbol="BTCUSDT",
@@ -100,9 +98,7 @@ def test_engine_survives_log_trade_and_close_position_failure(
         initial_balance=1000.0,
     )
     # Initialize balance in the database (mirrors what start() does)
-    engine.db_manager.update_balance(
-        1000.0, "session_start", "system", engine.trading_session_id
-    )
+    engine.db_manager.update_balance(1000.0, "session_start", "system", engine.trading_session_id)
 
     engine._execute_entry(
         symbol="BTCUSDT",

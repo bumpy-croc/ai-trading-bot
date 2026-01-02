@@ -4,16 +4,14 @@ Test per-strategy dynamic risk override functionality.
 
 from unittest.mock import Mock
 
-import pandas as pd
-
 from src.engines.backtest.engine import Backtester
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig
 from src.strategies.components import (
-    Strategy,
-    MLBasicSignalGenerator,
-    FixedRiskManager,
     ConfidenceWeightedSizer,
+    FixedRiskManager,
+    MLBasicSignalGenerator,
+    Strategy,
 )
 
 

@@ -6,17 +6,15 @@ This example demonstrates how to use the performance parity validation system
 to compare two trading strategies and ensure they maintain equivalent performance.
 """
 
+from datetime import datetime, timedelta
+
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
-from typing import Any, Dict
 
 from src.strategies.components.testing import (
     PerformanceParityValidator,
     ToleranceConfig,
     ValidationResult,
-    quick_strategy_comparison,
-    validate_migration_readiness,
 )
 
 
@@ -184,8 +182,8 @@ def example_statistical_analysis():
     print("=" * 80)
 
     from src.strategies.components.testing.statistical_tests import (
-        FinancialStatisticalTests,
         EquivalenceTests,
+        FinancialStatisticalTests,
         format_test_results,
     )
 
@@ -228,11 +226,12 @@ def example_export_functionality():
     print("EXPORT FUNCTIONALITY EXAMPLE")
     print("=" * 80)
 
+    import os
+    import tempfile
+
     from src.strategies.components.testing.performance_parity_validator import (
         PerformanceParityReporter,
     )
-    import tempfile
-    import os
 
     # Create sample validation report
     legacy_results = create_sample_backtest_results(seed=42)
@@ -266,7 +265,7 @@ def example_export_functionality():
         # Read back and display sample
         import json
 
-        with open(json_path, "r") as f:
+        with open(json_path) as f:
             exported_data = json.load(f)
 
         print(

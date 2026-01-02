@@ -17,7 +17,7 @@ import pandas as pd
 from src.performance import metrics as perf_metrics
 
 if TYPE_CHECKING:
-    from src.engines.shared.models import BaseTrade
+    pass
 
 
 class TradeProtocol(Protocol):
@@ -31,6 +31,7 @@ class TradeProtocol(Protocol):
     exit_time: datetime | None
     symbol: str | None
     side: str | None
+
 
 logger = logging.getLogger(__name__)
 
@@ -311,7 +312,7 @@ class PerformanceTracker:
 
             # Limit memory usage by keeping only most recent trades
             if len(self._trades) > self._max_trade_history:
-                self._trades = self._trades[-self._max_trade_history:]
+                self._trades = self._trades[-self._max_trade_history :]
 
     def update_balance(
         self,
@@ -391,9 +392,7 @@ class PerformanceTracker:
                 avg_duration_hours = (self._total_duration_seconds / total_trades) / 3600
 
             # Calculate total return percentage
-            total_return_pct = perf_metrics.total_return(
-                self.initial_balance, self.current_balance
-            )
+            total_return_pct = perf_metrics.total_return(self.initial_balance, self.current_balance)
 
             # Calculate annualized return (CAGR)
             annualized_return = 0.0
@@ -408,9 +407,7 @@ class PerformanceTracker:
             # Calculate current drawdown
             current_drawdown = 0.0
             if self.peak_balance > 0:
-                current_drawdown = (
-                    (self.peak_balance - self.current_balance) / self.peak_balance
-                )
+                current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
 
             # Get balance series for advanced metrics
             balance_series = self.get_balance_series()

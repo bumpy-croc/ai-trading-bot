@@ -129,6 +129,8 @@ def create_app() -> "Flask":
     500 status to callers.
     """
 
+    from urllib.parse import urlparse
+
     from flask import (
         Flask,
         Response,
@@ -138,7 +140,6 @@ def create_app() -> "Flask":
         request,
         url_for,
     )  # type: ignore
-    from urllib.parse import urljoin, urlparse
     from flask_admin import Admin  # type: ignore
     from flask_admin.contrib.sqla import ModelView  # type: ignore
     from flask_admin.form import SecureForm  # type: ignore

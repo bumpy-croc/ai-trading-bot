@@ -676,14 +676,22 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         try:
             # Validate required fields exist
             required_fields = [
-                "orderId", "symbol", "side", "type", "origQty",
-                "status", "executedQty", "time", "updateTime"
+                "orderId",
+                "symbol",
+                "side",
+                "type",
+                "origQty",
+                "status",
+                "executedQty",
+                "time",
+                "updateTime",
             ]
             for field in required_fields:
                 if field not in order_data:
                     logger.error(
                         "Invalid order data from Binance: missing required field '%s'. Data: %s",
-                        field, order_data
+                        field,
+                        order_data,
                     )
                     return None
 

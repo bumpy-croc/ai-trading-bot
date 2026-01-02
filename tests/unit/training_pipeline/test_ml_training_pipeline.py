@@ -1,13 +1,11 @@
 """Unit tests for ML training pipeline orchestration module."""
 
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
-import tensorflow as tf
 
 from src.ml.training_pipeline.config import TrainingConfig, TrainingContext, TrainingPaths
 from src.ml.training_pipeline.pipeline import (

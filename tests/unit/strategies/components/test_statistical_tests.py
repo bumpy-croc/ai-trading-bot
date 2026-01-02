@@ -2,10 +2,11 @@
 Unit tests for Statistical Tests module.
 """
 
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import patch
 
 from src.strategies.components.testing.statistical_tests import (
     EquivalenceTests,

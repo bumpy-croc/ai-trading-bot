@@ -233,7 +233,7 @@ class PredictionEngine:
                             timeout_seconds=timeout_seconds,
                             operation_name=f"Ensemble model {ensemble_bundle.model_name} inference",
                         )
-                    except InfraTimeoutError as timeout_err:
+                    except InfraTimeoutError:
                         # Skip this ensemble member if it times out
                         continue
 

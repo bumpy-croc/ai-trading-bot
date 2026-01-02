@@ -157,9 +157,7 @@ class LiveExitHandler:
 
         hit_stop_loss = False
         if position.stop_loss is not None:
-            hit_stop_loss = self._check_stop_loss(
-                position, current_price, candle_high, candle_low
-            )
+            hit_stop_loss = self._check_stop_loss(position, current_price, candle_high, candle_low)
 
         hit_take_profit = False
         if position.take_profit is not None:
@@ -475,11 +473,7 @@ class LiveExitHandler:
             return False
 
         # Use high/low for more realistic detection
-        if (
-            self.use_high_low_for_stops
-            and candle_low is not None
-            and candle_high is not None
-        ):
+        if self.use_high_low_for_stops and candle_low is not None and candle_high is not None:
             if position.side == PositionSide.LONG:
                 # For long SL, check if candle_low breached the stop
                 return candle_low <= position.stop_loss
@@ -515,11 +509,7 @@ class LiveExitHandler:
             return False
 
         # Use high/low for more realistic detection
-        if (
-            self.use_high_low_for_stops
-            and candle_high is not None
-            and candle_low is not None
-        ):
+        if self.use_high_low_for_stops and candle_high is not None and candle_low is not None:
             if position.side == PositionSide.LONG:
                 return candle_high >= position.take_profit
             else:

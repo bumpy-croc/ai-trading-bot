@@ -1,11 +1,7 @@
 """Tests for atb tests (legacy) commands."""
 
-import argparse
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
-
-import pytest
 
 from cli.commands.tests import _collect_failures, _format_failures
 

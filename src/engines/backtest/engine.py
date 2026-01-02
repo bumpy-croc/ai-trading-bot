@@ -218,11 +218,12 @@ class Backtester:
         # Risk management - handle backward compatibility for max_position_size
         if max_position_size is not None:
             from src.risk.risk_manager import RiskParameters
+
             if risk_parameters is None:
                 risk_parameters = RiskParameters(max_position_size=max_position_size)
             else:
                 # Update existing risk_parameters with max_position_size
-                if hasattr(risk_parameters, 'max_position_size'):
+                if hasattr(risk_parameters, "max_position_size"):
                     risk_parameters.max_position_size = max_position_size
 
         self.risk_parameters = risk_parameters
@@ -321,7 +322,9 @@ class Backtester:
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager
         partial_ops_manager = (
-            PartialOperationsManager(policy=partial_manager) if partial_manager is not None else None
+            PartialOperationsManager(policy=partial_manager)
+            if partial_manager is not None
+            else None
         )
 
         self.exit_handler = ExitHandler(
@@ -1203,7 +1206,11 @@ class Backtester:
             "early_stop_candle_index": None,
             "dynamic_risk_adjustments": [],
             "dynamic_risk_summary": None,
-            "execution_settings": self.execution_engine.get_execution_settings() if hasattr(self, 'execution_engine') else {},
+            "execution_settings": (
+                self.execution_engine.get_execution_settings()
+                if hasattr(self, "execution_engine")
+                else {}
+            ),
         }
 
         # Add regime switching results
@@ -1336,7 +1343,10 @@ class Backtester:
                     ).astype(
                         float
                     ) * (
-                        1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(DEFAULT_CONFIDENCE_SCORE)
+                        1.0
+                        - df["prediction_confidence"]
+                        .reindex(pred_series.index)
+                        .fillna(DEFAULT_CONFIDENCE_SCORE)
                     )
                     actual_up = (actual_series.diff() > 0).astype(float)
                     brier = brier_score_direction(p_up.fillna(0.5), actual_up.fillna(0.0))
@@ -1443,9 +1453,7 @@ class Backtester:
                 "Entry fee %.8f is negative - fee calculation error!",
                 entry_fee,
             )
-            raise RuntimeError(
-                f"Invalid entry fee {entry_fee:.8f}: fees cannot be negative"
-            )
+            raise RuntimeError(f"Invalid entry fee {entry_fee:.8f}: fees cannot be negative")
 
         if entry_fee > self.balance:
             logger.critical(

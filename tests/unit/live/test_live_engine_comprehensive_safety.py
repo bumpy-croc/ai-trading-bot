@@ -333,9 +333,7 @@ class TestErrorHandlingRecovery:
             # Engine should handle data provider errors gracefully
             assert engine.consecutive_errors == 0  # Not yet encountered
 
-    def test_max_consecutive_errors_triggers_shutdown(
-        self, mock_data_provider, minimal_strategy
-    ):
+    def test_max_consecutive_errors_triggers_shutdown(self, mock_data_provider, minimal_strategy):
         """Exceeding max consecutive errors should trigger shutdown"""
         with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(

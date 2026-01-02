@@ -41,9 +41,13 @@ class RiskParameters:
 
     base_risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE  # 2% risk per trade
     max_risk_per_trade: float = DEFAULT_MAX_RISK_PER_TRADE  # 3% maximum risk per trade
-    max_position_size: float = DEFAULT_MAX_POSITION_SIZE  # Maximum position size (fraction of balance)
+    max_position_size: float = (
+        DEFAULT_MAX_POSITION_SIZE  # Maximum position size (fraction of balance)
+    )
     max_daily_risk: float = DEFAULT_MAX_DAILY_RISK  # 6% maximum daily risk (fraction of balance)
-    max_correlated_risk: float = DEFAULT_MAX_CORRELATED_RISK  # 10% maximum risk for correlated positions
+    max_correlated_risk: float = (
+        DEFAULT_MAX_CORRELATED_RISK  # 10% maximum risk for correlated positions
+    )
     max_drawdown: float = DEFAULT_MAX_DRAWDOWN  # 20% maximum drawdown (fraction)
     position_size_atr_multiplier: float = 1.0
     default_take_profit_pct: float | None = None  # if None, engine/strategy may supply
@@ -510,7 +514,9 @@ class RiskManager:
             # Fallback: sum exposures for given symbols
             if corr_matrix is None or corr_matrix.empty:
                 exposure = sum(
-                    float(pos.get("size", 0.0)) for s, pos in positions_snapshot.items() if s in sym_set
+                    float(pos.get("size", 0.0))
+                    for s, pos in positions_snapshot.items()
+                    if s in sym_set
                 )
                 return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
@@ -560,7 +566,9 @@ class RiskManager:
                 max_exposure = max(max_exposure, total)
             # If no groups formed (all singletons), fall back to sum of the specified symbols
             if max_exposure == 0.0 and len(groups) == len(cols):
-                max_exposure = sum(float(positions_snapshot.get(s, {}).get("size", 0.0)) for s in cols)
+                max_exposure = sum(
+                    float(positions_snapshot.get(s, {}).get("size", 0.0)) for s in cols
+                )
             return round(max_exposure, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         except Exception:
             # Fail-safe
@@ -590,7 +598,9 @@ class RiskManager:
             new_size = max(0.0, current - float(executed_fraction_of_original))
             pos["size"] = new_size
             # Reduce daily risk used proportionally (approximation)
-            self.daily_risk_used = max(0.0, self.daily_risk_used - float(executed_fraction_of_original))
+            self.daily_risk_used = max(
+                0.0, self.daily_risk_used - float(executed_fraction_of_original)
+            )
 
     def adjust_position_after_scale_in(
         self, symbol: str, added_fraction_of_original: float
@@ -614,4 +624,6 @@ class RiskManager:
             if effective_add <= 0:
                 return
             pos["size"] = current + effective_add
-            self.daily_risk_used = min(self.params.max_daily_risk, self.daily_risk_used + effective_add)
+            self.daily_risk_used = min(
+                self.params.max_daily_risk, self.daily_risk_used + effective_add
+            )

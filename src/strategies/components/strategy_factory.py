@@ -189,9 +189,7 @@ class StrategyFactory:
         )
 
         risk_manager = VolatilityRiskManager(base_risk=0.02, atr_multiplier=1.8)
-        position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.05, min_confidence=0.5
-        )
+        position_sizer = ConfidenceWeightedSizer(base_fraction=0.05, min_confidence=0.5)
 
         return Strategy(
             name=name,

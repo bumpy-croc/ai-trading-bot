@@ -163,7 +163,11 @@ class OnnxRunner:
                             metadata_path,
                             type(data).__name__,
                         )
-                        return {"sequence_length": 120, "feature_count": 5, "normalization_params": {}}
+                        return {
+                            "sequence_length": 120,
+                            "feature_count": 5,
+                            "normalization_params": {},
+                        }
                     return data
 
             return run_with_timeout(
@@ -175,7 +179,7 @@ class OnnxRunner:
             # Return default metadata if file doesn't exist
             logging.info("No metadata file found for %s, using defaults", self.model_path)
             return {"sequence_length": 120, "feature_count": 5, "normalization_params": {}}
-        except TimeoutError as e:
+        except TimeoutError:
             logging.error(
                 "Metadata loading timed out after %.1fs for %s",
                 METADATA_LOAD_TIMEOUT,

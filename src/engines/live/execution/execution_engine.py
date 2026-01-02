@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 from src.config.constants import (
     DEFAULT_FEE_RATE,
     DEFAULT_SLIPPAGE_RATE,
-    DEFAULT_SYMBOL_STEP_SIZE,
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
@@ -199,17 +198,11 @@ class LiveExecutionEngine:
                     base_price,
                     symbol,
                 )
-                return EntryExecutionResult(
-                    success=False, error=f"Invalid price: {base_price}"
-                )
+                return EntryExecutionResult(success=False, error=f"Invalid price: {base_price}")
 
             if balance <= 0 or not math.isfinite(balance):
-                logger.error(
-                    "Invalid balance %.8f for %s - refusing entry", balance, symbol
-                )
-                return EntryExecutionResult(
-                    success=False, error=f"Invalid balance: {balance}"
-                )
+                logger.error("Invalid balance %.8f for %s - refusing entry", balance, symbol)
+                return EntryExecutionResult(success=False, error=f"Invalid balance: {balance}")
 
             if size_fraction <= 0 or size_fraction > 1 or not math.isfinite(size_fraction):
                 logger.error(
@@ -305,9 +298,7 @@ class LiveExecutionEngine:
                     base_price,
                     symbol,
                 )
-                return ExitExecutionResult(
-                    success=False, error=f"Invalid exit price: {base_price}"
-                )
+                return ExitExecutionResult(success=False, error=f"Invalid exit price: {base_price}")
 
             if position_notional <= 0 or not math.isfinite(position_notional):
                 logger.error(
@@ -513,9 +504,7 @@ class LiveExecutionEngine:
         try:
             symbol_info = self.exchange_interface.get_symbol_info(symbol)
         except (ConnectionError, TimeoutError) as e:
-            logger.error(
-                "Failed to fetch symbol info for %s: %s - using raw quantity", symbol, e
-            )
+            logger.error("Failed to fetch symbol info for %s: %s - using raw quantity", symbol, e)
             return quantity
 
         if not symbol_info or not isinstance(symbol_info, dict):

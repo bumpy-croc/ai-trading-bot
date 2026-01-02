@@ -249,6 +249,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                     "Content-Type": "application/json",
                 }
             )
+
         # Use retry decorator for network resilience
         @with_network_retry(max_retries=3, base_delay=1.0, max_delay=30.0)
         def _make_request() -> dict[str, Any]:

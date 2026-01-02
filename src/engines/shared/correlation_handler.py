@@ -323,9 +323,7 @@ class CorrelationHandler:
             if str(symbol) in group:
                 current = 0.0
                 for sym in group:
-                    current += float(
-                        positions_snapshot.get(sym, {}).get("size", 0.0)
-                    )
+                    current += float(positions_snapshot.get(sym, {}).get("size", 0.0))
                 candidate_group_exposure = current
                 break
 

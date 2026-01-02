@@ -8,9 +8,10 @@ import logging
 import signal
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 

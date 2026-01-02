@@ -232,7 +232,7 @@ class LiveTradingEngine:
                         "Failed to bind core risk manager to component strategy: %s. "
                         "Component risk limits may not be enforced.",
                         bind_error,
-                        exc_info=True
+                        exc_info=True,
                     )
             if hasattr(component_risk, "set_strategy_overrides"):
                 overrides = getattr(self.strategy, "_risk_overrides", None)
@@ -244,7 +244,7 @@ class LiveTradingEngine:
                             "Failed to propagate risk overrides to component manager: %s. "
                             "Strategy-specific risk parameters may not apply.",
                             override_error,
-                            exc_info=True
+                            exc_info=True,
                         )
 
         # Trailing stop policy
@@ -491,7 +491,7 @@ class LiveTradingEngine:
                     "Failed to create time exit policy from config: %s. "
                     "Time-based exits will be disabled.",
                     e,
-                    exc_info=True
+                    exc_info=True,
                 )
                 self.time_exit_policy = None
 
@@ -1408,7 +1408,9 @@ class LiveTradingEngine:
                             logger.error("❌ Failed to apply strategy/model update")
                 except Exception as e:
                     logger.error(
-                        "❌ Exception during strategy update check/application: %s", e, exc_info=True
+                        "❌ Exception during strategy update check/application: %s",
+                        e,
+                        exc_info=True,
                     )
                 # Proceed to indicator calculation
 
@@ -2290,7 +2292,9 @@ class LiveTradingEngine:
                     # Attempt emergency close to maintain consistency
                     if self.enable_live_trading and self.exchange_interface:
                         try:
-                            close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+                            close_side = (
+                                OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+                            )
                             # Validate entry_price to prevent division by zero
                             if position.entry_price <= 0:
                                 logger.error(
@@ -2301,10 +2305,13 @@ class LiveTradingEngine:
                                 self.exchange_interface.place_market_order(
                                     symbol=symbol,
                                     side=close_side,
-                                    quantity=position.size * result.position_value / position.entry_price,
+                                    quantity=position.size
+                                    * result.position_value
+                                    / position.entry_price,
                                 )
                             logger.warning(
-                                "Emergency close placed for %s due to balance update failure", symbol
+                                "Emergency close placed for %s due to balance update failure",
+                                symbol,
                             )
                         except Exception as close_err:
                             logger.critical(
@@ -2355,9 +2362,13 @@ class LiveTradingEngine:
                             self.exchange_interface.place_market_order(
                                 symbol=symbol,
                                 side=close_side,
-                                quantity=position.size * self.current_balance / position.entry_price,
+                                quantity=position.size
+                                * self.current_balance
+                                / position.entry_price,
                             )
-                            logger.info("Emergency close order placed for orphaned position %s", symbol)
+                            logger.info(
+                                "Emergency close order placed for orphaned position %s", symbol
+                            )
                     except Exception as close_err:
                         logger.critical(
                             "CRITICAL: Emergency close FAILED for %s. "
@@ -2472,7 +2483,11 @@ class LiveTradingEngine:
                         else float(self.current_balance)
                     )
                     position_value = size * entry_balance
-                    quantity = position_value / float(position.entry_price) if position.entry_price else 0.0
+                    quantity = (
+                        position_value / float(position.entry_price)
+                        if position.entry_price
+                        else 0.0
+                    )
 
                 for attempt in range(max_retries):
                     try:
@@ -2800,7 +2815,9 @@ class LiveTradingEngine:
                     entry_price=position.entry_price,
                     exit_price=exit_price,
                     size=float(
-                        position.current_size if position.current_size is not None else position.size
+                        position.current_size
+                        if position.current_size is not None
+                        else position.size
                     ),
                     pnl=net_trade_pnl,
                     strategy_name=self._strategy_name(),
@@ -3019,9 +3036,7 @@ class LiveTradingEngine:
             )
 
             # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(
-                float(pos.unrealized_pnl) for pos in positions_snapshot.values()
-            )
+            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in positions_snapshot.values())
             equity = float(self.current_balance) + unrealized_pnl
 
             # Calculate current drawdown percentage

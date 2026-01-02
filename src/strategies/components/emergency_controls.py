@@ -649,7 +649,9 @@ class EmergencyControls:
         cooldown_key = f"{alert_type.value}_{strategy_id}"
         if cooldown_key in self.alert_cooldowns:
             last_alert = self.alert_cooldowns[cooldown_key]
-            if datetime.now(UTC) - last_alert < timedelta(minutes=self.config.alert_cooldown_minutes):
+            if datetime.now(UTC) - last_alert < timedelta(
+                minutes=self.config.alert_cooldown_minutes
+            ):
                 return None  # Still in cooldown
 
         # Check rate limiting

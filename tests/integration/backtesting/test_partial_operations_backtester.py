@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 import pandas as pd
 import pytest
 
-from src.engines.backtest.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
+from src.engines.backtest.engine import Backtester
 from src.position_management.partial_manager import PartialExitPolicy
 from src.strategies.ml_adaptive import create_ml_adaptive_strategy
 

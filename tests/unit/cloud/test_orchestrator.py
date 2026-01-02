@@ -115,16 +115,12 @@ class TestBuildJobSpec:
         spec = orchestrator._build_job_spec()
         assert spec.epochs == 100
 
-    def test_build_job_spec_instance_type(
-        self, orchestrator: CloudTrainingOrchestrator
-    ) -> None:
+    def test_build_job_spec_instance_type(self, orchestrator: CloudTrainingOrchestrator) -> None:
         """Verify job spec contains correct instance type."""
         spec = orchestrator._build_job_spec()
         assert spec.instance_type == "ml.g4dn.xlarge"
 
-    def test_build_job_spec_spot_instances(
-        self, orchestrator: CloudTrainingOrchestrator
-    ) -> None:
+    def test_build_job_spec_spot_instances(self, orchestrator: CloudTrainingOrchestrator) -> None:
         """Verify job spec contains correct spot instance setting."""
         spec = orchestrator._build_job_spec()
         assert spec.use_spot_instances is True
@@ -242,9 +238,7 @@ class TestJobIdValidation:
 
             assert job_suffix == "download", f"Failed for job_id: {job_id}"
 
-    def test_path_traversal_extracts_last_segment(
-        self, cloud_config: CloudTrainingConfig
-    ) -> None:
+    def test_path_traversal_extracts_last_segment(self, cloud_config: CloudTrainingConfig) -> None:
         """Verify path traversal attempts extract only the last segment."""
         import re
 
@@ -335,9 +329,7 @@ class TestCheckStatus:
         assert result.job_status == "Completed"
         assert result.metrics["loss"] == 0.05
 
-    def test_check_status_handles_exception(
-        self, cloud_config: CloudTrainingConfig
-    ) -> None:
+    def test_check_status_handles_exception(self, cloud_config: CloudTrainingConfig) -> None:
         """Verify check_status handles provider exceptions gracefully."""
         mock_provider = MagicMock()
         mock_provider.provider_name = "sagemaker"

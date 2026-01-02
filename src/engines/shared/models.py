@@ -161,6 +161,7 @@ class BasePosition:
         Raises:
             ValueError: If size exceeds 1.0 or is negative.
         """
+
         def _coerce_float(
             value: float | None, field_name: str, *, required: bool = False
         ) -> float | None:
@@ -188,12 +189,8 @@ class BasePosition:
         self.entry_balance = _coerce_float(self.entry_balance, "entry_balance")
         self.original_size = _coerce_float(self.original_size, "original_size")
         self.current_size = _coerce_float(self.current_size, "current_size")
-        self.trailing_stop_price = _coerce_float(
-            self.trailing_stop_price, "trailing_stop_price"
-        )
-        self.unrealized_pnl = _coerce_float(
-            self.unrealized_pnl, "unrealized_pnl"
-        ) or 0.0
+        self.trailing_stop_price = _coerce_float(self.trailing_stop_price, "trailing_stop_price")
+        self.unrealized_pnl = _coerce_float(self.unrealized_pnl, "unrealized_pnl") or 0.0
         self.unrealized_pnl_percent = (
             _coerce_float(self.unrealized_pnl_percent, "unrealized_pnl_percent") or 0.0
         )

@@ -7,8 +7,9 @@ retry strategies, exponential backoff, and jitter.
 import logging
 import random
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 import requests
 

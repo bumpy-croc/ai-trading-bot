@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 
@@ -104,10 +104,9 @@ class TestTimeExitPolicyEdgeCases:
         assert reason == "Max holding period"
 
         # Mixed timezone handling should work
-        from datetime import timezone
 
-        entry_utc = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
-        now_utc = datetime(2024, 1, 2, 1, 0, tzinfo=timezone.utc)
+        entry_utc = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+        now_utc = datetime(2024, 1, 2, 1, 0, tzinfo=UTC)
         should_exit, reason = policy.check_time_exit_conditions(entry_utc, now_utc)
         assert should_exit
         assert reason == "Max holding period"

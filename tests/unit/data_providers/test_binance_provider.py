@@ -8,8 +8,8 @@ pytestmark = pytest.mark.unit
 
 try:
     from src.data_providers.binance_provider import (
-        BinanceProvider,
         STOP_LOSS_LIMIT_SLIPPAGE_FACTOR,
+        BinanceProvider,
         with_rate_limit_retry,
     )
     from src.data_providers.exchange_interface import OrderSide
@@ -424,9 +424,7 @@ class TestPlaceStopLossOrder:
 
         mock_client = Mock()
         mock_client_class.return_value = mock_client
-        mock_client.create_order.side_effect = BinanceOrderException(
-            Mock(), "Order rejected"
-        )
+        mock_client.create_order.side_effect = BinanceOrderException(Mock(), "Order rejected")
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()

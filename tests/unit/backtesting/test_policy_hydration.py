@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.engines.backtest.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
+from src.engines.backtest.engine import Backtester
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.strategies.components import (

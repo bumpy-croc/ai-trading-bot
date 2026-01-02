@@ -5,9 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pytest
-
-from cli.commands.strategies import _handle_version, _get_modified_strategy_files
+from cli.commands.strategies import _get_modified_strategy_files, _handle_version
 
 
 class TestGetModifiedStrategyFiles:

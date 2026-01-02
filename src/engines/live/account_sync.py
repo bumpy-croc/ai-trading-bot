@@ -80,7 +80,9 @@ class AccountSynchronizer:
             # Check if we should sync (avoid too frequent syncs)
             if not force and self.last_sync_time:
                 time_since_last_sync = datetime.now(UTC) - self.last_sync_time
-                if time_since_last_sync < timedelta(minutes=DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES):
+                if time_since_last_sync < timedelta(
+                    minutes=DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES
+                ):
                     logger.info("Skipping sync - too recent")
                     return SyncResult(
                         success=True,
@@ -164,9 +166,7 @@ class AccountSynchronizer:
 
             if usdt_balance:
                 # Validate total is numeric
-                if usdt_balance.total is None or not isinstance(
-                    usdt_balance.total, (int, float)
-                ):
+                if usdt_balance.total is None or not isinstance(usdt_balance.total, (int, float)):
                     logger.error(
                         "Invalid USDT balance total: %s (type=%s) - skipping sync",
                         usdt_balance.total,

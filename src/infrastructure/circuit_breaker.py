@@ -12,9 +12,10 @@ Circuit States:
 import logging
 import threading
 import time
+from collections.abc import Callable
 from enum import Enum
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +133,7 @@ class CircuitBreaker:
                 self._state = CircuitState.OPEN
             elif self._failure_count >= self.failure_threshold:
                 logger.error(
-                    "Circuit breaker '%s' opened after %d consecutive failures. "
-                    "Last error: %s",
+                    "Circuit breaker '%s' opened after %d consecutive failures. " "Last error: %s",
                     self.name,
                     self._failure_count,
                     exception,

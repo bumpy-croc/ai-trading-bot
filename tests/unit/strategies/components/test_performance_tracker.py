@@ -282,10 +282,30 @@ class TestPerformanceTracker:
         """Test balance and drawdown tracking"""
         trades = [
             TradeResult(
-                datetime.now(UTC), "BTCUSDT", "long", 50000, 51000, 0.1, 100.0, 2.0, 24.0, "test", 0.8
+                datetime.now(UTC),
+                "BTCUSDT",
+                "long",
+                50000,
+                51000,
+                0.1,
+                100.0,
+                2.0,
+                24.0,
+                "test",
+                0.8,
             ),
             TradeResult(
-                datetime.now(UTC), "BTCUSDT", "long", 51000, 52000, 0.1, 100.0, 2.0, 24.0, "test", 0.8
+                datetime.now(UTC),
+                "BTCUSDT",
+                "long",
+                51000,
+                52000,
+                0.1,
+                100.0,
+                2.0,
+                24.0,
+                "test",
+                0.8,
             ),
             TradeResult(
                 datetime.now(UTC),

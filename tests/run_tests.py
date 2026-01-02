@@ -6,13 +6,12 @@ A simple script to run various test suites for the crypto trading bot.
 This provides quick access to common testing scenarios.
 """
 
-from datetime import UTC, datetime
-
 import argparse
 import os
 import subprocess
 import sys
 import time
+from datetime import UTC
 from pathlib import Path
 
 # Ensure we can import from the project

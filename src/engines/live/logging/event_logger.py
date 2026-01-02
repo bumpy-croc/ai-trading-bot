@@ -163,9 +163,7 @@ class LiveEventLogger:
         """
         if not self.enabled or self.session_id is None:
             if self.log_to_database and self.session_id is None:
-                logger.warning(
-                    "Cannot log account snapshot - no trading session ID available"
-                )
+                logger.warning("Cannot log account snapshot - no trading session ID available")
             return
 
         try:
@@ -181,9 +179,7 @@ class LiveEventLogger:
             )
 
             # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(
-                float(pos.unrealized_pnl) for pos in positions.values()
-            )
+            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in positions.values())
             equity = float(balance) + unrealized_pnl
 
             # Calculate current drawdown percentage
@@ -232,9 +228,7 @@ class LiveEventLogger:
             total_trades: Total number of completed trades.
             winning_trades: Number of winning trades.
         """
-        total_unrealized = sum(
-            float(pos.unrealized_pnl) for pos in positions.values()
-        )
+        total_unrealized = sum(float(pos.unrealized_pnl) for pos in positions.values())
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
 
         logger.info(
@@ -302,7 +296,7 @@ class LiveEventLogger:
             with open(log_file, "a") as f:
                 f.write(json.dumps(trade_data) + "\n")
 
-        except (OSError, IOError, ValueError) as e:
+        except (OSError, ValueError) as e:
             logger.error("Failed to log trade to file: %s", e, exc_info=True)
 
     def log_trade_to_database(
@@ -595,9 +589,7 @@ class LiveEventLogger:
         print(f"Active Positions: {len(positions)}")
 
         if completed_trades:
-            avg_trade = sum(trade.pnl for trade in completed_trades) / len(
-                completed_trades
-            )
+            avg_trade = sum(trade.pnl for trade in completed_trades) / len(completed_trades)
             print(f"Average Trade: ${avg_trade:.2f}")
 
         print("=" * 60)
@@ -639,9 +631,7 @@ class LiveEventLogger:
         )
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
         current_drawdown = (
-            (peak_balance - current_balance) / peak_balance * 100
-            if peak_balance > 0
-            else 0
+            (peak_balance - current_balance) / peak_balance * 100 if peak_balance > 0 else 0
         )
 
         return {

@@ -1,6 +1,5 @@
 """Tests for atb migration commands."""
 
-import argparse
 from unittest.mock import Mock, patch
 
 import pytest

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+    from src.position_management.dynamic_risk import DynamicRiskConfig
     from src.position_management.partial_manager import PartialExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
 
@@ -170,9 +170,7 @@ class PolicyHydrator:
                     self._partial_exit_failures = 0  # Reset on success
                     return policy, True
                 elif self.log_skipped:
-                    logger.debug(
-                        "Skipping partial-exit policy: partial operations disabled"
-                    )
+                    logger.debug("Skipping partial-exit policy: partial operations disabled")
         except Exception as e:
             self._partial_exit_failures += 1
             logger.debug("Failed to hydrate partial-exit policy: %s", e)
@@ -206,9 +204,7 @@ class PolicyHydrator:
                     self._trailing_stop_failures = 0  # Reset on success
                     return policy, True
                 elif self.log_skipped:
-                    logger.debug(
-                        "Skipping trailing-stop policy: trailing stops disabled"
-                    )
+                    logger.debug("Skipping trailing-stop policy: trailing stops disabled")
         except Exception as e:
             self._trailing_stop_failures += 1
             logger.debug("Failed to hydrate trailing-stop policy: %s", e)

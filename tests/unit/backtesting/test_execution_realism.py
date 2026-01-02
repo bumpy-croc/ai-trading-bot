@@ -1,8 +1,8 @@
 """Unit tests for realistic execution parameters (fees, slippage, next-bar execution)"""
 
+from datetime import datetime
+
 import pandas as pd
-from datetime import datetime, timedelta
-from unittest.mock import Mock
 
 from src.engines.backtest.engine import Backtester
 from src.strategies.components import Signal, SignalDirection
@@ -14,7 +14,9 @@ class MockDataProvider:
     def __init__(self, df: pd.DataFrame):
         self.df = df
 
-    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: datetime) -> pd.DataFrame:
+    def get_historical_data(
+        self, symbol: str, timeframe: str, start: datetime, end: datetime
+    ) -> pd.DataFrame:
         """Return mock data"""
         return self.df.copy()
 
@@ -22,7 +24,9 @@ class MockDataProvider:
 class SimpleSignalStrategy:
     """Simple test strategy that generates fixed signals"""
 
-    def __init__(self, name: str = "test_strategy", signal_direction: SignalDirection = SignalDirection.BUY):
+    def __init__(
+        self, name: str = "test_strategy", signal_direction: SignalDirection = SignalDirection.BUY
+    ):
         self.name = name
         self.signal_direction = signal_direction
         self._runtime = None
@@ -76,9 +80,7 @@ def test_fees_applied_on_entry_and_exit():
         log_to_database=False,
     )
 
-    results = backtester.run(
-        symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1]
-    )
+    results = backtester.run(symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1])
 
     # Check that fee_rate is configured correctly
     assert backtester.fee_rate == 0.001, "Fee rate should be set"
@@ -103,9 +105,7 @@ def test_slippage_applied_on_entry():
         log_to_database=False,
     )
 
-    results = backtester.run(
-        symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1]
-    )
+    results = backtester.run(symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1])
 
     # Should have slippage cost recorded
     assert results["total_slippage_cost"] >= 0, "Should have slippage cost"
@@ -131,9 +131,7 @@ def test_fees_and_slippage_combined():
         log_to_database=False,
     )
 
-    results = backtester.run(
-        symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1]
-    )
+    results = backtester.run(symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1])
 
     # Both costs should be recorded (may be zero if no trades)
     assert isinstance(results["total_fees"], float), "Total fees should be recorded"
@@ -176,7 +174,9 @@ def test_next_bar_execution_disabled_by_default():
         log_to_database=False,
     )
 
-    assert backtester.use_next_bar_execution is False, "Next-bar execution should be disabled by default"
+    assert (
+        backtester.use_next_bar_execution is False
+    ), "Next-bar execution should be disabled by default"
 
 
 def test_high_low_for_stops_enabled_by_default():
@@ -193,7 +193,9 @@ def test_high_low_for_stops_enabled_by_default():
         log_to_database=False,
     )
 
-    assert backtester.use_high_low_for_stops is True, "High/low stop detection should be enabled by default"
+    assert (
+        backtester.use_high_low_for_stops is True
+    ), "High/low stop detection should be enabled by default"
 
 
 def test_execution_settings_in_results():
@@ -216,16 +218,20 @@ def test_execution_settings_in_results():
         log_to_database=False,
     )
 
-    results = backtester.run(
-        symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1]
-    )
+    results = backtester.run(symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1])
 
     # Check execution settings are in results
     assert "execution_settings" in results, "Results should include execution_settings"
     assert results["execution_settings"]["fee_rate"] == fee_rate, "Fee rate should match"
-    assert results["execution_settings"]["slippage_rate"] == slippage_rate, "Slippage rate should match"
-    assert results["execution_settings"]["use_next_bar_execution"] is False, "Next-bar execution flag should match"
-    assert results["execution_settings"]["use_high_low_for_stops"] is True, "High-low flag should match"
+    assert (
+        results["execution_settings"]["slippage_rate"] == slippage_rate
+    ), "Slippage rate should match"
+    assert (
+        results["execution_settings"]["use_next_bar_execution"] is False
+    ), "Next-bar execution flag should match"
+    assert (
+        results["execution_settings"]["use_high_low_for_stops"] is True
+    ), "High-low flag should match"
 
 
 def test_realistic_execution_reduces_returns():

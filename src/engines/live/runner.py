@@ -18,8 +18,8 @@ from src.config.constants import (
     DEFAULT_MAX_RISK_PER_TRADE,
 )
 from src.data_providers.mock_data_provider import MockDataProvider
-from src.infrastructure.logging.config import configure_logging
 from src.engines.live.trading_engine import LiveTradingEngine
+from src.infrastructure.logging.config import configure_logging
 from src.risk.risk_manager import RiskParameters
 
 # Import strategies
@@ -74,7 +74,10 @@ def parse_args():
         "--balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
     )
     parser.add_argument(
-        "--max-position", type=float, default=DEFAULT_MAX_POSITION_SIZE, help="Max position size (0.1 = 10% of balance)"
+        "--max-position",
+        type=float,
+        default=DEFAULT_MAX_POSITION_SIZE,
+        help="Max position size (0.1 = 10% of balance)",
     )
     parser.add_argument("--check-interval", type=int, default=60, help="Check interval in seconds")
 

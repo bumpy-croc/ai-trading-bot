@@ -222,9 +222,7 @@ class TestEdgeCases:
     def test_very_large_notional(self) -> None:
         """Very large notional should not overflow."""
         calc = CostCalculator(fee_rate=0.001, slippage_rate=0.0005)
-        result = calc.calculate_entry_costs(
-            price=100.0, notional=1_000_000_000.0, side="long"
-        )
+        result = calc.calculate_entry_costs(price=100.0, notional=1_000_000_000.0, side="long")
 
         assert result.fee == pytest.approx(1_000_000.0)
         assert result.slippage_cost > 0

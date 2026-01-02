@@ -14,11 +14,11 @@ try:
     import tensorflow as tf
     from tensorflow.keras import callbacks
     from tensorflow.keras.layers import (
+        GRU,
         BatchNormalization,
         Conv1D,
         Dense,
         Dropout,
-        GRU,
         Input,
         LayerNormalization,
         MaxPooling1D,
@@ -105,8 +105,6 @@ def create_model(input_shape, has_sentiment: bool = True) -> Any:
         metrics=[tf.keras.metrics.RootMeanSquaredError(name="rmse")],
     )
     return model
-
-
 
 
 def default_callbacks(patience: int = 15, reduce_lr_patience: int | None = None) -> list[Any]:

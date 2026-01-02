@@ -13,7 +13,7 @@ ARCHITECTURE:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.strategies.components.regime_context import RegimeContext
@@ -65,7 +65,7 @@ class RegimeHelper:
     """
 
     @staticmethod
-    def get_trend(regime: "RegimeContext | None") -> str | None:
+    def get_trend(regime: RegimeContext | None) -> str | None:
         """Get regime trend value safely.
 
         Args:
@@ -84,7 +84,7 @@ class RegimeHelper:
         return None
 
     @staticmethod
-    def get_volatility(regime: "RegimeContext | None") -> str | None:
+    def get_volatility(regime: RegimeContext | None) -> str | None:
         """Get regime volatility value safely.
 
         Args:
@@ -97,13 +97,17 @@ class RegimeHelper:
             return None
         try:
             if hasattr(regime, "volatility") and regime.volatility is not None:
-                return regime.volatility.value if hasattr(regime.volatility, "value") else str(regime.volatility)
+                return (
+                    regime.volatility.value
+                    if hasattr(regime.volatility, "value")
+                    else str(regime.volatility)
+                )
         except (AttributeError, TypeError):
             pass
         return None
 
     @staticmethod
-    def get_confidence(regime: "RegimeContext | None") -> float:
+    def get_confidence(regime: RegimeContext | None) -> float:
         """Get regime confidence value safely.
 
         Args:
@@ -122,7 +126,7 @@ class RegimeHelper:
         return 1.0
 
     @staticmethod
-    def is_bull_market(regime: "RegimeContext | None") -> bool:
+    def is_bull_market(regime: RegimeContext | None) -> bool:
         """Check if regime indicates a bull market (uptrend).
 
         Args:
@@ -134,7 +138,7 @@ class RegimeHelper:
         return RegimeHelper.get_trend(regime) == "trend_up"
 
     @staticmethod
-    def is_bear_market(regime: "RegimeContext | None") -> bool:
+    def is_bear_market(regime: RegimeContext | None) -> bool:
         """Check if regime indicates a bear market (downtrend).
 
         Args:
@@ -146,7 +150,7 @@ class RegimeHelper:
         return RegimeHelper.get_trend(regime) == "trend_down"
 
     @staticmethod
-    def is_ranging(regime: "RegimeContext | None") -> bool:
+    def is_ranging(regime: RegimeContext | None) -> bool:
         """Check if regime indicates a ranging/sideways market.
 
         Args:
@@ -158,7 +162,7 @@ class RegimeHelper:
         return RegimeHelper.get_trend(regime) == "range"
 
     @staticmethod
-    def is_high_volatility(regime: "RegimeContext | None") -> bool:
+    def is_high_volatility(regime: RegimeContext | None) -> bool:
         """Check if regime indicates high volatility.
 
         Args:
@@ -170,7 +174,7 @@ class RegimeHelper:
         return RegimeHelper.get_volatility(regime) == "high_vol"
 
     @staticmethod
-    def is_low_volatility(regime: "RegimeContext | None") -> bool:
+    def is_low_volatility(regime: RegimeContext | None) -> bool:
         """Check if regime indicates low volatility.
 
         Args:
@@ -207,7 +211,7 @@ class RegimeMultiplierCalculator:
         """
         self.config = config or RegimeMultiplierConfig()
 
-    def calculate(self, regime: "RegimeContext | None") -> float:
+    def calculate(self, regime: RegimeContext | None) -> float:
         """Calculate the combined regime multiplier.
 
         Applies all configured adjustments and returns the final multiplier,
@@ -252,7 +256,7 @@ class RegimeMultiplierCalculator:
 
         return max(self.config.min_multiplier, multiplier)
 
-    def calculate_conservative(self, regime: "RegimeContext | None") -> float:
+    def calculate_conservative(self, regime: RegimeContext | None) -> float:
         """Calculate a more conservative multiplier (no bull boost).
 
         Similar to calculate() but never increases position size,
@@ -287,7 +291,7 @@ class RegimeMultiplierCalculator:
 
 # Convenience function for simple use cases
 def get_regime_multiplier(
-    regime: "RegimeContext | None",
+    regime: RegimeContext | None,
     config: RegimeMultiplierConfig | None = None,
 ) -> float:
     """Get regime multiplier using default or custom config.

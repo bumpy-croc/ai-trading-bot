@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING
 from src.config.constants import DEFAULT_CONFIDENCE_SCORE
 
 if TYPE_CHECKING:
-    from src.engines.backtest.models import Trade
     from src.database.manager import DatabaseManager
     from src.database.models import TradeSource
+    from src.engines.backtest.models import Trade
 
 logger = logging.getLogger(__name__)
 

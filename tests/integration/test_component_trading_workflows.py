@@ -5,40 +5,37 @@ Tests end-to-end trading workflows including signal generation, risk management,
 position sizing, and regime transitions with the new component architecture.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
-from src.strategies.components.strategy import Strategy, TradingDecision
-from src.strategies.components.signal_generator import (
-    WeightedVotingSignalGenerator,
-    SignalDirection,
-    Signal,
-)
-from src.strategies.components.technical_signal_generator import TechnicalSignalGenerator
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.prediction import PredictionResult
 from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
-from src.strategies.components.risk_manager import (
-    FixedRiskManager,
-    VolatilityRiskManager,
-    RegimeAdaptiveRiskManager,
-    Position,
-    MarketData,
-)
 from src.strategies.components.position_sizer import (
     ConfidenceWeightedSizer,
     KellySizer,
     RegimeAdaptiveSizer,
 )
 from src.strategies.components.regime_context import (
-    EnhancedRegimeDetector,
-    RegimeContext,
     TrendLabel,
     VolLabel,
 )
-from src.prediction import PredictionResult
-
+from src.strategies.components.risk_manager import (
+    FixedRiskManager,
+    MarketData,
+    Position,
+    RegimeAdaptiveRiskManager,
+    VolatilityRiskManager,
+)
+from src.strategies.components.signal_generator import (
+    Signal,
+    SignalDirection,
+    WeightedVotingSignalGenerator,
+)
+from src.strategies.components.strategy import Strategy, TradingDecision
+from src.strategies.components.technical_signal_generator import TechnicalSignalGenerator
 
 pytestmark = pytest.mark.integration
 
@@ -558,7 +555,7 @@ class TestEndToEndTradingWorkflows:
         # At least some decisions should differ (not guaranteed, but likely)
         different_signals = sum(
             1
-            for ml_d, tech_d in zip(ml_decisions, tech_decisions)
+            for ml_d, tech_d in zip(ml_decisions, tech_decisions, strict=False)
             if ml_d.signal.direction != tech_d.signal.direction
         )
 

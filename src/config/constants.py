@@ -137,7 +137,11 @@ DEFAULT_REGIME_MIN_DURATION_BARS = 15  # Minimum bars before switching
 DEFAULT_REGIME_TIMEFRAME_AGREEMENT = 0.6  # Require 60% agreement across timeframes
 DEFAULT_REGIME_TRANSITION_SIZE_MULTIPLIER = 0.5  # Size multiplier during transitions
 DEFAULT_REGIME_MAX_DRAWDOWN_SWITCH = 0.15  # Switch to defensive if drawdown > 15%
-DEFAULT_REGIME_TIMEFRAME_WEIGHTS = {"1h": 1.0, "4h": 1.5, "1d": 2.0}  # Higher timeframes weighted more
+DEFAULT_REGIME_TIMEFRAME_WEIGHTS = {
+    "1h": 1.0,
+    "4h": 1.5,
+    "1d": 2.0,
+}  # Higher timeframes weighted more
 DEFAULT_REGIME_TIMEFRAMES = ["1h", "4h", "1d"]  # Timeframes for multi-timeframe analysis
 
 # CPU Optimization Constants

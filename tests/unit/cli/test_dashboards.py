@@ -3,8 +3,6 @@
 import argparse
 from unittest.mock import Mock, patch
 
-import pytest
-
 from cli.commands.dashboards import _handle_list, _handle_run
 
 
@@ -69,7 +67,7 @@ class TestDashboardsRunCommand:
         mock_dashboard_class = Mock()
         mock_dashboard_instance = Mock()
         mock_dashboard_class.return_value = mock_dashboard_instance
-        setattr(mock_module, "MonitoringDashboard", mock_dashboard_class)
+        mock_module.MonitoringDashboard = mock_dashboard_class
 
         # Act
         with (

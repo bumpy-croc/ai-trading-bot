@@ -53,8 +53,7 @@ class S3ArtifactManager:
                 self._s3_client = boto3.client("s3", region_name=self.region)
             except ImportError as exc:
                 raise ArtifactSyncError(
-                    "boto3 is required for S3 operations. "
-                    "Install with: pip install '.[cloud]'"
+                    "boto3 is required for S3 operations. " "Install with: pip install '.[cloud]'"
                 ) from exc
 
     def upload_training_data(

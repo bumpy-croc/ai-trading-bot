@@ -313,7 +313,11 @@ class FixedRiskManager(RiskManager):
     Uses fixed percentage risk per trade and simple stop loss rules
     """
 
-    def __init__(self, risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE, stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT):
+    def __init__(
+        self,
+        risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE,
+        stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT,
+    ):
         """
         Initialize fixed risk manager
 
@@ -662,7 +666,11 @@ class RegimeAdaptiveRiskManager(RiskManager):
     with different risk profiles for different market conditions.
     """
 
-    def __init__(self, base_risk: float = DEFAULT_BASE_RISK_PER_TRADE, regime_multipliers: dict[str, float] | None = None):
+    def __init__(
+        self,
+        base_risk: float = DEFAULT_BASE_RISK_PER_TRADE,
+        regime_multipliers: dict[str, float] | None = None,
+    ):
         """
         Initialize regime-adaptive risk manager
 
