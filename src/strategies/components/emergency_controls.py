@@ -379,14 +379,13 @@ class EmergencyControls:
             )
             return approval_request.request_id
 
-        else:
-            # Execute switch directly
-            request_id = self.strategy_switcher.request_manual_switch(
-                from_strategy, to_strategy, reason, requested_by
-            )
+        # Execute switch directly
+        request_id = self.strategy_switcher.request_manual_switch(
+            from_strategy, to_strategy, reason, requested_by
+        )
 
-            self.logger.info(f"Manual switch request submitted directly: {request_id}")
-            return request_id
+        self.logger.info(f"Manual switch request submitted directly: {request_id}")
+        return request_id
 
     def approve_request(
         self, request_id: str, approved_by: str, rejection_reason: str | None = None

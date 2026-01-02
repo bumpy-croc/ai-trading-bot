@@ -693,12 +693,11 @@ class RegimeTester:
 
         if isinstance(component, SignalGenerator):
             return self._test_signal_generator_in_regime(component, regime_data, regime_type)
-        elif isinstance(component, RiskManager):
+        if isinstance(component, RiskManager):
             return self._test_risk_manager_in_regime(component, regime_data, regime_type)
-        elif isinstance(component, PositionSizer):
+        if isinstance(component, PositionSizer):
             return self._test_position_sizer_in_regime(component, regime_data, regime_type)
-        else:
-            raise ValueError(f"Unsupported component type: {type(component)}")
+        raise ValueError(f"Unsupported component type: {type(component)}")
 
     def _test_signal_generator_in_regime(
         self, generator: SignalGenerator, regime_data: pd.DataFrame, regime_type: str

@@ -804,10 +804,9 @@ class PerformanceTracker:
 
         if score1 > score2:
             return "strategy_1"
-        elif score2 > score1:
+        if score2 > score1:
             return "strategy_2"
-        else:
-            return "tie"
+        return "tie"
 
     def _is_cache_valid(self, cache_key: str) -> bool:
         """Check if cached metrics are still valid"""

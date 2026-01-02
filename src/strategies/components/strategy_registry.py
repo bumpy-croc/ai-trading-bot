@@ -811,8 +811,7 @@ class StrategyRegistry:
 
         if is_major:
             return f"{major + 1}.0.0"
-        else:
-            return f"{major}.{minor}.{patch + 1}"
+        return f"{major}.{minor}.{patch + 1}"
 
     def _get_descendants(self, strategy_id: str) -> list[dict[str, Any]]:
         """Get all descendants of a strategy"""

@@ -115,14 +115,16 @@ def create_ensemble_weighted_strategy(
     }
 
     # Configure trailing stop behavior via risk overrides
-    strategy.set_risk_overrides({
-        "trailing_stop": {
-            "enabled": True,
-            "activation_threshold": 0.04,
-            "distance": 0.02,
-            "step": 0.01,
-            "cooldown_hours": 4,
+    strategy.set_risk_overrides(
+        {
+            "trailing_stop": {
+                "enabled": True,
+                "activation_threshold": 0.04,
+                "distance": 0.02,
+                "step": 0.01,
+                "cooldown_hours": 4,
+            }
         }
-    })
+    )
 
     return strategy

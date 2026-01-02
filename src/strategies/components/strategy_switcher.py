@@ -941,12 +941,11 @@ class StrategySwitcher:
         """Determine switch priority based on degradation severity"""
         if severity == DegradationSeverity.CRITICAL:
             return 4  # Emergency
-        elif severity == DegradationSeverity.SEVERE:
+        if severity == DegradationSeverity.SEVERE:
             return 3  # High
-        elif severity == DegradationSeverity.MODERATE:
+        if severity == DegradationSeverity.MODERATE:
             return 2  # Medium
-        else:
-            return 1  # Low
+        return 1  # Low
 
     def _capture_performance_snapshot(
         self, strategy_id: str, performance_tracker: PerformanceTracker | None = None

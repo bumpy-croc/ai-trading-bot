@@ -724,9 +724,8 @@ class PerformanceAttributionAnalyzer:
         if max_drawdown < target_drawdown:
             # Good risk control - positive contribution
             return (target_drawdown - max_drawdown) * baseline_results["total_return"]
-        else:
-            # Poor risk control - negative contribution
-            return -(max_drawdown - target_drawdown) * baseline_results["total_return"]
+        # Poor risk control - negative contribution
+        return -(max_drawdown - target_drawdown) * baseline_results["total_return"]
 
     def _estimate_sizing_contribution(
         self,
@@ -1029,7 +1028,7 @@ class PerformanceAttributionAnalyzer:
                 regime_detector=original_strategy.regime_detector,
                 enable_logging=False,  # Disable logging for test strategy
             )
-        elif component_type == "risk_manager":
+        if component_type == "risk_manager":
             return Strategy(
                 name=f"{original_strategy.name}_modified_risk",
                 signal_generator=original_strategy.signal_generator,
@@ -1038,7 +1037,7 @@ class PerformanceAttributionAnalyzer:
                 regime_detector=original_strategy.regime_detector,
                 enable_logging=False,
             )
-        elif component_type == "position_sizer":
+        if component_type == "position_sizer":
             return Strategy(
                 name=f"{original_strategy.name}_modified_sizer",
                 signal_generator=original_strategy.signal_generator,
@@ -1047,5 +1046,4 @@ class PerformanceAttributionAnalyzer:
                 regime_detector=original_strategy.regime_detector,
                 enable_logging=False,
             )
-        else:
-            raise ValueError(f"Unknown component type: {component_type}")
+        raise ValueError(f"Unknown component type: {component_type}")

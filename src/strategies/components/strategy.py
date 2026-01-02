@@ -460,10 +460,9 @@ class Strategy:
             # Return conservative stop loss
             if signal.direction == SignalDirection.BUY:
                 return entry_price * 0.95  # 5% stop loss for long
-            elif signal.direction == SignalDirection.SELL:
+            if signal.direction == SignalDirection.SELL:
                 return entry_price * 1.05  # 5% stop loss for short
-            else:
-                return entry_price
+            return entry_price
 
     def get_performance_metrics(self, lookback_decisions: int = 100) -> dict[str, Any]:
         """

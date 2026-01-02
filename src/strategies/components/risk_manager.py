@@ -403,12 +403,11 @@ class FixedRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price * (1 - self.stop_loss_pct)
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price * (1 + self.stop_loss_pct)
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
         """Get position size multiplier based on regime"""
@@ -585,12 +584,11 @@ class VolatilityRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price - stop_distance
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price + stop_distance
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
         """Get position size multiplier based on regime"""
@@ -786,12 +784,11 @@ class RegimeAdaptiveRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price * (1 - stop_loss_pct)
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price * (1 + stop_loss_pct)
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def get_take_profit(
         self,
@@ -851,9 +848,9 @@ class RegimeAdaptiveRiskManager(RiskManager):
         if hasattr(regime, "trend") and hasattr(regime, "volatility"):
             if regime.trend.value == "trend_up" and regime.volatility.value == "low_vol":
                 return 0.03  # 3% tight stop in bull low vol
-            elif regime.trend.value == "trend_down":
+            if regime.trend.value == "trend_down":
                 return 0.08  # 8% wider stop in bear market
-            elif regime.volatility.value == "high_vol":
+            if regime.volatility.value == "high_vol":
                 return 0.07  # 7% wider stop in high volatility
 
         return 0.05  # 5% default

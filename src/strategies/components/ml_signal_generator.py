@@ -129,9 +129,7 @@ class MLSignalGenerator(SignalGenerator):
 
         except Exception:
             if not self._engine_warning_emitted:
-                logger.exception(
-                    "MLSignalGenerator: Prediction engine initialization failed"
-                )
+                logger.exception("MLSignalGenerator: Prediction engine initialization failed")
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
@@ -275,9 +273,7 @@ class MLSignalGenerator(SignalGenerator):
             return pred
 
         except Exception:
-            logger.exception(
-                "MLSignalGenerator: Prediction error at index %d", index
-            )
+            logger.exception("MLSignalGenerator: Prediction error at index %d", index)
             return None
 
     def _should_generate_short_signal(
@@ -494,9 +490,7 @@ class MLBasicSignalGenerator(SignalGenerator):
 
         except Exception:
             if not self._engine_warning_emitted:
-                logger.exception(
-                    "MLBasicSignalGenerator: Prediction engine initialization failed"
-                )
+                logger.exception("MLBasicSignalGenerator: Prediction engine initialization failed")
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
@@ -659,9 +653,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             return pred
 
         except Exception:
-            logger.exception(
-                "MLBasicSignalGenerator: Prediction error at index %d", index
-            )
+            logger.exception("MLBasicSignalGenerator: Prediction error at index %d", index)
             return None
 
     def _calculate_confidence(self, predicted_return: float) -> float:

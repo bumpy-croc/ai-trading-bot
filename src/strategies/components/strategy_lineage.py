@@ -747,12 +747,11 @@ class StrategyLineageTracker:
                 "edges": self._get_lineage_edges(strategy_id),
                 "metadata": lineage,
             }
-        elif format == "mermaid":
+        if format == "mermaid":
             return self._generate_mermaid_diagram(strategy_id)
-        elif format == "dot":
+        if format == "dot":
             return self._generate_dot_diagram(strategy_id)
-        else:
-            raise ValueError(f"Unsupported format: {format}")
+        raise ValueError(f"Unsupported format: {format}")
 
     def _get_descendants(self, strategy_id: str) -> list[dict[str, Any]]:
         """Get all descendants of a strategy"""
@@ -836,15 +835,12 @@ class StrategyLineageTracker:
             {
                 "source": edge_data["source"],
                 "target": edge_data["target"],
-                "relationship": edge_data.get(
-                    "relationship_type", RelationshipType.PARENT
-                ).value,
+                "relationship": edge_data.get("relationship_type", RelationshipType.PARENT).value,
                 "branch_id": edge_data.get("branch_id"),
                 "merge_id": edge_data.get("merge_id"),
             }
             for edge_data in self.graph_edges.values()
-            if edge_data["source"] in all_strategies
-            and edge_data["target"] in all_strategies
+            if edge_data["source"] in all_strategies and edge_data["target"] in all_strategies
         ]
 
         return edges
@@ -859,15 +855,15 @@ class StrategyLineageTracker:
         # Add nodes using extend
         for node in nodes:
             node_style = "fill:#e1f5fe" if node["type"] == "current" else "fill:#f3e5f5"
-            mermaid.extend([
-                f"    {node['id']}[{node['id']}]",
-                f"    {node['id']} --> {node_style}",
-            ])
+            mermaid.extend(
+                [
+                    f"    {node['id']}[{node['id']}]",
+                    f"    {node['id']} --> {node_style}",
+                ]
+            )
 
         # Add edges using extend
-        mermaid.extend(
-            f"    {edge['source']} --> {edge['target']}" for edge in edges
-        )
+        mermaid.extend(f"    {edge['source']} --> {edge['target']}" for edge in edges)
 
         return "\n".join(mermaid)
 
@@ -885,9 +881,7 @@ class StrategyLineageTracker:
         )
 
         # Add edges using extend
-        dot.extend(
-            f'    "{edge["source"]}" -> "{edge["target"]}";' for edge in edges
-        )
+        dot.extend(f'    "{edge["source"]}" -> "{edge["target"]}";' for edge in edges)
 
         dot.append("}")
         return "\n".join(dot)

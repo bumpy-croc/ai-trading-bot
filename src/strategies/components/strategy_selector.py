@@ -740,13 +740,12 @@ class StrategySelector:
 
         if target_min <= volatility <= target_max:
             return 1.0
-        elif volatility < target_min:
+        if volatility < target_min:
             # Penalize too low volatility (might indicate insufficient opportunities)
             return max(0.0, volatility / target_min)
-        else:
-            # Penalize too high volatility
-            penalty = (volatility - target_max) / target_max
-            return max(0.0, 1.0 - penalty)
+        # Penalize too high volatility
+        penalty = (volatility - target_max) / target_max
+        return max(0.0, 1.0 - penalty)
 
     def _get_cached_performance_metrics(
         self, strategy_id: str, tracker: PerformanceTracker
