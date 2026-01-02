@@ -337,9 +337,9 @@ class PerformanceAttributionAnalyzer:
 
                 portfolio_values.append(balance)
 
-            except Exception as e:
+            except Exception:
                 error_count += 1
-                logger.exception("Error in strategy simulation at index %d: %s", i, e)
+                logger.exception("Error in strategy simulation at index %d", i)
                 continue
 
         # Check error threshold (fail if >2% errors)
@@ -418,8 +418,8 @@ class PerformanceAttributionAnalyzer:
                 "decision_metadata": decision_metadata,
             }
 
-        except Exception as e:
-            logger.exception("Error executing attribution trade: %s", e)
+        except Exception:
+            logger.exception("Error executing attribution trade")
             return None
 
     def _analyze_signal_generator_attribution(

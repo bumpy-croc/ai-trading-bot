@@ -933,9 +933,8 @@ class CircuitBreakerSignalGenerator(SignalGenerator):
         except Exception as e:
             # Unexpected error in fallback path
             logger.exception(
-                "Error in circuit breaker signal generation for %s: %s",
+                "Error in circuit breaker signal generation for %s",
                 self.wrapped_generator.name,
-                e,
             )
             # Return safe HOLD signal
             return Signal(

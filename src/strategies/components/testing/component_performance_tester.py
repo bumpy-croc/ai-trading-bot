@@ -512,9 +512,9 @@ class ComponentPerformanceTester:
                                 regime_breakdown[regime_key] = {"signals": [], "accuracy": 0.0}
                             regime_breakdown[regime_key]["signals"].append(accurate)
 
-                except Exception as e:
+                except Exception:
                     error_count += 1
-                    logger.exception("Error generating signal at index %d: %s", i, e)
+                    logger.exception("Error generating signal at index %d", i)
                     continue
 
             all_signals.extend(scenario_signals)
@@ -747,9 +747,9 @@ class ComponentPerformanceTester:
                         }
                     )
 
-                except Exception as e:
+                except Exception:
                     error_count += 1
-                    logger.exception("Error testing risk manager at index %d: %s", i, e)
+                    logger.exception("Error testing risk manager at index %d", i)
                     continue
 
         # Calculate metrics
@@ -921,9 +921,9 @@ class ComponentPerformanceTester:
                     calc_time = time.time() - calc_start
                     calculation_times.append(calc_time)
 
-                except Exception as e:
+                except Exception:
                     error_count += 1
-                    logger.exception("Error testing position sizer at index %d: %s", i, e)
+                    logger.exception("Error testing position sizer at index %d", i)
                     continue
 
         # Calculate metrics

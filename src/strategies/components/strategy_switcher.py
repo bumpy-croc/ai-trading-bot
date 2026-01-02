@@ -476,7 +476,7 @@ class StrategySwitcher:
                     )
                     return switch_record
                 except (ValueError, TypeError, RuntimeError) as e:
-                    self.logger.exception("Pre-switch callback #%d error: %s", i, e)
+                    self.logger.exception("Pre-switch callback #%d error", i)
                     switch_record.status = SwitchStatus.FAILED
                     switch_record.error_message = f"Pre-switch callback #{i} error: {e}"
                     return switch_record
@@ -486,9 +486,7 @@ class StrategySwitcher:
                 success = strategy_activation_callback(request.to_strategy)
             except (ValueError, TypeError, RuntimeError) as activation_error:
                 # Handle activation callback exceptions the same way as False returns
-                self.logger.exception(
-                    "Strategy activation callback raised exception: %s", activation_error
-                )
+                self.logger.exception("Strategy activation callback raised exception")
                 success = False
                 # Store the exception for potential rollback error message
                 activation_exception = activation_error
@@ -570,8 +568,8 @@ class StrategySwitcher:
                     )
                 except ExecutionTimeoutError as e:
                     self.logger.warning("Post-switch callback #%d timed out: %s", i, e)
-                except (ValueError, TypeError, RuntimeError) as e:
-                    self.logger.exception("Post-switch callback #%d error: %s", i, e)
+                except (ValueError, TypeError, RuntimeError):
+                    self.logger.exception("Post-switch callback #%d error", i)
 
             # Start performance tracking
             if self.config.track_switch_performance:
@@ -584,7 +582,7 @@ class StrategySwitcher:
         except (ValueError, TypeError, RuntimeError, KeyError) as e:
             switch_record.status = SwitchStatus.FAILED
             switch_record.error_message = str(e)
-            self.logger.exception("Strategy switch failed: %s", e)
+            self.logger.exception("Strategy switch failed")
 
             # Execute post-switch callbacks with failure flag and timeout protection
             for i, callback in enumerate(self.post_switch_callbacks):
@@ -598,10 +596,8 @@ class StrategySwitcher:
                     )
                 except ExecutionTimeoutError as te:
                     self.logger.warning("Post-switch callback #%d timed out: %s", i, te)
-                except (ValueError, TypeError, RuntimeError) as callback_error:
-                    self.logger.exception(
-                        "Post-switch callback #%d error: %s", i, callback_error
-                    )
+                except (ValueError, TypeError, RuntimeError):
+                    self.logger.exception("Post-switch callback #%d error", i)
 
         finally:
             # Add to history

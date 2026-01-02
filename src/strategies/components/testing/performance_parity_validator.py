@@ -210,7 +210,7 @@ class PerformanceParityValidator:
             self.logger.info(f"Performance parity validation completed: {report.overall_result}")
 
         except (ValueError, KeyError, TypeError) as e:
-            self.logger.exception("Error during performance parity validation: %s", e)
+            self.logger.exception("Error during performance parity validation")
             report.overall_result = ValidationResult.FAIL
             report.certification_notes = f"Validation failed due to error: {e!s}"
 

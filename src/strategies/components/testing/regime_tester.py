@@ -368,9 +368,9 @@ class RegimeTester:
 
                 portfolio_values.append(balance)
 
-            except Exception as e:
+            except Exception:
                 error_count += 1
-                logger.exception("Error testing strategy in regime at index %d: %s", i, e)
+                logger.exception("Error testing strategy in regime at index %d", i)
                 continue
 
         # Calculate performance metrics
@@ -483,8 +483,8 @@ class RegimeTester:
                 "exit_time": exit_data.name,
             }
 
-        except Exception as e:
-            logger.exception("Error executing trade: %s", e)
+        except Exception:
+            logger.exception("Error executing trade")
             return None
 
     def _calculate_sharpe_ratio(self, returns: pd.Series, risk_free_rate: float = 0.0) -> float:
@@ -617,8 +617,8 @@ class RegimeTester:
             try:
                 result = self.test_strategy_in_regime(strategy, regime_type, initial_balance)
                 regime_results[regime_type] = result
-            except Exception as e:
-                logger.exception("Error testing regime %s: %s", regime_type, e)
+            except Exception:
+                logger.exception("Error testing regime %s", regime_type)
                 continue
 
         if not regime_results:
@@ -767,8 +767,8 @@ class RegimeTester:
                 signals.append(signal)
                 accuracies.append(accurate)
 
-            except Exception as e:
-                logger.exception("Error testing signal generator in regime: %s", e)
+            except Exception:
+                logger.exception("Error testing signal generator in regime")
                 continue
 
         if not signals:

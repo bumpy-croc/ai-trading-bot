@@ -127,11 +127,10 @@ class MLSignalGenerator(SignalGenerator):
 
             self.prediction_engine = engine
 
-        except Exception as e:
+        except Exception:
             if not self._engine_warning_emitted:
                 logger.exception(
-                    "MLSignalGenerator: Prediction engine initialization failed: %s",
-                    e,
+                    "MLSignalGenerator: Prediction engine initialization failed"
                 )
                 self._engine_warning_emitted = True
             self.prediction_engine = None
@@ -275,9 +274,9 @@ class MLSignalGenerator(SignalGenerator):
             # Prediction engine returns real prices
             return pred
 
-        except Exception as e:
+        except Exception:
             logger.exception(
-                "MLSignalGenerator: Prediction error at index %d: %s", index, e
+                "MLSignalGenerator: Prediction error at index %d", index
             )
             return None
 
@@ -493,11 +492,10 @@ class MLBasicSignalGenerator(SignalGenerator):
                 # Engine doesn't have model_registry attribute
                 self._registry = None
 
-        except Exception as e:
+        except Exception:
             if not self._engine_warning_emitted:
                 logger.exception(
-                    "MLBasicSignalGenerator: Prediction engine initialization failed: %s",
-                    e,
+                    "MLBasicSignalGenerator: Prediction engine initialization failed"
                 )
                 self._engine_warning_emitted = True
             self.prediction_engine = None
@@ -660,9 +658,9 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Prediction engine returns real prices
             return pred
 
-        except Exception as e:
+        except Exception:
             logger.exception(
-                "MLBasicSignalGenerator: Prediction error at index %d: %s", index, e
+                "MLBasicSignalGenerator: Prediction error at index %d", index
             )
             return None
 

@@ -867,5 +867,5 @@ class StrategyRegistry:
         if self.storage_backend:
             try:
                 self.storage_backend.save_strategy(metadata)
-            except (OSError, ValueError, KeyError) as e:
-                self.logger.exception("Failed to persist strategy %s: %s", metadata.id, e)
+            except (OSError, ValueError, KeyError):
+                self.logger.exception("Failed to persist strategy %s", metadata.id)
