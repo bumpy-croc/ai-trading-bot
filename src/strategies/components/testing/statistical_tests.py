@@ -88,8 +88,8 @@ class FinancialStatisticalTests:
                     notes="Tests if two samples come from the same distribution",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"KS test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("KS test failed: %s", e)
 
         # Anderson-Darling test
         try:
@@ -109,8 +109,8 @@ class FinancialStatisticalTests:
                     notes="More sensitive to tail differences than KS test",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Anderson-Darling test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Anderson-Darling test failed: %s", e)
 
         return results
 
@@ -153,8 +153,8 @@ class FinancialStatisticalTests:
                     notes="Assumes unequal variances between samples",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Welch's t-test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Welch's t-test failed: %s", e)
 
         # Mann-Whitney U test (non-parametric)
         try:
@@ -175,8 +175,8 @@ class FinancialStatisticalTests:
                     notes="Non-parametric test for median equality",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Mann-Whitney U test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Mann-Whitney U test failed: %s", e)
 
         return results
 
@@ -219,8 +219,8 @@ class FinancialStatisticalTests:
                     notes="Robust test for variance equality",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Levene's test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Levene's test failed: %s", e)
 
         # Bartlett's test (assumes normality)
         try:
@@ -239,8 +239,8 @@ class FinancialStatisticalTests:
                     notes="Assumes normal distributions; sensitive to non-normality",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Bartlett's test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Bartlett's test failed: %s", e)
 
         return results
 
@@ -280,8 +280,8 @@ class FinancialStatisticalTests:
                         notes="Most powerful normality test for small samples",
                     )
                 )
-        except Exception as e:
-            self.logger.warning(f"Shapiro-Wilk test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Shapiro-Wilk test failed: %s", e)
 
         # Jarque-Bera test
         try:
@@ -300,8 +300,8 @@ class FinancialStatisticalTests:
                     notes="Tests for normality based on skewness and kurtosis",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Jarque-Bera test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Jarque-Bera test failed: %s", e)
 
         # D'Agostino's normality test
         try:
@@ -320,8 +320,8 @@ class FinancialStatisticalTests:
                     notes="Combines tests for skewness and kurtosis",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"D'Agostino's test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("D'Agostino's test failed: %s", e)
 
         return results
 
@@ -377,13 +377,13 @@ class FinancialStatisticalTests:
                 p_value=1.0,
                 interpretation="statsmodels required for this test",
             )
-        except Exception as e:
-            self.logger.warning(f"Ljung-Box test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Ljung-Box test failed: %s", e)
             return StatisticalTestResult(
                 test_name="Ljung-Box Autocorrelation Test",
                 statistic=0.0,
                 p_value=1.0,
-                interpretation=f"Test failed: {str(e)}",
+                interpretation=f"Test failed: {e!s}",
             )
 
     def test_stationarity(self, series: pd.Series) -> list[StatisticalTestResult]:
@@ -445,8 +445,8 @@ class FinancialStatisticalTests:
 
         except ImportError:
             self.logger.warning("statsmodels not available for stationarity tests")
-        except Exception as e:
-            self.logger.warning(f"Stationarity tests failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Stationarity tests failed: %s", e)
 
         return results
 
@@ -573,13 +573,13 @@ class EquivalenceTests:
                 notes=f"Equivalence margin: ±{margin:.4f}, Mean difference: {mean_diff:.6f}",
             )
 
-        except Exception as e:
-            self.logger.warning(f"TOST failed: {e}")
+        except (ValueError, RuntimeError, TypeError, ZeroDivisionError) as e:
+            self.logger.warning("TOST failed: %s", e)
             return StatisticalTestResult(
                 test_name="Two One-Sided Test (TOST) for Equivalence",
                 statistic=0.0,
                 p_value=1.0,
-                interpretation=f"Test failed: {str(e)}",
+                interpretation=f"Test failed: {e!s}",
             )
 
 

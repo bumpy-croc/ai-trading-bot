@@ -110,8 +110,8 @@ class TestDatasetGenerator:
                         break
 
                 logger.info(f"Cache evicted to {total_size_mb:.1f}MB")
-        except Exception as e:
-            logger.warning(f"Cache eviction failed: {e}")
+        except (OSError, ValueError) as e:
+            logger.warning("Cache eviction failed: %s", e)
 
     def _define_market_scenarios(self) -> list[MarketScenario]:
         """Define standard market scenarios for testing"""
@@ -291,7 +291,7 @@ class TestDatasetGenerator:
                 data = pd.read_feather(data_file)
                 data.set_index("timestamp", inplace=True)
                 return self._prepare_historical_data(data)
-            except Exception as e:
+            except (OSError, ValueError, KeyError) as e:
                 warnings.warn(f"Error loading historical data: {e}", stacklevel=2)
 
         # If historical data not available, generate synthetic data
@@ -436,8 +436,8 @@ class TestDatasetGenerator:
                 data = pd.read_feather(cache_file)
                 data.set_index("timestamp", inplace=True)
                 return data
-            except Exception as e:
-                logger.warning(f"Failed to load cached data: {e}. Regenerating...")
+            except (OSError, ValueError, KeyError) as e:
+                logger.warning("Failed to load cached data: %s. Regenerating...", e)
 
         # Generate synthetic data
         data = self.synthetic_generator.generate_scenario_data(scenario, seed)
@@ -449,7 +449,7 @@ class TestDatasetGenerator:
         try:
             data_to_cache = data.reset_index()
             data_to_cache.to_feather(cache_file)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             warnings.warn(f"Could not cache synthetic data: {e}", stacklevel=2)
 
         return data
@@ -750,8 +750,8 @@ class TestDatasetGenerator:
         try:
             historical = self.get_historical_dataset()
             test_suite["historical_btcusdt"] = historical
-        except Exception as e:
-            logger.debug(f"Historical data not available: {e}. Skipping...")
+        except (OSError, ValueError, KeyError) as e:
+            logger.debug("Historical data not available: %s. Skipping...", e)
 
         return test_suite
 

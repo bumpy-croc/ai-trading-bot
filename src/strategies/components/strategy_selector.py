@@ -703,8 +703,8 @@ class StrategySelector:
         try:
             correlation = np.corrcoef(returns1, returns2)[0, 1]
             return correlation if not np.isnan(correlation) else 0.0
-        except Exception as e:
-            self.logger.warning(f"Correlation calculation failed: {e}")
+        except (ValueError, FloatingPointError, TypeError) as e:
+            self.logger.warning("Correlation calculation failed: %s", e)
             return 0.0
 
     def _normalize_score(

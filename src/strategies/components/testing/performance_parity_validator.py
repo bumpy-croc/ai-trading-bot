@@ -209,10 +209,10 @@ class PerformanceParityValidator:
 
             self.logger.info(f"Performance parity validation completed: {report.overall_result}")
 
-        except Exception as e:
-            self.logger.error(f"Error during performance parity validation: {e}")
+        except (ValueError, KeyError, TypeError) as e:
+            self.logger.exception("Error during performance parity validation: %s", e)
             report.overall_result = ValidationResult.FAIL
-            report.certification_notes = f"Validation failed due to error: {str(e)}"
+            report.certification_notes = f"Validation failed due to error: {e!s}"
 
         return report
 
@@ -454,8 +454,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to perform KS test: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Failed to perform KS test: %s", e)
 
         # Mann-Whitney U test for median difference
         try:
@@ -486,8 +486,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to perform Mann-Whitney test: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Failed to perform Mann-Whitney test: %s", e)
 
     def _analyze_equity_curve_correlation(
         self,
@@ -537,8 +537,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to calculate equity curve correlation: {e}")
+        except (ValueError, KeyError, TypeError) as e:
+            self.logger.warning("Failed to calculate equity curve correlation: %s", e)
 
     def _create_metric_comparison(
         self,

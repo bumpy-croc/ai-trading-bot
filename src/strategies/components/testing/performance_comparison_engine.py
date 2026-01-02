@@ -225,8 +225,8 @@ class PerformanceComparisonEngine:
             self.logger.info(f"Strategy comparison completed: {result.overall_validation_result}")
             return result
 
-        except Exception as e:
-            self.logger.error(f"Strategy comparison failed: {e}")
+        except (ValueError, KeyError, TypeError) as e:
+            self.logger.exception("Strategy comparison failed: %s", e)
             # Return a failed result
             return StrategyComparisonResult(
                 comparison_id=comparison_id,
@@ -438,8 +438,8 @@ class PerformanceComparisonEngine:
 
             self.logger.info(f"Results exported to {export_dir}")
 
-        except Exception as e:
-            self.logger.warning(f"Failed to export results: {e}")
+        except (OSError, ValueError, KeyError) as e:
+            self.logger.warning("Failed to export results: %s", e)
 
     def generate_text_report(self, result: StrategyComparisonResult) -> str:
         """Generate comprehensive text report."""
