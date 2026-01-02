@@ -685,7 +685,7 @@ class StrategyRegistry:
                 errors.append(f"Parent strategy {metadata.parent_id} not found")
             else:
                 parent_lineage = self._strategies[metadata.parent_id].lineage_path
-                expected_lineage = parent_lineage + [metadata.parent_id]
+                expected_lineage = [*parent_lineage, metadata.parent_id]
                 if metadata.lineage_path != expected_lineage:
                     warnings.append("Lineage path inconsistency detected")
 
@@ -798,7 +798,7 @@ class StrategyRegistry:
             return []
 
         parent_metadata = self._strategies[parent_id]
-        return parent_metadata.lineage_path + [parent_id]
+        return [*parent_metadata.lineage_path, parent_id]
 
     def _calculate_next_version(self, current_version: str, is_major: bool) -> str:
         """Calculate next version number"""

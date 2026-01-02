@@ -408,7 +408,7 @@ class StrategyLineageTracker:
             Merge record ID
         """
         # Validate strategies exist
-        all_strategies = [target_strategy_id] + source_strategy_ids
+        all_strategies = [target_strategy_id, *source_strategy_ids]
         for sid in all_strategies:
             if sid not in self.strategies:
                 raise ValueError(f"Strategy {sid} not found")
@@ -900,11 +900,11 @@ class StrategyLineageTracker:
             # Check all outgoing edges from current strategy
             for neighbor in self.lineage_graph.get(current, []):
                 if neighbor == end:
-                    return path + [neighbor]
+                    return [*path, neighbor]
 
                 if neighbor not in visited:
                     visited.add(neighbor)
-                    queue.append((neighbor, path + [neighbor]))
+                    queue.append((neighbor, [*path, neighbor]))
 
         return []  # No path found
 

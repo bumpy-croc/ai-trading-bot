@@ -456,7 +456,7 @@ class WeightedVotingSignalGenerator(SignalGenerator):
         """Return the maximum warmup period required by any child generator."""
         if not self.generators:
             return 0
-        return max(gen.warmup_period for gen in self.generators.keys())
+        return max(gen.warmup_period for gen in self.generators)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get weighted voting parameters"""
@@ -834,7 +834,7 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
     @property
     def warmup_period(self) -> int:
         """Return the maximum warmup period required by any regime generator or default."""
-        all_generators = list(self.regime_generators.values()) + [self.default_generator]
+        all_generators = [*self.regime_generators.values(), self.default_generator]
         return max(gen.warmup_period for gen in all_generators)
 
     def get_parameters(self) -> dict[str, Any]:
