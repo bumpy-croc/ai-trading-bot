@@ -11,8 +11,6 @@ from typing import Any
 
 import pandas as pd
 
-logger = logging.getLogger(__name__)
-
 from src.config.config_manager import get_config
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
@@ -20,6 +18,8 @@ from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.regime.detector import TrendLabel, VolLabel
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+
+logger = logging.getLogger(__name__)
 
 
 class MLSignalGenerator(SignalGenerator):
