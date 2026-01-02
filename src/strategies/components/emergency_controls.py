@@ -370,9 +370,9 @@ class EmergencyControls:
                         callback, 10, approval_request
                     )  # 10 second timeout for approval callbacks
                 except ExecutionTimeoutError as error:
-                    self.logger.error(f"Approval callback #{i} timed out: {error}")
-                except Exception as error:
-                    self.logger.error(f"Approval callback #{i} error: {error}")
+                    self.logger.warning("Approval callback #%d timed out: %s", i, error)
+                except (ValueError, TypeError, RuntimeError) as error:
+                    self.logger.exception("Approval callback #%d error: %s", i, error)
 
             self.logger.info(
                 f"Manual switch request requires approval: {approval_request.request_id}"
@@ -688,9 +688,9 @@ class EmergencyControls:
             try:
                 execute_with_timeout(callback, 10, alert)  # 10 second timeout for alert callbacks
             except ExecutionTimeoutError as error:
-                self.logger.error(f"Alert callback #{i} timed out: {error}")
-            except Exception as error:
-                self.logger.error(f"Alert callback #{i} error: {error}")
+                self.logger.warning("Alert callback #%d timed out: %s", i, error)
+            except (ValueError, TypeError, RuntimeError) as error:
+                self.logger.exception("Alert callback #%d error: %s", i, error)
 
         self.logger.warning(f"Alert triggered: {alert.alert_type.value} - {message}")
 

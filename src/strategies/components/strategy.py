@@ -362,7 +362,7 @@ class Strategy:
                     regime,
                     **policy_kwargs,
                 )
-            except Exception as policy_error:
+            except (ValueError, KeyError, AttributeError) as policy_error:
                 self.logger.debug("Risk policy extraction failed: %s", policy_error)
 
             # Create trading decision
@@ -386,11 +386,11 @@ class Strategy:
 
             return decision
 
-        except Exception as e:
+        except (ValueError, KeyError, IndexError, TypeError) as e:
             # Handle errors gracefully
             execution_time_ms = (time.time() - start_time) * 1000
 
-            self.logger.error(f"Error processing candle at index {index}: {e}")
+            self.logger.exception("Error processing candle at index %d: %s", index, e)
 
             # Return safe decision
             safe_signal = Signal(
@@ -432,8 +432,8 @@ class Strategy:
         """
         try:
             return self.risk_manager.should_exit(position, current_data, regime)
-        except Exception as e:
-            self.logger.error(f"Error in exit decision: {e}")
+        except (ValueError, KeyError, AttributeError) as e:
+            self.logger.exception("Error in exit decision: %s", e)
             return False  # Conservative default
 
     def get_stop_loss_price(
@@ -455,8 +455,8 @@ class Strategy:
         """
         try:
             return self.risk_manager.get_stop_loss(entry_price, signal, regime)
-        except Exception as e:
-            self.logger.error(f"Error calculating stop loss: {e}")
+        except (ValueError, KeyError, AttributeError) as e:
+            self.logger.exception("Error calculating stop loss: %s", e)
             # Return conservative stop loss
             if signal.direction == SignalDirection.BUY:
                 return entry_price * 0.95  # 5% stop loss for long
@@ -639,8 +639,8 @@ class Strategy:
         """Detect market regime"""
         try:
             return self.regime_detector.detect_regime(df, index)
-        except Exception as e:
-            self.logger.warning(f"Regime detection failed: {e}")
+        except (ValueError, KeyError, IndexError) as e:
+            self.logger.warning("Regime detection failed: %s", e)
             return None
 
     def _generate_signal(
@@ -652,8 +652,8 @@ class Strategy:
         """Generate trading signal"""
         try:
             return self.signal_generator.generate_signal(df, index, regime)
-        except Exception as e:
-            self.logger.error(f"Signal generation failed: {e}")
+        except (ValueError, KeyError, IndexError) as e:
+            self.logger.exception("Signal generation failed: %s", e)
             return Signal(
                 direction=SignalDirection.HOLD,
                 strength=0.0,
@@ -682,7 +682,7 @@ class Strategy:
         if self._additional_risk_context_provider is not None:
             try:
                 extra_context = self._additional_risk_context_provider(df, index, signal)
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except (ValueError, KeyError, TypeError) as exc:  # pragma: no cover - defensive logging
                 self.logger.debug(
                     "Additional risk context provider failed at index %s: %s",
                     index,
@@ -757,8 +757,8 @@ class Strategy:
                 regime,
                 **filtered_context,
             )
-        except Exception as e:
-            self.logger.error(f"Risk position size calculation failed: {e}")
+        except (ValueError, KeyError, AttributeError) as e:
+            self.logger.exception("Risk position size calculation failed: %s", e)
             return 0.0
 
     def _calculate_final_position_size(
@@ -771,8 +771,8 @@ class Strategy:
         """Calculate final position size using position sizer"""
         try:
             return self.position_sizer.calculate_size(signal, balance, risk_amount, regime)
-        except Exception as e:
-            self.logger.error(f"Final position size calculation failed: {e}")
+        except (ValueError, KeyError, AttributeError) as e:
+            self.logger.exception("Final position size calculation failed: %s", e)
             return risk_amount  # Fallback to risk manager's calculation
 
     def _validate_position_size(

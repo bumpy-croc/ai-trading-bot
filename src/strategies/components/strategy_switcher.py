@@ -469,14 +469,14 @@ class StrategySwitcher:
                         switch_record.error_message = f"Pre-switch callback #{i} returned False"
                         return switch_record
                 except ExecutionTimeoutError as e:
-                    self.logger.error(f"Pre-switch callback #{i} timed out: {e}")
+                    self.logger.warning("Pre-switch callback #%d timed out: %s", i, e)
                     switch_record.status = SwitchStatus.FAILED
                     switch_record.error_message = (
                         f"Pre-switch callback #{i} timed out after 30 seconds"
                     )
                     return switch_record
-                except Exception as e:
-                    self.logger.error(f"Pre-switch callback #{i} error: {e}")
+                except (ValueError, TypeError, RuntimeError) as e:
+                    self.logger.exception("Pre-switch callback #%d error: %s", i, e)
                     switch_record.status = SwitchStatus.FAILED
                     switch_record.error_message = f"Pre-switch callback #{i} error: {e}"
                     return switch_record
@@ -484,10 +484,10 @@ class StrategySwitcher:
             # Activate new strategy
             try:
                 success = strategy_activation_callback(request.to_strategy)
-            except Exception as activation_error:
+            except (ValueError, TypeError, RuntimeError) as activation_error:
                 # Handle activation callback exceptions the same way as False returns
-                self.logger.error(
-                    f"Strategy activation callback raised exception: {activation_error}"
+                self.logger.exception(
+                    "Strategy activation callback raised exception: %s", activation_error
                 )
                 success = False
                 # Store the exception for potential rollback error message
@@ -527,7 +527,7 @@ class StrategySwitcher:
                             "Rollback callback returned False; previous strategy may already be active or activation callback is non-idempotent"
                         )
                         self.last_active_strategy = request.from_strategy
-                except Exception as rollback_error:
+                except (ValueError, TypeError, RuntimeError) as rollback_error:
                     # CRITICAL: Exception during rollback - activate circuit breaker
                     switch_record.status = SwitchStatus.FAILED
                     # Include both activation and rollback exception info if available
@@ -537,13 +537,14 @@ class StrategySwitcher:
                             f"rollback error: {rollback_error} - circuit breaker activated"
                         )
                         self.logger.critical(
-                            f"CIRCUIT BREAKER ACTIVATED: Activation exception: {activation_exception}, "
-                            f"Rollback error: {rollback_error}"
+                            "CIRCUIT BREAKER ACTIVATED: Activation exception: %s, Rollback error: %s",
+                            activation_exception,
+                            rollback_error,
                         )
                     else:
                         switch_record.error_message = f"CRITICAL: Strategy activation failed, rollback error: {rollback_error} - circuit breaker activated"
                         self.logger.critical(
-                            f"CIRCUIT BREAKER ACTIVATED: Rollback error: {rollback_error}"
+                            "CIRCUIT BREAKER ACTIVATED: Rollback error: %s", rollback_error
                         )
 
                     self._activate_circuit_breaker(
@@ -568,9 +569,9 @@ class StrategySwitcher:
                         True,
                     )
                 except ExecutionTimeoutError as e:
-                    self.logger.error(f"Post-switch callback #{i} timed out: {e}")
-                except Exception as e:
-                    self.logger.error(f"Post-switch callback #{i} error: {e}")
+                    self.logger.warning("Post-switch callback #%d timed out: %s", i, e)
+                except (ValueError, TypeError, RuntimeError) as e:
+                    self.logger.exception("Post-switch callback #%d error: %s", i, e)
 
             # Start performance tracking
             if self.config.track_switch_performance:
@@ -580,10 +581,10 @@ class StrategySwitcher:
                 f"Strategy switch completed: {request.from_strategy} -> {request.to_strategy}"
             )
 
-        except Exception as e:
+        except (ValueError, TypeError, RuntimeError, KeyError) as e:
             switch_record.status = SwitchStatus.FAILED
             switch_record.error_message = str(e)
-            self.logger.error(f"Strategy switch failed: {e}")
+            self.logger.exception("Strategy switch failed: %s", e)
 
             # Execute post-switch callbacks with failure flag and timeout protection
             for i, callback in enumerate(self.post_switch_callbacks):
@@ -596,9 +597,11 @@ class StrategySwitcher:
                         False,
                     )
                 except ExecutionTimeoutError as te:
-                    self.logger.error(f"Post-switch callback #{i} timed out: {te}")
-                except Exception as callback_error:
-                    self.logger.error(f"Post-switch callback #{i} error: {callback_error}")
+                    self.logger.warning("Post-switch callback #%d timed out: %s", i, te)
+                except (ValueError, TypeError, RuntimeError) as callback_error:
+                    self.logger.exception(
+                        "Post-switch callback #%d error: %s", i, callback_error
+                    )
 
         finally:
             # Add to history
@@ -970,8 +973,8 @@ class StrategySwitcher:
                         "volatility": metrics.volatility,
                     }
                 )
-            except Exception as e:
-                self.logger.warning(f"Failed to capture detailed metrics: {e}")
+            except (AttributeError, KeyError, TypeError) as e:
+                self.logger.warning("Failed to capture detailed metrics: %s", e)
 
         return snapshot
 
