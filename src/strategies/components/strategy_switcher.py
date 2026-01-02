@@ -25,8 +25,11 @@ from .regime_context import RegimeContext
 from .strategy_selector import StrategyScore, StrategySelector
 
 
-class TimeoutError(Exception):
-    """Exception raised when a callback execution times out"""
+class ExecutionTimeoutError(Exception):
+    """Exception raised when a callback execution times out.
+
+    Named to avoid shadowing the Python builtin TimeoutError.
+    """
 
     pass
 
@@ -48,7 +51,7 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
         Result of the function execution
 
     Raises:
-        TimeoutError: If execution exceeds the specified timeout
+        ExecutionTimeoutError: If execution exceeds the specified timeout
     """
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="strategy_switcher_timeout")
     future = executor.submit(func, *args, **kwargs)
@@ -58,7 +61,7 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
     except FutureTimeoutError as exc:
         # Attempt to cancel the running future and shut down the executor without waiting
         future.cancel()
-        raise TimeoutError(f"Execution timed out after {timeout_seconds} seconds") from exc
+        raise ExecutionTimeoutError(f"Execution timed out after {timeout_seconds} seconds") from exc
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -75,7 +78,7 @@ def timeout_context(seconds: int):
         seconds: Maximum execution time in seconds
 
     Raises:
-        TimeoutError: If execution exceeds the specified timeout
+        ExecutionTimeoutError: If execution exceeds the specified timeout
     """
     timeout_occurred = threading.Event()
     original_exception = None
@@ -104,7 +107,7 @@ def timeout_context(seconds: int):
             if original_exception:
                 raise original_exception
             else:
-                raise TimeoutError(f"Execution timed out after {seconds} seconds")
+                raise ExecutionTimeoutError(f"Execution timed out after {seconds} seconds")
 
 
 class SwitchTrigger(Enum):
@@ -465,7 +468,7 @@ class StrategySwitcher:
                         switch_record.status = SwitchStatus.FAILED
                         switch_record.error_message = f"Pre-switch callback #{i} returned False"
                         return switch_record
-                except TimeoutError as e:
+                except ExecutionTimeoutError as e:
                     self.logger.error(f"Pre-switch callback #{i} timed out: {e}")
                     switch_record.status = SwitchStatus.FAILED
                     switch_record.error_message = (
@@ -564,7 +567,7 @@ class StrategySwitcher:
                         request.to_strategy,
                         True,
                     )
-                except TimeoutError as e:
+                except ExecutionTimeoutError as e:
                     self.logger.error(f"Post-switch callback #{i} timed out: {e}")
                 except Exception as e:
                     self.logger.error(f"Post-switch callback #{i} error: {e}")
@@ -592,7 +595,7 @@ class StrategySwitcher:
                         request.to_strategy,
                         False,
                     )
-                except TimeoutError as te:
+                except ExecutionTimeoutError as te:
                     self.logger.error(f"Post-switch callback #{i} timed out: {te}")
                 except Exception as callback_error:
                     self.logger.error(f"Post-switch callback #{i} error: {callback_error}")
