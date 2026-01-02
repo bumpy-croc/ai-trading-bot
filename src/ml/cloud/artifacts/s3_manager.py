@@ -380,6 +380,7 @@ class S3ArtifactManager:
                 try:
                     temp_link.unlink()
                 except OSError:
+                    # Ignore cleanup errors - primary error already logged
                     pass
             logger.error(f"Failed to update 'latest' symlink: {exc}")
             raise ArtifactSyncError(f"Failed to update 'latest' symlink: {exc}") from exc
