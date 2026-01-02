@@ -139,9 +139,9 @@ def default_callbacks(patience: int = 15, reduce_lr_patience: int | None = None)
     ]
 
 
-# Legacy function for backwards compatibility
+# Backwards compatibility function
 def build_price_only_model(sequence_length: int, num_features: int) -> Any:
-    """Build a price-only model (legacy compatibility function).
+    """Provides backwards compatibility for code using the old function signature.
 
     Args:
         sequence_length: Length of input sequences

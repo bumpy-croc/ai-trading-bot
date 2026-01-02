@@ -30,6 +30,11 @@ else:
 
 logger = logging.getLogger(__name__)
 
+# Plotting and performance metric constants
+PLOT_SAMPLE_SIZE = 100  # Number of predictions to show in training plot (balances detail vs readability)
+MIN_MAPE_DENOMINATOR = 1e-8  # Minimum denominator for MAPE calculation (prevents division by near-zero values)
+MAX_PERCENTAGE_ERROR_CAP = 1000.0  # Cap MAPE errors at 1000% to prevent outliers from dominating metrics
+
 
 class PerformanceMetrics(TypedDict):
     """Performance metrics with MSE and RMSE."""
@@ -109,7 +114,7 @@ def create_training_plots(
 
         plt.subplot(2, 2, 4)
         test_predictions = model.predict(X_test, verbose=0)
-        sample = min(100, len(y_test))
+        sample = min(PLOT_SAMPLE_SIZE, len(y_test))
         plt.plot(y_test[:sample], label="Actual", alpha=0.8, linewidth=2)
         plt.plot(test_predictions[:sample].flatten(), label="Predicted", alpha=0.8, linewidth=2)
         plt.title("Prediction Sample (Test Set)")
@@ -145,9 +150,8 @@ def validate_model_robustness(
             "Install it with: pip install tensorflow"
         )
     # Validate input tensor shape
-    assert (
-        len(X_test.shape) == 3
-    ), f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}"
+    if len(X_test.shape) != 3:
+        raise ValueError(f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}")
 
     results = {"base_performance": {}}
     base_pred = model.predict(X_test)
@@ -158,10 +162,11 @@ def validate_model_robustness(
         sentiment_indices = [i for i, name in enumerate(feature_names) if "sentiment" in name]
         if sentiment_indices:
             X_no_sentiment = X_test.copy()
-            # Safely set sentiment features to zero with bounds check
-            assert all(
-                i < X_test.shape[2] for i in sentiment_indices
-            ), f"Sentiment feature indices {sentiment_indices} exceed feature dimension {X_test.shape[2]}"
+            # Validate sentiment feature indices are within bounds
+            if not all(i < X_test.shape[2] for i in sentiment_indices):
+                raise ValueError(
+                    f"Sentiment feature indices {sentiment_indices} exceed feature dimension {X_test.shape[2]}"
+                )
             X_no_sentiment[:, :, sentiment_indices] = 0
             no_sentiment_pred = model.predict(X_no_sentiment)
             no_sentiment_mse = np.mean((no_sentiment_pred.flatten() - y_test) ** 2)
@@ -197,18 +202,16 @@ def evaluate_model_performance(
             test_predictions.flatten().reshape(-1, 1)
         ).flatten()
         # Guard against division by near-zero values in MAPE calculation
-        # Use max(abs(actual), threshold) to avoid unrealistic MAPE values (>10^10%)
-        # when actual values are very small relative to prediction errors
-        denominator = np.maximum(np.abs(y_test_denorm), 1e-8)
+        denominator = np.maximum(np.abs(y_test_denorm), MIN_MAPE_DENOMINATOR)
         percentage_errors = np.abs((y_test_denorm - pred_denorm) / denominator) * 100
-        # Cap individual errors at 1000% to prevent extreme outliers from dominating MAPE
-        percentage_errors = np.minimum(percentage_errors, 1000.0)
+        # Cap individual errors to prevent extreme outliers from dominating MAPE
+        percentage_errors = np.minimum(percentage_errors, MAX_PERCENTAGE_ERROR_CAP)
     else:
         # Guard against division by near-zero values in MAPE calculation
-        denominator = np.maximum(np.abs(y_test), 1e-8)
+        denominator = np.maximum(np.abs(y_test), MIN_MAPE_DENOMINATOR)
         percentage_errors = np.abs((y_test - test_predictions.flatten()) / denominator) * 100
-        # Cap individual errors at 1000% to prevent extreme outliers from dominating MAPE
-        percentage_errors = np.minimum(percentage_errors, 1000.0)
+        # Cap individual errors to prevent extreme outliers from dominating MAPE
+        percentage_errors = np.minimum(percentage_errors, MAX_PERCENTAGE_ERROR_CAP)
     mape = np.mean(percentage_errors)
 
     return {
@@ -260,9 +263,13 @@ def convert_to_onnx(model: Any, output_path: Path) -> Path | None:
             return output_path
         logger.warning("ONNX conversion failed: %s", result.stderr)
         return None
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         # ONNX conversion timeout - training should continue with Keras model
         logger.warning("ONNX conversion timed out after 300 seconds")
+        if exc.stdout:
+            logger.debug("Partial stdout: %s", exc.stdout[:500])
+        if exc.stderr:
+            logger.debug("Partial stderr: %s", exc.stderr[:500])
         return None
     except Exception as exc:  # noqa: BLE001 - Catch all ONNX conversion errors
         # ONNX export is optional - training should continue with Keras model if conversion fails

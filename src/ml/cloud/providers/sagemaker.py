@@ -94,7 +94,8 @@ class SageMakerProvider(CloudTrainingProvider):
         try:
             self._ensure_clients()
             # Verify credentials by making a lightweight API call
-            assert self._sagemaker_client is not None
+            if self._sagemaker_client is None:
+                return False
             self._sagemaker_client.list_training_jobs(MaxResults=1)
             return True
         except Exception as exc:
@@ -120,7 +121,8 @@ class SageMakerProvider(CloudTrainingProvider):
             )
 
         self._ensure_clients()
-        assert self._sagemaker_client is not None
+        if self._sagemaker_client is None:
+            raise ProviderNotAvailableError("SageMaker client not initialized")
 
         job_name = self._generate_job_name(spec.symbol, spec.timeframe)
 
@@ -163,7 +165,8 @@ class SageMakerProvider(CloudTrainingProvider):
             Current job status with metrics
         """
         self._ensure_clients()
-        assert self._sagemaker_client is not None
+        if self._sagemaker_client is None:
+            raise ProviderNotAvailableError("SageMaker client not initialized")
 
         job_name = self._extract_job_name(job_id)
 
@@ -180,7 +183,8 @@ class SageMakerProvider(CloudTrainingProvider):
             job_id: Job ARN or job name
         """
         self._ensure_clients()
-        assert self._sagemaker_client is not None
+        if self._sagemaker_client is None:
+            raise ProviderNotAvailableError("SageMaker client not initialized")
 
         job_name = self._extract_job_name(job_id)
 
@@ -204,7 +208,8 @@ class SageMakerProvider(CloudTrainingProvider):
             Path to extracted artifacts directory
         """
         self._ensure_clients()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ProviderNotAvailableError("S3 client not initialized")
 
         status = self.get_job_status(job_id)
         if not status.is_successful:

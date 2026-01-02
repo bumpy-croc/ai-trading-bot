@@ -284,16 +284,23 @@ class CloudTrainingOrchestrator:
 
         # Extract and validate job_id suffix for temp directory naming
         import re
+        import tempfile
 
         job_suffix = job_id.split("/")[-1] if job_id else ""
-        # Only allow alphanumeric, hyphens, and underscores
-        if not job_suffix or not re.match(r"^[\w\-]+$", job_suffix):
+        # Validate: alphanumeric/hyphens/underscores, max 100 chars, no path separators
+        if (
+            not job_suffix
+            or not re.match(r"^[\w\-]+$", job_suffix)
+            or len(job_suffix) > 100
+            or "/" in job_suffix
+            or "\\" in job_suffix
+        ):
             job_suffix = "download"
 
         temp_dir: Path | None = None
         try:
-            # Create temp directory inside try block
-            temp_dir = Path("/tmp") / f"model-download-{job_suffix}"
+            # Create temp directory inside try block (cross-platform)
+            temp_dir = Path(tempfile.gettempdir()) / f"model-download-{job_suffix}"
 
             # Download from provider (S3 for cloud, local path for local provider)
             artifact_path = self.provider.download_artifacts(job_id, temp_dir)

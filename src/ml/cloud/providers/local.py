@@ -206,6 +206,7 @@ class LocalProvider(CloudTrainingProvider):
                     logger.error(f"Local training failed: {job_id}")
 
         except Exception as exc:
+            # Ensure lock protection for all state mutations
             with self._lock:
                 self._jobs[job_id].status = "Failed"
                 self._jobs[job_id].end_time = datetime.now(UTC)
