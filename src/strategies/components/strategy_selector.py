@@ -127,7 +127,7 @@ class StrategySelector:
 
         # Correlation matrix cache
         self.correlation_matrix: dict[tuple[str, str], float] = {}
-        self.correlation_cache_expiry = datetime.min
+        self.correlation_cache_expiry = datetime.min.replace(tzinfo=UTC)
         self.correlation_strategy_set: frozenset[str] | None = (
             None  # Track which strategies are cached
         )
@@ -777,6 +777,6 @@ class StrategySelector:
         self.performance_cache.clear()
         self.cache_expiry.clear()
         self.correlation_matrix.clear()
-        self.correlation_cache_expiry = datetime.min
+        self.correlation_cache_expiry = datetime.min.replace(tzinfo=UTC)
 
         self.logger.info("Strategy selector cache cleared")
