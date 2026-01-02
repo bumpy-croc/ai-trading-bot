@@ -836,10 +836,7 @@ class StrategySwitcher:
             if r.request.requested_at >= weekly_cutoff and r.status == SwitchStatus.COMPLETED
         )
 
-        if weekly_switches >= self.config.max_switches_per_week:
-            return False
-
-        return True
+        return weekly_switches < self.config.max_switches_per_week
 
     def _meets_improvement_threshold(self, request: SwitchRequest) -> bool:
         """Check if the proposed switch meets minimum improvement threshold"""

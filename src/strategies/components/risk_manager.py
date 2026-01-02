@@ -384,10 +384,7 @@ class FixedRiskManager(RiskManager):
         loss_pct = abs(position.get_pnl_percentage()) / 100
 
         # Exit if loss exceeds stop loss threshold
-        if position.get_pnl_percentage() < 0 and loss_pct >= self.stop_loss_pct:
-            return True
-
-        return False
+        return position.get_pnl_percentage() < 0 and loss_pct >= self.stop_loss_pct
 
     def get_stop_loss(
         self,
@@ -559,10 +556,7 @@ class VolatilityRiskManager(RiskManager):
         loss_pct = abs(position.get_pnl_percentage()) / 100
 
         # Exit if loss exceeds dynamic stop loss threshold
-        if position.get_pnl_percentage() < 0 and loss_pct >= stop_loss_pct:
-            return True
-
-        return False
+        return position.get_pnl_percentage() < 0 and loss_pct >= stop_loss_pct
 
     def get_stop_loss(
         self,
@@ -762,10 +756,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
             return True
 
         # Check for regime transition exit conditions
-        if regime is not None and self._should_exit_on_regime_change(regime):
-            return True
-
-        return False
+        return regime is not None and self._should_exit_on_regime_change(regime)
 
     def get_stop_loss(
         self,
@@ -862,10 +853,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
             return True
 
         # Exit if regime duration is very short (unstable regime)
-        if hasattr(regime, "duration") and regime.duration < 3:
-            return True
-
-        return False
+        return hasattr(regime, "duration") and regime.duration < 3
 
     def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive risk manager parameters"""

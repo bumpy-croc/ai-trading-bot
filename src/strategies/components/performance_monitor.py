@@ -553,10 +553,7 @@ class PerformanceMonitor:
         if current_regime.confidence < 0.7:
             return True
 
-        if current_regime.duration < self.config.min_regime_duration_days:
-            return True
-
-        return False
+        return current_regime.duration < self.config.min_regime_duration_days
 
     def _calculate_degradation_severity(
         self, timeframe_results: list[TimeFrameAnalysis]
