@@ -133,6 +133,14 @@ class MomentumSignalGenerator(SignalGenerator):
         momentum_3 = self._pct_change(df, "close", self.momentum_fast_window, index) or 0.0
         return float(max(0.0, min(1.0, abs(momentum_3) * DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM)))
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals.
+
+        Requires max of EMA slow period and breakout lookback for reliable calculations.
+        """
+        return max(self.ema_slow, self.breakout_lookback)
+
     @staticmethod
     def _ema(df: pd.DataFrame, col: str, span: int, index: int) -> float | None:
         try:

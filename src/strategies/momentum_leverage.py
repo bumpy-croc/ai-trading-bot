@@ -98,7 +98,7 @@ def create_momentum_leverage_strategy(
     strategy.take_profit_pct = take_profit_pct
 
     # Restore aggressive runtime overrides consumed by backtesting/live engines
-    strategy._risk_overrides = {
+    strategy.set_risk_overrides({
         "position_sizer": "confidence_weighted",
         "base_fraction": base_fraction,
         "min_fraction": min_position_size_ratio,
@@ -124,6 +124,6 @@ def create_momentum_leverage_strategy(
             "breakeven_threshold": 0.10,
             "breakeven_buffer": 0.02,
         },
-    }
+    })
 
     return strategy

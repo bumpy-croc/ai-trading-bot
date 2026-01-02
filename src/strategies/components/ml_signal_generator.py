@@ -354,6 +354,11 @@ class MLSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.sequence_length
+
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
@@ -386,6 +391,9 @@ class MLBasicSignalGenerator(SignalGenerator):
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
     CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
 
+    # Default symbol used for registry selection when none specified
+    DEFAULT_SYMBOL = "BTCUSDT"
+
     def __init__(
         self,
         name: str = "ml_basic_signal_generator",
@@ -393,6 +401,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         model_name: str | None = None,
         model_type: str | None = None,
         timeframe: str | None = None,
+        symbol: str | None = None,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -403,6 +412,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             model_name: Model name for prediction engine (optional)
             model_type: Model type for registry selection (optional)
             timeframe: Timeframe for registry selection (optional)
+            symbol: Trading symbol for registry selection (optional, defaults to BTCUSDT)
         """
         super().__init__(name)
 
@@ -411,6 +421,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         # Registry model selection preferences
         self.model_type = model_type or "basic"
         self.model_timeframe = timeframe or "1h"
+        self.symbol = symbol or self.DEFAULT_SYMBOL
 
         # Model name configuration
         cfg = get_config()
@@ -625,7 +636,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             if self._registry is not None:
                 try:
                     bundle = self._registry.select_bundle(
-                        symbol="BTCUSDT",  # Default trading pair
+                        symbol=self.symbol,
                         model_type=self.model_type,
                         timeframe=self.model_timeframe,
                     )
@@ -668,6 +679,11 @@ class MLBasicSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.sequence_length
+
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
@@ -677,6 +693,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                 "model_name": self.model_name,
                 "model_type": self.model_type,
                 "model_timeframe": self.model_timeframe,
+                "symbol": self.symbol,
                 "short_entry_threshold": self.SHORT_ENTRY_THRESHOLD,
                 "confidence_multiplier": self.CONFIDENCE_MULTIPLIER,
             }

@@ -607,6 +607,17 @@ class Strategy:
         """Return configured risk overrides when provided."""
         return getattr(self, "_risk_overrides", None)
 
+    def set_risk_overrides(self, overrides: dict[str, Any] | None) -> None:
+        """Set risk overrides for the strategy.
+
+        Args:
+            overrides: Dictionary of risk override parameters, or None to clear.
+        """
+        if overrides is None:
+            self._risk_overrides = {}
+        else:
+            self._risk_overrides = dict(overrides)
+
     def _validate_inputs(self, df: pd.DataFrame, index: int, balance: float) -> None:
         """Validate input parameters"""
         if df.empty:

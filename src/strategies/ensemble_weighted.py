@@ -31,10 +31,9 @@ from src.strategies.components import (
     WeightedVotingSignalGenerator,
 )
 
-# Configuration constants
-MIN_STRATEGIES_FOR_SIGNAL = 1
-PERFORMANCE_WINDOW = 30
-WEIGHT_UPDATE_FREQUENCY = 10
+# Configuration constants for ensemble strategy
+# Note: MIN_STRATEGIES_FOR_SIGNAL, PERFORMANCE_WINDOW, and WEIGHT_UPDATE_FREQUENCY
+# are reserved for future dynamic weight adjustment features.
 BASE_POSITION_SIZE = 0.50
 MIN_POSITION_SIZE_RATIO = 0.20
 MAX_POSITION_SIZE_RATIO = 0.80
@@ -116,7 +115,7 @@ def create_ensemble_weighted_strategy(
     }
 
     # Configure trailing stop behavior via risk overrides
-    strategy._risk_overrides = {
+    strategy.set_risk_overrides({
         "trailing_stop": {
             "enabled": True,
             "activation_threshold": 0.04,
@@ -124,6 +123,6 @@ def create_ensemble_weighted_strategy(
             "step": 0.01,
             "cooldown_hours": 4,
         }
-    }
+    })
 
     return strategy

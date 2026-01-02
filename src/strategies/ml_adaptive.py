@@ -87,7 +87,7 @@ def create_ml_adaptive_strategy(
         regime_detector=regime_detector,
     )
 
-    strategy._risk_overrides = {
+    strategy.set_risk_overrides({
         "partial_operations": {
             "exit_targets": list(DEFAULT_PARTIAL_EXIT_TARGETS),
             "exit_sizes": list(DEFAULT_PARTIAL_EXIT_SIZES),
@@ -95,6 +95,6 @@ def create_ml_adaptive_strategy(
             "scale_in_sizes": list(DEFAULT_SCALE_IN_SIZES),
             "max_scale_ins": DEFAULT_MAX_SCALE_INS,
         }
-    }
+    })
 
     return strategy
