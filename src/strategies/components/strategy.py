@@ -206,9 +206,9 @@ class Strategy:
                 f"Got type: {type(signal_generator).__name__}"
             )
 
-        if not hasattr(risk_manager, "calculate_position_fraction"):
+        if not hasattr(risk_manager, "calculate_position_size"):
             raise ValueError(
-                f"Strategy '{name}': risk_manager missing 'calculate_position_fraction' method. "
+                f"Strategy '{name}': risk_manager missing 'calculate_position_size' method. "
                 f"Got type: {type(risk_manager).__name__}"
             )
 

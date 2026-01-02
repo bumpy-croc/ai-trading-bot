@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Enhanced CLAUDE.md with regression prevention section
 
+### Fixed
+- Recorded live exits even when filled prices exceed deviation thresholds to keep state consistent
+- Aligned live exit-condition evaluation order with backtest engine parity
+
 ---
 
 ## 2025-12-22

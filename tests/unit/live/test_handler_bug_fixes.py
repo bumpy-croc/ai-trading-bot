@@ -214,6 +214,48 @@ class TestTakeProfitLimitPricing:
         assert base_price == pytest.approx(80.0)
 
 
+class TestExitConditionOrdering:
+    """Test exit condition evaluation order matches backtest."""
+
+    def test_strategy_exit_checked_before_risk_exits(self) -> None:
+        """Strategy exit evaluation runs even when stop loss triggers."""
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+        )
+
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            entry_price=100.0,
+            entry_time=datetime.now(timezone.utc),
+            order_id="order-exit-1",
+            stop_loss=95.0,
+        )
+
+        runtime_decision = MagicMock()
+        component_strategy = MagicMock()
+
+        with patch.object(
+            exit_handler, "_check_strategy_exit", return_value=(True, "Strategy signal")
+        ) as mock_check:
+            result = exit_handler.check_exit_conditions(
+                position=position,
+                current_price=94.0,
+                candle_high=101.0,
+                candle_low=94.0,
+                runtime_decision=runtime_decision,
+                component_strategy=component_strategy,
+            )
+
+        mock_check.assert_called_once()
+        assert result.should_exit is True
+        assert "Stop loss" in result.exit_reason
+
+
 class TestPositionTrackerThreadSafety:
     """Test thread safety of LivePositionTracker."""
 

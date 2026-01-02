@@ -90,6 +90,7 @@ class DatabaseManager:
         self.engine: _Engine | None = None
         self.session_factory = None
         self._current_session_id: int | None = None
+        self._is_postgres: bool = False  # Set during _init_database
 
         # Initialize database connection
         self._init_database()
@@ -163,6 +164,7 @@ class DatabaseManager:
         # Accept SQLite strictly for unit tests (fast path)
         is_sqlite = self.database_url.startswith("sqlite:")
         is_postgres = self.database_url.startswith("postgresql")
+        self._is_postgres = is_postgres  # Store for later use (e.g., dialect-specific commands)
 
         if not (is_sqlite or is_postgres):
             # Keep error message compatible with tests expectations
@@ -388,7 +390,9 @@ class DatabaseManager:
             # Set statement_timeout for this session using SET LOCAL (transaction-scoped)
             # This overrides the connection-level default timeout
             # Safe to use f-string here because timeout_ms is validated as positive int above
-            session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            # Note: SET LOCAL is PostgreSQL-specific; SQLite doesn't support this syntax
+            if self._is_postgres:
+                session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
             yield session
         except Exception as e:
             session.rollback()
@@ -407,6 +411,12 @@ class DatabaseManager:
             return {"error": "Engine not initialized"}
 
         pool = self.engine.pool
+
+        # SQLite StaticPool doesn't have size/checkedout/overflow methods
+        # Skip pool health check for non-PostgreSQL databases
+        if not self._is_postgres:
+            return {"info": "Pool health check skipped for SQLite"}
+
         stats = {
             "size": pool.size(),
             "checked_out": pool.checkedout(),
@@ -811,12 +821,17 @@ class DatabaseManager:
             except IntegrityError as ie:
                 # Rollback on integrity errors (duplicate keys, constraint violations)
                 session.rollback()
-                logger.error(f"IntegrityError logging trade for {symbol}: {ie}. Transaction rolled back.")
+                logger.error(
+                    f"IntegrityError logging trade for {symbol}: {ie}. Transaction rolled back."
+                )
                 raise
             except Exception as e:
                 # Rollback on any other database errors
                 session.rollback()
-                logger.error(f"Failed to log trade for {symbol}: {e}. Transaction rolled back.", exc_info=True)
+                logger.error(
+                    f"Failed to log trade for {symbol}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
                 raise
 
             logger.info(
@@ -1973,7 +1988,9 @@ class DatabaseManager:
                     margin_used=Decimal("0.0"),
                     margin_available=Decimal(str(new_balance)),
                     total_pnl=Decimal("0.0"),  # Would be calculated from session
-                    daily_pnl=Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0"),
+                    daily_pnl=(
+                        Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0")
+                    ),
                     drawdown=Decimal("0.0"),
                 )
                 session.add(history_entry)
