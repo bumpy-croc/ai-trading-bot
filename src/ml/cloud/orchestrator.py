@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 # Default poll interval for checking job status (seconds)
 DEFAULT_POLL_INTERVAL = 60
 
+# Spot instance interruption allowance multiplier (AWS recommends 2x for spot)
+# SageMaker spot training may be interrupted and restarted, requiring extended wait time
+SPOT_WAIT_TIME_MULTIPLIER = 2
+
+# Maximum length for job ID suffix used in temporary directory naming
+# Prevents excessively long paths while allowing for timestamp-based job IDs
+MAX_JOB_SUFFIX_LENGTH = 100
+
 
 class CloudTrainingOrchestrator:
     """Orchestrates cloud training workflow.
@@ -243,7 +251,7 @@ class CloudTrainingOrchestrator:
             JobTimeoutError: If job exceeds max runtime
         """
 
-        max_wait = self.config.max_runtime_seconds * 2  # Allow extra time for spot interruptions
+        max_wait = self.config.max_runtime_seconds * SPOT_WAIT_TIME_MULTIPLIER
         elapsed = 0
 
         while elapsed < max_wait:
@@ -287,11 +295,11 @@ class CloudTrainingOrchestrator:
         import tempfile
 
         job_suffix = job_id.split("/")[-1] if job_id else ""
-        # Validate: alphanumeric/hyphens/underscores, max 100 chars, no path separators
+        # Validate: alphanumeric/hyphens/underscores, reasonable length, no path separators
         if (
             not job_suffix
             or not re.match(r"^[\w\-]+$", job_suffix)
-            or len(job_suffix) > 100
+            or len(job_suffix) > MAX_JOB_SUFFIX_LENGTH
             or "/" in job_suffix
             or "\\" in job_suffix
         ):
