@@ -127,6 +127,19 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
 def merge_price_sentiment_data(
     price_df: pd.DataFrame, sentiment_df: pd.DataFrame, timeframe: str
 ) -> pd.DataFrame:
+    """Merge price and sentiment data on timestamp index.
+
+    Performs time-based alignment of sentiment data to price candles,
+    forward-filling sentiment values within the same timeframe period.
+
+    Args:
+        price_df: OHLCV data with timestamp index
+        sentiment_df: Sentiment data with timestamp index
+        timeframe: Candle timeframe (e.g., '1h', '4h', '1d')
+
+    Returns:
+        Merged DataFrame with price and sentiment columns aligned by timestamp
+    """
     if sentiment_df.empty:
         return price_df
     if timeframe != "1d":
