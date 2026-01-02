@@ -347,7 +347,7 @@ class WeightedVotingSignalGenerator(SignalGenerator):
                 signal = generator.generate_signal(df, index, regime)
                 if signal.confidence >= self.min_confidence:
                     signals.append((signal, weight))
-            except Exception as e:
+            except (ValueError, KeyError, IndexError) as e:
                 # Log error but continue with other generators
                 logger.warning("Generator %s failed: %s", generator.name, e, exc_info=False)
                 continue
@@ -522,7 +522,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
         # Get primary signal
         try:
             primary_signal = self.primary_generator.generate_signal(df, index, regime)
-        except Exception as e:
+        except (ValueError, KeyError, IndexError) as e:
             # Primary failed, use secondary as fallback
             try:
                 secondary_signal = self.secondary_generator.generate_signal(df, index, regime)
@@ -534,7 +534,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
                     }
                 )
                 return secondary_signal
-            except Exception as e2:
+            except (ValueError, KeyError, IndexError) as e2:
                 # Both failed, return HOLD
                 return Signal(
                     direction=SignalDirection.HOLD,
@@ -731,7 +731,7 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
 
         try:
             signal = generator.generate_signal(df, index, regime)
-        except Exception as e:
+        except (ValueError, KeyError, IndexError) as e:
             # Selected generator failed, try default
             try:
                 signal = self.default_generator.generate_signal(df, index, regime)
@@ -743,7 +743,7 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
                         "error": str(e),
                     }
                 )
-            except Exception as e2:
+            except (ValueError, KeyError, IndexError) as e2:
                 # Default also failed, return HOLD
                 return Signal(
                     direction=SignalDirection.HOLD,

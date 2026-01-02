@@ -282,8 +282,8 @@ class ComponentStrategyManager:
 
             return signal, position_size, metadata
 
-        except Exception as e:
-            self.logger.error(f"Strategy execution failed: {e}")
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            self.logger.exception("Strategy execution failed: %s", e)
             # Return safe defaults
             from .signal_generator import SignalDirection
 
@@ -457,8 +457,8 @@ class ComponentStrategyManager:
             self.logger.info(f"Activated strategy version {version_id}")
             return True
 
-        except Exception as e:
-            self.logger.error(f"Failed to activate version {version_id}: {e}")
+        except (ValueError, KeyError, AttributeError) as e:
+            self.logger.exception("Failed to activate version %s: %s", version_id, e)
             return False
 
     def rollback_to_version(self, version_id: str) -> bool:
@@ -701,6 +701,6 @@ class ComponentStrategyManager:
 
             return version.version_id
 
-        except Exception as e:
-            self.logger.error(f"Failed to import version: {e}")
+        except (ValueError, KeyError, OSError) as e:
+            self.logger.exception("Failed to import version: %s", e)
             return None
