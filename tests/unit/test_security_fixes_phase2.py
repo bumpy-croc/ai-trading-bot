@@ -4,8 +4,10 @@ Tests for Phase 2 security fixes.
 Tests for:
 - SEC-004: Input validation for data providers
 - SEC-005: Database SSL enforcement
-- SEC-006: Logging redaction patterns
 - SEC-008/009: Admin application enhancements (CSRF, rate limiting)
+
+Note: SEC-006 (Logging redaction) tests moved to
+tests/unit/infrastructure/logging/test_config.py::TestSensitiveDataFilter
 """
 
 import os
@@ -103,46 +105,6 @@ def test_sec_005_database_ssl_override():
         config = manager._get_engine_config()
 
         assert config["connect_args"]["sslmode"] == "require"
-
-
-def test_sec_006_logging_redaction_expanded():
-    """SEC-006: Verify expanded sensitive keys are redacted."""
-    from src.infrastructure.logging.config import SensitiveDataFilter
-
-    filter_obj = SensitiveDataFilter()
-
-    # Test new sensitive keys (key-value format)
-    test_cases = [
-        "refresh_token: my-secret-token-123",
-        "access_token: my-secret-token-456",
-        "private_key: secret-key-789",
-        "client_secret: secret-123",
-    ]
-
-    for input_text in test_cases:
-        result = filter_obj._redact_text(input_text)
-        # Should have *** to indicate redaction
-        assert "***" in result
-        # Should preserve the key name
-        key_name = input_text.split(":")[0].strip()
-        assert key_name in result
-
-
-def test_sec_006_logging_redaction_json():
-    """SEC-006: Verify JSON-style redaction works."""
-    from src.infrastructure.logging.config import SensitiveDataFilter
-
-    filter_obj = SensitiveDataFilter()
-
-    test_cases = [
-        ('"refresh_token": "my-token"', "***"),
-        ('"access_token": "my-token"', "***"),
-        ('"signing_key": "my-key"', "***"),
-    ]
-
-    for input_text, redacted_part in test_cases:
-        result = filter_obj._redact_text(input_text)
-        assert redacted_part in result
 
 
 def test_sec_008_csrf_imports():
