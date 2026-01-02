@@ -10,6 +10,8 @@ This module provides unified implementations for common trading engine functiona
 - Partial operations management
 - Performance tracking
 - Correlation-based position sizing
+- Side utilities (consistent side handling across engines)
+- Validation utilities (input validation for financial calculations)
 """
 
 from src.engines.shared.correlation_handler import CorrelationHandler
@@ -53,6 +55,27 @@ from src.engines.shared.strategy_exit_checker import (
 from src.engines.shared.trailing_stop_manager import (
     TrailingStopManager,
     TrailingStopUpdate,
+)
+from src.engines.shared.side_utils import (
+    get_position_side,
+    is_long,
+    is_short,
+    opposite_side,
+    opposite_side_string,
+    to_position_side,
+    to_side_string,
+)
+from src.engines.shared.validation import (
+    EPSILON,
+    clamp_fraction,
+    is_position_fully_closed,
+    is_valid_fraction,
+    is_valid_price,
+    safe_divide,
+    validate_fraction,
+    validate_notional,
+    validate_parallel_lists,
+    validate_price,
 )
 
 # Re-export from canonical location for backward compatibility
@@ -103,4 +126,23 @@ __all__ = [
     "PerformanceMetrics",
     # Correlation handling
     "CorrelationHandler",
+    # Side utilities
+    "to_side_string",
+    "to_position_side",
+    "is_long",
+    "is_short",
+    "opposite_side",
+    "opposite_side_string",
+    "get_position_side",
+    # Validation utilities
+    "EPSILON",
+    "validate_price",
+    "validate_notional",
+    "validate_fraction",
+    "is_valid_price",
+    "is_valid_fraction",
+    "safe_divide",
+    "is_position_fully_closed",
+    "clamp_fraction",
+    "validate_parallel_lists",
 ]
