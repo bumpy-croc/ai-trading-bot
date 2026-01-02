@@ -32,6 +32,19 @@ def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, 
     # Do not start thread; exercise methods directly
     engine.is_running = True
 
+    # Create a trading session (required for balance updates)
+    engine.trading_session_id = engine.db_manager.create_trading_session(
+        strategy_name="TestStrategy",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        mode="paper",
+        initial_balance=1000.0,
+    )
+    # Initialize balance in the database (mirrors what start() does)
+    engine.db_manager.update_balance(
+        1000.0, "session_start", "system", engine.trading_session_id
+    )
+
     # Open a position
     engine._execute_entry(
         symbol="BTCUSDT",

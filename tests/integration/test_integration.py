@@ -289,6 +289,19 @@ class TestComponentInteractions:
             initial_balance=10000,
         )
 
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="ml_basic",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         # Mock data provider
         market_data = pd.DataFrame(
             {"open": [50000], "high": [50200], "low": [49800], "close": [50100], "volume": [1000]},

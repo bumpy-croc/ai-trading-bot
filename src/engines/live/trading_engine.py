@@ -2263,6 +2263,17 @@ class LiveTradingEngine:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         try:
+            # Check max concurrent positions limit (defense-in-depth, also checked in loop)
+            max_concurrent = self.risk_manager.get_max_concurrent_positions()
+            if self.live_position_tracker.position_count >= max_concurrent:
+                logger.warning(
+                    "Max concurrent positions limit reached (%d/%d). Rejecting entry for %s.",
+                    self.live_position_tracker.position_count,
+                    max_concurrent,
+                    symbol,
+                )
+                return
+
             if size > self.max_position_size:
                 logger.warning(
                     "Position size %.2f%% exceeds maximum %.2f%%. Capping at maximum.",

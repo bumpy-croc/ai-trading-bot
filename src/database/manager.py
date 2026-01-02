@@ -1946,11 +1946,16 @@ class DatabaseManager:
         if not session_id:
             raise ValueError("No active trading session for balance update")
 
+        if self.session_factory is None:
+            raise ValueError("Session factory not initialized")
+
         session = None
         try:
-            # Use a single session for the entire atomic operation with WRITE timeout
-            # Critical balance updates must complete within timeout to prevent deadlocks
-            session = next(self.get_session_with_timeout(QueryTimeout.WRITE))
+            # Create session directly (not using context manager since we're in a generator)
+            # Apply WRITE timeout for critical balance updates
+            session = self.session_factory()
+            if self._is_postgres:
+                session.execute(text(f"SET LOCAL statement_timeout = {QueryTimeout.WRITE}"))
 
             # Begin nested transaction (SAVEPOINT) for atomicity
             with session.begin_nested():
