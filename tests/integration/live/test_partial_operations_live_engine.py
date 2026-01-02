@@ -69,6 +69,18 @@ def test_partial_exits_and_scale_ins_execution(monkeypatch):
         slippage_rate=0.0,
     )
 
+    # Create a trading session (required for balance updates)
+    engine.trading_session_id = engine.db_manager.create_trading_session(
+        strategy_name="ml_adaptive",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        mode="paper",
+        initial_balance=10000,
+    )
+    engine.db_manager.update_balance(
+        10000, "session_start", "system", engine.trading_session_id
+    )
+
     # Open a position manually at 100, size 0.5
     engine._execute_entry(
         symbol="BTCUSDT",
