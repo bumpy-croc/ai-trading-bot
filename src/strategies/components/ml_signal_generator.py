@@ -129,10 +129,9 @@ class MLSignalGenerator(SignalGenerator):
 
         except Exception as e:
             if not self._engine_warning_emitted:
-                logger.error(
+                logger.exception(
                     "MLSignalGenerator: Prediction engine initialization failed: %s",
                     e,
-                    exc_info=True,
                 )
                 self._engine_warning_emitted = True
             self.prediction_engine = None
@@ -277,8 +276,8 @@ class MLSignalGenerator(SignalGenerator):
             return pred
 
         except Exception as e:
-            logger.error(
-                "MLSignalGenerator: Prediction error at index %d: %s", index, e, exc_info=True
+            logger.exception(
+                "MLSignalGenerator: Prediction error at index %d: %s", index, e
             )
             return None
 
@@ -496,10 +495,9 @@ class MLBasicSignalGenerator(SignalGenerator):
 
         except Exception as e:
             if not self._engine_warning_emitted:
-                logger.error(
+                logger.exception(
                     "MLBasicSignalGenerator: Prediction engine initialization failed: %s",
                     e,
-                    exc_info=True,
                 )
                 self._engine_warning_emitted = True
             self.prediction_engine = None
@@ -663,8 +661,8 @@ class MLBasicSignalGenerator(SignalGenerator):
             return pred
 
         except Exception as e:
-            logger.error(
-                "MLBasicSignalGenerator: Prediction error at index %d: %s", index, e, exc_info=True
+            logger.exception(
+                "MLBasicSignalGenerator: Prediction error at index %d: %s", index, e
             )
             return None
 

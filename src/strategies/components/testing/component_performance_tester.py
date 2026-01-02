@@ -514,7 +514,7 @@ class ComponentPerformanceTester:
 
                 except Exception as e:
                     error_count += 1
-                    logger.error(f"Error generating signal at index {i}: {e}", exc_info=True)
+                    logger.exception("Error generating signal at index %d: %s", i, e)
                     continue
 
             all_signals.extend(scenario_signals)
@@ -749,7 +749,7 @@ class ComponentPerformanceTester:
 
                 except Exception as e:
                     error_count += 1
-                    logger.error(f"Error testing risk manager at index {i}: {e}", exc_info=True)
+                    logger.exception("Error testing risk manager at index %d: %s", i, e)
                     continue
 
         # Calculate metrics
@@ -923,7 +923,7 @@ class ComponentPerformanceTester:
 
                 except Exception as e:
                     error_count += 1
-                    logger.error(f"Error testing position sizer at index {i}: {e}", exc_info=True)
+                    logger.exception("Error testing position sizer at index %d: %s", i, e)
                     continue
 
         # Calculate metrics

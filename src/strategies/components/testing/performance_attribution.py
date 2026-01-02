@@ -339,7 +339,7 @@ class PerformanceAttributionAnalyzer:
 
             except Exception as e:
                 error_count += 1
-                logger.error(f"Error in strategy simulation at index {i}: {e}", exc_info=True)
+                logger.exception("Error in strategy simulation at index %d: %s", i, e)
                 continue
 
         # Check error threshold (fail if >2% errors)
@@ -419,7 +419,7 @@ class PerformanceAttributionAnalyzer:
             }
 
         except Exception as e:
-            logger.error(f"Error executing attribution trade: {e}", exc_info=True)
+            logger.exception("Error executing attribution trade: %s", e)
             return None
 
     def _analyze_signal_generator_attribution(
