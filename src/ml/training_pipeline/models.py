@@ -119,8 +119,8 @@ def default_callbacks(patience: int = 15, reduce_lr_patience: int | None = None)
     """
     _ensure_tensorflow_available()
 
-    if reduce_lr_patience is None:
-        reduce_lr_patience = max(patience // 3, 3)
+    # Avoid reassigning function parameter (CODE.md line 77)
+    lr_patience = reduce_lr_patience if reduce_lr_patience is not None else max(patience // 3, 3)
 
     return [
         callbacks.EarlyStopping(
@@ -132,7 +132,7 @@ def default_callbacks(patience: int = 15, reduce_lr_patience: int | None = None)
         callbacks.ReduceLROnPlateau(
             monitor="val_loss",
             factor=0.5,
-            patience=reduce_lr_patience,
+            patience=lr_patience,
             min_lr=1e-6,
             verbose=1,
         ),

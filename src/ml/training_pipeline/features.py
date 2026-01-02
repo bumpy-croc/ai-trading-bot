@@ -41,11 +41,10 @@ def normalize_timezone(ts1: pd.Timestamp, ts2: pd.Timestamp) -> tuple[pd.Timesta
     Returns:
         Tuple of UTC-aware timestamps that can be compared safely
     """
-    if ts1.tzinfo is None:
-        ts1 = ts1.tz_localize("UTC")
-    if ts2.tzinfo is None:
-        ts2 = ts2.tz_localize("UTC")
-    return ts1, ts2
+    # Avoid reassigning function parameters (CODE.md line 77)
+    normalized_ts1 = ts1.tz_localize("UTC") if ts1.tzinfo is None else ts1
+    normalized_ts2 = ts2.tz_localize("UTC") if ts2.tzinfo is None else ts2
+    return normalized_ts1, normalized_ts2
 
 
 def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:
@@ -263,8 +262,9 @@ def _validate_and_clean_data(data: pd.DataFrame) -> pd.DataFrame:
     # Drop NaNs before scaling to avoid MinMaxScaler ValueError
     rows_before = len(data)
     nan_counts = data.isna().sum()
-    data = data.dropna()
-    rows_dropped = rows_before - len(data)
+    # Avoid reassigning function parameter (CODE.md line 77)
+    cleaned_data = data.dropna()
+    rows_dropped = rows_before - len(cleaned_data)
 
     if rows_dropped > 0:
         logger.info(
@@ -277,14 +277,14 @@ def _validate_and_clean_data(data: pd.DataFrame) -> pd.DataFrame:
 
     # Validate sufficient data remains after dropping NaNs
     min_required_rows = max(SMA_WINDOWS) * 2  # Need enough data for meaningful training
-    if len(data) < min_required_rows:
+    if len(cleaned_data) < min_required_rows:
         raise ValueError(
-            f"Insufficient data after dropping NaNs: {len(data)} rows remaining, "
+            f"Insufficient data after dropping NaNs: {len(cleaned_data)} rows remaining, "
             f"need at least {min_required_rows} for training with SMA windows {SMA_WINDOWS}"
         )
 
     # Validate data for inf values and other corruption that would break MinMaxScaler
-    inf_counts = np.isinf(data.select_dtypes(include=[np.number])).sum()
+    inf_counts = np.isinf(cleaned_data.select_dtypes(include=[np.number])).sum()
     if inf_counts.sum() > 0:
         logger.error(
             "Found infinite values in training data. Columns with inf: %s",
@@ -300,14 +300,14 @@ def _validate_and_clean_data(data: pd.DataFrame) -> pd.DataFrame:
         f"sma_{w}" for w in SMA_WINDOWS
     ]
     for col in numeric_cols:
-        if col in data.columns:
-            if not np.issubdtype(data[col].dtype, np.number):
+        if col in cleaned_data.columns:
+            if not np.issubdtype(cleaned_data[col].dtype, np.number):
                 raise ValueError(
-                    f"Column '{col}' is not numeric (dtype={data[col].dtype}) - "
+                    f"Column '{col}' is not numeric (dtype={cleaned_data[col].dtype}) - "
                     "cannot proceed with feature engineering"
                 )
 
-    return data
+    return cleaned_data
 
 
 def _scale_technical_indicators(
@@ -400,21 +400,14 @@ def create_robust_features(
     feature_names: list[str] = []
     scalers: dict[str, MinMaxScaler] = {}
 
-    # Add and scale price features
-    data, feature_names, scalers = _add_price_features(data, feature_names, scalers)
-
-    # Calculate technical indicators
-    data = _calculate_technical_indicators(data)
-
-    # Validate and clean data
-    data = _validate_and_clean_data(data)
-
-    # Scale technical indicators
-    data, feature_names = _scale_technical_indicators(data, feature_names)
-
-    # Add sentiment features if recommended
-    data, feature_names, scalers = _add_sentiment_features(
-        data, sentiment_assessment, feature_names, scalers
+    # Avoid reassigning function parameter (CODE.md line 77)
+    # Use pipeline pattern with intermediate variable
+    processed_data, feature_names, scalers = _add_price_features(data, feature_names, scalers)
+    processed_data = _calculate_technical_indicators(processed_data)
+    processed_data = _validate_and_clean_data(processed_data)
+    processed_data, feature_names = _scale_technical_indicators(processed_data, feature_names)
+    processed_data, feature_names, scalers = _add_sentiment_features(
+        processed_data, sentiment_assessment, feature_names, scalers
     )
 
-    return data, scalers, feature_names
+    return processed_data, scalers, feature_names
