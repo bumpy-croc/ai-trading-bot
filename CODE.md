@@ -6,6 +6,44 @@ This file contains coding guidelines and quality standards for this project.
 
 ---
 
+## Software Architecture Principles
+
+These foundational principles guide all architectural decisions in this codebase.
+
+### 1. Separation of Concerns
+
+The foundation everything else builds on. Keep distinct responsibilities isolated (presentation, business logic, data access). This makes systems understandable, testable, and changeable. Get this wrong and complexity compounds everywhere.
+
+### 2. Design for Change (Loose Coupling)
+
+Assume requirements will evolve. Depend on abstractions rather than concretions, use interfaces at boundaries, and minimise the ripple effect of changes. This is what keeps a codebase viable at year three versus year one.
+
+### 3. Keep It Simple (YAGNI/KISS)
+
+Resist speculative generality. The cleverest abstraction you don't need yet is technical debt with interest. Build for today's requirements with room to extend, not pre-built extension points.
+
+### 4. Single Responsibility at Every Level
+
+Applies to functions, classes, modules, and services. When something has one clear reason to change, it's easier to understand, test, and replace.
+
+### 5. Define Clear Boundaries and Contracts
+
+Whether microservices or modules, explicit APIs at boundaries let teams work independently and systems evolve in pieces. This includes versioning strategies and backwards compatibility thinking.
+
+### 6. Favour Composition Over Inheritance
+
+Inheritance hierarchies become brittle; composition gives flexibility. This principle extends beyond OOP into how you combine services and modules.
+
+### 7. Design for Failure
+
+Assume networks fail, dependencies go down, and load spikes happen. Circuit breakers, retries with backoff, graceful degradation, and timeouts should be architectural defaults, not afterthoughts.
+
+### 8. Make It Observable
+
+Structured logging, metrics, and tracing aren't optional extras. If you can't see what's happening in production, you can't debug, optimise, or confidently deploy.
+
+---
+
 ## Coding Style & Naming Conventions
 
 ### Key Conventions
