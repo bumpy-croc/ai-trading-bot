@@ -490,7 +490,8 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Initialize registry for structured selection
             try:
                 self._registry = engine.model_registry
-            except Exception:
+            except AttributeError:
+                # Engine doesn't have model_registry attribute
                 self._registry = None
 
         except Exception as e:
@@ -641,7 +642,8 @@ class MLBasicSignalGenerator(SignalGenerator):
                         timeframe=self.model_timeframe,
                     )
                     selected_bundle_key = bundle.key
-                except Exception:
+                except (KeyError, ValueError, AttributeError):
+                    # Bundle not found or invalid - fall back to default
                     selected_bundle_key = None
 
             # Prefer registry selection by symbol/type/timeframe when available
@@ -651,7 +653,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                     result = self.prediction_engine.predict(window_df, model_name=engine_model_name)
                 else:
                     result = self.prediction_engine.predict(window_df)
-            except Exception:
+            except (KeyError, ValueError):
                 # Fall back to default registry resolution if explicit lookup fails
                 result = self.prediction_engine.predict(window_df)
 
