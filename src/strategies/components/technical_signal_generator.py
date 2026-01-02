@@ -503,6 +503,11 @@ class TechnicalSignalGenerator(SignalGenerator):
         else:
             return 0.5  # Default confidence
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.min_periods
+
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
@@ -645,6 +650,11 @@ class RSISignalGenerator(SignalGenerator):
         else:
             return 0.3
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.period
+
     def get_parameters(self) -> dict[str, Any]:
         """Get RSI signal generator parameters"""
         params = super().get_parameters()
@@ -786,6 +796,11 @@ class MACDSignalGenerator(SignalGenerator):
             return 0.5
         else:
             return 0.3
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.min_periods
 
     def get_parameters(self) -> dict[str, Any]:
         """Get MACD signal generator parameters"""
