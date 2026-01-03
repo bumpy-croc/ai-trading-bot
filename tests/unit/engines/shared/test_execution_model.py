@@ -103,3 +103,41 @@ def test_stop_order_fills_with_taker_liquidity() -> None:
     # Adverse fill price: candle low for SELL stop (long exit)
     assert decision.fill_price == pytest.approx(90.0)
     assert decision.liquidity == "taker"
+
+
+def test_nan_quantity_rejects_fill() -> None:
+    """NaN quantity should be rejected to prevent state corruption."""
+    import math
+
+    model = ExecutionModel(default_fill_policy())
+    snapshot = _snapshot(high=110.0, low=95.0)
+    order_intent = OrderIntent(
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=math.nan,
+    )
+
+    decision = model.decide_fill(order_intent, snapshot)
+
+    assert decision.should_fill is False
+    assert "finite" in decision.reason.lower()
+
+
+def test_infinity_quantity_rejects_fill() -> None:
+    """Infinite quantity should be rejected."""
+    import math
+
+    model = ExecutionModel(default_fill_policy())
+    snapshot = _snapshot(high=110.0, low=95.0)
+    order_intent = OrderIntent(
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=math.inf,
+    )
+
+    decision = model.decide_fill(order_intent, snapshot)
+
+    assert decision.should_fill is False
+    assert "finite" in decision.reason.lower()

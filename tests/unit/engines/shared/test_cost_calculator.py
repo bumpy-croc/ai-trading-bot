@@ -266,6 +266,38 @@ class TestEdgeCases:
 
         assert result_lower.executed_price == result_upper.executed_price
 
+    def test_nan_price_raises_error(self) -> None:
+        """NaN price should raise ValueError to prevent state corruption."""
+        import math
+
+        calc = CostCalculator()
+        with pytest.raises(ValueError, match="Price must be finite"):
+            calc.calculate_entry_costs(price=math.nan, notional=1000.0, side="long")
+
+    def test_infinity_price_raises_error(self) -> None:
+        """Infinite price should raise ValueError."""
+        import math
+
+        calc = CostCalculator()
+        with pytest.raises(ValueError, match="Price must be finite"):
+            calc.calculate_entry_costs(price=math.inf, notional=1000.0, side="long")
+
+    def test_nan_notional_raises_error(self) -> None:
+        """NaN notional should raise ValueError."""
+        import math
+
+        calc = CostCalculator()
+        with pytest.raises(ValueError, match="Notional must be finite"):
+            calc.calculate_entry_costs(price=100.0, notional=math.nan, side="long")
+
+    def test_infinity_notional_raises_error(self) -> None:
+        """Infinite notional should raise ValueError."""
+        import math
+
+        calc = CostCalculator()
+        with pytest.raises(ValueError, match="Notional must be finite"):
+            calc.calculate_entry_costs(price=100.0, notional=math.inf, side="long")
+
 
 class TestLiquidityOverrides:
     """Test maker/taker liquidity behavior."""
