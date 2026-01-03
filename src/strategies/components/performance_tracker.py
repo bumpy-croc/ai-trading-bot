@@ -259,8 +259,8 @@ class PerformanceTracker:
         if self.storage_backend:
             try:
                 self.storage_backend.save_trade(trade)
-            except Exception as e:
-                self.logger.error(f"Failed to persist trade: {e}")
+            except Exception:
+                self.logger.exception("Failed to persist trade")
 
         self.logger.debug(
             f"Recorded trade: PnL={trade.pnl:.2f}, Balance={self.current_balance:.2f}"
@@ -804,10 +804,9 @@ class PerformanceTracker:
 
         if score1 > score2:
             return "strategy_1"
-        elif score2 > score1:
+        if score2 > score1:
             return "strategy_2"
-        else:
-            return "tie"
+        return "tie"
 
     def _is_cache_valid(self, cache_key: str) -> bool:
         """Check if cached metrics are still valid"""

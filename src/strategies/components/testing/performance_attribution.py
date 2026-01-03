@@ -303,8 +303,8 @@ class PerformanceAttributionAnalyzer:
                         signals.append(
                             {"index": i, "signal": signal, "timestamp": self.test_data.index[i]}
                         )
-                    except Exception as e:
-                        logger.debug(f"Failed to generate signal at index {i}: {e}")
+                    except (ValueError, KeyError, IndexError) as e:
+                        logger.debug("Failed to generate signal at index %d: %s", i, e)
 
                 # Execute trade if decision made (TradingDecision is a dataclass)
                 if decision and hasattr(decision, "signal"):
@@ -337,9 +337,9 @@ class PerformanceAttributionAnalyzer:
 
                 portfolio_values.append(balance)
 
-            except Exception as e:
+            except Exception:
                 error_count += 1
-                logger.error(f"Error in strategy simulation at index {i}: {e}", exc_info=True)
+                logger.exception("Error in strategy simulation at index %d", i)
                 continue
 
         # Check error threshold (fail if >2% errors)
@@ -418,8 +418,8 @@ class PerformanceAttributionAnalyzer:
                 "decision_metadata": decision_metadata,
             }
 
-        except Exception as e:
-            logger.error(f"Error executing attribution trade: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Error executing attribution trade")
             return None
 
     def _analyze_signal_generator_attribution(
@@ -684,9 +684,10 @@ class PerformanceAttributionAnalyzer:
                 total_signals += 1
 
                 # Check if signal was accurate
-                if signal.direction == SignalDirection.BUY and corresponding_trade["return"] > 0:
-                    accurate_signals += 1
-                elif signal.direction == SignalDirection.SELL and corresponding_trade["return"] < 0:
+                if (
+                    (signal.direction == SignalDirection.BUY and corresponding_trade["return"] > 0)
+                    or (signal.direction == SignalDirection.SELL and corresponding_trade["return"] < 0)
+                ):
                     accurate_signals += 1
                 elif signal.direction == SignalDirection.HOLD:
                     accurate_signals += 0.5  # Neutral for hold signals
@@ -724,9 +725,8 @@ class PerformanceAttributionAnalyzer:
         if max_drawdown < target_drawdown:
             # Good risk control - positive contribution
             return (target_drawdown - max_drawdown) * baseline_results["total_return"]
-        else:
-            # Poor risk control - negative contribution
-            return -(max_drawdown - target_drawdown) * baseline_results["total_return"]
+        # Poor risk control - negative contribution
+        return -(max_drawdown - target_drawdown) * baseline_results["total_return"]
 
     def _estimate_sizing_contribution(
         self,
@@ -1029,7 +1029,7 @@ class PerformanceAttributionAnalyzer:
                 regime_detector=original_strategy.regime_detector,
                 enable_logging=False,  # Disable logging for test strategy
             )
-        elif component_type == "risk_manager":
+        if component_type == "risk_manager":
             return Strategy(
                 name=f"{original_strategy.name}_modified_risk",
                 signal_generator=original_strategy.signal_generator,
@@ -1038,7 +1038,7 @@ class PerformanceAttributionAnalyzer:
                 regime_detector=original_strategy.regime_detector,
                 enable_logging=False,
             )
-        elif component_type == "position_sizer":
+        if component_type == "position_sizer":
             return Strategy(
                 name=f"{original_strategy.name}_modified_sizer",
                 signal_generator=original_strategy.signal_generator,
@@ -1047,5 +1047,4 @@ class PerformanceAttributionAnalyzer:
                 regime_detector=original_strategy.regime_detector,
                 enable_logging=False,
             )
-        else:
-            raise ValueError(f"Unknown component type: {component_type}")
+        raise ValueError(f"Unknown component type: {component_type}")

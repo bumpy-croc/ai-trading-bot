@@ -63,7 +63,6 @@ class PositionSizer(ABC):
         Raises:
             ValueError: If input parameters are invalid
         """
-        pass
 
     def validate_inputs(self, balance: float, risk_amount: float) -> None:
         """Validate common input parameters.
@@ -625,12 +624,11 @@ class RegimeAdaptiveSizer(PositionSizer):
 
         if strength >= 0.8:
             return 1.1  # Increase size in very stable regimes
-        elif strength >= 0.6:
+        if strength >= 0.6:
             return 1.0  # Normal size in stable regimes
-        elif strength >= 0.4:
+        if strength >= 0.4:
             return 0.9  # Slight reduction in moderately stable regimes
-        else:
-            return 0.7  # Significant reduction in unstable regimes
+        return 0.7  # Significant reduction in unstable regimes
 
     def _get_max_fraction_for_regime(self, regime: Optional["RegimeContext"]) -> float:
         """Get maximum position fraction based on regime"""
@@ -641,9 +639,9 @@ class RegimeAdaptiveSizer(PositionSizer):
         if hasattr(regime, "trend") and hasattr(regime, "volatility"):
             if regime.trend.value == "trend_up" and regime.volatility.value == "low_vol":
                 return 0.25  # 25% max in bull low vol
-            elif regime.trend.value == "trend_down":
+            if regime.trend.value == "trend_down":
                 return 0.08  # 8% max in bear market
-            elif regime.volatility.value == "high_vol":
+            if regime.volatility.value == "high_vol":
                 return 0.12  # 12% max in high volatility
 
         return 0.15  # 15% default max

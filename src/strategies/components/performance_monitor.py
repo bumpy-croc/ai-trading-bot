@@ -468,11 +468,10 @@ class PerformanceMonitor:
             # Return significance level (1 - p_value for underperformance)
             if t_stat < 0:  # Underperforming
                 return 1.0 - p_value
-            else:
-                return 0.0  # Not underperforming
+            return 0.0  # Not underperforming
 
-        except Exception as e:
-            self.logger.warning(f"Statistical significance calculation failed: {e}")
+        except (ValueError, ZeroDivisionError, statistics.StatisticsError) as e:
+            self.logger.warning("Statistical significance calculation failed: %s", e)
             return 0.0
 
     def _calculate_confidence_interval(
@@ -496,8 +495,8 @@ class PerformanceMonitor:
 
             return (mean_return - margin_of_error, mean_return + margin_of_error)
 
-        except Exception as e:
-            self.logger.warning(f"Confidence interval calculation failed: {e}")
+        except (ValueError, ZeroDivisionError, statistics.StatisticsError) as e:
+            self.logger.warning("Confidence interval calculation failed: %s", e)
             return (0.0, 0.0)
 
     def _determine_timeframe_severity(
@@ -524,14 +523,13 @@ class PerformanceMonitor:
 
         if severity_score < 0.1:
             return DegradationSeverity.NONE
-        elif severity_score < 0.3:
+        if severity_score < 0.3:
             return DegradationSeverity.MINOR
-        elif severity_score < 0.6:
+        if severity_score < 0.6:
             return DegradationSeverity.MODERATE
-        elif severity_score < 1.0:
+        if severity_score < 1.0:
             return DegradationSeverity.SEVERE
-        else:
-            return DegradationSeverity.CRITICAL
+        return DegradationSeverity.CRITICAL
 
     def _is_statistically_significant(self, timeframe_results: list[TimeFrameAnalysis]) -> bool:
         """Check if underperformance is statistically significant"""
@@ -555,10 +553,7 @@ class PerformanceMonitor:
         if current_regime.confidence < 0.7:
             return True
 
-        if current_regime.duration < self.config.min_regime_duration_days:
-            return True
-
-        return False
+        return current_regime.duration < self.config.min_regime_duration_days
 
     def _calculate_degradation_severity(
         self, timeframe_results: list[TimeFrameAnalysis]
@@ -572,14 +567,13 @@ class PerformanceMonitor:
         # Determine overall severity based on worst case and frequency
         if severity_counts.get(DegradationSeverity.CRITICAL, 0) >= 1:
             return DegradationSeverity.CRITICAL
-        elif severity_counts.get(DegradationSeverity.SEVERE, 0) >= 2:
+        if severity_counts.get(DegradationSeverity.SEVERE, 0) >= 2:
             return DegradationSeverity.SEVERE
-        elif severity_counts.get(DegradationSeverity.MODERATE, 0) >= 2:
+        if severity_counts.get(DegradationSeverity.MODERATE, 0) >= 2:
             return DegradationSeverity.MODERATE
-        elif severity_counts.get(DegradationSeverity.MINOR, 0) >= 2:
+        if severity_counts.get(DegradationSeverity.MINOR, 0) >= 2:
             return DegradationSeverity.MINOR
-        else:
-            return DegradationSeverity.NONE
+        return DegradationSeverity.NONE
 
     def _calculate_switch_confidence(
         self, timeframe_results: list[TimeFrameAnalysis], severity: DegradationSeverity
@@ -613,12 +607,11 @@ class PerformanceMonitor:
         """Get number of days for a timeframe"""
         if timeframe == TimeFrame.SHORT_TERM:
             return self.config.short_term_days
-        elif timeframe == TimeFrame.MEDIUM_TERM:
+        if timeframe == TimeFrame.MEDIUM_TERM:
             return self.config.medium_term_days
-        elif timeframe == TimeFrame.LONG_TERM:
+        if timeframe == TimeFrame.LONG_TERM:
             return self.config.long_term_days
-        else:
-            return 30  # Default
+        return 30  # Default
 
     def get_degradation_history(
         self, strategy_id: str | None = None, days: int = 30

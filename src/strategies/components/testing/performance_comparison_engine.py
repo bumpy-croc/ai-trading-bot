@@ -226,7 +226,7 @@ class PerformanceComparisonEngine:
             return result
 
         except Exception as e:
-            self.logger.error(f"Strategy comparison failed: {e}")
+            self.logger.exception("Strategy comparison failed")
             # Return a failed result
             return StrategyComparisonResult(
                 comparison_id=comparison_id,
@@ -243,8 +243,8 @@ class PerformanceComparisonEngine:
                 statistical_tests={},
                 equivalence_tests=[],
                 overall_validation_result=ValidationResult.FAIL,
-                certification_status=f"Failed: {str(e)}",
-                recommendations=[f"Fix error: {str(e)}"],
+                certification_status=f"Failed: {e!s}",
+                recommendations=[f"Fix error: {e!s}"],
             )
 
     def _run_backtest(
@@ -324,12 +324,13 @@ class PerformanceComparisonEngine:
         # Start with parity validation result
         parity_result = result.parity_report.overall_result
 
-        # Check statistical test results
-        statistical_failures = []
-        for category, tests in result.statistical_tests.items():
-            for test in tests:
-                if test.reject_null and "equality" in test.test_name.lower():
-                    statistical_failures.append(f"{category}: {test.test_name}")
+        # Check statistical test results using list comprehension
+        statistical_failures = [
+            f"{category}: {test.test_name}"
+            for category, tests in result.statistical_tests.items()
+            for test in tests
+            if test.reject_null and "equality" in test.test_name.lower()
+        ]
 
         # Check equivalence test results
         # TOST (Two One-Sided Test) tests for equivalence, so we check if reject_null is True
@@ -437,8 +438,8 @@ class PerformanceComparisonEngine:
 
             self.logger.info(f"Results exported to {export_dir}")
 
-        except Exception as e:
-            self.logger.warning(f"Failed to export results: {e}")
+        except (OSError, ValueError, KeyError) as e:
+            self.logger.warning("Failed to export results: %s", e)
 
     def generate_text_report(self, result: StrategyComparisonResult) -> str:
         """Generate comprehensive text report."""

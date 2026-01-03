@@ -17,10 +17,10 @@ from typing import Any
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
 from .strategy_switcher import (
+    ExecutionTimeoutError,
     StrategySwitcher,
     SwitchRequest,
     SwitchTrigger,
-    TimeoutError,
     execute_with_timeout,
 )
 
@@ -239,7 +239,7 @@ class EmergencyControls:
         self,
         strategy_id: str,
         performance_tracker: PerformanceTracker,
-        current_regime: RegimeContext | None = None,
+        _current_regime: RegimeContext | None = None,
     ) -> EmergencyLevel:
         """
         Check for emergency conditions in strategy performance
@@ -247,7 +247,7 @@ class EmergencyControls:
         Args:
             strategy_id: Strategy to check
             performance_tracker: Performance tracker for the strategy
-            current_regime: Current market regime
+            _current_regime: Current market regime (reserved for future regime-aware checks)
 
         Returns:
             Emergency level detected
@@ -369,24 +369,25 @@ class EmergencyControls:
                     execute_with_timeout(
                         callback, 10, approval_request
                     )  # 10 second timeout for approval callbacks
-                except TimeoutError as error:
-                    self.logger.error(f"Approval callback #{i} timed out: {error}")
-                except Exception as error:
-                    self.logger.error(f"Approval callback #{i} error: {error}")
+                except ExecutionTimeoutError as error:
+                    self.logger.warning("Approval callback #%d timed out: %s", i, error)
+                except Exception:
+                    # Catch all exceptions from user-provided callbacks to prevent
+                    # third-party failures from disrupting emergency controls
+                    self.logger.exception("Approval callback #%d error", i)
 
             self.logger.info(
                 f"Manual switch request requires approval: {approval_request.request_id}"
             )
             return approval_request.request_id
 
-        else:
-            # Execute switch directly
-            request_id = self.strategy_switcher.request_manual_switch(
-                from_strategy, to_strategy, reason, requested_by
-            )
+        # Execute switch directly
+        request_id = self.strategy_switcher.request_manual_switch(
+            from_strategy, to_strategy, reason, requested_by
+        )
 
-            self.logger.info(f"Manual switch request submitted directly: {request_id}")
-            return request_id
+        self.logger.info(f"Manual switch request submitted directly: {request_id}")
+        return request_id
 
     def approve_request(
         self, request_id: str, approved_by: str, rejection_reason: str | None = None
@@ -687,10 +688,12 @@ class EmergencyControls:
         for i, callback in enumerate(self.alert_callbacks):
             try:
                 execute_with_timeout(callback, 10, alert)  # 10 second timeout for alert callbacks
-            except TimeoutError as error:
-                self.logger.error(f"Alert callback #{i} timed out: {error}")
-            except Exception as error:
-                self.logger.error(f"Alert callback #{i} error: {error}")
+            except ExecutionTimeoutError as error:
+                self.logger.warning("Alert callback #%d timed out: %s", i, error)
+            except Exception:
+                # Catch all exceptions from user-provided callbacks to prevent
+                # third-party failures from disrupting alert processing
+                self.logger.exception("Alert callback #%d error", i)
 
         self.logger.warning(f"Alert triggered: {alert.alert_type.value} - {message}")
 

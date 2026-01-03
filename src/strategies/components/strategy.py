@@ -362,7 +362,7 @@ class Strategy:
                     regime,
                     **policy_kwargs,
                 )
-            except Exception as policy_error:
+            except (ValueError, KeyError, AttributeError) as policy_error:
                 self.logger.debug("Risk policy extraction failed: %s", policy_error)
 
             # Create trading decision
@@ -386,11 +386,11 @@ class Strategy:
 
             return decision
 
-        except Exception as e:
+        except (ValueError, KeyError, IndexError, TypeError) as e:
             # Handle errors gracefully
             execution_time_ms = (time.time() - start_time) * 1000
 
-            self.logger.error(f"Error processing candle at index {index}: {e}")
+            self.logger.exception("Error processing candle at index %d", index)
 
             # Return safe decision
             safe_signal = Signal(
@@ -432,8 +432,8 @@ class Strategy:
         """
         try:
             return self.risk_manager.should_exit(position, current_data, regime)
-        except Exception as e:
-            self.logger.error(f"Error in exit decision: {e}")
+        except (ValueError, KeyError, AttributeError):
+            self.logger.exception("Error in exit decision")
             return False  # Conservative default
 
     def get_stop_loss_price(
@@ -455,15 +455,14 @@ class Strategy:
         """
         try:
             return self.risk_manager.get_stop_loss(entry_price, signal, regime)
-        except Exception as e:
-            self.logger.error(f"Error calculating stop loss: {e}")
+        except (ValueError, KeyError, AttributeError):
+            self.logger.exception("Error calculating stop loss")
             # Return conservative stop loss
             if signal.direction == SignalDirection.BUY:
                 return entry_price * 0.95  # 5% stop loss for long
-            elif signal.direction == SignalDirection.SELL:
+            if signal.direction == SignalDirection.SELL:
                 return entry_price * 1.05  # 5% stop loss for short
-            else:
-                return entry_price
+            return entry_price
 
     def get_performance_metrics(self, lookback_decisions: int = 100) -> dict[str, Any]:
         """
@@ -607,6 +606,17 @@ class Strategy:
         """Return configured risk overrides when provided."""
         return getattr(self, "_risk_overrides", None)
 
+    def set_risk_overrides(self, overrides: dict[str, Any] | None) -> None:
+        """Set risk overrides for the strategy.
+
+        Args:
+            overrides: Dictionary of risk override parameters, or None to clear.
+        """
+        if overrides is None:
+            self._risk_overrides = {}
+        else:
+            self._risk_overrides = dict(overrides)
+
     def _validate_inputs(self, df: pd.DataFrame, index: int, balance: float) -> None:
         """Validate input parameters"""
         if df.empty:
@@ -629,7 +639,7 @@ class Strategy:
         try:
             return self.regime_detector.detect_regime(df, index)
         except Exception as e:
-            self.logger.warning(f"Regime detection failed: {e}")
+            self.logger.warning("Regime detection failed: %s", e)
             return None
 
     def _generate_signal(
@@ -642,7 +652,7 @@ class Strategy:
         try:
             return self.signal_generator.generate_signal(df, index, regime)
         except Exception as e:
-            self.logger.error(f"Signal generation failed: {e}")
+            self.logger.exception("Signal generation failed")
             return Signal(
                 direction=SignalDirection.HOLD,
                 strength=0.0,
@@ -671,7 +681,7 @@ class Strategy:
         if self._additional_risk_context_provider is not None:
             try:
                 extra_context = self._additional_risk_context_provider(df, index, signal)
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except (ValueError, KeyError, TypeError) as exc:  # pragma: no cover - defensive logging
                 self.logger.debug(
                     "Additional risk context provider failed at index %s: %s",
                     index,
@@ -693,14 +703,14 @@ class Strategy:
 
         try:
             row = df.iloc[index]
-        except Exception:
+        except (IndexError, KeyError):
             return {}
 
         snapshot: dict[str, Any] = {}
         for column in df.columns:
             try:
                 snapshot[column] = row[column]
-            except Exception:
+            except (KeyError, TypeError):
                 continue
 
         # Propagate signal metadata keys when present for adapters that rely on them.
@@ -746,8 +756,8 @@ class Strategy:
                 regime,
                 **filtered_context,
             )
-        except Exception as e:
-            self.logger.error(f"Risk position size calculation failed: {e}")
+        except Exception:
+            self.logger.exception("Risk position size calculation failed")
             return 0.0
 
     def _calculate_final_position_size(
@@ -760,8 +770,8 @@ class Strategy:
         """Calculate final position size using position sizer"""
         try:
             return self.position_sizer.calculate_size(signal, balance, risk_amount, regime)
-        except Exception as e:
-            self.logger.error(f"Final position size calculation failed: {e}")
+        except Exception:
+            self.logger.exception("Final position size calculation failed")
             return risk_amount  # Fallback to risk manager's calculation
 
     def _validate_position_size(

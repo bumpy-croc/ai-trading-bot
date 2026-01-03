@@ -140,7 +140,6 @@ class StrategyVersion:
 class StrategyValidationError(Exception):
     """Exception raised when strategy validation fails"""
 
-    pass
 
 
 class StrategyRegistry:
@@ -677,7 +676,7 @@ class StrategyRegistry:
             self._validate_component_config(metadata.risk_manager_config, "risk_manager")
             self._validate_component_config(metadata.position_sizer_config, "position_sizer")
             self._validate_component_config(metadata.regime_detector_config, "regime_detector")
-        except Exception as e:
+        except (ValueError, KeyError, TypeError) as e:
             errors.append(f"Component validation failed: {e}")
 
         # Validate lineage consistency
@@ -686,7 +685,7 @@ class StrategyRegistry:
                 errors.append(f"Parent strategy {metadata.parent_id} not found")
             else:
                 parent_lineage = self._strategies[metadata.parent_id].lineage_path
-                expected_lineage = parent_lineage + [metadata.parent_id]
+                expected_lineage = [*parent_lineage, metadata.parent_id]
                 if metadata.lineage_path != expected_lineage:
                     warnings.append("Lineage path inconsistency detected")
 
@@ -799,7 +798,7 @@ class StrategyRegistry:
             return []
 
         parent_metadata = self._strategies[parent_id]
-        return parent_metadata.lineage_path + [parent_id]
+        return [*parent_metadata.lineage_path, parent_id]
 
     def _calculate_next_version(self, current_version: str, is_major: bool) -> str:
         """Calculate next version number"""
@@ -811,8 +810,7 @@ class StrategyRegistry:
 
         if is_major:
             return f"{major + 1}.0.0"
-        else:
-            return f"{major}.{minor}.{patch + 1}"
+        return f"{major}.{minor}.{patch + 1}"
 
     def _get_descendants(self, strategy_id: str) -> list[dict[str, Any]]:
         """Get all descendants of a strategy"""
@@ -867,5 +865,5 @@ class StrategyRegistry:
         if self.storage_backend:
             try:
                 self.storage_backend.save_strategy(metadata)
-            except Exception as e:
-                self.logger.error(f"Failed to persist strategy {metadata.id}: {e}")
+            except (OSError, ValueError, KeyError):
+                self.logger.exception("Failed to persist strategy %s", metadata.id)

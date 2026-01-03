@@ -356,6 +356,23 @@ class TestMLSignalGenerator:
         assert signal.confidence == 0.0
         assert signal.metadata["reason"] == "prediction_failed"
 
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
+    def test_warmup_period_property(self, mock_config_class, mock_engine_class):
+        """Test warmup_period property returns sequence_length."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        # Test with default sequence_length
+        generator = MLSignalGenerator()
+        assert generator.warmup_period == generator.sequence_length
+        assert generator.warmup_period == 120  # Default value
+
+        # Test with custom sequence_length
+        generator_custom = MLSignalGenerator(sequence_length=200)
+        assert generator_custom.warmup_period == 200
+
 
 class TestMLBasicSignalGenerator:
     """Test MLBasicSignalGenerator implementation"""
@@ -624,6 +641,84 @@ class TestMLBasicSignalGenerator:
         assert (
             prediction == real_price
         ), f"MLBasic prediction engine result should not be denormalized: expected {real_price}, got {prediction}"
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
+    def test_warmup_period_property(self, mock_config_class, mock_engine_class):
+        """Test warmup_period property returns sequence_length."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        # Test with default sequence_length
+        generator = MLBasicSignalGenerator()
+        assert generator.warmup_period == generator.sequence_length
+        assert generator.warmup_period == 120  # Default value
+
+        # Test with custom sequence_length
+        generator_custom = MLBasicSignalGenerator(sequence_length=150)
+        assert generator_custom.warmup_period == 150
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
+    def test_symbol_parameter_default(self, mock_config_class, mock_engine_class):
+        """Test symbol parameter defaults to BTCUSDT."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLBasicSignalGenerator()
+        assert generator.symbol == "BTCUSDT"
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
+    def test_symbol_parameter_custom(self, mock_config_class, mock_engine_class):
+        """Test symbol parameter can be customized."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLBasicSignalGenerator(symbol="ETHUSDT")
+        assert generator.symbol == "ETHUSDT"
+
+        # Verify symbol is included in get_parameters output
+        params = generator.get_parameters()
+        assert params["symbol"] == "ETHUSDT"
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
+    def test_symbol_used_in_registry_selection(self, mock_config_class, mock_engine_class):
+        """Test symbol parameter is used when selecting model bundle from registry."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+
+        # Mock the registry with select_bundle method
+        mock_registry = MagicMock()
+        mock_bundle = MagicMock()
+        mock_bundle.key = "ETHUSDT/basic/latest"
+        mock_registry.select_bundle.return_value = mock_bundle
+        mock_engine.model_registry = mock_registry
+
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 3000.0
+        mock_engine.predict.return_value = mock_result
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLBasicSignalGenerator(
+            symbol="ETHUSDT",
+            model_type="basic",
+            timeframe="1h",
+        )
+
+        df = self.create_test_dataframe(150)
+        generator._get_ml_prediction(df, 130)
+
+        # Verify registry select_bundle was called with correct symbol
+        mock_registry.select_bundle.assert_called_once_with(
+            symbol="ETHUSDT",
+            model_type="basic",
+            timeframe="1h",
+        )
 
 
 class TestMLSignalGeneratorEdgeCases:

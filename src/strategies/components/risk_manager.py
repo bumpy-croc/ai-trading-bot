@@ -193,7 +193,6 @@ class RiskManager(ABC):
         Raises:
             ValueError: If input parameters are invalid
         """
-        pass
 
     @abstractmethod
     def should_exit(
@@ -214,7 +213,6 @@ class RiskManager(ABC):
         Returns:
             True if position should be exited, False otherwise
         """
-        pass
 
     @abstractmethod
     def get_stop_loss(
@@ -238,7 +236,6 @@ class RiskManager(ABC):
         Raises:
             ValueError: If input parameters are invalid
         """
-        pass
 
     def validate_inputs(self, balance: float) -> None:
         """
@@ -384,10 +381,7 @@ class FixedRiskManager(RiskManager):
         loss_pct = abs(position.get_pnl_percentage()) / 100
 
         # Exit if loss exceeds stop loss threshold
-        if position.get_pnl_percentage() < 0 and loss_pct >= self.stop_loss_pct:
-            return True
-
-        return False
+        return position.get_pnl_percentage() < 0 and loss_pct >= self.stop_loss_pct
 
     def get_stop_loss(
         self,
@@ -403,12 +397,11 @@ class FixedRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price * (1 - self.stop_loss_pct)
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price * (1 + self.stop_loss_pct)
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
         """Get position size multiplier based on regime"""
@@ -560,10 +553,7 @@ class VolatilityRiskManager(RiskManager):
         loss_pct = abs(position.get_pnl_percentage()) / 100
 
         # Exit if loss exceeds dynamic stop loss threshold
-        if position.get_pnl_percentage() < 0 and loss_pct >= stop_loss_pct:
-            return True
-
-        return False
+        return position.get_pnl_percentage() < 0 and loss_pct >= stop_loss_pct
 
     def get_stop_loss(
         self,
@@ -585,12 +575,11 @@ class VolatilityRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price - stop_distance
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price + stop_distance
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
         """Get position size multiplier based on regime"""
@@ -645,7 +634,7 @@ class VolatilityRiskManager(RiskManager):
         elif context and "volatility" in context:
             try:
                 distance = float(context["volatility"]) * entry_price
-            except Exception:
+            except (ValueError, TypeError):
                 distance = None
 
         if distance is None:
@@ -764,10 +753,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
             return True
 
         # Check for regime transition exit conditions
-        if regime is not None and self._should_exit_on_regime_change(regime):
-            return True
-
-        return False
+        return regime is not None and self._should_exit_on_regime_change(regime)
 
     def get_stop_loss(
         self,
@@ -786,12 +772,11 @@ class RegimeAdaptiveRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price * (1 - stop_loss_pct)
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price * (1 + stop_loss_pct)
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def get_take_profit(
         self,
@@ -851,9 +836,9 @@ class RegimeAdaptiveRiskManager(RiskManager):
         if hasattr(regime, "trend") and hasattr(regime, "volatility"):
             if regime.trend.value == "trend_up" and regime.volatility.value == "low_vol":
                 return 0.03  # 3% tight stop in bull low vol
-            elif regime.trend.value == "trend_down":
+            if regime.trend.value == "trend_down":
                 return 0.08  # 8% wider stop in bear market
-            elif regime.volatility.value == "high_vol":
+            if regime.volatility.value == "high_vol":
                 return 0.07  # 7% wider stop in high volatility
 
         return 0.05  # 5% default
@@ -865,10 +850,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
             return True
 
         # Exit if regime duration is very short (unstable regime)
-        if hasattr(regime, "duration") and regime.duration < 3:
-            return True
-
-        return False
+        return hasattr(regime, "duration") and regime.duration < 3
 
     def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive risk manager parameters"""

@@ -368,9 +368,9 @@ class RegimeTester:
 
                 portfolio_values.append(balance)
 
-            except Exception as e:
+            except Exception:
                 error_count += 1
-                logger.error(f"Error testing strategy in regime at index {i}: {e}", exc_info=True)
+                logger.exception("Error testing strategy in regime at index %d", i)
                 continue
 
         # Calculate performance metrics
@@ -483,8 +483,8 @@ class RegimeTester:
                 "exit_time": exit_data.name,
             }
 
-        except Exception as e:
-            logger.error(f"Error executing trade: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Error executing trade")
             return None
 
     def _calculate_sharpe_ratio(self, returns: pd.Series, risk_free_rate: float = 0.0) -> float:
@@ -617,8 +617,8 @@ class RegimeTester:
             try:
                 result = self.test_strategy_in_regime(strategy, regime_type, initial_balance)
                 regime_results[regime_type] = result
-            except Exception as e:
-                logger.error(f"Error testing regime {regime_type}: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error testing regime %s", regime_type)
                 continue
 
         if not regime_results:
@@ -693,12 +693,11 @@ class RegimeTester:
 
         if isinstance(component, SignalGenerator):
             return self._test_signal_generator_in_regime(component, regime_data, regime_type)
-        elif isinstance(component, RiskManager):
+        if isinstance(component, RiskManager):
             return self._test_risk_manager_in_regime(component, regime_data, regime_type)
-        elif isinstance(component, PositionSizer):
+        if isinstance(component, PositionSizer):
             return self._test_position_sizer_in_regime(component, regime_data, regime_type)
-        else:
-            raise ValueError(f"Unsupported component type: {type(component)}")
+        raise ValueError(f"Unsupported component type: {type(component)}")
 
     def _test_signal_generator_in_regime(
         self, generator: SignalGenerator, regime_data: pd.DataFrame, regime_type: str
@@ -755,20 +754,17 @@ class RegimeTester:
                     else signal.direction
                 )
 
-                if direction_value == "buy" and future_return > 0:
-                    accurate = True
-                elif direction_value == "sell" and future_return < 0:
-                    accurate = True
-                elif direction_value == "hold" and abs(future_return) < 0.01:
-                    accurate = True
-                else:
-                    accurate = False
+                accurate = (
+                    (direction_value == "buy" and future_return > 0)
+                    or (direction_value == "sell" and future_return < 0)
+                    or (direction_value == "hold" and abs(future_return) < 0.01)
+                )
 
                 signals.append(signal)
                 accuracies.append(accurate)
 
-            except Exception as e:
-                logger.error(f"Error testing signal generator in regime: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error testing signal generator in regime")
                 continue
 
         if not signals:

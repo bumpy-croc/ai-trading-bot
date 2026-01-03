@@ -11,8 +11,6 @@ from typing import Any
 
 import pandas as pd
 
-logger = logging.getLogger(__name__)
-
 from src.config.config_manager import get_config
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
@@ -20,6 +18,8 @@ from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.regime.detector import TrendLabel, VolLabel
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+
+logger = logging.getLogger(__name__)
 
 
 class MLSignalGenerator(SignalGenerator):
@@ -127,13 +127,9 @@ class MLSignalGenerator(SignalGenerator):
 
             self.prediction_engine = engine
 
-        except Exception as e:
+        except Exception:
             if not self._engine_warning_emitted:
-                logger.error(
-                    "MLSignalGenerator: Prediction engine initialization failed: %s",
-                    e,
-                    exc_info=True,
-                )
+                logger.exception("MLSignalGenerator: Prediction engine initialization failed")
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
@@ -276,10 +272,8 @@ class MLSignalGenerator(SignalGenerator):
             # Prediction engine returns real prices
             return pred
 
-        except Exception as e:
-            logger.error(
-                "MLSignalGenerator: Prediction error at index %d: %s", index, e, exc_info=True
-            )
+        except Exception:
+            logger.exception("MLSignalGenerator: Prediction error at index %d", index)
             return None
 
     def _should_generate_short_signal(
@@ -354,6 +348,11 @@ class MLSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.sequence_length
+
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
@@ -386,6 +385,9 @@ class MLBasicSignalGenerator(SignalGenerator):
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
     CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
 
+    # Default symbol used for registry selection when none specified
+    DEFAULT_SYMBOL = "BTCUSDT"
+
     def __init__(
         self,
         name: str = "ml_basic_signal_generator",
@@ -393,6 +395,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         model_name: str | None = None,
         model_type: str | None = None,
         timeframe: str | None = None,
+        symbol: str | None = None,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -403,6 +406,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             model_name: Model name for prediction engine (optional)
             model_type: Model type for registry selection (optional)
             timeframe: Timeframe for registry selection (optional)
+            symbol: Trading symbol for registry selection (optional, defaults to BTCUSDT)
         """
         super().__init__(name)
 
@@ -411,6 +415,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         # Registry model selection preferences
         self.model_type = model_type or "basic"
         self.model_timeframe = timeframe or "1h"
+        self.symbol = symbol or self.DEFAULT_SYMBOL
 
         # Model name configuration
         cfg = get_config()
@@ -479,16 +484,13 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Initialize registry for structured selection
             try:
                 self._registry = engine.model_registry
-            except Exception:
+            except AttributeError:
+                # Engine doesn't have model_registry attribute
                 self._registry = None
 
-        except Exception as e:
+        except Exception:
             if not self._engine_warning_emitted:
-                logger.error(
-                    "MLBasicSignalGenerator: Prediction engine initialization failed: %s",
-                    e,
-                    exc_info=True,
-                )
+                logger.exception("MLBasicSignalGenerator: Prediction engine initialization failed")
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
@@ -625,12 +627,13 @@ class MLBasicSignalGenerator(SignalGenerator):
             if self._registry is not None:
                 try:
                     bundle = self._registry.select_bundle(
-                        symbol="BTCUSDT",  # Default trading pair
+                        symbol=self.symbol,
                         model_type=self.model_type,
                         timeframe=self.model_timeframe,
                     )
                     selected_bundle_key = bundle.key
-                except Exception:
+                except (KeyError, ValueError, AttributeError):
+                    # Bundle not found or invalid - fall back to default
                     selected_bundle_key = None
 
             # Prefer registry selection by symbol/type/timeframe when available
@@ -640,7 +643,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                     result = self.prediction_engine.predict(window_df, model_name=engine_model_name)
                 else:
                     result = self.prediction_engine.predict(window_df)
-            except Exception:
+            except (KeyError, ValueError):
                 # Fall back to default registry resolution if explicit lookup fails
                 result = self.prediction_engine.predict(window_df)
 
@@ -649,10 +652,8 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Prediction engine returns real prices
             return pred
 
-        except Exception as e:
-            logger.error(
-                "MLBasicSignalGenerator: Prediction error at index %d: %s", index, e, exc_info=True
-            )
+        except Exception:
+            logger.exception("MLBasicSignalGenerator: Prediction error at index %d", index)
             return None
 
     def _calculate_confidence(self, predicted_return: float) -> float:
@@ -668,6 +669,11 @@ class MLBasicSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.sequence_length
+
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
@@ -677,6 +683,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                 "model_name": self.model_name,
                 "model_type": self.model_type,
                 "model_timeframe": self.model_timeframe,
+                "symbol": self.symbol,
                 "short_entry_threshold": self.SHORT_ENTRY_THRESHOLD,
                 "confidence_multiplier": self.CONFIDENCE_MULTIPLIER,
             }

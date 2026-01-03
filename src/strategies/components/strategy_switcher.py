@@ -25,10 +25,12 @@ from .regime_context import RegimeContext
 from .strategy_selector import StrategyScore, StrategySelector
 
 
-class TimeoutError(Exception):
-    """Exception raised when a callback execution times out"""
+class ExecutionTimeoutError(Exception):
+    """Exception raised when a callback execution times out.
 
-    pass
+    Named to avoid shadowing the Python builtin TimeoutError.
+    """
+
 
 
 def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
@@ -48,7 +50,7 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
         Result of the function execution
 
     Raises:
-        TimeoutError: If execution exceeds the specified timeout
+        ExecutionTimeoutError: If execution exceeds the specified timeout
     """
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="strategy_switcher_timeout")
     future = executor.submit(func, *args, **kwargs)
@@ -58,7 +60,7 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
     except FutureTimeoutError as exc:
         # Attempt to cancel the running future and shut down the executor without waiting
         future.cancel()
-        raise TimeoutError(f"Execution timed out after {timeout_seconds} seconds") from exc
+        raise ExecutionTimeoutError(f"Execution timed out after {timeout_seconds} seconds") from exc
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -75,7 +77,7 @@ def timeout_context(seconds: int):
         seconds: Maximum execution time in seconds
 
     Raises:
-        TimeoutError: If execution exceeds the specified timeout
+        ExecutionTimeoutError: If execution exceeds the specified timeout
     """
     timeout_occurred = threading.Event()
     original_exception = None
@@ -104,7 +106,7 @@ def timeout_context(seconds: int):
             if original_exception:
                 raise original_exception
             else:
-                raise TimeoutError(f"Execution timed out after {seconds} seconds")
+                raise ExecutionTimeoutError(f"Execution timed out after {seconds} seconds")
 
 
 class SwitchTrigger(Enum):
@@ -465,15 +467,15 @@ class StrategySwitcher:
                         switch_record.status = SwitchStatus.FAILED
                         switch_record.error_message = f"Pre-switch callback #{i} returned False"
                         return switch_record
-                except TimeoutError as e:
-                    self.logger.error(f"Pre-switch callback #{i} timed out: {e}")
+                except ExecutionTimeoutError as e:
+                    self.logger.warning("Pre-switch callback #%d timed out: %s", i, e)
                     switch_record.status = SwitchStatus.FAILED
                     switch_record.error_message = (
                         f"Pre-switch callback #{i} timed out after 30 seconds"
                     )
                     return switch_record
-                except Exception as e:
-                    self.logger.error(f"Pre-switch callback #{i} error: {e}")
+                except (ValueError, TypeError, RuntimeError) as e:
+                    self.logger.exception("Pre-switch callback #%d error", i)
                     switch_record.status = SwitchStatus.FAILED
                     switch_record.error_message = f"Pre-switch callback #{i} error: {e}"
                     return switch_record
@@ -481,11 +483,9 @@ class StrategySwitcher:
             # Activate new strategy
             try:
                 success = strategy_activation_callback(request.to_strategy)
-            except Exception as activation_error:
+            except (ValueError, TypeError, RuntimeError) as activation_error:
                 # Handle activation callback exceptions the same way as False returns
-                self.logger.error(
-                    f"Strategy activation callback raised exception: {activation_error}"
-                )
+                self.logger.exception("Strategy activation callback raised exception")
                 success = False
                 # Store the exception for potential rollback error message
                 activation_exception = activation_error
@@ -524,7 +524,7 @@ class StrategySwitcher:
                             "Rollback callback returned False; previous strategy may already be active or activation callback is non-idempotent"
                         )
                         self.last_active_strategy = request.from_strategy
-                except Exception as rollback_error:
+                except (ValueError, TypeError, RuntimeError) as rollback_error:
                     # CRITICAL: Exception during rollback - activate circuit breaker
                     switch_record.status = SwitchStatus.FAILED
                     # Include both activation and rollback exception info if available
@@ -534,13 +534,14 @@ class StrategySwitcher:
                             f"rollback error: {rollback_error} - circuit breaker activated"
                         )
                         self.logger.critical(
-                            f"CIRCUIT BREAKER ACTIVATED: Activation exception: {activation_exception}, "
-                            f"Rollback error: {rollback_error}"
+                            "CIRCUIT BREAKER ACTIVATED: Activation exception: %s, Rollback error: %s",
+                            activation_exception,
+                            rollback_error,
                         )
                     else:
                         switch_record.error_message = f"CRITICAL: Strategy activation failed, rollback error: {rollback_error} - circuit breaker activated"
                         self.logger.critical(
-                            f"CIRCUIT BREAKER ACTIVATED: Rollback error: {rollback_error}"
+                            "CIRCUIT BREAKER ACTIVATED: Rollback error: %s", rollback_error
                         )
 
                     self._activate_circuit_breaker(
@@ -564,10 +565,10 @@ class StrategySwitcher:
                         request.to_strategy,
                         True,
                     )
-                except TimeoutError as e:
-                    self.logger.error(f"Post-switch callback #{i} timed out: {e}")
-                except Exception as e:
-                    self.logger.error(f"Post-switch callback #{i} error: {e}")
+                except ExecutionTimeoutError as e:
+                    self.logger.warning("Post-switch callback #%d timed out: %s", i, e)
+                except (ValueError, TypeError, RuntimeError):
+                    self.logger.exception("Post-switch callback #%d error", i)
 
             # Start performance tracking
             if self.config.track_switch_performance:
@@ -577,10 +578,10 @@ class StrategySwitcher:
                 f"Strategy switch completed: {request.from_strategy} -> {request.to_strategy}"
             )
 
-        except Exception as e:
+        except (ValueError, TypeError, RuntimeError, KeyError) as e:
             switch_record.status = SwitchStatus.FAILED
             switch_record.error_message = str(e)
-            self.logger.error(f"Strategy switch failed: {e}")
+            self.logger.exception("Strategy switch failed")
 
             # Execute post-switch callbacks with failure flag and timeout protection
             for i, callback in enumerate(self.post_switch_callbacks):
@@ -592,10 +593,10 @@ class StrategySwitcher:
                         request.to_strategy,
                         False,
                     )
-                except TimeoutError as te:
-                    self.logger.error(f"Post-switch callback #{i} timed out: {te}")
-                except Exception as callback_error:
-                    self.logger.error(f"Post-switch callback #{i} error: {callback_error}")
+                except ExecutionTimeoutError as te:
+                    self.logger.warning("Post-switch callback #%d timed out: %s", i, te)
+                except (ValueError, TypeError, RuntimeError):
+                    self.logger.exception("Post-switch callback #%d error", i)
 
         finally:
             # Add to history
@@ -653,9 +654,9 @@ class StrategySwitcher:
             if record.request.requested_at < cutoff_date:
                 continue
 
-            if strategy_id and (
-                record.request.from_strategy != strategy_id
-                and record.request.to_strategy != strategy_id
+            if strategy_id and strategy_id not in (
+                record.request.from_strategy,
+                record.request.to_strategy,
             ):
                 continue
 
@@ -764,14 +765,19 @@ class StrategySwitcher:
                 return ValidationResult.REJECTED_INSUFFICIENT_DATA
 
         # Check improvement threshold
-        if request.switch_decision and request.alternative_scores:
-            if not self._meets_improvement_threshold(request):
-                return ValidationResult.REJECTED_NO_BETTER_ALTERNATIVE
+        if (
+            request.switch_decision
+            and request.alternative_scores
+            and not self._meets_improvement_threshold(request)
+        ):
+            return ValidationResult.REJECTED_NO_BETTER_ALTERNATIVE
 
         # Check risk increase
-        if self._exceeds_risk_threshold(request):
-            if self.config.require_manual_approval_for_high_risk:
-                return ValidationResult.REJECTED_HIGH_RISK
+        if (
+            self._exceeds_risk_threshold(request)
+            and self.config.require_manual_approval_for_high_risk
+        ):
+            return ValidationResult.REJECTED_HIGH_RISK
 
         return ValidationResult.APPROVED
 
@@ -834,10 +840,7 @@ class StrategySwitcher:
             if r.request.requested_at >= weekly_cutoff and r.status == SwitchStatus.COMPLETED
         )
 
-        if weekly_switches >= self.config.max_switches_per_week:
-            return False
-
-        return True
+        return weekly_switches < self.config.max_switches_per_week
 
     def _meets_improvement_threshold(self, request: SwitchRequest) -> bool:
         """Check if the proposed switch meets minimum improvement threshold"""
@@ -883,7 +886,7 @@ class StrategySwitcher:
             relative_improvement = improvement / estimated_current_score
         else:
             # If current score is 0 or negative, any positive improvement is significant
-            relative_improvement = improvement if improvement > 0 else 0
+            relative_improvement = max(0, improvement)
 
         # Check if improvement meets the threshold
         meets_threshold = relative_improvement >= self.config.min_improvement_threshold
@@ -939,12 +942,11 @@ class StrategySwitcher:
         """Determine switch priority based on degradation severity"""
         if severity == DegradationSeverity.CRITICAL:
             return 4  # Emergency
-        elif severity == DegradationSeverity.SEVERE:
+        if severity == DegradationSeverity.SEVERE:
             return 3  # High
-        elif severity == DegradationSeverity.MODERATE:
+        if severity == DegradationSeverity.MODERATE:
             return 2  # Medium
-        else:
-            return 1  # Low
+        return 1  # Low
 
     def _capture_performance_snapshot(
         self, strategy_id: str, performance_tracker: PerformanceTracker | None = None
@@ -967,8 +969,8 @@ class StrategySwitcher:
                         "volatility": metrics.volatility,
                     }
                 )
-            except Exception as e:
-                self.logger.warning(f"Failed to capture detailed metrics: {e}")
+            except (AttributeError, KeyError, TypeError) as e:
+                self.logger.warning("Failed to capture detailed metrics: %s", e)
 
         return snapshot
 

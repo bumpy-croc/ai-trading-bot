@@ -467,9 +467,10 @@ class ComponentPerformanceTester:
                         future_return = scenario_data.iloc[i + 1]["returns"]
 
                         # Determine if signal was accurate
-                        if signal.direction == SignalDirection.BUY and future_return > 0:
-                            accurate = True
-                        elif signal.direction == SignalDirection.SELL and future_return < 0:
+                        if (
+                            (signal.direction == SignalDirection.BUY and future_return > 0)
+                            or (signal.direction == SignalDirection.SELL and future_return < 0)
+                        ):
                             accurate = True
                         elif signal.direction == SignalDirection.HOLD:
                             accurate = (
@@ -512,19 +513,19 @@ class ComponentPerformanceTester:
                                 regime_breakdown[regime_key] = {"signals": [], "accuracy": 0.0}
                             regime_breakdown[regime_key]["signals"].append(accurate)
 
-                except Exception as e:
+                except Exception:
                     error_count += 1
-                    logger.error(f"Error generating signal at index {i}: {e}", exc_info=True)
+                    logger.exception("Error generating signal at index %d", i)
                     continue
 
             all_signals.extend(scenario_signals)
 
         # Calculate regime breakdown accuracies
-        for regime_key in regime_breakdown:
-            signals = regime_breakdown[regime_key]["signals"]
+        for regime_data in regime_breakdown.values():
+            signals = regime_data["signals"]
             if signals:
-                regime_breakdown[regime_key]["accuracy"] = sum(signals) / len(signals)
-                regime_breakdown[regime_key]["count"] = len(signals)
+                regime_data["accuracy"] = sum(signals) / len(signals)
+                regime_data["count"] = len(signals)
 
         # Calculate overall metrics
         total_signals = len(all_signals)
@@ -747,9 +748,9 @@ class ComponentPerformanceTester:
                         }
                     )
 
-                except Exception as e:
+                except Exception:
                     error_count += 1
-                    logger.error(f"Error testing risk manager at index {i}: {e}", exc_info=True)
+                    logger.exception("Error testing risk manager at index %d", i)
                     continue
 
         # Calculate metrics
@@ -921,9 +922,9 @@ class ComponentPerformanceTester:
                     calc_time = time.time() - calc_start
                     calculation_times.append(calc_time)
 
-                except Exception as e:
+                except Exception:
                     error_count += 1
-                    logger.error(f"Error testing position sizer at index {i}: {e}", exc_info=True)
+                    logger.exception("Error testing position sizer at index %d", i)
                     continue
 
         # Calculate metrics

@@ -333,8 +333,8 @@ class StrategyFactory:
             name: Strategy name
             sequence_length: Sequence length for LSTM
             model_name: Model name for registry
-            model_type: Model type
-            timeframe: Model timeframe
+            model_type: Model type for future sentiment-specific model selection
+            timeframe: Model timeframe for future sentiment-specific model selection
 
         Returns:
             Configured ML Sentiment strategy
@@ -344,6 +344,9 @@ class StrategyFactory:
             sequence_length=sequence_length,
             model_name=model_name,
         )
+        # Store model_type/timeframe for potential future use in sentiment model selection
+        signal_generator.model_type = model_type
+        signal_generator.model_timeframe = timeframe
 
         risk_manager = FixedRiskManager(
             risk_per_trade=0.02,

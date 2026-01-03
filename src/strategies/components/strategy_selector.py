@@ -503,14 +503,14 @@ class StrategySelector:
         processed_pairs = set()  # Track which pairs we've already processed
 
         for (sid1, sid2), correlation in correlation_matrix.items():
-            if sid1 == strategy_id or sid2 == strategy_id:
-                if sid1 != sid2:  # Don't include self-correlation
-                    # Create a canonical pair representation to avoid double-counting
-                    # Use lexicographic ordering to ensure consistent pair representation
-                    pair = tuple(sorted([sid1, sid2]))
-                    if pair not in processed_pairs:
-                        correlations.append(abs(correlation))
-                        processed_pairs.add(pair)
+            # Check strategy is in pair and not self-correlation
+            if strategy_id in (sid1, sid2) and sid1 != sid2:
+                # Create a canonical pair representation to avoid double-counting
+                # Use lexicographic ordering to ensure consistent pair representation
+                pair = tuple(sorted([sid1, sid2]))
+                if pair not in processed_pairs:
+                    correlations.append(abs(correlation))
+                    processed_pairs.add(pair)
 
         if not correlations:
             return 0.0
@@ -703,8 +703,8 @@ class StrategySelector:
         try:
             correlation = np.corrcoef(returns1, returns2)[0, 1]
             return correlation if not np.isnan(correlation) else 0.0
-        except Exception as e:
-            self.logger.warning(f"Correlation calculation failed: {e}")
+        except (ValueError, FloatingPointError, TypeError) as e:
+            self.logger.warning("Correlation calculation failed: %s", e)
             return 0.0
 
     def _normalize_score(
@@ -740,13 +740,12 @@ class StrategySelector:
 
         if target_min <= volatility <= target_max:
             return 1.0
-        elif volatility < target_min:
+        if volatility < target_min:
             # Penalize too low volatility (might indicate insufficient opportunities)
             return max(0.0, volatility / target_min)
-        else:
-            # Penalize too high volatility
-            penalty = (volatility - target_max) / target_max
-            return max(0.0, 1.0 - penalty)
+        # Penalize too high volatility
+        penalty = (volatility - target_max) / target_max
+        return max(0.0, 1.0 - penalty)
 
     def _get_cached_performance_metrics(
         self, strategy_id: str, tracker: PerformanceTracker

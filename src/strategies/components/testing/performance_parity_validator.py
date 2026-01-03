@@ -209,10 +209,10 @@ class PerformanceParityValidator:
 
             self.logger.info(f"Performance parity validation completed: {report.overall_result}")
 
-        except Exception as e:
-            self.logger.error(f"Error during performance parity validation: {e}")
+        except (ValueError, KeyError, TypeError) as e:
+            self.logger.exception("Error during performance parity validation")
             report.overall_result = ValidationResult.FAIL
-            report.certification_notes = f"Validation failed due to error: {str(e)}"
+            report.certification_notes = f"Validation failed due to error: {e!s}"
 
         return report
 
@@ -454,8 +454,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to perform KS test: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Failed to perform KS test: %s", e)
 
         # Mann-Whitney U test for median difference
         try:
@@ -486,8 +486,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to perform Mann-Whitney test: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Failed to perform Mann-Whitney test: %s", e)
 
     def _analyze_equity_curve_correlation(
         self,
@@ -537,8 +537,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to calculate equity curve correlation: {e}")
+        except (ValueError, KeyError, TypeError) as e:
+            self.logger.warning("Failed to calculate equity curve correlation: %s", e)
 
     def _create_metric_comparison(
         self,
@@ -730,22 +730,21 @@ class PerformanceParityReporter:
     def export_to_csv(report: PerformanceComparisonReport, filepath: str) -> None:
         """Export metric comparisons to CSV format."""
 
-        data = []
-        for comparison in report.metric_comparisons:
-            data.append(
-                {
-                    "metric_name": comparison.metric_name,
-                    "metric_type": comparison.metric_type.value,
-                    "legacy_value": comparison.legacy_value,
-                    "new_value": comparison.new_value,
-                    "difference": comparison.difference,
-                    "relative_difference": comparison.relative_difference,
-                    "tolerance": comparison.tolerance,
-                    "result": comparison.result.value,
-                    "p_value": comparison.p_value,
-                    "notes": comparison.notes,
-                }
-            )
+        data = [
+            {
+                "metric_name": comparison.metric_name,
+                "metric_type": comparison.metric_type.value,
+                "legacy_value": comparison.legacy_value,
+                "new_value": comparison.new_value,
+                "difference": comparison.difference,
+                "relative_difference": comparison.relative_difference,
+                "tolerance": comparison.tolerance,
+                "result": comparison.result.value,
+                "p_value": comparison.p_value,
+                "notes": comparison.notes,
+            }
+            for comparison in report.metric_comparisons
+        ]
 
         df = pd.DataFrame(data)
         df.to_csv(filepath, index=False)
