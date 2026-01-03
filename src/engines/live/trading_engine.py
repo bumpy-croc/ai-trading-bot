@@ -3510,7 +3510,10 @@ class LiveTradingEngine:
                     )
                     exit_fee = self.live_execution_engine.calculate_exit_fee(exit_position_notional)
                     exit_slippage_cost = 0.0  # Slippage already in fill price
-                    realized_pnl = pnl_pct_sized * basis_balance - exit_fee
+                    # Calculate GROSS P&L for Trade.pnl (parity with backtest engine)
+                    # and NET P&L for balance updates
+                    gross_pnl = pnl_pct_sized * basis_balance
+                    realized_pnl = gross_pnl - exit_fee  # Net P&L for balance update
 
                     # Atomic balance update for offline stop-loss reconciliation
                     if self.trading_session_id is not None:
@@ -3540,6 +3543,8 @@ class LiveTradingEngine:
                             f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
                             f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
                         )
+                    # Store GROSS P&L in Trade.pnl for parity with backtest engine
+                    # Fees are tracked separately via performance_tracker.record_trade()
                     trade = Trade(
                         symbol=position.symbol,
                         side=position.side,
@@ -3548,7 +3553,7 @@ class LiveTradingEngine:
                         exit_price=exit_price,
                         entry_time=position.entry_time,
                         exit_time=datetime.now(UTC),
-                        pnl=realized_pnl,
+                        pnl=gross_pnl,
                         pnl_percent=pnl_pct_sized,
                         exit_reason="stop_loss_offline",
                     )
