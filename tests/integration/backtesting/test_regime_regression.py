@@ -271,7 +271,7 @@ class StubRegimeStrategySwitcher:
 
 def _build_fixture_dataframe() -> pd.DataFrame:
     periods = 240
-    index = pd.date_range("2022-01-01", periods=periods, freq="H")
+    index = pd.date_range("2022-01-01", periods=periods, freq="h")
     closes = []
     price = 100.0
     for i in range(periods):
@@ -350,15 +350,6 @@ def test_regime_backtester_regression(monkeypatch):
     strategy_manager.current_strategy = primary_strategy
 
     monkeypatch.setenv("FEATURE_ENABLE_REGIME_DETECTION", "true")
-    monkeypatch.setattr(
-        "src.engines.live.strategy_manager.StrategyManager", lambda: strategy_manager
-    )
-    monkeypatch.setattr(
-        "src.engines.live.regime_strategy_switcher.RegimeStrategySwitcher",
-        lambda strategy_manager, regime_config=None, strategy_mapping=None, switching_config=None: StubRegimeStrategySwitcher(
-            strategy_manager, regime_config, strategy_mapping, switching_config
-        ),
-    )
 
     original_loader = Backtester._load_strategy_by_name
 
@@ -382,6 +373,8 @@ def test_regime_backtester_regression(monkeypatch):
         enable_regime_switching=True,
         log_to_database=False,
         enable_dynamic_risk=False,
+        _regime_switcher_class=StubRegimeStrategySwitcher,
+        _strategy_manager=strategy_manager,
     )
 
     start = frame.index[0].to_pydatetime()
