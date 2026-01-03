@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from src.data_providers.exchange_interface import OrderSide
 from src.engines.shared.execution.execution_decision import ExecutionDecision
 from src.engines.shared.execution.fill_policy import FillPolicy
@@ -22,8 +24,12 @@ class OhlcFillModel:
         policy: FillPolicy,
     ) -> ExecutionDecision:
         """Decide whether an order fills using OHLC data."""
-        if order_intent.quantity <= ZERO_QUANTITY:
-            return ExecutionDecision.no_fill("quantity must be positive")
+        # Validate quantity is positive and finite to prevent NaN propagation
+        if (
+            order_intent.quantity <= ZERO_QUANTITY
+            or not math.isfinite(order_intent.quantity)
+        ):
+            return ExecutionDecision.no_fill("quantity must be positive and finite")
 
         if order_intent.is_market_order():
             return self._fill_market(order_intent, snapshot)

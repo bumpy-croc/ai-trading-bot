@@ -6,6 +6,7 @@ backtesting and live trading engines.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
@@ -100,11 +101,15 @@ class CostCalculator:
             CostResult with executed price, fee, and slippage cost.
 
         Raises:
-            ValueError: If price <= 0, notional < 0, or side is invalid.
+            ValueError: If price <= 0, notional < 0, side is invalid, or values are NaN/infinity.
         """
-        # Input validation
+        # Input validation - check for NaN/infinity to prevent corrupted state
+        if not math.isfinite(price):
+            raise ValueError(f"Price must be finite, got {price}")
         if price <= 0:
             raise ValueError(f"Price must be positive, got {price}")
+        if not math.isfinite(notional):
+            raise ValueError(f"Notional must be finite, got {notional}")
         if notional < 0:
             raise ValueError(f"Notional must be non-negative, got {notional}")
 
@@ -162,11 +167,15 @@ class CostCalculator:
             CostResult with executed price, fee, and slippage cost.
 
         Raises:
-            ValueError: If price <= 0, notional < 0, or side is invalid.
+            ValueError: If price <= 0, notional < 0, side is invalid, or values are NaN/infinity.
         """
-        # Input validation
+        # Input validation - check for NaN/infinity to prevent corrupted state
+        if not math.isfinite(price):
+            raise ValueError(f"Price must be finite, got {price}")
         if price <= 0:
             raise ValueError(f"Price must be positive, got {price}")
+        if not math.isfinite(notional):
+            raise ValueError(f"Notional must be finite, got {notional}")
         if notional < 0:
             raise ValueError(f"Notional must be non-negative, got {notional}")
 
