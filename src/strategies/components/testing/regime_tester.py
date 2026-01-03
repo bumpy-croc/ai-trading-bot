@@ -754,14 +754,11 @@ class RegimeTester:
                     else signal.direction
                 )
 
-                if direction_value == "buy" and future_return > 0:
-                    accurate = True
-                elif direction_value == "sell" and future_return < 0:
-                    accurate = True
-                elif direction_value == "hold" and abs(future_return) < 0.01:
-                    accurate = True
-                else:
-                    accurate = False
+                accurate = (
+                    (direction_value == "buy" and future_return > 0)
+                    or (direction_value == "sell" and future_return < 0)
+                    or (direction_value == "hold" and abs(future_return) < 0.01)
+                )
 
                 signals.append(signal)
                 accuracies.append(accurate)

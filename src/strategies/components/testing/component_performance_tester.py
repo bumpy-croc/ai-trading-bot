@@ -467,9 +467,10 @@ class ComponentPerformanceTester:
                         future_return = scenario_data.iloc[i + 1]["returns"]
 
                         # Determine if signal was accurate
-                        if signal.direction == SignalDirection.BUY and future_return > 0:
-                            accurate = True
-                        elif signal.direction == SignalDirection.SELL and future_return < 0:
+                        if (
+                            (signal.direction == SignalDirection.BUY and future_return > 0)
+                            or (signal.direction == SignalDirection.SELL and future_return < 0)
+                        ):
                             accurate = True
                         elif signal.direction == SignalDirection.HOLD:
                             accurate = (
@@ -520,11 +521,11 @@ class ComponentPerformanceTester:
             all_signals.extend(scenario_signals)
 
         # Calculate regime breakdown accuracies
-        for regime_key in regime_breakdown:
-            signals = regime_breakdown[regime_key]["signals"]
+        for _regime_key, regime_data in regime_breakdown.items():
+            signals = regime_data["signals"]
             if signals:
-                regime_breakdown[regime_key]["accuracy"] = sum(signals) / len(signals)
-                regime_breakdown[regime_key]["count"] = len(signals)
+                regime_data["accuracy"] = sum(signals) / len(signals)
+                regime_data["count"] = len(signals)
 
         # Calculate overall metrics
         total_signals = len(all_signals)
