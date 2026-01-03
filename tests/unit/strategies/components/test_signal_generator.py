@@ -449,7 +449,7 @@ class TestWeightedVotingSignalGenerator:
                 super().__init__(name)
 
             def generate_signal(self, df, index, regime=None):
-                raise Exception("Generator failed")
+                raise ValueError("Generator failed")
 
             def get_confidence(self, df, index):
                 return 0.5
@@ -846,7 +846,7 @@ class TestRegimeAdaptiveSignalGenerator:
                 super().__init__(name)
 
             def generate_signal(self, df, index, regime=None):
-                raise Exception("Generator failed")
+                raise ValueError("Generator failed")
 
             def get_confidence(self, df, index):
                 return 0.5

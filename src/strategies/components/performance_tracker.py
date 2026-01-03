@@ -259,7 +259,7 @@ class PerformanceTracker:
         if self.storage_backend:
             try:
                 self.storage_backend.save_trade(trade)
-            except (OSError, ValueError, KeyError):
+            except Exception:
                 self.logger.exception("Failed to persist trade")
 
         self.logger.debug(
