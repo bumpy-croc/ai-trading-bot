@@ -141,3 +141,43 @@ def test_infinity_quantity_rejects_fill() -> None:
 
     assert decision.should_fill is False
     assert "finite" in decision.reason.lower()
+
+
+def test_nan_limit_price_rejects_fill() -> None:
+    """NaN limit price should be rejected."""
+    import math
+
+    model = ExecutionModel(default_fill_policy())
+    snapshot = _snapshot(high=110.0, low=95.0)
+    order_intent = OrderIntent(
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=1.0,
+        limit_price=math.nan,
+    )
+
+    decision = model.decide_fill(order_intent, snapshot)
+
+    assert decision.should_fill is False
+    assert "finite" in decision.reason.lower()
+
+
+def test_nan_stop_price_rejects_fill() -> None:
+    """NaN stop price should be rejected."""
+    import math
+
+    model = ExecutionModel(default_fill_policy())
+    snapshot = _snapshot(high=110.0, low=95.0)
+    order_intent = OrderIntent(
+        symbol="BTCUSDT",
+        side=OrderSide.SELL,
+        order_type=OrderType.STOP_LOSS,
+        quantity=1.0,
+        stop_price=math.nan,
+    )
+
+    decision = model.decide_fill(order_intent, snapshot)
+
+    assert decision.should_fill is False
+    assert "finite" in decision.reason.lower()

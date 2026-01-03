@@ -70,6 +70,9 @@ class OhlcFillModel:
         if order_intent.limit_price is None:
             return ExecutionDecision.no_fill("limit price missing")
 
+        if not math.isfinite(order_intent.limit_price):
+            return ExecutionDecision.no_fill("limit price must be finite")
+
         if order_intent.limit_price <= ZERO_PRICE:
             return ExecutionDecision.no_fill("limit price must be positive")
 
@@ -98,6 +101,9 @@ class OhlcFillModel:
         """
         if order_intent.stop_price is None:
             return ExecutionDecision.no_fill("stop price missing")
+
+        if not math.isfinite(order_intent.stop_price):
+            return ExecutionDecision.no_fill("stop price must be finite")
 
         if order_intent.stop_price <= ZERO_PRICE:
             return ExecutionDecision.no_fill("stop price must be positive")

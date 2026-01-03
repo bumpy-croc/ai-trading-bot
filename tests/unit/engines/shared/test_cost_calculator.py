@@ -7,10 +7,10 @@ and is used identically by both backtesting and live trading engines.
 import pytest
 
 from src.engines.shared.cost_calculator import (
-    CostCalculator,
-    CostResult,
     LIQUIDITY_MAKER,
     LIQUIDITY_TAKER,
+    CostCalculator,
+    CostResult,
 )
 
 
@@ -297,6 +297,22 @@ class TestEdgeCases:
         calc = CostCalculator()
         with pytest.raises(ValueError, match="Notional must be finite"):
             calc.calculate_entry_costs(price=100.0, notional=math.inf, side="long")
+
+    def test_exit_nan_price_raises_error(self) -> None:
+        """NaN price should raise ValueError in exit costs."""
+        import math
+
+        calc = CostCalculator()
+        with pytest.raises(ValueError, match="Price must be finite"):
+            calc.calculate_exit_costs(price=math.nan, notional=1000.0, side="long")
+
+    def test_exit_infinity_notional_raises_error(self) -> None:
+        """Infinite notional should raise ValueError in exit costs."""
+        import math
+
+        calc = CostCalculator()
+        with pytest.raises(ValueError, match="Notional must be finite"):
+            calc.calculate_exit_costs(price=100.0, notional=math.inf, side="long")
 
 
 class TestLiquidityOverrides:
