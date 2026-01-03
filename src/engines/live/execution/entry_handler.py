@@ -23,11 +23,11 @@ from src.config.constants import (
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
+from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.entry_utils import (
     extract_entry_plan,
     resolve_stop_loss_take_profit_pct,
 )
-from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -36,7 +36,6 @@ from src.engines.shared.execution.snapshot_builder import (
     map_entry_order_side_from_enum,
 )
 from src.engines.shared.side_utils import to_side_string
-from src.strategies.components import SignalDirection
 from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:

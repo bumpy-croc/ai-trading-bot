@@ -63,8 +63,7 @@ def resolve_fill_policy(name: str | None) -> FillPolicy:
     normalized = name.strip().lower()
     if normalized not in FILL_POLICIES:
         logger.warning(
-            "Unknown fill policy '%s'; using default '%s'. "
-            "Available policies: %s",
+            "Unknown fill policy '%s'; using default '%s'. " "Available policies: %s",
             name,
             DEFAULT_FILL_POLICY_NAME,
             list(FILL_POLICIES.keys()),

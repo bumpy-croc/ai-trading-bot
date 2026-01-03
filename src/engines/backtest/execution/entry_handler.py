@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -20,22 +20,20 @@ from src.config.constants import (
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import ActiveTrade
+from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.entry_utils import (
     extract_entry_plan,
     resolve_stop_loss_take_profit_pct,
 )
-from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
 from src.engines.shared.execution.snapshot_builder import (
     build_snapshot_from_candle,
-    coerce_float,
     map_entry_order_side_from_string,
 )
 from src.engines.shared.models import PositionSide
 from src.engines.shared.side_utils import to_side_string
-from src.strategies.components import SignalDirection
 from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:

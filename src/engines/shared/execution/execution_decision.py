@@ -26,7 +26,7 @@ class ExecutionDecision:
     reason: str
 
     @classmethod
-    def no_fill(cls, reason: str) -> "ExecutionDecision":
+    def no_fill(cls, reason: str) -> ExecutionDecision:
         """Create a no-fill decision with a reason."""
         return cls(
             should_fill=False,

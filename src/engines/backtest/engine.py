@@ -48,9 +48,9 @@ from src.engines.backtest.risk import CorrelationHandler
 from src.engines.backtest.utils import extract_indicators as util_extract_indicators
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
-from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
+from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,

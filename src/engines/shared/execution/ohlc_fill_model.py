@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from src.data_providers.exchange_interface import OrderSide
-
 from src.engines.shared.execution.execution_decision import ExecutionDecision
 from src.engines.shared.execution.fill_policy import FillPolicy
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
