@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_ATR_PERIOD,
+    DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_BREAKEVEN_BUFFER,
     DEFAULT_BREAKEVEN_THRESHOLD,
     DEFAULT_CORRELATION_THRESHOLD,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
+    DEFAULT_EXPOSURE_PRECISION_DECIMALS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
+    DEFAULT_MAX_CORRELATED_RISK,
+    DEFAULT_MAX_DAILY_RISK,
+    DEFAULT_MAX_DRAWDOWN,
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_MAX_RISK_PER_TRADE,
     DEFAULT_MAX_SCALE_INS,
     DEFAULT_PARTIAL_EXIT_SIZES,
     DEFAULT_PARTIAL_EXIT_TARGETS,
@@ -23,21 +32,26 @@ from src.config.constants import (
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
 from src.tech.indicators.core import calculate_atr
+from src.utils.price_targets import PriceTargetCalculator
 
 
 @dataclass
 class RiskParameters:
     """Risk management parameters"""
 
-    base_risk_per_trade: float = 0.02  # 2% risk per trade
-    max_risk_per_trade: float = 0.03  # 3% maximum risk per trade
-    max_position_size: float = 0.25  # 25% maximum position size (fraction of balance)
-    max_daily_risk: float = 0.06  # 6% maximum daily risk (fraction of balance)
-    max_correlated_risk: float = 0.10  # 10% maximum risk for correlated positions
-    max_drawdown: float = 0.20  # 20% maximum drawdown (fraction)
+    base_risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE  # 2% risk per trade
+    max_risk_per_trade: float = DEFAULT_MAX_RISK_PER_TRADE  # 3% maximum risk per trade
+    max_position_size: float = (
+        DEFAULT_MAX_POSITION_SIZE  # Maximum position size (fraction of balance)
+    )
+    max_daily_risk: float = DEFAULT_MAX_DAILY_RISK  # 6% maximum daily risk (fraction of balance)
+    max_correlated_risk: float = (
+        DEFAULT_MAX_CORRELATED_RISK  # 10% maximum risk for correlated positions
+    )
+    max_drawdown: float = DEFAULT_MAX_DRAWDOWN  # 20% maximum drawdown (fraction)
     position_size_atr_multiplier: float = 1.0
     default_take_profit_pct: float | None = None  # if None, engine/strategy may supply
-    atr_period: int = 14
+    atr_period: int = DEFAULT_ATR_PERIOD
     # Time exit config (optional; strategies may override)
     time_exits: dict | None = None
     # Partial operations (defaults can be overridden by strategies)
@@ -109,17 +123,26 @@ class RiskParameters:
 
 
 class RiskManager:
-    """Handles position sizing and risk management"""
+    """Handles position sizing and risk management.
+
+    Thread Safety
+    -------------
+    All operations on shared state (positions dict and daily_risk_used counter)
+    are protected by a reentrant lock to ensure safe concurrent access from
+    multiple threads (e.g., live trading engine + monitoring threads).
+    """
 
     def __init__(self, parameters: RiskParameters | None = None, max_concurrent_positions: int = 3):
         self.params = parameters or RiskParameters()
         self.daily_risk_used = 0.0
         self.positions: dict[str, dict] = {}
         self.max_concurrent_positions = max_concurrent_positions
+        self._state_lock = threading.RLock()  # Protects positions and daily_risk_used
 
     def reset_daily_risk(self):
         """Reset daily risk counter"""
-        self.daily_risk_used = 0.0
+        with self._state_lock:
+            self.daily_risk_used = 0.0
 
     def _ensure_atr(self, df: pd.DataFrame) -> pd.DataFrame:
         if "atr" not in df.columns:
@@ -153,7 +176,8 @@ class RiskManager:
 
         # Ensure we don't exceed maximum risk limits
         risk = min(risk, self.params.max_risk_per_trade)
-        remaining_daily_risk = self.params.max_daily_risk - self.daily_risk_used
+        with self._state_lock:
+            remaining_daily_risk = self.params.max_daily_risk - self.daily_risk_used
         risk = min(risk, remaining_daily_risk)
 
         # If no remaining daily risk, return 0
@@ -174,13 +198,12 @@ class RiskManager:
 
     def calculate_stop_loss(self, entry_price: float, atr: float, side: str = "long") -> float:
         """Calculate adaptive stop loss level (ATR-based)"""
-        atr_multiple = self.params.position_size_atr_multiplier
-        stop_distance = atr * atr_multiple
-
-        if side == "long":
-            return entry_price - stop_distance
-        else:  # short
-            return entry_price + stop_distance
+        return PriceTargetCalculator.stop_loss_atr(
+            entry_price=entry_price,
+            atr=atr,
+            multiplier=self.params.position_size_atr_multiplier,
+            side=side,
+        )
 
     # NEW HIGHER-LEVEL API (fraction-based + SL/TP policies)
     def calculate_position_fraction(
@@ -234,7 +257,8 @@ class RiskManager:
         max_fraction = min(max_fraction, self.params.max_position_size)
 
         # Respect remaining daily risk
-        remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+        with self._state_lock:
+            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
         max_fraction = min(max_fraction, remaining_daily_risk)
 
         # Default fraction baseline
@@ -287,22 +311,61 @@ class RiskManager:
                 corr_matrix = correlation_ctx.get("corr_matrix")
                 max_exposure_override = correlation_ctx.get("max_exposure_override")
                 if engine is not None and candidate_symbol:
-                    positions = self.positions
-                    factor = float(
-                        engine.compute_size_reduction_factor(
-                            positions=positions,
-                            corr_matrix=corr_matrix,
-                            candidate_symbol=str(candidate_symbol),
-                            candidate_fraction=float(fraction),
-                            max_exposure_override=max_exposure_override,
-                        )
+                    with self._state_lock:
+                        positions = self.positions.copy()
+                    raw_factor = engine.compute_size_reduction_factor(
+                        positions=positions,
+                        corr_matrix=corr_matrix,
+                        candidate_symbol=str(candidate_symbol),
+                        candidate_fraction=float(fraction),
+                        max_exposure_override=max_exposure_override,
                     )
+                    # Validate factor is numeric and not None/NaN before using
+                    try:
+                        factor = float(raw_factor)
+                        if pd.isna(factor):
+                            logging.warning(
+                                "Correlation engine returned NaN reduction factor - ignoring correlation adjustment"
+                            )
+                            factor = 1.0
+                    except (TypeError, ValueError):
+                        logging.warning(
+                            "Correlation engine returned non-numeric factor (%s: %s) - ignoring correlation adjustment",
+                            type(raw_factor).__name__,
+                            raw_factor,
+                        )
+                        factor = 1.0
                     if factor < 1.0:
                         fraction = max(0.0, fraction * factor)
         except Exception:
             # Fail-safe: never raise from correlation logic
             logging.exception("Exception in correlation-based size reduction logic")
-        return max(0.0, min(self.params.max_position_size, fraction))
+
+        # Final clamping and validation
+        final_fraction = max(0.0, min(self.params.max_position_size, fraction))
+
+        # Runtime validation: ensure result respects risk limits
+        with self._state_lock:
+            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+
+        if final_fraction > remaining_daily_risk:
+            logging.warning(
+                "Calculated fraction %.4f exceeds remaining daily risk %.4f, clamping to limit",
+                final_fraction,
+                remaining_daily_risk,
+            )
+            final_fraction = remaining_daily_risk
+
+        if final_fraction > self.params.max_position_size:
+            logging.error(
+                "CRITICAL: Calculated fraction %.4f exceeds max_position_size %.4f. "
+                "This indicates a logic error in position sizing.",
+                final_fraction,
+                self.params.max_position_size,
+            )
+            final_fraction = self.params.max_position_size
+
+        return final_fraction
 
     def compute_sl_tp(
         self,
@@ -329,10 +392,21 @@ class RiskManager:
         tp_price: float | None = None
 
         if stop_loss_pct is not None:
-            if side == "long":
-                sl_price = entry_price * (1 - float(stop_loss_pct))
-            else:
-                sl_price = entry_price * (1 + float(stop_loss_pct))
+            try:
+                sl_price = PriceTargetCalculator.stop_loss(
+                    entry_price=entry_price,
+                    pct=float(stop_loss_pct),
+                    side=side,
+                )
+            except (TypeError, ValueError) as e:
+                logging.warning(
+                    "Invalid stop_loss_pct value '%s' (type: %s) - cannot convert to float: %s. "
+                    "Falling back to ATR-based stop loss.",
+                    stop_loss_pct,
+                    type(stop_loss_pct).__name__,
+                    e,
+                )
+                sl_price = None
         else:
             # ATR-based if available
             df = self._ensure_atr(df)
@@ -347,10 +421,21 @@ class RiskManager:
                 )
 
         if take_profit_pct is not None:
-            if side == "long":
-                tp_price = entry_price * (1 + float(take_profit_pct))
-            else:
-                tp_price = entry_price * (1 - float(take_profit_pct))
+            try:
+                tp_price = PriceTargetCalculator.take_profit(
+                    entry_price=entry_price,
+                    pct=float(take_profit_pct),
+                    side=side,
+                )
+            except (TypeError, ValueError) as e:
+                logging.warning(
+                    "Invalid take_profit_pct value '%s' (type: %s) - cannot convert to float: %s. "
+                    "Setting take profit to None.",
+                    take_profit_pct,
+                    type(take_profit_pct).__name__,
+                    e,
+                )
+                tp_price = None
         else:
             tp_price = None
 
@@ -384,20 +469,23 @@ class RiskManager:
         - Daily risk accounting increments `daily_risk_used` by `size` so that
           the sum of concurrently open position fractions respects
           `params.max_daily_risk` across multiple positions.
+        - Thread-safe: protected by internal lock.
         """
-        self.positions[symbol] = {"side": side, "size": size, "entry_price": entry_price}
-
-        # Update daily risk used (approximate: count fraction of balance put at risk)
-        self.daily_risk_used += size  # size here is treated as fraction of balance allocated
+        with self._state_lock:
+            self.positions[symbol] = {"side": side, "size": size, "entry_price": entry_price}
+            # Update daily risk used (approximate: count fraction of balance put at risk)
+            self.daily_risk_used += size  # size here is treated as fraction of balance allocated
 
     def close_position(self, symbol: str):
-        """Close position tracking"""
-        if symbol in self.positions:
-            del self.positions[symbol]
+        """Close position tracking (thread-safe)."""
+        with self._state_lock:
+            if symbol in self.positions:
+                del self.positions[symbol]
 
     def get_total_exposure(self) -> float:
-        """Calculate total position exposure (sum of fractions)"""
-        return float(sum(pos["size"] for pos in self.positions.values()))
+        """Calculate total position exposure (sum of fractions, thread-safe)."""
+        with self._state_lock:
+            return float(sum(pos["size"] for pos in self.positions.values()))
 
     def get_position_correlation_risk(
         self,
@@ -411,17 +499,26 @@ class RiskManager:
         exceeds the threshold (defaults to params.correlation_threshold) and return
         the maximum group exposure among the groups that intersect the input symbols.
         Fallback: sum exposures of provided symbols.
+
+        Thread-safe: takes a snapshot of positions at start.
         """
         if not symbols:
             return 0.0
+
+        # Take snapshot of positions while holding lock
+        with self._state_lock:
+            positions_snapshot = self.positions.copy()
+
         try:
             sym_set = set(map(str, symbols))
             # Fallback: sum exposures for given symbols
             if corr_matrix is None or corr_matrix.empty:
                 exposure = sum(
-                    float(pos.get("size", 0.0)) for s, pos in self.positions.items() if s in sym_set
+                    float(pos.get("size", 0.0))
+                    for s, pos in positions_snapshot.items()
+                    if s in sym_set
                 )
-                return round(float(exposure), 8)
+                return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
             thr = float(self.params.correlation_threshold if threshold is None else threshold)
             cols = [c for c in corr_matrix.columns if c in sym_set]
@@ -465,18 +562,20 @@ class RiskManager:
                     continue
                 total = 0.0
                 for s in g:
-                    total += float(self.positions.get(s, {}).get("size", 0.0))
+                    total += float(positions_snapshot.get(s, {}).get("size", 0.0))
                 max_exposure = max(max_exposure, total)
             # If no groups formed (all singletons), fall back to sum of the specified symbols
             if max_exposure == 0.0 and len(groups) == len(cols):
-                max_exposure = sum(float(self.positions.get(s, {}).get("size", 0.0)) for s in cols)
-            return round(max_exposure, 8)
+                max_exposure = sum(
+                    float(positions_snapshot.get(s, {}).get("size", 0.0)) for s in cols
+                )
+            return round(max_exposure, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         except Exception:
             # Fail-safe
             exposure = sum(
-                float(pos.get("size", 0.0)) for s, pos in self.positions.items() if s in symbols
+                float(pos.get("size", 0.0)) for s, pos in positions_snapshot.items() if s in symbols
             )
-            return round(float(exposure), 8)
+            return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
     def get_max_concurrent_positions(self) -> int:
         """Return the maximum number of concurrent positions allowed."""
@@ -488,32 +587,43 @@ class RiskManager:
         """Reduce tracked exposure after a partial exit.
 
         executed_fraction_of_original is the fraction of ORIGINAL size removed.
+
+        Thread-safe: protected by internal lock.
         """
-        pos = self.positions.get(symbol)
-        if not pos:
-            return
-        current = float(pos.get("size", 0.0))
-        new_size = max(0.0, current - float(executed_fraction_of_original))
-        pos["size"] = new_size
-        # Reduce daily risk used proportionally (approximation)
-        self.daily_risk_used = max(0.0, self.daily_risk_used - float(executed_fraction_of_original))
+        with self._state_lock:
+            pos = self.positions.get(symbol)
+            if not pos:
+                return
+            current = float(pos.get("size", 0.0))
+            new_size = max(0.0, current - float(executed_fraction_of_original))
+            pos["size"] = new_size
+            # Reduce daily risk used proportionally (approximation)
+            self.daily_risk_used = max(
+                0.0, self.daily_risk_used - float(executed_fraction_of_original)
+            )
 
     def adjust_position_after_scale_in(
         self, symbol: str, added_fraction_of_original: float
     ) -> None:
-        """Increase tracked exposure after a scale-in, enforcing daily and per-position caps."""
-        pos = self.positions.get(symbol)
-        if not pos:
-            return
-        current = float(pos.get("size", 0.0))
-        # Enforce per-position cap and remaining daily risk
-        remaining_daily = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
-        effective_add = min(
-            float(added_fraction_of_original),
-            remaining_daily,
-            max(0.0, self.params.max_position_size - current),
-        )
-        if effective_add <= 0:
-            return
-        pos["size"] = current + effective_add
-        self.daily_risk_used = min(self.params.max_daily_risk, self.daily_risk_used + effective_add)
+        """Increase tracked exposure after a scale-in, enforcing daily and per-position caps.
+
+        Thread-safe: protected by internal lock.
+        """
+        with self._state_lock:
+            pos = self.positions.get(symbol)
+            if not pos:
+                return
+            current = float(pos.get("size", 0.0))
+            # Enforce per-position cap and remaining daily risk
+            remaining_daily = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+            effective_add = min(
+                float(added_fraction_of_original),
+                remaining_daily,
+                max(0.0, self.params.max_position_size - current),
+            )
+            if effective_add <= 0:
+                return
+            pos["size"] = current + effective_add
+            self.daily_risk_used = min(
+                self.params.max_daily_risk, self.daily_risk_used + effective_add
+            )

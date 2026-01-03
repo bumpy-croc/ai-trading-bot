@@ -13,9 +13,8 @@ Adds new performance tracking columns to support unified PerformanceTracker:
 - Enhanced risk metrics for AccountHistory snapshots
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0005_enhanced_performance"
@@ -56,7 +55,9 @@ def upgrade() -> None:
     )
     op.add_column(
         "performance_metrics",
-        sa.Column("avg_trade_duration_hours", sa.Numeric(precision=18, scale=8), server_default="0.0"),
+        sa.Column(
+            "avg_trade_duration_hours", sa.Numeric(precision=18, scale=8), server_default="0.0"
+        ),
     )
     op.add_column(
         "performance_metrics",

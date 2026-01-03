@@ -7,6 +7,7 @@ engineering, and model inference.
 """
 
 import hashlib
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -15,6 +16,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.config.constants import DEFAULT_INFERENCE_TIMEOUT
+from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
+from src.infrastructure.timeout import run_with_timeout
 from src.regime.detector import RegimeConfig, RegimeDetector
 
 from .config import PredictionConfig
@@ -22,6 +26,7 @@ from .ensemble import SimpleEnsembleAggregator
 from .exceptions import (
     FeatureExtractionError,
     InvalidInputError,
+    ModelInferenceError,
     ModelNotFoundError,
 )
 from .features.pipeline import FeaturePipeline
@@ -156,7 +161,27 @@ class PredictionEngine:
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
-                prediction = model.predict(prepared_features)
+                # Wrap prediction with timeout to prevent hanging on slow/hung models
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else DEFAULT_INFERENCE_TIMEOUT
+                )
+                try:
+                    prediction = run_with_timeout(
+                        model.predict,
+                        args=(prepared_features,),
+                        timeout_seconds=timeout_seconds,
+                        operation_name="ML model inference",
+                    )
+                except InfraTimeoutError as timeout_err:
+                    # Prediction exceeded timeout - return error result
+                    inference_time = time.time() - start_time
+                    raise ModelInferenceError(
+                        f"Model inference timeout after {timeout_seconds}s"
+                    ) from timeout_err
+
                 final_price = prediction.price
                 final_conf = prediction.confidence
                 final_dir = prediction.direction
@@ -186,6 +211,14 @@ class PredictionEngine:
                 if not ensemble_bundles:
                     ensemble_bundles = [bundle]
 
+                # Same timeout configuration as single model
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else DEFAULT_INFERENCE_TIMEOUT
+                )
+
                 for ensemble_bundle in ensemble_bundles:
                     ensemble_features = self._prepare_features_for_bundle(
                         ensemble_bundle, features, features_df
@@ -193,7 +226,17 @@ class PredictionEngine:
                     if not features_used:
                         features_used = self._count_features_used(ensemble_features)
 
-                    raw_prediction = ensemble_bundle.runner.predict(ensemble_features)
+                    try:
+                        raw_prediction = run_with_timeout(
+                            ensemble_bundle.runner.predict,
+                            args=(ensemble_features,),
+                            timeout_seconds=timeout_seconds,
+                            operation_name=f"Ensemble model {ensemble_bundle.model_name} inference",
+                        )
+                    except InfraTimeoutError:
+                        # Skip this ensemble member if it times out
+                        continue
+
                     denormalized_price = self._apply_rolling_denormalization(
                         raw_prediction.price, ensemble_bundle, data
                     )
@@ -407,10 +450,32 @@ class PredictionEngine:
 
         num_windows = windows.shape[0]
         preds_norm = np.empty((num_windows,), dtype=np.float32)
+
+        # Configure timeout for series prediction
+        timeout_seconds = (
+            self.config.max_prediction_latency
+            if hasattr(self.config, "max_prediction_latency")
+            and isinstance(self.config.max_prediction_latency, (int, float))
+            else DEFAULT_INFERENCE_TIMEOUT
+        )
+
         for start in range(0, num_windows, batch_size):
             end = min(start + batch_size, num_windows)
             batch = windows[start:end]
-            output = session.run(None, {input_name: batch})
+
+            # Wrap session.run with timeout to prevent hanging on large batches
+            try:
+                output = run_with_timeout(
+                    session.run,
+                    args=(None, {input_name: batch}),
+                    timeout_seconds=timeout_seconds,
+                    operation_name=f"Series prediction batch {start}-{end}",
+                )
+            except InfraTimeoutError as timeout_err:
+                raise ModelInferenceError(
+                    f"Series prediction batch timeout after {timeout_seconds}s"
+                ) from timeout_err
+
             out = output[0]
             preds_norm[start:end] = out.reshape(out.shape[0], -1)[:, 0].astype(np.float32)
 
@@ -515,8 +580,24 @@ class PredictionEngine:
                 self._total_feature_extraction_time += feature_time
                 self._feature_extraction_count += 1
 
-                # Make prediction with pre-loaded model
-                prediction = model.predict(prepared_features)
+                # Make prediction with pre-loaded model (with timeout protection)
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else DEFAULT_INFERENCE_TIMEOUT
+                )
+                try:
+                    prediction = run_with_timeout(
+                        model.predict,
+                        args=(prepared_features,),
+                        timeout_seconds=timeout_seconds,
+                        operation_name=f"Batch prediction {i+1}/{len(data_batches)}",
+                    )
+                except InfraTimeoutError as timeout_err:
+                    raise ModelInferenceError(
+                        f"Batch prediction timeout after {timeout_seconds}s"
+                    ) from timeout_err
 
                 # Apply rolling MinMax denormalization if needed
                 denorm_price = self._apply_rolling_denormalization(prediction.price, bundle, data)
@@ -970,6 +1051,16 @@ class PredictionEngine:
         window_data = input_data[target_feature].tail(window)
         window_min = float(window_data.min())
         window_max = float(window_data.max())
+
+        # Validate min/max are finite to prevent NaN propagation
+        if not math.isfinite(window_min) or not math.isfinite(window_max):
+            logger.error(
+                "Invalid window min/max (min=%.8f, max=%.8f) for denormalization - "
+                "input data contains NaN/inf. Returning raw normalized prediction.",
+                window_min,
+                window_max,
+            )
+            return normalized_price
 
         # Denormalize: real_price = normalized * (max - min) + min
         if window_max == window_min:

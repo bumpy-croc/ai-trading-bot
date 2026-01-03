@@ -27,7 +27,9 @@ class AlwaysBuySignalGenerator(SignalGenerator):
             confidence=1.0,
             strength=1.0,
             metadata={
-                "timestamp": df.index[index] if len(df.index) > index else pd.Timestamp.now(tz="UTC")
+                "timestamp": (
+                    df.index[index] if len(df.index) > index else pd.Timestamp.now(tz="UTC")
+                )
             },
         )
 
@@ -144,7 +146,11 @@ def test_backtester_correlation_reduces_size(monkeypatch):
         captures["after"] = result
         return result
 
-    monkeypatch.setattr(bt.correlation_handler, "apply_correlation_control", MethodType(_wrap, bt.correlation_handler))
+    monkeypatch.setattr(
+        bt.correlation_handler,
+        "apply_correlation_control",
+        MethodType(_wrap, bt.correlation_handler),
+    )
 
     start = df.index[0]
     end = df.index[-1]

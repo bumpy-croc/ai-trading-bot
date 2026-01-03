@@ -128,6 +128,20 @@ class TestLiveTradingEngine:
             fee_rate=0.0,
             slippage_rate=0.0,
         )
+
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         engine._execute_entry(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -239,6 +253,20 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(
             strategy=mock_strategy, data_provider=mock_data_provider, max_position_size=0.1
         )
+
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         engine._execute_entry(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -263,6 +291,7 @@ class TestLiveTradingEngine:
         # Update performance tracker with test data
         # Simulate 10 trades: 6 winning, 4 losing
         from unittest.mock import Mock
+
         for _ in range(6):
             trade = Mock()
             trade.pnl = 100.0  # winning trade
@@ -519,7 +548,9 @@ def test_stop_loss_from_component_strategy(mock_data_provider):
         position_sizer=position_sizer,
     )
 
-    _ = LiveTradingEngine(strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False)
+    _ = LiveTradingEngine(
+        strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
+    )
 
     # Create test data with enough history for ML model
     df = pd.DataFrame(
@@ -603,7 +634,9 @@ def test_position_exit_with_should_exit_position(mock_data_provider):
     )
 
     # Create market data
-    market_data = MarketData(symbol="BTCUSDT", price=51490, volume=2490, timestamp=datetime.now(UTC))
+    market_data = MarketData(
+        symbol="BTCUSDT", price=51490, volume=2490, timestamp=datetime.now(UTC)
+    )
 
     # Test should_exit_position
     should_exit = strategy.should_exit_position(position, market_data)
@@ -632,7 +665,9 @@ def test_stop_loss_update_with_component_strategy(mock_data_provider):
         position_sizer=position_sizer,
     )
 
-    _ = LiveTradingEngine(strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False)
+    _ = LiveTradingEngine(
+        strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
+    )
 
     # Create test data
     df = pd.DataFrame(

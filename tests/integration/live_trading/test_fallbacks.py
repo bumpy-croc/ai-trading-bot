@@ -1,5 +1,3 @@
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -43,10 +41,10 @@ class TestLiveTradingFallbacks:
         # and log their execution properly
         try:
             from src.strategies.components import (
-                Strategy,
-                MLBasicSignalGenerator,
-                FixedRiskManager,
                 ConfidenceWeightedSizer,
+                FixedRiskManager,
+                MLBasicSignalGenerator,
+                Strategy,
             )
 
             # Create a component-based strategy

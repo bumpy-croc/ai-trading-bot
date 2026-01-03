@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from src.engines.live.trading_engine import Trade, PositionSide
+from src.engines.live.trading_engine import PositionSide, Trade
 
 
 class TestTradeGeneration:

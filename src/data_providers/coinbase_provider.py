@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 
 from src.config import get_config
+from src.infrastructure.network_retry import with_network_retry
 from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
@@ -175,6 +176,40 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         except Exception:
             self._decoded_secret = None
 
+    def close(self) -> None:
+        """Close the HTTP session and release resources."""
+        if hasattr(self, "_session") and self._session is not None:
+            try:
+                self._session.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
+            self._session = None
+
+    def __del__(self) -> None:
+        """Destructor to ensure session is closed when provider is garbage collected."""
+        self.close()
+
+    @staticmethod
+    def _safe_calculate_average_price(executed_value: Any, filled_size: Any) -> float | None:
+        """Safely calculate average price with validation to prevent NaN/inf propagation."""
+        import math
+
+        try:
+            exec_val = float(executed_value)
+            fill_sz = float(filled_size)
+
+            # Validate both values are finite before division
+            if not math.isfinite(exec_val) or not math.isfinite(fill_sz):
+                return None
+
+            if fill_sz > 0:
+                avg_price = exec_val / fill_sz
+                # Validate result is finite
+                return avg_price if math.isfinite(avg_price) else None
+            return None
+        except (TypeError, ValueError):
+            return None
+
     # ------------------------------------------------------------
     # The following methods provide implementations for authenticated endpoints of the Coinbase Exchange API.
     # These methods interact with the API to fetch account information and balances.
@@ -214,7 +249,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                     "Content-Type": "application/json",
                 }
             )
-        try:
+
+        # Use retry decorator for network resilience
+        @with_network_retry(max_retries=3, base_delay=1.0, max_delay=30.0)
+        def _make_request() -> dict[str, Any]:
             response = self._session.request(
                 method,
                 url,
@@ -227,8 +265,11 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             if response.text:
                 return response.json()
             return {}
+
+        try:
+            return _make_request()
         except Exception as e:
-            logger.error(f"Coinbase API request error {method} {path}: {e}")
+            logger.error(f"Coinbase API request error {method} {path} after retries: {e}")
             raise
 
     def test_connection(self) -> bool:
@@ -303,9 +344,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                         status=self._convert_order_status(od.get("status"), od.get("done_reason")),
                         filled_quantity=float(od.get("filled_size", 0)),
                         average_price=(
-                            (float(od.get("executed_value", 0)) / float(od.get("filled_size", 0)))
-                            if float(od.get("filled_size", 0)) > 0
-                            else None
+                            self._safe_calculate_average_price(
+                                od.get("executed_value", 0), od.get("filled_size", 0)
+                            )
                         ),
                         commission=0.0,
                         commission_asset="",
@@ -365,16 +406,24 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             fills = self._request("GET", "/fills", params=params, auth=True)
             trades: list[Trade] = []
             for fl in fills:
+                # Extract commission asset safely from product_id (e.g., "BTC-USD" -> "USD")
+                product_id = fl.get("product_id")
+                if product_id and "-" in product_id:
+                    parts = product_id.split("-")
+                    commission_asset = parts[1] if len(parts) >= 2 else "USD"
+                else:
+                    commission_asset = "USD"  # Default fallback
+
                 trades.append(
                     Trade(
                         trade_id=fl.get("trade_id"),
                         order_id=fl.get("order_id"),
-                        symbol=fl.get("product_id"),
+                        symbol=product_id,
                         side=OrderSide.BUY if fl.get("side") == "buy" else OrderSide.SELL,
                         quantity=float(fl.get("size")),
                         price=float(fl.get("price")),
                         commission=float(fl.get("fee")),
-                        commission_asset=fl.get("product_id").split("-")[1],
+                        commission_asset=commission_asset,
                         time=datetime.fromisoformat(fl.get("created_at")),
                     )
                 )
@@ -392,7 +441,13 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         price: float | None = None,
         stop_price: float | None = None,
         time_in_force: str = "GTC",
+        client_order_id: str | None = None,
     ) -> str | None:
+        """
+        Place an order on Coinbase Advanced Trade API.
+
+        Note: Coinbase Advanced Trade API supports client_order_id for idempotency.
+        """
         try:
             cb_type = self._convert_to_cb_type(order_type)
             body: dict[str, Any] = {
@@ -413,6 +468,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             if cb_type == "stop":
                 body["stop_price"] = str(stop_price) if stop_price else None
                 body["stop"] = "loss"  # default stop loss
+
+            # Add client_order_id for idempotency if provided
+            if client_order_id:
+                body["client_order_id"] = client_order_id
 
             order = self._request("POST", "/orders", body=body, auth=True)
             return order.get("id")
@@ -587,16 +646,30 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             raise
 
     def get_current_price(self, symbol: str) -> float:
+        """Get latest price for a symbol.
+
+        Raises:
+            RuntimeError: If price cannot be fetched from exchange.
+                         Caller must handle this to prevent trading with invalid prices.
+        """
         try:
             product_id = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
             url = f"{self.BASE_URL}/products/{product_id}/ticker"
             r = self._session.get(url, timeout=10)
             r.raise_for_status()
             data = r.json()
-            return float(data["price"])
+            price = float(data["price"])
+            # Validate price is positive to prevent downstream calculation errors
+            if price <= 0:
+                raise ValueError(f"Invalid price {price} <= 0 for {symbol}")
+            return price
         except Exception as e:
             logger.error(f"Error fetching current price for {symbol} from Coinbase: {e}")
-            return 0.0
+            # Don't return 0.0 - that could cause division by zero or infinite position sizes
+            # Force caller to handle price fetch failures explicitly
+            raise RuntimeError(
+                f"Failed to fetch current price for {symbol} from Coinbase: {e}"
+            ) from e
 
     # --------------------------- DataProvider --------------------------
 

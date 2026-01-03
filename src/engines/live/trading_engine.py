@@ -231,16 +231,23 @@ class LiveTradingEngine:
                 try:
                     component_risk.bind_core_manager(self.risk_manager)
                 except Exception as bind_error:
-                    logger.debug("Failed to bind core risk manager to component: %s", bind_error)
+                    logger.warning(
+                        "Failed to bind core risk manager to component strategy: %s. "
+                        "Component risk limits may not be enforced.",
+                        bind_error,
+                        exc_info=True,
+                    )
             if hasattr(component_risk, "set_strategy_overrides"):
                 overrides = getattr(self.strategy, "_risk_overrides", None)
                 if overrides:
                     try:
                         component_risk.set_strategy_overrides(overrides)
                     except Exception as override_error:
-                        logger.debug(
-                            "Failed to propagate risk overrides to component manager: %s",
+                        logger.warning(
+                            "Failed to propagate risk overrides to component manager: %s. "
+                            "Strategy-specific risk parameters may not apply.",
                             override_error,
+                            exc_info=True,
                         )
 
         # Trailing stop policy
@@ -269,6 +276,7 @@ class LiveTradingEngine:
         self.last_data_timestamp = None
         self.initial_balance = initial_balance
         self.current_balance = initial_balance  # Will be updated during startup
+        self._balance_lock = threading.Lock()  # Protect concurrent balance modifications
         self.max_position_size = max_position_size
         self.enable_live_trading = enable_live_trading
         # Execution realism (parity with backtest)
@@ -481,8 +489,14 @@ class LiveTradingEngine:
                         market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
                         time_restrictions=restrictions,
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "Failed to create time exit policy from config: %s. "
+                    "Time-based exits will be disabled.",
+                    e,
+                    exc_info=True,
+                )
+                self.time_exit_policy = None
 
         # Threading
         self.main_thread = None
@@ -706,10 +720,15 @@ class LiveTradingEngine:
 
             if self.db_manager and self.trading_session_id:
                 try:
+                    # Extract adjustment type from primary_reason (e.g., "drawdown_reduction" -> "drawdown")
+                    # Use safe extraction to handle edge cases where reason doesn't contain "_"
+                    reason = adjustment.primary_reason or "unknown"
+                    adjustment_type = reason.split("_")[0] if "_" in reason else reason
+
                     # Log factor values (not position sizes) for backward compatibility
                     self.db_manager.log_risk_adjustment(
                         session_id=self.trading_session_id,
-                        adjustment_type=adjustment.primary_reason.split("_")[0],
+                        adjustment_type=adjustment_type,
                         trigger_reason=adjustment.primary_reason,
                         parameter_name="position_size_factor",
                         original_value=1.0,
@@ -1205,13 +1224,14 @@ class LiveTradingEngine:
                     balance_sync = sync_result.data.get("balance_sync", {})
                     if balance_sync.get("corrected", False):
                         corrected_balance = balance_sync.get("new_balance", self.current_balance)
-                        self.current_balance = corrected_balance
+                        # Atomic balance update with lock to prevent race conditions
+                        with self._balance_lock:
+                            self.current_balance = corrected_balance
+                            self._pending_balance_correction = True
+                            self._pending_corrected_balance = corrected_balance
                         logger.info(
                             f"💰 Balance corrected from exchange: ${corrected_balance:,.2f}"
                         )
-                        # Defer DB update until session is created
-                        self._pending_balance_correction = True
-                        self._pending_corrected_balance = corrected_balance
                 else:
                     logger.warning(f"⚠️ Account synchronization failed: {sync_result.message}")
 
@@ -1222,24 +1242,26 @@ class LiveTradingEngine:
                 logger.error(f"❌ Account synchronization error: {e}", exc_info=True)
 
         # If a balance correction was pending, log it now (outside session creation conditional)
-        if (
-            getattr(self, "_pending_balance_correction", False)
-            and self.trading_session_id is not None
-        ):
-            corrected_balance = self._pending_corrected_balance
-            self.db_manager.update_balance(
-                corrected_balance, "account_sync", "system", self.trading_session_id
-            )
-            self._pending_balance_correction = False
-            self._pending_corrected_balance = None
-            logger.info(f"💰 Balance corrected in database: ${corrected_balance:,.2f}")
-        elif getattr(self, "_pending_balance_correction", False):
-            # Balance correction was pending but no session ID available
-            logger.warning(
-                "⚠️ Balance correction pending but no trading session ID available - skipping database update"
-            )
-            self._pending_balance_correction = False
-            self._pending_corrected_balance = None
+        # Use lock to ensure atomic check and update
+        with self._balance_lock:
+            if (
+                getattr(self, "_pending_balance_correction", False)
+                and self.trading_session_id is not None
+            ):
+                corrected_balance = self._pending_corrected_balance
+                self.db_manager.update_balance(
+                    corrected_balance, "account_sync", "system", self.trading_session_id
+                )
+                self._pending_balance_correction = False
+                self._pending_corrected_balance = None
+                logger.info(f"💰 Balance corrected in database: ${corrected_balance:,.2f}")
+            elif getattr(self, "_pending_balance_correction", False):
+                # Balance correction was pending but no session ID available
+                logger.warning(
+                    "⚠️ Balance correction pending but no trading session ID available - skipping database update"
+                )
+                self._pending_balance_correction = False
+                self._pending_corrected_balance = None
 
         # Set session ID on strategy for logging
         if hasattr(self.strategy, "session_id"):
@@ -1286,11 +1308,22 @@ class LiveTradingEngine:
             logger.info("Closing %s open positions...", len(positions_snapshot))
             for position in list(positions_snapshot.values()):
                 try:
+                    # Get current price for position closure - MUST be valid
+                    current_price = self.data_provider.get_current_price(position.symbol)
+                    if current_price is None or current_price <= 0:
+                        logger.critical(
+                            "Cannot close position %s during shutdown - invalid price %s. "
+                            "Position will remain open! Manual intervention required.",
+                            position.symbol,
+                            current_price,
+                        )
+                        continue
+
                     self._execute_exit(
                         position,
                         "Engine shutdown",
                         None,
-                        float(self.data_provider.get_current_price(position.symbol) or 0.0),
+                        float(current_price),
                         None,
                         None,
                         None,
@@ -1367,20 +1400,27 @@ class LiveTradingEngine:
                 # Add sentiment data if available
                 if self.sentiment_provider:
                     df = self._add_sentiment_data(df, symbol)
-                # Check for pending strategy/model updates
-                if self.strategy_manager and self.strategy_manager.has_pending_update():
-                    logger.info("🔄 Applying pending strategy/model update...")
-                    success = self.strategy_manager.apply_pending_update()
-                    if success:
-                        self._finalize_runtime()
-                        updated_strategy = self.strategy_manager.current_strategy
-                        self._configure_strategy(updated_strategy)
-                        self._runtime_dataset = None
-                        self._runtime_warmup = 0
-                        logger.info("✅ Strategy/model update applied successfully")
-                        self._send_alert("Strategy/Model updated in live trading")
-                    else:
-                        logger.error("❌ Failed to apply strategy/model update")
+                # Check for pending strategy/model updates (wrap in try-except to prevent loop crash)
+                try:
+                    if self.strategy_manager and self.strategy_manager.has_pending_update():
+                        logger.info("🔄 Applying pending strategy/model update...")
+                        success = self.strategy_manager.apply_pending_update()
+                        if success:
+                            self._finalize_runtime()
+                            updated_strategy = self.strategy_manager.current_strategy
+                            self._configure_strategy(updated_strategy)
+                            self._runtime_dataset = None
+                            self._runtime_warmup = 0
+                            logger.info("✅ Strategy/model update applied successfully")
+                            self._send_alert("Strategy/Model updated in live trading")
+                        else:
+                            logger.error("❌ Failed to apply strategy/model update")
+                except Exception as e:
+                    logger.error(
+                        "❌ Exception during strategy update check/application: %s",
+                        e,
+                        exc_info=True,
+                    )
                 # Proceed to indicator calculation
 
                 # Calculate indicators or prepare runtime dataset
@@ -1410,7 +1450,16 @@ class LiveTradingEngine:
                     self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
+
+                # Validate DataFrame is not empty before iloc access
                 current_index = len(df) - 1
+                if current_index < 0:
+                    logger.error(
+                        "DataFrame became empty after readiness check - skipping iteration"
+                    )
+                    self._sleep_with_interrupt(self.check_interval)
+                    continue
+
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
                 current_time = current_candle.name if hasattr(current_candle, "name") else None
@@ -1823,7 +1872,14 @@ class LiveTradingEngine:
             # Log exit decision for each position
             if self.db_manager:
                 # Calculate current P&L for context
-                if position.side == PositionSide.LONG:
+                # Validate entry_price to prevent division by zero from corrupted position data
+                if position.entry_price <= 0:
+                    logger.error(
+                        f"Invalid entry_price {position.entry_price} for position {position.symbol} - "
+                        "skipping P&L calculation for logging"
+                    )
+                    current_pnl = 0.0  # Fallback value for logging
+                elif position.side == PositionSide.LONG:
                     current_pnl = (float(current_price) - float(position.entry_price)) / float(
                         position.entry_price
                     )
@@ -2191,6 +2247,17 @@ class LiveTradingEngine:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         try:
+            # Check max concurrent positions limit (defense-in-depth, also checked in loop)
+            max_concurrent = self.risk_manager.get_max_concurrent_positions()
+            if self.live_position_tracker.position_count >= max_concurrent:
+                logger.warning(
+                    "Max concurrent positions limit reached (%d/%d). Rejecting entry for %s.",
+                    self.live_position_tracker.position_count,
+                    max_concurrent,
+                    symbol,
+                )
+                return
+
             if size > self.max_position_size:
                 logger.warning(
                     "Position size %.2f%% exceeds maximum %.2f%%. Capping at maximum.",
@@ -2235,7 +2302,59 @@ class LiveTradingEngine:
             position = result.position
             entry_fee = result.entry_fee
             entry_slippage_cost = result.slippage_cost
-            self.current_balance -= entry_fee
+
+            # Atomic balance update with full audit trail when trading session exists
+            if self.trading_session_id is not None:
+                try:
+                    with self.db_manager.atomic_balance_update(
+                        balance_change=-entry_fee,
+                        reason=f"entry_fee_{symbol}",
+                        updated_by="live_engine",
+                        correlation_id=position.order_id,
+                    ) as balance_result:
+                        self.current_balance = balance_result["new_balance"]
+                except (ValueError, Exception) as balance_err:
+                    logger.error(
+                        "Failed to update balance for entry fee %s: %s. Aborting entry.",
+                        symbol,
+                        balance_err,
+                    )
+                    # Critical: Entry executed but balance update failed
+                    # Attempt emergency close to maintain consistency
+                    if self.enable_live_trading and self.exchange_interface:
+                        try:
+                            close_side = (
+                                OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+                            )
+                            # Validate entry_price to prevent division by zero
+                            if position.entry_price <= 0:
+                                logger.error(
+                                    f"Cannot calculate emergency close quantity - invalid entry_price "
+                                    f"{position.entry_price} for {symbol}"
+                                )
+                            else:
+                                self.exchange_interface.place_market_order(
+                                    symbol=symbol,
+                                    side=close_side,
+                                    quantity=position.size
+                                    * result.position_value
+                                    / position.entry_price,
+                                )
+                            logger.warning(
+                                "Emergency close placed for %s due to balance update failure",
+                                symbol,
+                            )
+                        except Exception as close_err:
+                            logger.critical(
+                                "CRITICAL: Emergency close FAILED after balance update failure for %s. "
+                                "MANUAL INTERVENTION REQUIRED. Error: %s",
+                                symbol,
+                                close_err,
+                            )
+                    return
+            else:
+                # No trading session - update balance directly (testing/paper trading mode)
+                self.current_balance -= entry_fee
 
             position.metadata["entry_fee"] = entry_fee
             position.metadata["entry_slippage_cost"] = entry_slippage_cost
@@ -2261,12 +2380,26 @@ class LiveTradingEngine:
                 if self.enable_live_trading and self.exchange_interface:
                     try:
                         close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-                        self.exchange_interface.place_market_order(
-                            symbol=symbol,
-                            side=close_side,
-                            quantity=position.size * self.current_balance / position.entry_price,
-                        )
-                        logger.info("Emergency close order placed for orphaned position %s", symbol)
+
+                        # Validate entry_price before division to prevent crashes
+                        if position.entry_price <= 0:
+                            logger.critical(
+                                "CRITICAL: Cannot calculate emergency close quantity for %s - "
+                                "invalid entry_price %.8f. MANUAL INTERVENTION REQUIRED.",
+                                symbol,
+                                position.entry_price,
+                            )
+                        else:
+                            self.exchange_interface.place_market_order(
+                                symbol=symbol,
+                                side=close_side,
+                                quantity=position.size
+                                * self.current_balance
+                                / position.entry_price,
+                            )
+                            logger.info(
+                                "Emergency close order placed for orphaned position %s", symbol
+                            )
                     except Exception as close_err:
                         logger.critical(
                             "CRITICAL: Emergency close FAILED for %s. "
@@ -2274,8 +2407,26 @@ class LiveTradingEngine:
                             symbol,
                             close_err,
                         )
-                # Restore balance since position tracking failed
-                self.current_balance += entry_fee
+                # Restore balance since position tracking failed (atomic refund)
+                if self.trading_session_id is not None:
+                    try:
+                        with self.db_manager.atomic_balance_update(
+                            balance_change=entry_fee,
+                            reason=f"refund_entry_fee_{symbol}_tracking_failed",
+                            updated_by="live_engine",
+                            correlation_id=position.order_id,
+                        ) as balance_result:
+                            self.current_balance = balance_result["new_balance"]
+                    except Exception as refund_err:
+                        logger.critical(
+                            "CRITICAL: Failed to refund entry fee after position tracking failure for %s. "
+                            "Balance state inconsistent. Error: %s",
+                            symbol,
+                            refund_err,
+                        )
+                else:
+                    # No trading session - update balance directly
+                    self.current_balance += entry_fee
                 return
 
             # Update risk manager tracking for new position.
@@ -2363,7 +2514,11 @@ class LiveTradingEngine:
                         else float(self.current_balance)
                     )
                     position_value = size * entry_balance
-                    quantity = position_value / float(position.entry_price) if position.entry_price else 0.0
+                    quantity = (
+                        position_value / float(position.entry_price)
+                        if position.entry_price
+                        else 0.0
+                    )
 
                 for attempt in range(max_retries):
                     try:
@@ -2627,7 +2782,29 @@ class LiveTradingEngine:
                 return
 
             realized_pnl = exit_result.realized_pnl - exit_result.exit_fee
-            self.current_balance += realized_pnl
+
+            # Atomic balance update with full audit trail for realized P&L
+            if self.trading_session_id is not None:
+                try:
+                    with self.db_manager.atomic_balance_update(
+                        balance_change=realized_pnl,
+                        reason=f"realized_pnl_{position.symbol}_{reason}",
+                        updated_by="live_engine",
+                        correlation_id=position.order_id,
+                    ) as balance_result:
+                        self.current_balance = balance_result["new_balance"]
+                except Exception as balance_err:
+                    logger.error(
+                        "Failed to update balance for realized P&L %s: %s. Trade will be logged but balance inconsistent.",
+                        position.symbol,
+                        balance_err,
+                    )
+                    # Continue processing to log the trade even if balance update fails
+                    # This allows for manual reconciliation
+            else:
+                # No trading session - update balance directly (testing/paper trading mode)
+                self.current_balance += realized_pnl
+
             exit_price = float(exit_result.exit_price)
             exit_fee = exit_result.exit_fee
             exit_slippage_cost = exit_result.slippage_cost
@@ -2669,7 +2846,9 @@ class LiveTradingEngine:
                     entry_price=position.entry_price,
                     exit_price=exit_price,
                     size=float(
-                        position.current_size if position.current_size is not None else position.size
+                        position.current_size
+                        if position.current_size is not None
+                        else position.size
                     ),
                     pnl=net_trade_pnl,
                     strategy_name=self._strategy_name(),
@@ -2888,9 +3067,7 @@ class LiveTradingEngine:
             )
 
             # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(
-                float(pos.unrealized_pnl) for pos in positions_snapshot.values()
-            )
+            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in positions_snapshot.values())
             equity = float(self.current_balance) + unrealized_pnl
 
             # Calculate current drawdown percentage
@@ -3050,6 +3227,15 @@ class LiveTradingEngine:
 
     def _print_final_stats(self):
         """Print final trading statistics"""
+        # Validate initial_balance before division to prevent crashes
+        if self.initial_balance <= 0:
+            logger.error(
+                "Cannot calculate total return - invalid initial_balance: %.8f. "
+                "Skipping final statistics.",
+                self.initial_balance,
+            )
+            return
+
         total_return = ((self.current_balance - self.initial_balance) / self.initial_balance) * 100
         perf_metrics = self.performance_tracker.get_metrics()
         win_rate = perf_metrics.win_rate * 100
@@ -3323,11 +3509,35 @@ class LiveTradingEngine:
                         exit_position_notional
                     )
                     realized_pnl = pnl_pct * fraction * basis_balance - exit_fee
-                    self.current_balance += realized_pnl
-                    logger.info(
-                        f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
-                        f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
-                    )
+
+                    # Atomic balance update for offline stop-loss reconciliation
+                    if self.trading_session_id is not None:
+                        try:
+                            with self.db_manager.atomic_balance_update(
+                                balance_change=realized_pnl,
+                                reason=f"offline_stop_loss_{position.symbol}",
+                                updated_by="live_engine_reconciliation",
+                                correlation_id=position.order_id,
+                            ) as balance_result:
+                                self.current_balance = balance_result["new_balance"]
+                                logger.info(
+                                    f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
+                                    f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
+                                )
+                        except Exception as balance_err:
+                            logger.error(
+                                "Failed to update balance for offline stop-loss %s: %s. Skipping reconciliation.",
+                                position.symbol,
+                                balance_err,
+                            )
+                            continue
+                    else:
+                        # No trading session - update balance directly
+                        self.current_balance += realized_pnl
+                        logger.info(
+                            f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
+                            f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
+                        )
                     trade = Trade(
                         symbol=position.symbol,
                         side=position.side,
@@ -3389,11 +3599,31 @@ class LiveTradingEngine:
         if swap_data.get("close_positions", False):
             logger.info("🚪 Closing all positions before strategy swap")
             for position in list(self.live_position_tracker.positions.values()):
+                # Validate price before closing to prevent data corruption
+                try:
+                    current_price = self.data_provider.get_current_price(position.symbol)
+                except Exception as exc:
+                    logger.error(
+                        "Cannot close position %s during strategy change - price fetch failed: %s. "
+                        "Position will remain open.",
+                        position.symbol,
+                        exc,
+                    )
+                    continue
+                if current_price is None or current_price <= 0:
+                    logger.error(
+                        "Cannot close position %s during strategy change - invalid price %s. "
+                        "Position will remain open.",
+                        position.symbol,
+                        current_price,
+                    )
+                    continue
+
                 self._execute_exit(
                     position,
                     "Strategy change - close requested",
                     None,
-                    float(self.data_provider.get_current_price(position.symbol) or 0.0),
+                    float(current_price),
                     None,
                     None,
                     None,

@@ -96,9 +96,7 @@ class TestLocalProvider:
         with pytest.raises(ValueError, match="Job not found"):
             provider.get_job_status("unknown-job-id")
 
-    def test_cancel_job(
-        self, provider: LocalProvider, job_spec: TrainingJobSpec
-    ) -> None:
+    def test_cancel_job(self, provider: LocalProvider, job_spec: TrainingJobSpec) -> None:
         """Verify cancel_job marks job as stopped."""
         with patch.object(provider, "_run_local_training"):
             job_id = provider.submit_training_job(job_spec)

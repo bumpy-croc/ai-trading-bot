@@ -15,9 +15,15 @@ class DummyComponent:
     def get_feature_generators(self):  # pragma: no cover - interface compatibility
         return []
 
+    def generate_signal(self, *args, **kwargs):  # pragma: no cover - interface compatibility
+        return None
+
 
 class DummySizer(DummyComponent):
     def size_position(self, *args, **kwargs):  # pragma: no cover - interface compatibility
+        return 0.0
+
+    def calculate_size(self, *args, **kwargs):  # pragma: no cover - interface compatibility
         return 0.0
 
 

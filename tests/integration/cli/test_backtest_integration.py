@@ -5,7 +5,7 @@ import json
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
@@ -88,7 +88,7 @@ class TestBacktestIntegration:
             assert len(log_files) == 1
 
             # Verify log file contains expected data
-            with open(log_files[0], "r") as f:
+            with open(log_files[0]) as f:
                 log_data = json.load(f)
                 # Strategy is logged as class name (MlBasic) not identifier (ml_basic)
                 assert log_data["strategy"] == "MlBasic"
@@ -184,7 +184,7 @@ class TestBacktestIntegration:
             log_files = list(logs_dir.glob("*.json"))
             assert len(log_files) == 1
 
-            with open(log_files[0], "r") as f:
+            with open(log_files[0]) as f:
                 log_data = json.load(f)
                 assert start_date in log_data["start_date"]
                 assert end_date in log_data["end_date"]
@@ -230,7 +230,7 @@ class TestBacktestIntegration:
             logs_dir = temp_project_root / "logs" / "backtest"
             log_files = list(logs_dir.glob("*.json"))
 
-            with open(log_files[0], "r") as f:
+            with open(log_files[0]) as f:
                 log_data = json.load(f)
                 results = log_data["results"]
 

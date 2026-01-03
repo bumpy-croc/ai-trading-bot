@@ -11,6 +11,12 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_REGIME_CHECK_FREQUENCY,
+    DEFAULT_REGIME_LOOKBACK_BUFFER,
+    DEFAULT_REGIME_WARMUP_CANDLES,
+)
+
 if TYPE_CHECKING:
     from src.engines.live.regime_strategy_switcher import RegimeStrategySwitcher
     from src.engines.live.strategy_manager import StrategyManager
@@ -18,14 +24,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Buffer for regime lookback calculation
-REGIME_LOOKBACK_BUFFER = 5
-
-# Frequency of regime analysis (every N candles)
-REGIME_CHECK_FREQUENCY = 50
-
-# Minimum candles before first regime check
-REGIME_WARMUP_CANDLES = 60
+# Use centralized constants for regime detection
+REGIME_LOOKBACK_BUFFER = DEFAULT_REGIME_LOOKBACK_BUFFER
+REGIME_CHECK_FREQUENCY = DEFAULT_REGIME_CHECK_FREQUENCY
+REGIME_WARMUP_CANDLES = DEFAULT_REGIME_WARMUP_CANDLES
 
 
 def compute_regime_lookback(regime_switcher: Any) -> int:
@@ -248,13 +250,15 @@ class RegimeHandler:
             current_time: Current timestamp.
             regime_analysis: Result from regime analysis.
         """
-        self.regime_history.append({
-            "timestamp": current_time,
-            "candle_index": candle_index,
-            "regime": regime_analysis["consensus_regime"]["regime_label"],
-            "confidence": regime_analysis["consensus_regime"]["confidence"],
-            "agreement": regime_analysis["consensus_regime"]["agreement_score"],
-        })
+        self.regime_history.append(
+            {
+                "timestamp": current_time,
+                "candle_index": candle_index,
+                "regime": regime_analysis["consensus_regime"]["regime_label"],
+                "confidence": regime_analysis["consensus_regime"]["confidence"],
+                "agreement": regime_analysis["consensus_regime"]["agreement_score"],
+            }
+        )
 
     def _load_strategy(self, strategy_name: str) -> ComponentStrategy | None:
         """Load strategy by name.

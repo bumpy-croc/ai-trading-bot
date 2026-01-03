@@ -17,6 +17,24 @@ import pandas as pd
 from pandas import DataFrame
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.config.config_manager import get_config
+from src.config.constants import (
+    DEFAULT_CONFIDENCE_SCORE,
+    DEFAULT_DYNAMIC_RISK_ENABLED,
+    DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_EXECUTION_FILL_POLICY,
+    DEFAULT_FEE_RATE,
+    DEFAULT_INITIAL_BALANCE,
+    DEFAULT_MARKET_TIMEZONE,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_REGIME_LOOKBACK_BUFFER,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
+)
+from src.database.models import TradeSource
 from src.engines.backtest.execution import (
     EntryHandler,
     ExecutionEngine,
@@ -27,7 +45,6 @@ from src.engines.backtest.logging import EventLogger
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.backtest.regime import RegimeHandler
 from src.engines.backtest.risk import CorrelationHandler
-from src.engines.backtest.utils import compute_performance_metrics
 from src.engines.backtest.utils import extract_indicators as util_extract_indicators
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
@@ -36,23 +53,9 @@ from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
-    build_time_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
-from src.config.config_manager import get_config
-from src.config.constants import (
-    DEFAULT_DYNAMIC_RISK_ENABLED,
-    DEFAULT_EXECUTION_FILL_POLICY,
-    DEFAULT_END_OF_DAY_FLAT,
-    DEFAULT_INITIAL_BALANCE,
-    DEFAULT_MARKET_TIMEZONE,
-    DEFAULT_MAX_HOLDING_HOURS,
-    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
-    DEFAULT_TIME_RESTRICTIONS,
-    DEFAULT_WEEKEND_FLAT,
-)
-from src.database.models import TradeSource
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
@@ -75,8 +78,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Regime lookback buffer for data fetching
-REGIME_LOOKBACK_BUFFER = 5
+# Use centralized constant for regime lookback buffer
+REGIME_LOOKBACK_BUFFER = DEFAULT_REGIME_LOOKBACK_BUFFER
 
 
 def _compute_regime_lookback(regime_switcher: Any) -> int:
@@ -149,8 +152,8 @@ class Backtester:
         regime_config: Any | None = None,
         strategy_mapping: Any | None = None,
         switching_config: Any | None = None,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         use_next_bar_execution: bool = False,
         use_high_low_for_stops: bool = True,
         max_position_size: float | None = None,
@@ -218,11 +221,12 @@ class Backtester:
         # Risk management - handle backward compatibility for max_position_size
         if max_position_size is not None:
             from src.risk.risk_manager import RiskParameters
+
             if risk_parameters is None:
                 risk_parameters = RiskParameters(max_position_size=max_position_size)
             else:
                 # Update existing risk_parameters with max_position_size
-                if hasattr(risk_parameters, 'max_position_size'):
+                if hasattr(risk_parameters, "max_position_size"):
                     risk_parameters.max_position_size = max_position_size
 
         self.risk_parameters = risk_parameters
@@ -319,11 +323,14 @@ class Backtester:
             dynamic_risk_manager=self.dynamic_risk_manager,
             correlation_handler=self.correlation_handler,
             default_take_profit_pct=default_take_profit_pct,
+            max_position_size=self.risk_manager.params.max_position_size,
         )
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager
         partial_ops_manager = (
-            PartialOperationsManager(policy=partial_manager) if partial_manager is not None else None
+            PartialOperationsManager(policy=partial_manager)
+            if partial_manager is not None
+            else None
         )
 
         self.exit_handler = ExitHandler(
@@ -392,7 +399,7 @@ class Backtester:
     def max_position_size(self) -> float:
         """Get max position size (backward compatibility)."""
         if self.risk_parameters is None:
-            return 0.1  # Default 10% for backward compatibility
+            return DEFAULT_MAX_POSITION_SIZE  # Default for backward compatibility
         return self.risk_manager.params.max_position_size
 
     def _init_regime_switching(
@@ -826,9 +833,23 @@ class Backtester:
         return df
 
     def _calculate_hold_return(self, df: pd.DataFrame) -> float:
-        """Calculate buy-and-hold return for comparison."""
-        start_price = df["close"].iloc[0]
-        end_price = df["close"].iloc[-1]
+        """Calculate buy-and-hold return for comparison with robust validation."""
+        if df.empty or len(df) < 2:
+            logger.warning("Insufficient data for hold return calculation")
+            return 0.0
+
+        start_price = float(df["close"].iloc[0])
+        end_price = float(df["close"].iloc[-1])
+
+        # Guard against zero or invalid prices to prevent division by zero
+        if start_price <= 0 or end_price <= 0:
+            logger.warning(
+                "Invalid prices for hold return: start=%.8f, end=%.8f",
+                start_price,
+                end_price,
+            )
+            return 0.0
+
         return ((end_price / start_price) - 1) * 100
 
     def _run_main_loop(
@@ -864,7 +885,16 @@ class Backtester:
                     candle=candle,
                 )
                 if entry_result.executed:
-                    self.balance -= entry_result.entry_fee
+                    self._deduct_entry_fee(entry_result.entry_fee)
+
+                    # Final validation: ensure balance is still positive
+                    if self.balance < 0:
+                        logger.critical(
+                            "Balance went negative: %.2f after entry fee %.2f",
+                            self.balance,
+                            entry_result.entry_fee,
+                        )
+                        raise RuntimeError(f"Balance corruption: balance={self.balance:.2f}")
 
             # Get runtime decision
             runtime_decision = self._get_runtime_decision(df, i, current_price, current_time)
@@ -1017,7 +1047,7 @@ class Backtester:
                 timeframe=timeframe,
                 action_taken="closed_position" if exit_check.should_exit else "hold_position",
                 signal_strength=1.0 if exit_check.should_exit else 0.0,
-                confidence_score=indicators.get("prediction_confidence", 0.5),
+                confidence_score=indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE),
                 position_size=(
                     self.position_tracker.current_trade.size
                     if self.position_tracker.current_trade
@@ -1131,7 +1161,16 @@ class Backtester:
         )
 
         if entry_result.executed:
-            self.balance -= entry_result.entry_fee
+            self._deduct_entry_fee(entry_result.entry_fee)
+
+            # Final validation: ensure balance is still positive
+            if self.balance < 0:
+                logger.critical(
+                    "Balance went negative: %.2f after entry fee %.2f",
+                    self.balance,
+                    entry_result.entry_fee,
+                )
+                raise RuntimeError(f"Balance corruption: balance={self.balance:.2f}")
 
             # Log entry
             indicators = util_extract_indicators(df, index)
@@ -1191,7 +1230,11 @@ class Backtester:
             "early_stop_candle_index": None,
             "dynamic_risk_adjustments": [],
             "dynamic_risk_summary": None,
-            "execution_settings": self.execution_engine.get_execution_settings() if hasattr(self, 'execution_engine') else {},
+            "execution_settings": (
+                self.execution_engine.get_execution_settings()
+                if hasattr(self, "execution_engine")
+                else {}
+            ),
         }
 
         # Add regime switching results
@@ -1213,10 +1256,6 @@ class Backtester:
         hold_return: float,
     ) -> dict:
         """Build final backtest results dictionary."""
-        total_trades = len(self.trades)
-        winning_trades = sum(1 for t in self.trades if t.pnl > 0)
-        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-
         # Calculate prediction metrics
         pred_metrics = self._calculate_prediction_metrics(df)
 
@@ -1328,7 +1367,10 @@ class Backtester:
                     ).astype(
                         float
                     ) * (
-                        1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(0.5)
+                        1.0
+                        - df["prediction_confidence"]
+                        .reindex(pred_series.index)
+                        .fillna(DEFAULT_CONFIDENCE_SCORE)
                     )
                     actual_up = (actual_series.diff() > 0).astype(float)
                     brier = brier_score_direction(p_up.fillna(0.5), actual_up.fillna(0.0))
@@ -1415,6 +1457,48 @@ class Backtester:
         """
         if self.balance > self.peak_balance:
             self.peak_balance = self.balance
+
+    def _deduct_entry_fee(self, entry_fee: float) -> None:
+        """Deduct entry fee from balance with validation.
+
+        Validates that entry fee is non-negative, does not exceed balance,
+        and that balance remains non-negative after deduction. Raises
+        RuntimeError on validation failure to prevent balance corruption.
+
+        Args:
+            entry_fee: The fee to deduct from balance (must be >= 0).
+
+        Raises:
+            RuntimeError: If entry fee is negative, exceeds balance,
+                or balance goes negative after deduction.
+        """
+        if entry_fee < 0:
+            logger.critical(
+                "Entry fee %.8f is negative - fee calculation error!",
+                entry_fee,
+            )
+            raise RuntimeError(f"Invalid entry fee {entry_fee:.8f}: fees cannot be negative")
+
+        if entry_fee > self.balance:
+            logger.critical(
+                "Entry fee %.2f exceeds balance %.2f - position sizing error!",
+                entry_fee,
+                self.balance,
+            )
+            raise RuntimeError(
+                f"Critical error: Entry fee {entry_fee:.2f} "
+                f"exceeds balance {self.balance:.2f}. Aborting to prevent corruption."
+            )
+
+        self.balance -= entry_fee
+
+        if self.balance < 0:
+            logger.critical(
+                "Balance went negative: %.2f after entry fee %.2f",
+                self.balance,
+                entry_fee,
+            )
+            raise RuntimeError(f"Balance corruption: balance={self.balance:.2f}")
 
     def _apply_correlation_control(
         self,

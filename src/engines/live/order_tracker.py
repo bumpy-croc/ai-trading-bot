@@ -6,13 +6,15 @@ the trading engine when orders fill, partially fill, or get cancelled.
 """
 
 import logging
+import math
 import threading
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from src.config.constants import DEFAULT_ORDER_POLL_INTERVAL, DEFAULT_ORDER_TRACKER_TIMEOUT
 from src.data_providers.exchange_interface import ExchangeInterface, Order, OrderStatus
+from src.infrastructure.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ class OrderTracker:
     def __init__(
         self,
         exchange: ExchangeInterface,
-        poll_interval: int = 5,
+        poll_interval: int = DEFAULT_ORDER_POLL_INTERVAL,
         on_fill: Callable[[str, str, float, float], None] | None = None,
         on_partial_fill: Callable[[str, str, float, float], None] | None = None,
         on_cancel: Callable[[str, str], None] | None = None,
@@ -48,7 +50,7 @@ class OrderTracker:
 
         Args:
             exchange: Exchange interface for querying order status
-            poll_interval: Seconds between status checks (default 5)
+            poll_interval: Seconds between status checks
             on_fill: Callback(order_id, symbol, filled_qty, avg_price) for filled orders
             on_partial_fill: Callback(order_id, symbol, new_filled_qty, avg_price) for partial fills
             on_cancel: Callback(order_id, symbol) for cancelled/rejected orders
@@ -62,7 +64,11 @@ class OrderTracker:
         self._pending_orders: dict[str, TrackedOrder] = {}
         self._lock = threading.Lock()
         self._running = False
+        self._stop_event = threading.Event()  # For clean, interruptible shutdown
         self._thread: threading.Thread | None = None
+        # Circuit breaker to handle exchange API failures gracefully
+        # Prevents resource exhaustion from repeated failing API calls
+        self._circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
 
     def track_order(self, order_id: str, symbol: str) -> None:
         """
@@ -105,6 +111,7 @@ class OrderTracker:
             return
 
         self._running = True
+        self._stop_event.clear()  # Clear stop signal for new run
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
         logger.info(f"OrderTracker started (poll interval: {self.poll_interval}s)")
@@ -112,8 +119,19 @@ class OrderTracker:
     def stop(self) -> None:
         """Stop the background polling thread."""
         self._running = False
+        self._stop_event.set()  # Signal thread to wake up and exit
         if self._thread:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=DEFAULT_ORDER_TRACKER_TIMEOUT)
+            # Verify thread actually stopped after timeout
+            if self._thread.is_alive():
+                logger.critical(
+                    "OrderTracker thread did not stop after timeout - thread may be stuck! "
+                    "This indicates a blocking call in _poll_loop. "
+                    "Tracker will be marked as stopped but thread continues running."
+                )
+                # Mark as None anyway to prevent double-start, but thread is leaked
+                self._thread = None
+                return
             self._thread = None
         logger.info("OrderTracker stopped")
 
@@ -124,7 +142,9 @@ class OrderTracker:
                 self._check_orders()
             except Exception as e:
                 logger.error(f"Order tracking error: {e}")
-            time.sleep(self.poll_interval)
+            # Use Event.wait() instead of time.sleep() for interruptible sleep
+            # This allows stop() to immediately wake up the thread
+            self._stop_event.wait(self.poll_interval)
 
     def _check_orders(self) -> None:
         """Check status of all pending orders."""
@@ -134,7 +154,11 @@ class OrderTracker:
 
         for order_id, tracked in orders_to_check:
             try:
-                order = self.exchange.get_order(order_id, tracked.symbol)
+                # Use circuit breaker to prevent resource exhaustion during exchange outages
+                # If circuit is OPEN (too many failures), skip API call and log warning
+                order = self._circuit_breaker.call(
+                    self.exchange.get_order, order_id, tracked.symbol
+                )
                 if not order:
                     logger.warning(f"Could not fetch order {order_id} - may have expired")
                     continue
@@ -144,9 +168,7 @@ class OrderTracker:
             except Exception as e:
                 logger.warning(f"Failed to check order {order_id}: {e}")
 
-    def _process_order_status(
-        self, order_id: str, tracked: TrackedOrder, order: Order
-    ) -> None:
+    def _process_order_status(self, order_id: str, tracked: TrackedOrder, order: Order) -> None:
         """
         Process order status and trigger appropriate callbacks.
 
@@ -161,41 +183,120 @@ class OrderTracker:
 
         if status == OrderStatus.FILLED:
             # Validate avg_price for fills to prevent corrupt P&L calculations
-            if not isinstance(avg_price, int | float) or avg_price <= 0:
+            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            if (
+                not isinstance(avg_price, int | float)
+                or math.isnan(float(avg_price))
+                or avg_price <= 0
+            ):
                 logger.error(
-                    f"Invalid average price {avg_price} for filled order {order_id} - "
+                    f"Invalid average price {avg_price} (NaN or <= 0) for filled order {order_id} - "
                     "skipping fill callback to prevent corrupt P&L"
                 )
                 # Don't stop tracking - keep polling until we get valid price
                 return
+
+            # Validate filled_qty to prevent division by zero and corrupt position tracking
+            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            if (
+                not isinstance(filled_qty, int | float)
+                or math.isnan(float(filled_qty))
+                or filled_qty <= 0
+            ):
+                logger.error(
+                    f"Invalid filled quantity {filled_qty} (NaN or <= 0) for order {order_id} - "
+                    "skipping fill callback to prevent corrupt position tracking"
+                )
+                # Don't stop tracking - keep polling until we get valid quantity
+                return
+
             logger.info(
-                f"Order filled: {order_id} {tracked.symbol} "
-                f"qty={filled_qty} @ {avg_price}"
+                f"Order filled: {order_id} {tracked.symbol} " f"qty={filled_qty} @ {avg_price}"
             )
+            # Call callback outside any lock to prevent deadlock
             if self.on_fill:
-                self.on_fill(order_id, tracked.symbol, filled_qty, avg_price)
+                try:
+                    self.on_fill(order_id, tracked.symbol, filled_qty, avg_price)
+                except Exception as e:
+                    logger.error("Fill callback failed for %s: %s", order_id, e)
+            # Stop tracking even if callback fails
             self.stop_tracking(order_id)
 
         elif status == OrderStatus.PARTIALLY_FILLED:
             # Validate avg_price for partial fills to prevent corrupt P&L calculations
-            if not isinstance(avg_price, int | float) or avg_price <= 0:
+            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            if (
+                not isinstance(avg_price, int | float)
+                or math.isnan(float(avg_price))
+                or avg_price <= 0
+            ):
                 logger.error(
-                    f"Invalid average price {avg_price} for partial fill order {order_id} - "
+                    f"Invalid average price {avg_price} (NaN or <= 0) for partial fill order {order_id} - "
                     "skipping partial fill callback to prevent corrupt P&L"
                 )
                 return
-            new_filled = filled_qty - tracked.last_filled_qty
-            if new_filled > 0:
-                logger.info(
-                    f"Partial fill: {order_id} {tracked.symbol} "
-                    f"+{new_filled} @ {avg_price}"
+
+            # Validate filled_qty for partial fills to prevent corrupt position tracking
+            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            if (
+                not isinstance(filled_qty, int | float)
+                or math.isnan(float(filled_qty))
+                or filled_qty <= 0
+            ):
+                logger.error(
+                    f"Invalid filled quantity {filled_qty} (NaN or <= 0) for partial fill {order_id} - "
+                    "skipping partial fill callback"
                 )
-                if self.on_partial_fill:
+                return
+
+            new_filled = filled_qty - tracked.last_filled_qty
+
+            # CRITICAL: Always update last_filled_qty, even if delta is non-positive
+            # This prevents infinite loops if exchange reports decreasing fills
+            # Validate and prepare callback parameters inside lock, but call callback outside
+            should_call_callback = False
+            with self._lock:
+                if order_id not in self._pending_orders:
+                    logger.warning(
+                        "Order %s no longer tracked during partial fill processing", order_id
+                    )
+                    return
+
+                # Detect anomalous fill quantity changes
+                if new_filled < 0:
+                    logger.critical(
+                        "ANOMALY: Filled quantity decreased for order %s: %.8f -> %.8f (delta: %.8f). "
+                        "This indicates exchange API inconsistency. Updating tracker to prevent divergence.",
+                        order_id,
+                        tracked.last_filled_qty,
+                        filled_qty,
+                        new_filled,
+                    )
+                    # Update to prevent infinite loop, but don't trigger callback
+                    self._pending_orders[order_id].last_filled_qty = filled_qty
+                    return
+
+                if new_filled == 0:
+                    logger.debug("Partial fill status with no quantity change for %s", order_id)
+                    return
+
+                # Normal case: positive fill delta
+                logger.info(
+                    f"Partial fill: {order_id} {tracked.symbol} +{new_filled} @ {avg_price}"
+                )
+                should_call_callback = True
+
+            # Call callback OUTSIDE lock to prevent deadlock if callback accesses tracker
+            if should_call_callback and self.on_partial_fill:
+                try:
                     self.on_partial_fill(order_id, tracked.symbol, new_filled, avg_price)
-                # Update tracked quantity
-                with self._lock:
-                    if order_id in self._pending_orders:
-                        self._pending_orders[order_id].last_filled_qty = filled_qty
+                except Exception as e:
+                    logger.error("Partial fill callback failed for %s: %s", order_id, e)
+
+            # Update tracker state in separate lock scope to ensure it happens even if callback fails
+            with self._lock:
+                if order_id in self._pending_orders:
+                    self._pending_orders[order_id].last_filled_qty = filled_qty
 
         elif status in (
             OrderStatus.CANCELLED,
@@ -203,6 +304,11 @@ class OrderTracker:
             OrderStatus.EXPIRED,
         ):
             logger.warning(f"Order {status.value}: {order_id} {tracked.symbol}")
+            # Call callback outside any lock to prevent deadlock
             if self.on_cancel:
-                self.on_cancel(order_id, tracked.symbol)
+                try:
+                    self.on_cancel(order_id, tracked.symbol)
+                except Exception as e:
+                    logger.error("Cancel callback failed for %s: %s", order_id, e)
+            # Stop tracking even if callback fails to prevent memory leaks
             self.stop_tracking(order_id)

@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.engines.shared.cost_calculator import CostCalculator, CostResult
+from src.engines.shared.cost_calculator import CostCalculator
 
 
 class TestCostCalculatorBasics:

@@ -137,7 +137,13 @@ class CachedDataProvider(DataProvider):
                 return True
 
         # Check if cache is expired
-        file_time = datetime.fromtimestamp(os.path.getmtime(cache_path), tz=UTC)
+        try:
+            file_time = datetime.fromtimestamp(os.path.getmtime(cache_path), tz=UTC)
+        except OSError:
+            # File deleted or inaccessible between existence check and getmtime call (TOCTOU race)
+            # Return False to trigger re-fetch from provider
+            return False
+
         current_time = datetime.now(UTC)
         age_hours = (current_time - file_time).total_seconds() / 3600
 
@@ -173,7 +179,10 @@ class CachedDataProvider(DataProvider):
 
     def _save_to_cache(self, cache_path: str | None, data: pd.DataFrame):
         """
-        Save data to cache file.
+        Save data to cache file using atomic write operation.
+
+        Uses temp file + atomic rename to prevent cache corruption from
+        process crashes during write (OOM, SIGKILL, disk full).
 
         Args:
             cache_path: Path to the cache file (None if caching is disabled)
@@ -182,11 +191,39 @@ class CachedDataProvider(DataProvider):
         if cache_path is None:
             return
 
+        temp_path = None
         try:
-            data.to_parquet(cache_path, index=True)
+            # Write to temporary file first (atomic operation pattern)
+            temp_path = f"{cache_path}.tmp.{os.getpid()}"
+            data.to_parquet(temp_path, index=True)
+
+            # Verify temp file is readable before atomic rename
+            # This catches corrupted writes early, preventing corrupt cache
+            try:
+                pd.read_parquet(temp_path)
+            except Exception as verify_error:
+                logger.error(
+                    "Cache file verification failed after write - file corrupted: %s. "
+                    "Discarding corrupt cache to prevent infinite crash loop.",
+                    verify_error,
+                )
+                # Remove corrupt temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return  # Don't rename corrupt file
+
+            # Atomic rename (POSIX guarantee: old file replaced atomically)
+            os.replace(temp_path, cache_path)
+
             logger.debug(f"Saved data to cache: {cache_path}")
         except Exception as e:
             logger.warning(f"Failed to save cache to {cache_path}: {e}")
+            # Clean up temporary file on error
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass  # Best effort cleanup
 
     def _get_year_ranges(
         self, start: datetime, end: datetime
@@ -494,8 +531,15 @@ class CachedDataProvider(DataProvider):
         if not os.path.exists(self.cache_dir):
             return
 
+        # List cache directory with error handling
+        try:
+            filenames = os.listdir(self.cache_dir)
+        except OSError as e:
+            logger.warning(f"Cannot list cache directory {self.cache_dir}: {e}")
+            return
+
         cleared_count = 0
-        for filename in os.listdir(self.cache_dir):
+        for filename in filenames:
             if filename.endswith(CACHE_FILE_EXTENSION):
                 file_path = os.path.join(self.cache_dir, filename)
                 should_delete = True
@@ -548,8 +592,26 @@ class CachedDataProvider(DataProvider):
                 "years_cached": [],
             }
 
-        files = [f for f in os.listdir(self.cache_dir) if f.endswith(CACHE_FILE_EXTENSION)]
-        total_size = sum(os.path.getsize(os.path.join(self.cache_dir, f)) for f in files)
+        # List cache files with error handling
+        try:
+            files = [f for f in os.listdir(self.cache_dir) if f.endswith(CACHE_FILE_EXTENSION)]
+        except OSError as e:
+            logger.warning(f"Cannot list cache directory: {e}")
+            return {
+                "total_files": 0,
+                "total_size_mb": 0,
+                "oldest_file": None,
+                "newest_file": None,
+                "years_cached": [],
+            }
+
+        # Calculate total size with error handling for inaccessible files
+        total_size = 0
+        for f in files:
+            try:
+                total_size += os.path.getsize(os.path.join(self.cache_dir, f))
+            except OSError:
+                continue  # Skip inaccessible files
 
         if not files:
             return {
@@ -563,9 +625,23 @@ class CachedDataProvider(DataProvider):
         file_times = []
         for f in files:
             file_path = os.path.join(self.cache_dir, f)
-            file_times.append((f, os.path.getmtime(file_path)))
+            try:
+                mtime = os.path.getmtime(file_path)
+                file_times.append((f, mtime))
+            except OSError:
+                continue  # Skip inaccessible files
 
         file_times.sort(key=lambda x: x[1])
+
+        # Handle case where all files were inaccessible
+        if not file_times:
+            return {
+                "total_files": len(files),
+                "total_size_mb": round(total_size / (1024 * 1024), 2),
+                "oldest_file": None,
+                "newest_file": None,
+                "cache_strategy": "year-based",
+            }
 
         return {
             "total_files": len(files),

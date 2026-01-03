@@ -11,17 +11,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import (
+    DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_HEALTH_BASE_CHECK_INTERVAL,
+    DEFAULT_HEALTH_MAX_CHECK_INTERVAL,
+    DEFAULT_HEALTH_MIN_CHECK_INTERVAL,
+    DEFAULT_MAX_CONSECUTIVE_ERRORS,
+    DEFAULT_RECENT_TRADE_LOOKBACK_HOURS,
+)
+
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePosition
 
 logger = logging.getLogger(__name__)
-
-# Default configuration values
-DEFAULT_MAX_CONSECUTIVE_ERRORS = 10
-DEFAULT_BASE_CHECK_INTERVAL = 60  # seconds
-DEFAULT_MIN_CHECK_INTERVAL = 10  # seconds
-DEFAULT_MAX_CHECK_INTERVAL = 300  # seconds
-DEFAULT_ERROR_COOLDOWN = 30  # seconds
 
 
 @dataclass
@@ -50,9 +52,9 @@ class HealthMonitor:
     def __init__(
         self,
         max_consecutive_errors: int = DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        base_check_interval: int = DEFAULT_BASE_CHECK_INTERVAL,
-        min_check_interval: int = DEFAULT_MIN_CHECK_INTERVAL,
-        max_check_interval: int = DEFAULT_MAX_CHECK_INTERVAL,
+        base_check_interval: int = DEFAULT_HEALTH_BASE_CHECK_INTERVAL,
+        min_check_interval: int = DEFAULT_HEALTH_MIN_CHECK_INTERVAL,
+        max_check_interval: int = DEFAULT_HEALTH_MAX_CHECK_INTERVAL,
         error_cooldown: int = DEFAULT_ERROR_COOLDOWN,
     ) -> None:
         """Initialize health monitor.
@@ -93,11 +95,9 @@ class HealthMonitor:
         self.last_error_time = datetime.now(UTC)
 
         error_msg = str(error) if isinstance(error, Exception) else error
-        self.recent_errors.append(
-            f"{datetime.now(UTC).isoformat()}: {error_msg}"
-        )
+        self.recent_errors.append(f"{datetime.now(UTC).isoformat()}: {error_msg}")
         if len(self.recent_errors) > self._max_recent_errors:
-            self.recent_errors = self.recent_errors[-self._max_recent_errors:]
+            self.recent_errors = self.recent_errors[-self._max_recent_errors :]
 
         logger.error(
             "Error in trading loop (#%d): %s",
@@ -142,7 +142,9 @@ class HealthMonitor:
             now = datetime.now(UTC)
             for pos in positions.values():
                 entry_time = getattr(pos, "entry_time", None)
-                if entry_time and entry_time > now - timedelta(hours=1):
+                if entry_time and entry_time > now - timedelta(
+                    hours=DEFAULT_RECENT_TRADE_LOOKBACK_HOURS
+                ):
                     recent_trades += 1
 
         if recent_trades > 0:
@@ -223,14 +225,8 @@ class HealthMonitor:
             "min_check_interval": self.min_check_interval,
             "max_check_interval": self.max_check_interval,
             "last_success_time": (
-                self.last_success_time.isoformat()
-                if self.last_success_time
-                else None
+                self.last_success_time.isoformat() if self.last_success_time else None
             ),
-            "last_error_time": (
-                self.last_error_time.isoformat()
-                if self.last_error_time
-                else None
-            ),
+            "last_error_time": (self.last_error_time.isoformat() if self.last_error_time else None),
             "is_healthy": self.consecutive_errors == 0,
         }

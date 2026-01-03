@@ -1,15 +1,11 @@
 """Tests for atb dev commands (quality and clean)."""
 
 import argparse
-import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pytest
-
-from cli.commands.dev import _clean, _quality, _setup, _venv, _dashboard
+from cli.commands.dev import _clean, _dashboard, _quality, _setup, _venv
 
 
 class TestQualityCommand:
@@ -366,7 +362,9 @@ class TestDashboardCommand:
 
         # Act
         with (
-            patch("src.dashboards.monitoring.dashboard.MonitoringDashboard") as mock_dashboard_class,
+            patch(
+                "src.dashboards.monitoring.dashboard.MonitoringDashboard"
+            ) as mock_dashboard_class,
             patch("src.infrastructure.logging.config.configure_logging"),
             patch.dict("os.environ", {"PORT": "8090", "HOST": "0.0.0.0"}),
         ):
@@ -388,7 +386,9 @@ class TestDashboardCommand:
 
         # Act
         with (
-            patch("src.dashboards.monitoring.dashboard.MonitoringDashboard") as mock_dashboard_class,
+            patch(
+                "src.dashboards.monitoring.dashboard.MonitoringDashboard"
+            ) as mock_dashboard_class,
             patch("src.infrastructure.logging.config.configure_logging"),
             patch.dict("os.environ", {"PORT": "8090", "HOST": "0.0.0.0"}),
         ):

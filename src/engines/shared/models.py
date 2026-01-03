@@ -14,10 +14,12 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
+from src.config.constants import DEFAULT_EPSILON
+
 logger = logging.getLogger(__name__)
 
-# Epsilon for floating-point comparisons in financial calculations
-EPSILON = 1e-9
+# Use centralized epsilon for floating-point comparisons
+EPSILON = DEFAULT_EPSILON
 
 
 class PositionSide(Enum):
@@ -50,6 +52,48 @@ class PositionSide(Enum):
             return cls.SHORT
         else:
             raise ValueError(f"Invalid position side: {value}")
+
+
+def normalize_side(side: Any) -> str:
+    """Normalize a position side to a lowercase string.
+
+    Note:
+        This function is maintained for backward compatibility.
+        Prefer using `to_side_string` from `src.engines.shared.side_utils`
+        for new code, as it provides additional features like BUY/SELL mapping.
+
+    Handles PositionSide enum, string, or any object with a .value attribute.
+    This utility ensures consistent side representation across engines.
+
+    Args:
+        side: Position side as PositionSide enum, string, or object with value.
+
+    Returns:
+        Lowercase string 'long' or 'short'.
+
+    Examples:
+        >>> normalize_side(PositionSide.LONG)
+        'long'
+        >>> normalize_side("SHORT")
+        'short'
+        >>> normalize_side("long")
+        'long'
+    """
+    # Handle None case (not supported by to_side_string)
+    if side is None:
+        return "long"
+
+    # Delegate to the canonical implementation
+    # Late import to avoid circular dependency
+    from src.engines.shared.side_utils import to_side_string
+
+    try:
+        return to_side_string(side)
+    except ValueError:
+        # Fallback for edge cases: convert to string
+        if hasattr(side, "value"):
+            return str(side.value).lower()
+        return str(side).lower()
 
 
 class OrderStatus(Enum):
@@ -130,6 +174,7 @@ class BasePosition:
         Raises:
             ValueError: If size exceeds 1.0 or is negative.
         """
+
         def _coerce_float(
             value: float | None, field_name: str, *, required: bool = False
         ) -> float | None:
@@ -157,12 +202,8 @@ class BasePosition:
         self.entry_balance = _coerce_float(self.entry_balance, "entry_balance")
         self.original_size = _coerce_float(self.original_size, "original_size")
         self.current_size = _coerce_float(self.current_size, "current_size")
-        self.trailing_stop_price = _coerce_float(
-            self.trailing_stop_price, "trailing_stop_price"
-        )
-        self.unrealized_pnl = _coerce_float(
-            self.unrealized_pnl, "unrealized_pnl"
-        ) or 0.0
+        self.trailing_stop_price = _coerce_float(self.trailing_stop_price, "trailing_stop_price")
+        self.unrealized_pnl = _coerce_float(self.unrealized_pnl, "unrealized_pnl") or 0.0
         self.unrealized_pnl_percent = (
             _coerce_float(self.unrealized_pnl_percent, "unrealized_pnl_percent") or 0.0
         )
@@ -325,6 +366,7 @@ Trade = BaseTrade
 __all__ = [
     "PositionSide",
     "OrderStatus",
+    "normalize_side",
     "BasePosition",
     "BaseTrade",
     "Position",

@@ -10,10 +10,16 @@ Encapsulates the mechanics of trade execution including:
 from __future__ import annotations
 
 import logging
+import math
 import time
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import (
+    DEFAULT_FEE_RATE,
+    DEFAULT_SLIPPAGE_RATE,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderStatus, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
@@ -74,8 +80,8 @@ class LiveExecutionEngine:
 
     def __init__(
         self,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         enable_live_trading: bool = False,
         exchange_interface: Any = None,
     ) -> None:
@@ -270,6 +276,29 @@ class LiveExecutionEngine:
             EntryExecutionResult with execution details.
         """
         try:
+            # Validate inputs before any calculations to prevent corrupt state
+            if base_price <= 0 or not math.isfinite(base_price):
+                logger.error(
+                    "Invalid base_price %.8f for %s - refusing entry to prevent corrupt state",
+                    base_price,
+                    symbol,
+                )
+                return EntryExecutionResult(success=False, error=f"Invalid price: {base_price}")
+
+            if balance <= 0 or not math.isfinite(balance):
+                logger.error("Invalid balance %.8f for %s - refusing entry", balance, symbol)
+                return EntryExecutionResult(success=False, error=f"Invalid balance: {balance}")
+
+            if size_fraction <= 0 or size_fraction > 1 or not math.isfinite(size_fraction):
+                logger.error(
+                    "Invalid size_fraction %.8f for %s - must be in (0, 1]",
+                    size_fraction,
+                    symbol,
+                )
+                return EntryExecutionResult(
+                    success=False, error=f"Invalid size_fraction: {size_fraction}"
+                )
+
             # Calculate position value and costs using shared cost calculator
             position_value = size_fraction * balance
             side_str = self._position_side_to_str(side)
@@ -284,7 +313,19 @@ class LiveExecutionEngine:
             executed_price = cost_result.executed_price
             entry_fee = cost_result.fee
             slippage_cost = cost_result.slippage_cost
-            quantity = position_value / executed_price if executed_price > 0 else 0.0
+
+            # Validate executed_price before division
+            if executed_price <= 0 or not math.isfinite(executed_price):
+                logger.error(
+                    "Cost calculator returned invalid executed_price %.8f for %s - refusing entry",
+                    executed_price,
+                    symbol,
+                )
+                return EntryExecutionResult(
+                    success=False, error=f"Invalid executed price: {executed_price}"
+                )
+
+            quantity = position_value / executed_price
 
             # Execute real order if enabled
             if self.enable_live_trading:
@@ -376,6 +417,23 @@ class LiveExecutionEngine:
             ExitExecutionResult with execution details.
         """
         try:
+            # Validate inputs before any calculations to prevent corrupt state
+            if base_price <= 0 or not math.isfinite(base_price):
+                logger.error(
+                    "Invalid base_price %.8f for exit on %s - refusing exit to prevent corrupt state",
+                    base_price,
+                    symbol,
+                )
+                return ExitExecutionResult(success=False, error=f"Invalid exit price: {base_price}")
+
+            if position_notional <= 0 or not math.isfinite(position_notional):
+                logger.error(
+                    "Invalid position_notional %.8f for exit on %s", position_notional, symbol
+                )
+                return ExitExecutionResult(
+                    success=False, error=f"Invalid position notional: {position_notional}"
+                )
+
             # Calculate costs using shared cost calculator
             side_str = self._position_side_to_str(side)
 
@@ -393,7 +451,8 @@ class LiveExecutionEngine:
 
             # Execute real order if enabled
             if self.enable_live_trading:
-                quantity = position_notional / base_price if base_price > 0 else 0.0
+                # Already validated base_price > 0 above
+                quantity = position_notional / base_price
                 close_order_id = self._close_live_order(
                     symbol,
                     side,
@@ -466,7 +525,10 @@ class LiveExecutionEngine:
         value: float,
         price: float,
     ) -> str | None:
-        """Execute a real market order via exchange.
+        """Execute a real market order via exchange with idempotency.
+
+        Generates a client order ID based on timestamp and order details to prevent
+        duplicate orders on network failures or retries.
 
         Args:
             symbol: Trading symbol.
@@ -477,22 +539,57 @@ class LiveExecutionEngine:
         Returns:
             Order ID if successful, None otherwise.
         """
+        # CRITICAL VALIDATION: Never allow live trading mode without exchange interface
         if self.exchange_interface is None:
-            logger.warning("No exchange interface configured - using paper order ID")
-            return f"real_{int(time.time() * 1000)}"
+            if self.enable_live_trading:
+                # Fail loudly - this is a configuration error that must be fixed
+                logger.critical(
+                    "CRITICAL: Live trading enabled but no exchange interface configured! "
+                    "This would create fake orders. Aborting order placement."
+                )
+                return None
+            else:
+                # Paper trading mode - this is expected
+                logger.debug("Paper trading mode - generating simulated order ID")
+                return f"paper_{int(time.time() * 1000)}"
 
         try:
+            # Defensive validation - should already be validated by caller but check anyway
+            if price <= 0 or not math.isfinite(price):
+                logger.error(
+                    "Invalid price %.8f for live order on %s - refusing to place order",
+                    price,
+                    symbol,
+                )
+                return None
+
+            if value <= 0 or not math.isfinite(value):
+                logger.error(
+                    "Invalid value %.8f for live order on %s - refusing to place order",
+                    value,
+                    symbol,
+                )
+                return None
+
             order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
-            quantity = value / price if price > 0 else 0.0
+            quantity = value / price
             quantity = self._normalize_quantity(symbol, quantity, value)
             if quantity <= 0:
                 return None
+
+            # Generate deterministic client order ID for idempotency
+            # Format: atb_SYMBOL_SIDE_TIMESTAMP_UUID
+            # UUID prevents collision if multiple orders placed within same millisecond
+            timestamp_ms = int(time.time() * 1000)
+            unique_suffix = uuid.uuid4().hex[:8]
+            client_order_id = f"atb_{symbol}_{side.value}_{timestamp_ms}_{unique_suffix}"
 
             return self.exchange_interface.place_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
+                client_order_id=client_order_id,
             )
         except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order execution failed: %s", e)
@@ -531,11 +628,22 @@ class LiveExecutionEngine:
             if quantity <= 0:
                 return None
 
+            # Generate deterministic client order ID for exit order idempotency
+            # Use UUID to prevent collision, timestamp for ordering
+            timestamp_ms = int(time.time() * 1000)
+            close_side_str = "SELL" if side == PositionSide.LONG else "BUY"
+            unique_suffix = uuid.uuid4().hex[:8]
+            client_order_id = f"atb_close_{symbol}_{close_side_str}_{timestamp_ms}_{unique_suffix}"
+            if order_id:
+                # Include original order ID for traceability
+                client_order_id = f"{client_order_id}_{order_id[:8]}"
+
             close_order_id = self.exchange_interface.place_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
+                client_order_id=client_order_id,
             )
             if close_order_id:
                 logger.info(
@@ -553,37 +661,70 @@ class LiveExecutionEngine:
             return None
 
     def _normalize_quantity(self, symbol: str, quantity: float, value: float) -> float:
-        """Normalize quantity based on exchange symbol info."""
+        """Normalize quantity based on exchange symbol info with robust error handling."""
         if quantity <= 0 or self.exchange_interface is None:
             return 0.0
 
-        symbol_info = self.exchange_interface.get_symbol_info(symbol)
-        if not symbol_info:
+        try:
+            symbol_info = self.exchange_interface.get_symbol_info(symbol)
+        except (ConnectionError, TimeoutError) as e:
+            logger.error("Failed to fetch symbol info for %s: %s - using raw quantity", symbol, e)
             return quantity
 
-        step_size = symbol_info.get("step_size", 0.00001)
-        if step_size > 0:
-            quantity = round(quantity / step_size) * step_size
-
-        min_qty = symbol_info.get("min_qty", 0)
-        if quantity < min_qty:
-            logger.error(
-                "Calculated quantity %.8f below minimum %.8f for %s",
-                quantity,
-                min_qty,
+        if not symbol_info or not isinstance(symbol_info, dict):
+            logger.warning(
+                "Missing or invalid symbol info for %s (type=%s) - using raw quantity",
                 symbol,
+                type(symbol_info).__name__ if symbol_info else "None",
             )
-            return 0.0
+            return quantity
 
-        min_notional = symbol_info.get("min_notional", 0)
-        if value < min_notional:
-            logger.error(
-                "Order value %.2f below minimum notional %.2f for %s",
-                value,
-                min_notional,
-                symbol,
+        # Validate and apply step_size
+        step_size = symbol_info.get("step_size")
+        if step_size is None or not isinstance(step_size, (int, float)):
+            logger.warning("Invalid step_size for %s - using raw quantity", symbol)
+            # Continue without step_size normalization
+        elif step_size <= 0 or not math.isfinite(step_size):
+            logger.warning(
+                "Invalid step_size value %.8f for %s - using raw quantity", step_size, symbol
             )
-            return 0.0
+        else:
+            # Apply step_size rounding
+            try:
+                normalized = round(quantity / step_size) * step_size
+                if not math.isfinite(normalized):
+                    logger.error(
+                        "Normalization produced non-finite value for %s - keeping original",
+                        symbol,
+                    )
+                else:
+                    quantity = normalized
+            except (ArithmeticError, ValueError) as e:
+                logger.error("Step_size normalization failed for %s: %s", symbol, e)
+
+        # Validate min_qty constraint
+        min_qty = symbol_info.get("min_qty")
+        if min_qty and isinstance(min_qty, (int, float)) and min_qty > 0:
+            if quantity < min_qty:
+                logger.error(
+                    "Calculated quantity %.8f below minimum %.8f for %s",
+                    quantity,
+                    min_qty,
+                    symbol,
+                )
+                return 0.0
+
+        # Validate min_notional constraint
+        min_notional = symbol_info.get("min_notional")
+        if min_notional and isinstance(min_notional, (int, float)) and min_notional > 0:
+            if value < min_notional:
+                logger.error(
+                    "Order value %.2f below minimum notional %.2f for %s",
+                    value,
+                    min_notional,
+                    symbol,
+                )
+                return 0.0
 
         return quantity
 

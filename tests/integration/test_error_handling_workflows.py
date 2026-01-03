@@ -5,19 +5,16 @@ Tests how the component system handles various error conditions
 and recovers gracefully during trading operations.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from datetime import datetime
-from unittest.mock import Mock, patch
 
-from src.strategies.components.strategy import Strategy, TradingDecision
-from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
+import pandas as pd
+import pytest
+
 from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
-from src.strategies.components.risk_manager import FixedRiskManager, Position, MarketData
 from src.strategies.components.position_sizer import ConfidenceWeightedSizer
 from src.strategies.components.regime_context import EnhancedRegimeDetector
-
+from src.strategies.components.risk_manager import FixedRiskManager
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.strategies.components.strategy import Strategy
 
 pytestmark = pytest.mark.integration
 
@@ -332,7 +329,6 @@ class TestErrorHandlingWorkflows:
     def test_concurrent_access_safety(self):
         """Test thread safety and concurrent access handling"""
         import threading
-        import time
 
         strategy = Strategy(
             name="concurrent_test",

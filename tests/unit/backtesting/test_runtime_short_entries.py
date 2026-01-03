@@ -2,8 +2,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from src.engines.backtest.engine import Backtester
 from src.data_providers.data_provider import DataProvider
+from src.engines.backtest.engine import Backtester
 from src.strategies.components.position_sizer import PositionSizer
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.risk_manager import MarketData, Position, RiskManager
@@ -163,6 +163,7 @@ def test_runtime_short_entry_honors_metadata():
     assert backtester.trades
     # side is now a PositionSide enum after model consolidation
     from src.engines.shared.models import PositionSide
+
     assert backtester.trades[0].side == PositionSide.SHORT
 
 

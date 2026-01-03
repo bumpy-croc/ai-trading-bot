@@ -270,13 +270,14 @@ class TestDatabaseLogging:
     def test_trading_decision_logged_to_database(self, mock_strategy, mock_data_provider):
         """Test that TradingDecision objects are properly logged to database"""
         try:
-            from src.strategies.components import (
-                Strategy,
-                MLBasicSignalGenerator,
-                FixedRiskManager,
-                ConfidenceWeightedSizer,
-            )
             import pandas as pd
+
+            from src.strategies.components import (
+                ConfidenceWeightedSizer,
+                FixedRiskManager,
+                MLBasicSignalGenerator,
+                Strategy,
+            )
         except ImportError:
             pytest.skip("Component strategy not available")
 
@@ -370,14 +371,15 @@ class TestDatabaseLogging:
     def test_signal_direction_logged_correctly(self, mock_strategy, mock_data_provider):
         """Test that signal direction from TradingDecision is logged correctly"""
         try:
-            from src.strategies.components import (
-                Strategy,
-                MLBasicSignalGenerator,
-                FixedRiskManager,
-                ConfidenceWeightedSizer,
-                SignalDirection,
-            )
             import pandas as pd
+
+            from src.strategies.components import (
+                ConfidenceWeightedSizer,
+                FixedRiskManager,
+                MLBasicSignalGenerator,
+                SignalDirection,
+                Strategy,
+            )
         except ImportError:
             pytest.skip("Component strategy not available")
 
@@ -445,13 +447,14 @@ class TestDatabaseLogging:
     def test_regime_context_logged_to_database(self, mock_strategy, mock_data_provider):
         """Test that regime context from TradingDecision is logged correctly"""
         try:
-            from src.strategies.components import (
-                Strategy,
-                MLBasicSignalGenerator,
-                FixedRiskManager,
-                ConfidenceWeightedSizer,
-            )
             import pandas as pd
+
+            from src.strategies.components import (
+                ConfidenceWeightedSizer,
+                FixedRiskManager,
+                MLBasicSignalGenerator,
+                Strategy,
+            )
         except ImportError:
             pytest.skip("Component strategy not available")
 
@@ -532,13 +535,14 @@ class TestDatabaseLogging:
     def test_risk_metrics_logged_to_database(self, mock_strategy, mock_data_provider):
         """Test that risk metrics from TradingDecision are logged correctly"""
         try:
-            from src.strategies.components import (
-                Strategy,
-                MLBasicSignalGenerator,
-                FixedRiskManager,
-                ConfidenceWeightedSizer,
-            )
             import pandas as pd
+
+            from src.strategies.components import (
+                ConfidenceWeightedSizer,
+                FixedRiskManager,
+                MLBasicSignalGenerator,
+                Strategy,
+            )
         except ImportError:
             pytest.skip("Component strategy not available")
 

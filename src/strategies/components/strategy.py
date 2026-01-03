@@ -110,7 +110,13 @@ class Strategy:
             regime_detector: Optional regime detection component
             enable_logging: Whether to enable detailed logging
             max_history: Maximum number of decisions to keep in history
+
+        Raises:
+            ValueError: If required components are None or invalid
         """
+        # Validate required components before initialization
+        self._validate_components(name, signal_generator, risk_manager, position_sizer)
+
         self.name = name
         self.signal_generator = signal_generator
         self.risk_manager = risk_manager
@@ -153,6 +159,64 @@ class Strategy:
             f"RiskMgr={risk_manager.name}, "
             f"PosSizer={position_sizer.name}"
         )
+
+    @staticmethod
+    def _validate_components(
+        name: str,
+        signal_generator: SignalGenerator | None,
+        risk_manager: RiskManager | None,
+        position_sizer: PositionSizer | None,
+    ) -> None:
+        """Validate that required components are properly initialized.
+
+        Args:
+            name: Strategy name for error messages.
+            signal_generator: Signal generator component to validate.
+            risk_manager: Risk manager component to validate.
+            position_sizer: Position sizer component to validate.
+
+        Raises:
+            ValueError: If any required component is None or invalid.
+        """
+        if not name or not isinstance(name, str):
+            raise ValueError(f"Strategy name must be a non-empty string, got: {name}")
+
+        if signal_generator is None:
+            raise ValueError(
+                f"Strategy '{name}': signal_generator cannot be None. "
+                "Provide a valid SignalGenerator instance."
+            )
+
+        if risk_manager is None:
+            raise ValueError(
+                f"Strategy '{name}': risk_manager cannot be None. "
+                "Provide a valid RiskManager instance."
+            )
+
+        if position_sizer is None:
+            raise ValueError(
+                f"Strategy '{name}': position_sizer cannot be None. "
+                "Provide a valid PositionSizer instance."
+            )
+
+        # Validate components have required interface (duck typing check)
+        if not hasattr(signal_generator, "generate_signal"):
+            raise ValueError(
+                f"Strategy '{name}': signal_generator missing 'generate_signal' method. "
+                f"Got type: {type(signal_generator).__name__}"
+            )
+
+        if not hasattr(risk_manager, "calculate_position_size"):
+            raise ValueError(
+                f"Strategy '{name}': risk_manager missing 'calculate_position_size' method. "
+                f"Got type: {type(risk_manager).__name__}"
+            )
+
+        if not hasattr(position_sizer, "calculate_size"):
+            raise ValueError(
+                f"Strategy '{name}': position_sizer missing 'calculate_size' method. "
+                f"Got type: {type(position_sizer).__name__}"
+            )
 
     @property
     def warmup_period(self) -> int:

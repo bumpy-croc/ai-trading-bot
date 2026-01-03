@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -142,15 +142,21 @@ class DynamicRiskHandler:
                     adjustments.primary_reason,
                 )
 
+                # Safely access adjustment_details to prevent AttributeError
+                adjustment_details = getattr(adjustments, "adjustment_details", None)
+                current_drawdown = (
+                    adjustment_details.get("current_drawdown")
+                    if adjustment_details and isinstance(adjustment_details, dict)
+                    else None
+                )
+
                 adjustment = DynamicRiskAdjustment(
                     timestamp=current_time,
                     position_size_factor=adjustments.position_size_factor,
                     stop_loss_tightening=adjustments.stop_loss_tightening,
                     daily_risk_factor=adjustments.daily_risk_factor,
                     primary_reason=adjustments.primary_reason,
-                    current_drawdown=adjustments.adjustment_details.get(
-                        "current_drawdown"
-                    ),
+                    current_drawdown=current_drawdown,
                     balance=balance,
                     peak_balance=peak_balance,
                     original_size=original_size,

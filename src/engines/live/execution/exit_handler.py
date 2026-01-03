@@ -7,13 +7,17 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_MAX_FILLED_PRICE_DEVIATION,
+    DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
+    DEFAULT_MAX_POSITION_SIZE,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import (
@@ -32,7 +36,12 @@ from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
 )
+from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
+from src.engines.shared.validation import (
+    convert_exit_fraction_to_current,
+    is_position_fully_closed,
+)
 
 if TYPE_CHECKING:
     from src.position_management.time_exits import TimeExitPolicy
@@ -42,11 +51,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Maximum partial exits to process per cycle (defense-in-depth against malformed policies).
-# Ten caps worst-case overhead while still supporting typical multi-target exit ladders.
-MAX_PARTIAL_EXITS_PER_CYCLE = 10
-# Maximum acceptable filled-price deviation from entry price before logging a critical warning.
-MAX_FILLED_PRICE_DEVIATION = 0.5
+# Use centralized constant for partial exits limit (defense-in-depth against malformed policies)
+MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 ZERO_VALUE = 0.0
 
 
@@ -95,8 +101,8 @@ class LiveExitHandler:
         time_exit_policy: TimeExitPolicy | None = None,
         partial_manager: PartialOperationsManager | None = None,
         use_high_low_for_stops: bool = True,
-        max_position_size: float = 0.1,
-        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
+        max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize exit handler.
 
@@ -124,6 +130,7 @@ class LiveExitHandler:
         self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
+        self._strategy_exit_checker = StrategyExitChecker()
 
     def _build_snapshot(
         self,
@@ -232,6 +239,14 @@ class LiveExitHandler:
     ) -> LiveExitCheck:
         """Check all exit conditions for a position.
 
+        Evaluation order mirrors backtest engine for parity:
+        1. Strategy signal (exit signal evaluation)
+        2. Stop loss
+        3. Take profit
+        4. Time limit
+
+        Exit reason priority remains: stop loss, take profit, time, strategy.
+
         Args:
             position: Position to check.
             current_price: Current market price.
@@ -243,49 +258,58 @@ class LiveExitHandler:
         Returns:
             LiveExitCheck with exit decision and reason.
         """
-        # Check strategy exit signal first
+        # Check strategy exit signal first (parity with backtest evaluation order)
+        exit_signal = False
+        signal_reason = ""
         if runtime_decision is not None and component_strategy is not None:
-            should_exit, reason = self._check_strategy_exit(
+            exit_signal, signal_reason = self._check_strategy_exit(
                 position, current_price, runtime_decision, component_strategy
             )
-            if should_exit:
-                return LiveExitCheck(
-                    should_exit=True,
-                    exit_reason=reason,
-                    limit_price=None,
-                )
 
-        # Check stop loss (priority over take profit)
+        hit_stop_loss = False
         if position.stop_loss is not None:
-            if self._check_stop_loss(position, current_price, candle_high, candle_low):
-                return LiveExitCheck(
-                    should_exit=True,
-                    exit_reason="Stop loss",
-                    limit_price=position.stop_loss,
-                )
+            hit_stop_loss = self._check_stop_loss(position, current_price, candle_high, candle_low)
 
-        # Check take profit
+        hit_take_profit = False
         if position.take_profit is not None:
-            if self._check_take_profit(position, current_price, candle_high, candle_low):
-                return LiveExitCheck(
-                    should_exit=True,
-                    exit_reason="Take profit",
-                    limit_price=position.take_profit,
-                )
+            hit_take_profit = self._check_take_profit(
+                position, current_price, candle_high, candle_low
+            )
 
-        # Check time-based exit
+        hit_time_exit = False
+        time_reason = ""
         if self.time_exit_policy is not None:
             hit_time_exit, time_reason = self.time_exit_policy.check_time_exit_conditions(
                 position.entry_time, datetime.now(UTC)
             )
-            if hit_time_exit:
-                return LiveExitCheck(
-                    should_exit=True,
-                    exit_reason=time_reason or "Time exit",
-                    limit_price=None,
-                )
 
-        return LiveExitCheck(should_exit=False)
+        should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_exit
+        if not should_exit:
+            return LiveExitCheck(should_exit=False)
+
+        if hit_stop_loss:
+            return LiveExitCheck(
+                should_exit=True,
+                exit_reason="Stop loss",
+                limit_price=position.stop_loss,
+            )
+        if hit_take_profit:
+            return LiveExitCheck(
+                should_exit=True,
+                exit_reason="Take profit",
+                limit_price=position.take_profit,
+            )
+        if hit_time_exit:
+            return LiveExitCheck(
+                should_exit=True,
+                exit_reason=time_reason or "Time exit",
+                limit_price=None,
+            )
+        return LiveExitCheck(
+            should_exit=True,
+            exit_reason=signal_reason,
+            limit_price=None,
+        )
 
     def execute_exit(
         self,
@@ -468,18 +492,24 @@ class LiveExitHandler:
                 error="Invalid filled price",
             )
 
+        # Validate filled price against entry price for flash crash detection
         if position.entry_price > 0:
             price_change = abs(filled_price - position.entry_price) / position.entry_price
             if price_change > self.max_filled_price_deviation:
                 logger.critical(
-                    "Suspicious fill price for %s: entry=%.2f filled=%.2f (%.1f%% move)",
+                    "Suspicious fill price for %s exceeds deviation threshold. "
+                    "Entry=%.2f Filled=%.2f (%.1f%% move, max allowed: %.1f%%). "
+                    "Recording exit to preserve live state. MANUAL REVIEW REQUIRED.",
                     position.symbol,
                     position.entry_price,
                     filled_price,
                     price_change * 100,
+                    self.max_filled_price_deviation * 100,
                 )
 
         # Filled exits use the exchange-reported price without simulated slippage.
+        # Slippage already occurred on the exchange - we don't apply additional slippage
+        # to avoid double-counting. This matches backtest behavior for parity.
         executed_price = filled_price
 
         position_notional = self._calculate_position_notional(
@@ -489,6 +519,7 @@ class LiveExitHandler:
         )
 
         exit_fee = self.execution_engine.calculate_exit_fee(position_notional)
+        # No slippage cost reported for filled orders - slippage already occurred
         slippage_cost = ZERO_VALUE
 
         close_result = self.position_tracker.close_position(
@@ -532,6 +563,8 @@ class LiveExitHandler:
     ) -> tuple[bool, str]:
         """Check if strategy signals an exit.
 
+        Uses shared StrategyExitChecker for consistent logic across engines.
+
         Args:
             position: Position to check.
             current_price: Current market price.
@@ -541,47 +574,14 @@ class LiveExitHandler:
         Returns:
             Tuple of (should_exit, reason).
         """
-        from src.strategies.components import MarketData as ComponentMarketData
-        from src.strategies.components import Position as ComponentPosition
-        from src.strategies.components import SignalDirection
+        result = self._strategy_exit_checker.check_exit(
+            position=position,
+            current_price=current_price,
+            runtime_decision=runtime_decision,
+            component_strategy=component_strategy,
+        )
 
-        # Check for signal reversal
-        if (
-            position.side == PositionSide.LONG
-            and runtime_decision.signal.direction == SignalDirection.SELL
-        ):
-            return True, "Signal reversal"
-        if (
-            position.side == PositionSide.SHORT
-            and runtime_decision.signal.direction == SignalDirection.BUY
-        ):
-            return True, "Signal reversal"
-
-        # Check component strategy exit
-        try:
-            component_position = ComponentPosition(
-                symbol=position.symbol,
-                side=position.side.value,
-                size=float(position.size),
-                entry_price=float(position.entry_price),
-                current_price=float(current_price),
-                entry_time=position.entry_time,
-            )
-            market_data = ComponentMarketData(
-                symbol=position.symbol,
-                price=float(current_price),
-                volume=0.0,
-            )
-            regime = runtime_decision.regime if runtime_decision else None
-
-            if component_strategy.should_exit_position(
-                component_position, market_data, regime
-            ):
-                return True, "Strategy signal"
-        except (AttributeError, ValueError, TypeError) as e:
-            logger.debug("Component exit check failed: %s", e)
-
-        return False, "Hold"
+        return result.should_exit, result.exit_reason
 
     def _check_stop_loss(
         self,
@@ -607,11 +607,7 @@ class LiveExitHandler:
             return False
 
         # Use high/low for more realistic detection
-        if (
-            self.use_high_low_for_stops
-            and candle_low is not None
-            and candle_high is not None
-        ):
+        if self.use_high_low_for_stops and candle_low is not None and candle_high is not None:
             if position.side == PositionSide.LONG:
                 # For long SL, check if candle_low breached the stop
                 return candle_low <= position.stop_loss
@@ -647,11 +643,7 @@ class LiveExitHandler:
             return False
 
         # Use high/low for more realistic detection
-        if (
-            self.use_high_low_for_stops
-            and candle_high is not None
-            and candle_low is not None
-        ):
+        if self.use_high_low_for_stops and candle_high is not None and candle_low is not None:
             if position.side == PositionSide.LONG:
                 return candle_high >= position.take_profit
             else:
@@ -745,11 +737,11 @@ class LiveExitHandler:
         Uses unified PartialOperationsManager for consistent logic.
 
         Threading Safety:
-        - Uses list() to create defensive snapshot of positions for iteration
-        - This prevents modification-during-iteration errors from concurrent callbacks
-        - Individual position_tracker methods should be atomic at Python level (GIL)
-        - Note: position_tracker does not have internal locking; assumes main-loop-only access
-        - If OrderTracker callbacks modify positions concurrently, consider adding lock
+        - position_tracker.positions property returns a copy with internal locking
+        - All position_tracker methods are protected by _positions_lock
+        - Safe for concurrent access from OrderTracker callbacks and main trading loop
+        - list() creates snapshot of the copy for iteration safety
+        - No additional locking needed at this level
 
         Args:
             df: DataFrame with market data.
@@ -776,24 +768,24 @@ class LiveExitHandler:
 
                     # Convert from fraction of original to fraction of current
                     exit_size_of_original = exit_result.exit_fraction
-                    current_size_fraction = position.current_size / position.original_size
-
-                    # Protect against division by zero (position fully closed)
-                    if abs(current_size_fraction) < EPSILON:
+                    if is_position_fully_closed(
+                        position.current_size,
+                        position.original_size,
+                        epsilon=EPSILON,
+                    ):
                         logger.debug(
                             "Position %s fully closed, skipping further partial exits",
                             position.symbol,
                         )
                         break
 
-                    exit_size_of_current = exit_size_of_original / current_size_fraction
-
-                    # Validate bounds and check for NaN/Infinity
-                    if (
-                        exit_size_of_current <= 0
-                        or exit_size_of_current > 1.0
-                        or not math.isfinite(exit_size_of_current)
-                    ):
+                    exit_size_of_current = convert_exit_fraction_to_current(
+                        exit_fraction_of_original=exit_size_of_original,
+                        current_size=position.current_size,
+                        original_size=position.original_size,
+                        epsilon=EPSILON,
+                    )
+                    if exit_size_of_current is None:
                         break
 
                     self._execute_partial_exit(
@@ -875,7 +867,7 @@ class LiveExitHandler:
                     logger.debug("Risk manager partial-exit accounting failed: %s", e)
 
             # If fully closed by partials, close position
-            if result.new_current_size <= 1e-9:
+            if result.new_current_size <= EPSILON:
                 self.execute_exit(
                     position=position,
                     exit_reason=f"Partial exits complete @ level {target_level}",

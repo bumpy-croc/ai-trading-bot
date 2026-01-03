@@ -13,8 +13,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.config.constants import (
+    DEFAULT_FEE_RATE,
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
+    DEFAULT_SLIPPAGE_RATE,
 )
 from src.engines.shared.models import (
     BasePosition,
@@ -30,6 +32,10 @@ if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
+
+# Epsilon for floating-point comparisons in financial calculations
+# Use this to handle accumulated rounding errors in partial operations
+EPSILON = 1e-9
 
 
 @dataclass
@@ -82,8 +88,8 @@ class LivePositionTracker:
         db_manager: DatabaseManager | None = None,
         mfe_mae_precision: int = DEFAULT_MFE_MAE_PRECISION_DECIMALS,
         mfe_mae_update_frequency: float = DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> None:
         """Initialize position tracker.
 
@@ -191,11 +197,19 @@ class LivePositionTracker:
             try:
                 quantity = position.quantity
                 if quantity is None:
-                    quantity = (
-                        (position.size * (position.entry_balance or 0)) / position.entry_price
-                        if position.entry_price > 0
-                        else 0.0
-                    )
+                    # Validate entry_balance is available to calculate quantity
+                    if position.entry_balance is None or position.entry_balance <= 0:
+                        logger.error(
+                            "Cannot calculate quantity for position %s: missing or invalid entry_balance (%.2f). "
+                            "Position record will be incomplete.",
+                            order_id,
+                            position.entry_balance or 0.0,
+                        )
+                        quantity = 0.0  # Record with zero quantity as fallback
+                    elif position.entry_price > 0:
+                        quantity = (position.size * position.entry_balance) / position.entry_price
+                    else:
+                        quantity = 0.0
                 db_id = self.db_manager.log_position(
                     symbol=position.symbol,
                     side=position.side.value,
@@ -442,8 +456,8 @@ class LivePositionTracker:
         target_level: int,
         fraction_of_original: float,
         basis_balance: float,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> PartialExitResult | None:
         """Reduce position size via partial exit.
 
@@ -479,8 +493,8 @@ class LivePositionTracker:
             if position.current_size is None:
                 position.current_size = position.size
 
-            # Validate delta_fraction does not exceed current size
-            if delta_fraction > position.current_size:
+            # Validate delta_fraction does not exceed current size (with epsilon tolerance)
+            if delta_fraction > position.current_size + EPSILON:
                 logger.error(
                     "Partial exit %.4f exceeds current size %.4f for %s, clamping to current size",
                     delta_fraction,
@@ -498,8 +512,10 @@ class LivePositionTracker:
                 else basis_balance
             )
 
-            # Update position state
+            # Update position state - clamp to exactly zero if very close (accumulated rounding)
             position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
+            if abs(position.current_size) < EPSILON:
+                position.current_size = 0.0
             position.partial_exits_taken += 1
             position.last_partial_exit_price = price
 
@@ -543,9 +559,7 @@ class LivePositionTracker:
                     order_id,
                     e,
                 )
-                raise RuntimeError(
-                    f"Partial-exit persistence failed for order {order_id}"
-                ) from e
+                raise RuntimeError(f"Partial-exit persistence failed for order {order_id}") from e
 
         return PartialExitResult(
             realized_pnl=partial_exit_result.realized_pnl,

@@ -1,18 +1,15 @@
 """Tests for atb models commands."""
 
 import argparse
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pytest
-
 from cli.commands.models import (
-    _handle_list,
     _handle_compare,
-    _handle_validate,
+    _handle_list,
     _handle_promote,
+    _handle_validate,
 )
 
 

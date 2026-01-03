@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
+from src.config.constants import DEFAULT_BASE_RISK_PER_TRADE, DEFAULT_STOP_LOSS_PCT
+
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
     from .runtime import FeatureGeneratorSpec
@@ -311,7 +313,11 @@ class FixedRiskManager(RiskManager):
     Uses fixed percentage risk per trade and simple stop loss rules
     """
 
-    def __init__(self, risk_per_trade: float = 0.02, stop_loss_pct: float = 0.05):
+    def __init__(
+        self,
+        risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE,
+        stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT,
+    ):
         """
         Initialize fixed risk manager
 
@@ -459,10 +465,10 @@ class VolatilityRiskManager(RiskManager):
 
     def __init__(
         self,
-        base_risk: float = 0.02,
+        base_risk: float = DEFAULT_BASE_RISK_PER_TRADE,
         atr_multiplier: float = 2.0,
         min_risk: float = 0.005,
-        max_risk: float = 0.05,
+        max_risk: float = DEFAULT_STOP_LOSS_PCT,
     ):
         """
         Initialize volatility risk manager
@@ -660,7 +666,11 @@ class RegimeAdaptiveRiskManager(RiskManager):
     with different risk profiles for different market conditions.
     """
 
-    def __init__(self, base_risk: float = 0.02, regime_multipliers: dict[str, float] | None = None):
+    def __init__(
+        self,
+        base_risk: float = DEFAULT_BASE_RISK_PER_TRADE,
+        regime_multipliers: dict[str, float] | None = None,
+    ):
         """
         Initialize regime-adaptive risk manager
 

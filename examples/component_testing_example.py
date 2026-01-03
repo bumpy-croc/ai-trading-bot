@@ -6,17 +6,14 @@ This example demonstrates how to use the comprehensive component testing framewo
 to test and analyze strategy components in isolation and combination.
 """
 
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
 
 # Import the testing framework
-from src.strategies.components.testing import (
-    ComponentPerformanceTester,
-    RegimeTester,
-    PerformanceAttributionAnalyzer,
-    TestDatasetGenerator,
+from src.strategies.components.position_sizer import (
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+    KellySizer,
 )
+from src.strategies.components.risk_manager import FixedRiskManager, VolatilityRiskManager
 
 # Import components to test
 from src.strategies.components.signal_generator import (
@@ -24,11 +21,11 @@ from src.strategies.components.signal_generator import (
     RandomSignalGenerator,
     WeightedVotingSignalGenerator,
 )
-from src.strategies.components.risk_manager import FixedRiskManager, VolatilityRiskManager
-from src.strategies.components.position_sizer import (
-    FixedFractionSizer,
-    ConfidenceWeightedSizer,
-    KellySizer,
+from src.strategies.components.testing import (
+    ComponentPerformanceTester,
+    PerformanceAttributionAnalyzer,
+    RegimeTester,
+    TestDatasetGenerator,
 )
 
 
@@ -137,7 +134,7 @@ def main():
     replacement_impact = attribution_analyzer.analyze_component_replacement_impact(
         None, "signal", RandomSignalGenerator(seed=42)  # Would need actual strategy object
     )
-    print(f"   Component replacement analysis completed")
+    print("   Component replacement analysis completed")
 
     # 7. Edge Case Testing
     print("\n7. Edge Case Testing...")

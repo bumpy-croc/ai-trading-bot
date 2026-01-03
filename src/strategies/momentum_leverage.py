@@ -19,6 +19,7 @@ Research-backed approach:
 Key insight: Beat buy-and-hold by being MORE aggressive, not more conservative.
 """
 
+from src.config.constants import DEFAULT_STRATEGY_MIN_CONFIDENCE_AGGRESSIVE
 from src.strategies.components import (
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
@@ -78,7 +79,7 @@ def create_momentum_leverage_strategy(
     effective_base_fraction = min(base_fraction, 0.5)
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=effective_base_fraction,  # 50% base allocation cap for safety
-        min_confidence=0.2,  # Lower threshold for aggressive trading
+        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE_AGGRESSIVE,  # Lower threshold for aggressive trading
     )
 
     # Create regime detector

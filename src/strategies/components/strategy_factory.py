@@ -8,6 +8,13 @@ pre-configured strategies and custom strategy compositions.
 from copy import deepcopy
 from typing import Any
 
+from src.config.constants import (
+    DEFAULT_STRATEGY_BASE_FRACTION,
+    DEFAULT_STRATEGY_BASE_FRACTION_SMALL,
+    DEFAULT_STRATEGY_MIN_CONFIDENCE,
+    DEFAULT_STRATEGY_MIN_CONFIDENCE_CONSERVATIVE,
+)
+
 from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
 from .momentum_signal_generator import MomentumSignalGenerator
 from .position_sizer import (
@@ -79,7 +86,10 @@ class StrategyFactory:
         """
         signal_generator = RandomSignalGenerator(buy_prob=0.3, sell_prob=0.3, seed=42)
         risk_manager = VolatilityRiskManager(base_risk=0.02, atr_multiplier=2.0)
-        position_sizer = ConfidenceWeightedSizer(base_fraction=0.04, min_confidence=0.4)
+        position_sizer = ConfidenceWeightedSizer(
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION_SMALL,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE_CONSERVATIVE,
+        )
 
         return Strategy(
             name=name,
@@ -173,7 +183,9 @@ class StrategyFactory:
         # Combine with weighted voting
         generators = {gen1: 0.4, gen2: 0.4, gen3: 0.2}
         signal_generator = WeightedVotingSignalGenerator(
-            generators=generators, min_confidence=0.3, consensus_threshold=0.6
+            generators=generators,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
+            consensus_threshold=0.6,
         )
 
         risk_manager = VolatilityRiskManager(base_risk=0.02, atr_multiplier=1.8)
@@ -254,8 +266,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.20,
-            min_confidence=0.3,
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -294,8 +306,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.20,
-            min_confidence=0.3,
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -339,8 +351,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.20,
-            min_confidence=0.3,
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -378,8 +390,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.50,
-            min_confidence=0.3,
+            base_fraction=0.50,  # Aggressive strategy - intentionally higher
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -420,7 +432,7 @@ class StrategyFactory:
 
         signal_generator = WeightedVotingSignalGenerator(
             generators=generators,
-            min_confidence=0.3,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
             consensus_threshold=0.6,
         )
 
@@ -432,8 +444,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.50,
-            min_confidence=0.3,
+            base_fraction=0.50,  # Aggressive strategy - intentionally higher
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(

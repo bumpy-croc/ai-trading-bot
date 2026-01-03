@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -20,7 +20,7 @@ def test_open_position_persists_executed_quantity(mock_db_manager) -> None:
         side=PositionSide.LONG,
         size=1.0,
         entry_price=100.0,
-        entry_time=datetime.now(timezone.utc),
+        entry_time=datetime.now(UTC),
         entry_balance=999.0,
         quantity=10.0,
         order_id="order-123",
@@ -34,7 +34,7 @@ def test_open_position_persists_executed_quantity(mock_db_manager) -> None:
 
 @pytest.mark.fast
 def test_recover_positions_restores_quantity(mock_db_manager) -> None:
-    entry_time = datetime.now(timezone.utc)
+    entry_time = datetime.now(UTC)
     db_pos = SimpleNamespace(
         id=123,
         symbol="BTCUSDT",

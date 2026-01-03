@@ -1,6 +1,6 @@
 """Tests for the PredictionResult dataclass."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.prediction.engine import PredictionResult
 
@@ -10,7 +10,7 @@ class TestPredictionResult:
 
     def test_prediction_result_creation(self):
         """Test creating a PredictionResult"""
-        timestamp = datetime.now(timezone.utc)
+        timestamp = datetime.now(UTC)
         result = PredictionResult(
             price=100.5,
             confidence=0.85,
@@ -39,7 +39,7 @@ class TestPredictionResult:
             confidence=0.0,
             direction=0,
             model_name="test_model",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             inference_time=0.1,
             features_used=0,
             error="Test error message",

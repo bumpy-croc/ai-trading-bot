@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -54,7 +54,7 @@ class TestExitFeeCalculation:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="test-order-123",
         )
@@ -103,7 +103,7 @@ class TestExitFeeCalculation:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="test-order-456",
         )
@@ -157,7 +157,7 @@ class TestTakeProfitLimitPricing:
             side=PositionSide.LONG,
             size=0.5,
             entry_price=90.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="tp-order-long",
         )
@@ -201,7 +201,7 @@ class TestTakeProfitLimitPricing:
             side=PositionSide.SHORT,
             size=0.5,
             entry_price=100.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="tp-order-short",
         )
@@ -249,7 +249,7 @@ class TestStopLossGapPricing:
             side=PositionSide.LONG,
             size=0.5,
             entry_price=120.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="sl-gap-long",
             stop_loss=100.0,
@@ -296,7 +296,7 @@ class TestStopLossGapPricing:
             side=PositionSide.SHORT,
             size=0.5,
             entry_price=100.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             entry_balance=1000.0,
             order_id="sl-gap-short",
             stop_loss=110.0,
@@ -322,6 +322,49 @@ class TestStopLossGapPricing:
         assert apply_slippage is False
 
 
+class TestExitConditionOrdering:
+    """Test exit condition evaluation order matches backtest."""
+
+    def test_strategy_exit_checked_before_risk_exits(self) -> None:
+        """Strategy exit evaluation runs even when stop loss triggers."""
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            entry_price=100.0,
+            entry_time=datetime.now(UTC),
+            order_id="order-exit-1",
+            stop_loss=95.0,
+        )
+
+        runtime_decision = MagicMock()
+        component_strategy = MagicMock()
+
+        with patch.object(
+            exit_handler, "_check_strategy_exit", return_value=(True, "Strategy signal")
+        ) as mock_check:
+            result = exit_handler.check_exit_conditions(
+                position=position,
+                current_price=94.0,
+                candle_high=101.0,
+                candle_low=94.0,
+                runtime_decision=runtime_decision,
+                component_strategy=component_strategy,
+            )
+
+        mock_check.assert_called_once()
+        assert result.should_exit is True
+        assert "Stop loss" in result.exit_reason
+
+
 class TestPositionTrackerThreadSafety:
     """Test thread safety of LivePositionTracker."""
 
@@ -342,7 +385,7 @@ class TestPositionTrackerThreadSafety:
                         side=PositionSide.LONG,
                         size=0.1,
                         entry_price=50000.0 + i,
-                        entry_time=datetime.now(timezone.utc),
+                        entry_time=datetime.now(UTC),
                         order_id=f"open-{i}",
                     )
                     tracker.open_position(position)
@@ -399,7 +442,7 @@ class TestPositionTrackerThreadSafety:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=datetime.now(UTC),
             order_id="test-1",
         )
         tracker.open_position(position)
@@ -472,18 +515,19 @@ class TestDailyPnLTracking:
 
 
 class TestEntryBalanceBasis:
-    """Test entry balance basis uses pre-fee balance."""
+    """Test entry balance basis uses post-fee balance for parity with backtest."""
 
-    def test_entry_balance_does_not_net_entry_fee(self) -> None:
-        """Entry balance should remain the pre-fee balance."""
+    def test_entry_balance_subtracts_entry_fee(self) -> None:
+        """Entry balance should be balance minus entry fee for backtest parity."""
         # Arrange
         execution_engine = MagicMock()
+        entry_fee = 1.23
         execution_engine.execute_entry.return_value = MagicMock(
             success=True,
             executed_price=100.0,
             order_id="entry-1",
             quantity=0.1,
-            entry_fee=1.23,
+            entry_fee=entry_fee,
             slippage_cost=0.0,
         )
 
@@ -506,10 +550,10 @@ class TestEntryBalanceBasis:
             balance=balance,
         )
 
-        # Assert
+        # Assert: entry_balance = balance - entry_fee (matches backtest behavior)
         assert result.executed is True
         assert result.position is not None
-        assert result.position.entry_balance == balance
+        assert result.position.entry_balance == balance - entry_fee
 
 
 

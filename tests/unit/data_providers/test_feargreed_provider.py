@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -10,8 +10,8 @@ pytestmark = pytest.mark.unit
 
 def sample_api_payload():
     # Two days of data
-    now = int(datetime(2024, 6, 2, tzinfo=timezone.utc).timestamp())
-    prev = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
+    now = int(datetime(2024, 6, 2, tzinfo=UTC).timestamp())
+    prev = int(datetime(2024, 6, 1, tzinfo=UTC).timestamp())
     return {
         "name": "Fear and Greed Index",
         "data": [
@@ -54,8 +54,8 @@ def test_feargreed_historical_and_resample(mock_get):
     mock_get.return_value = resp
 
     prov = FearGreedProvider()
-    start = datetime(2024, 6, 1, tzinfo=timezone.utc)
-    end = datetime(2024, 6, 3, tzinfo=timezone.utc)
+    start = datetime(2024, 6, 1, tzinfo=UTC)
+    end = datetime(2024, 6, 3, tzinfo=UTC)
     df = prov.get_historical_sentiment("BTCUSDT", start, end)
     assert not df.empty
     # Resample daily via aggregate

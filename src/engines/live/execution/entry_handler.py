@@ -11,9 +11,22 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import pandas as pd
+
+from src.config.constants import (
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_MAX_STOP_LOSS_PCT,
+    DEFAULT_MIN_STOP_LOSS_PCT,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
+from src.engines.shared.entry_utils import (
+    extract_entry_plan,
+    resolve_stop_loss_take_profit_pct,
+)
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
@@ -22,9 +35,12 @@ from src.engines.shared.execution.snapshot_builder import (
     build_snapshot_from_price,
     map_entry_order_side_from_enum,
 )
+from src.engines.shared.side_utils import to_side_string
 from src.strategies.components import SignalDirection
+from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
+    from src.engines.shared.correlation_handler import CorrelationHandler
     from src.position_management.dynamic_risk import DynamicRiskManager
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
@@ -79,7 +95,8 @@ class LiveEntryHandler:
         risk_manager: RiskManager | None = None,
         component_strategy: ComponentStrategy | None = None,
         dynamic_risk_manager: DynamicRiskManager | None = None,
-        max_position_size: float = 0.1,
+        correlation_handler: CorrelationHandler | None = None,
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         default_take_profit_pct: float | None = None,
         max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
@@ -91,6 +108,7 @@ class LiveEntryHandler:
             risk_manager: Risk manager for position sizing.
             component_strategy: Component strategy for signals.
             dynamic_risk_manager: Manager for dynamic risk adjustments.
+            correlation_handler: Handler for correlation-based position sizing.
             max_position_size: Maximum position size as fraction.
             default_take_profit_pct: Default take profit percentage.
             max_filled_price_deviation: Threshold for logging suspicious fill prices.
@@ -100,6 +118,7 @@ class LiveEntryHandler:
         self.risk_manager = risk_manager
         self.component_strategy = component_strategy
         self.dynamic_risk_manager = dynamic_risk_manager
+        self.correlation_handler = correlation_handler
         self.max_position_size = max_position_size
         self.default_take_profit_pct = default_take_profit_pct
         self.max_filled_price_deviation = max_filled_price_deviation
@@ -136,6 +155,10 @@ class LiveEntryHandler:
         balance: float,
         current_price: float,
         current_time: datetime,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        df: pd.DataFrame | None = None,
+        index: int | None = None,
         peak_balance: float | None = None,
         trading_session_id: int | None = None,
     ) -> LiveEntrySignal:
@@ -146,6 +169,10 @@ class LiveEntryHandler:
             balance: Current account balance.
             current_price: Current market price.
             current_time: Current timestamp.
+            symbol: Trading symbol (for correlation control).
+            timeframe: Trading timeframe (for correlation control).
+            df: Market data DataFrame (for correlation control).
+            index: Current candle index (for correlation control).
             peak_balance: Peak balance for drawdown calculations.
             trading_session_id: Session ID for logging.
 
@@ -153,6 +180,15 @@ class LiveEntryHandler:
             LiveEntrySignal with entry decision and parameters.
         """
         reasons = []
+
+        # Validate critical inputs before processing
+        if balance <= 0:
+            reasons.append(f"invalid_balance_{balance:.2f}")
+            return LiveEntrySignal(should_enter=False, reasons=reasons)
+
+        if current_price <= 0:
+            reasons.append(f"invalid_price_{current_price:.8f}")
+            return LiveEntrySignal(should_enter=False, reasons=reasons)
 
         # Extract entry side and size from decision
         entry_side, size_fraction = self._extract_entry_plan(runtime_decision, balance)
@@ -166,7 +202,26 @@ class LiveEntryHandler:
             )
 
         # Enforce maximum position size to prevent over-concentration risk
+        # (matches backtest engine behavior for backtest-live parity)
         size_fraction = min(size_fraction, self.max_position_size)
+
+        # Apply correlation control if available
+        # (matches backtest engine behavior for backtest-live parity)
+        if (
+            self.correlation_handler is not None
+            and size_fraction > 0
+            and symbol is not None
+            and timeframe is not None
+            and df is not None
+            and index is not None
+        ):
+            size_fraction = self.correlation_handler.apply_correlation_control(
+                symbol=symbol,
+                timeframe=timeframe,
+                df=df,
+                index=index,
+                candidate_fraction=size_fraction,
+            )
 
         # Reduce position size during drawdown or adverse market conditions
         if self.dynamic_risk_manager is not None and size_fraction > 0:
@@ -294,7 +349,9 @@ class LiveEntryHandler:
                     price_change * 100,
                 )
 
-        entry_balance = balance
+        # CRITICAL: Subtract entry fee from entry_balance to match backtest behavior.
+        # This ensures P&L calculations use the same basis in both engines.
+        entry_balance = balance - exec_result.entry_fee
         # Create position with actual quantity from execution
         position = LivePosition(
             symbol=symbol,
@@ -333,37 +390,10 @@ class LiveEntryHandler:
         Returns:
             Tuple of (side, size_fraction).
         """
-        if decision is None:
+        plan = extract_entry_plan(decision, balance)
+        if plan is None:
             return None, 0.0
-
-        if balance <= 0:
-            return None, 0.0
-
-        # Check signal direction
-        if (
-            decision.signal.direction == SignalDirection.HOLD
-            or decision.position_size <= 0
-        ):
-            return None, 0.0
-
-        # Check for short entry authorization
-        metadata = getattr(decision, "metadata", {}) or {}
-        if decision.signal.direction == SignalDirection.SELL and not bool(
-            metadata.get("enter_short")
-        ):
-            return None, 0.0
-
-        # Determine side
-        if decision.signal.direction == SignalDirection.BUY:
-            side = PositionSide.LONG
-        else:
-            side = PositionSide.SHORT
-
-        # Calculate size fraction
-        size_fraction = float(decision.position_size) / float(balance)
-        size_fraction = max(0.0, min(1.0, size_fraction))
-
-        return side, size_fraction
+        return plan.side, plan.size_fraction
 
     def _calculate_sl_tp(
         self,
@@ -381,34 +411,35 @@ class LiveEntryHandler:
         Returns:
             Tuple of (stop_loss_price, take_profit_price).
         """
-        # Default percentages
-        default_sl_pct = 0.05  # 5%
-        tp_pct = self.default_take_profit_pct or 0.04  # 4%
+        # Validate current_price to prevent division by zero
+        if current_price <= 0:
+            logger.warning(
+                "Invalid current_price (%.8f) in _calculate_sl_tp - cannot compute SL/TP",
+                current_price,
+            )
+            return None, None
 
-        # Try to get stop loss from strategy
-        sl_pct = default_sl_pct
-        if self.component_strategy is not None:
-            try:
-                signal = runtime_decision.signal if runtime_decision else None
-                regime = runtime_decision.regime if runtime_decision else None
-                stop_loss_price = self.component_strategy.get_stop_loss_price(
-                    current_price, signal, regime
-                )
-                if entry_side == PositionSide.LONG:
-                    sl_pct = (current_price - stop_loss_price) / current_price
-                else:
-                    sl_pct = (stop_loss_price - current_price) / current_price
-                sl_pct = max(0.01, min(0.20, sl_pct))  # Clamp 1-20%
-            except (AttributeError, ValueError, TypeError):
-                pass
+        default_tp_pct = self.default_take_profit_pct or DEFAULT_TAKE_PROFIT_PCT
+        sl_pct, tp_pct = resolve_stop_loss_take_profit_pct(
+            current_price=current_price,
+            entry_side=entry_side,
+            runtime_decision=runtime_decision,
+            component_strategy=self.component_strategy,
+            default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
+            default_take_profit_pct=default_tp_pct,
+            min_stop_loss_pct=DEFAULT_MIN_STOP_LOSS_PCT,
+            max_stop_loss_pct=DEFAULT_MAX_STOP_LOSS_PCT,
+            use_strategy_take_profit=False,
+        )
 
-        # Calculate prices
-        if entry_side == PositionSide.LONG:
-            stop_loss = current_price * (1 - sl_pct)
-            take_profit = current_price * (1 + tp_pct)
-        else:
-            stop_loss = current_price * (1 + sl_pct)
-            take_profit = current_price * (1 - tp_pct)
+        # Calculate prices using shared calculator
+        side_str = to_side_string(entry_side)
+        stop_loss, take_profit = PriceTargetCalculator.sl_tp(
+            entry_price=current_price,
+            sl_pct=sl_pct,
+            tp_pct=tp_pct,
+            side=side_str,
+        )
 
         return stop_loss, take_profit
 

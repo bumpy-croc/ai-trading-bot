@@ -7,13 +7,16 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_BASIS_BALANCE_FALLBACK,
+    DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import Trade
 from src.engines.shared.execution.execution_model import ExecutionModel
@@ -28,7 +31,13 @@ from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
 )
+from src.engines.shared.side_utils import to_side_string
+from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
+from src.engines.shared.validation import (
+    convert_exit_fraction_to_current,
+    is_position_fully_closed,
+)
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -39,8 +48,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Maximum partial exits to process per candle (defense-in-depth against malformed policies)
-MAX_PARTIAL_EXITS_PER_CYCLE = 10
+# Use centralized constant for partial exits limit (defense-in-depth against malformed policies)
+MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 ZERO_VALUE = 0.0
 
 
@@ -113,6 +122,7 @@ class ExitHandler:
         self.use_high_low_for_stops = use_high_low_for_stops
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
+        self._strategy_exit_checker = StrategyExitChecker()
 
     def _build_snapshot(
         self,
@@ -264,21 +274,21 @@ class ExitHandler:
                 # Calculate exit size from fraction of original
                 exit_size_of_original = result.exit_fraction
                 # Convert from fraction-of-original to fraction-of-current
-                current_size_fraction = trade.current_size / trade.original_size
-
-                # Protect against division by zero (position fully closed)
-                if abs(current_size_fraction) < EPSILON:
+                if is_position_fully_closed(
+                    trade.current_size,
+                    trade.original_size,
+                    epsilon=EPSILON,
+                ):
                     logger.debug("Position fully closed, skipping further partial exits")
                     break
 
-                exit_size_of_current = exit_size_of_original / current_size_fraction
-
-                # Validate bounds and check for NaN/Infinity
-                if (
-                    exit_size_of_current <= 0
-                    or exit_size_of_current > 1.0
-                    or not math.isfinite(exit_size_of_current)
-                ):
+                exit_size_of_current = convert_exit_fraction_to_current(
+                    exit_fraction_of_original=exit_size_of_original,
+                    current_size=trade.current_size,
+                    original_size=trade.original_size,
+                    epsilon=EPSILON,
+                )
+                if exit_size_of_current is None:
                     break
 
                 iteration_count += 1
@@ -288,7 +298,7 @@ class ExitHandler:
                 basis_balance = (
                     float(entry_balance)
                     if entry_balance is not None and entry_balance > 0
-                    else 10000.0  # Fallback
+                    else DEFAULT_BASIS_BALANCE_FALLBACK
                 )
 
                 # Execute partial exit via position tracker
@@ -410,7 +420,7 @@ class ExitHandler:
             candle_low = current_price
 
         # Convert PositionSide enum to string for comparisons
-        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        side_str = to_side_string(trade.side)
 
         # Check stop loss
         hit_stop_loss = False
@@ -492,6 +502,8 @@ class ExitHandler:
     ) -> tuple[bool, str]:
         """Check if runtime decision indicates exit.
 
+        Uses shared StrategyExitChecker for consistent logic across engines.
+
         Args:
             decision: Runtime decision from strategy.
             symbol: Trading symbol.
@@ -506,60 +518,21 @@ class ExitHandler:
         if decision is None or trade is None:
             return False, "Hold"
 
-        # Check for signal reversal
-        try:
-            from src.strategies.components import SignalDirection
+        # Extract volume and timestamp from candle for the shared checker
+        volume = float(candle.get("volume", 0.0) if hasattr(candle, "get") else 0.0)
+        timestamp = candle.name if hasattr(candle, "name") else None
 
-            # Convert PositionSide enum to string for comparison
-            side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        # Use shared strategy exit checker for consistent logic
+        result = self._strategy_exit_checker.check_exit(
+            position=trade,
+            current_price=current_price,
+            runtime_decision=decision,
+            component_strategy=component_strategy,
+            volume=volume,
+            timestamp=timestamp,
+        )
 
-            if side_str == "long" and decision.signal.direction == SignalDirection.SELL:
-                return True, "Signal reversal"
-            if side_str == "short" and decision.signal.direction == SignalDirection.BUY:
-                return True, "Signal reversal"
-        except Exception:
-            pass
-
-        # Check strategy's should_exit_position
-        if component_strategy is not None:
-            try:
-                from src.strategies.components import MarketData as ComponentMarketData
-                from src.strategies.components import Position as ComponentPosition
-
-                # Compute notional value from current position size and entry balance
-                # (component_notional field was removed - compute on-demand)
-                notional = float(trade.current_size) * float(trade.entry_balance or 0.0)
-
-                # Convert PositionSide enum to string for component Position validator
-                side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
-
-                position = ComponentPosition(
-                    symbol=trade.symbol,
-                    side=side_str,
-                    size=notional,
-                    entry_price=float(trade.entry_price),
-                    current_price=float(current_price),
-                    entry_time=trade.entry_time,
-                )
-
-                market_data = ComponentMarketData(
-                    symbol=symbol,
-                    price=float(current_price),
-                    volume=float(candle.get("volume", 0.0) if hasattr(candle, "get") else 0.0),
-                    timestamp=candle.name if hasattr(candle, "name") else None,
-                )
-
-                should_exit = component_strategy.should_exit_position(
-                    position,
-                    market_data,
-                    decision.regime,
-                )
-                if should_exit:
-                    return True, "Strategy signal"
-            except Exception as e:
-                logger.debug("Runtime exit evaluation failed: %s", e)
-
-        return False, "Hold"
+        return result.should_exit, result.exit_reason
 
     def execute_exit(
         self,
@@ -635,7 +608,7 @@ class ExitHandler:
         position_notional = entry_notional * (base_exit_price / trade.entry_price)
 
         # Convert PositionSide enum to string for cost calculation
-        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        side_str = to_side_string(trade.side)
         apply_slippage = True
         if (
             order_intent.order_type == OrderType.STOP_LOSS

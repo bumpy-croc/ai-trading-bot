@@ -41,8 +41,18 @@ def get_country_code() -> str | None:
 
                 if service_url.endswith("countryCode"):
                     # ip-api.com returns JSON
-                    data = response.json()
-                    country_code = data.get("countryCode", "").upper()
+                    try:
+                        data = response.json()
+                        # Validate response is dict before accessing keys
+                        if not isinstance(data, dict):
+                            logger.debug(
+                                f"Invalid JSON response from {service_url}: expected dict, got {type(data).__name__}"
+                            )
+                            continue
+                        country_code = data.get("countryCode", "").upper()
+                    except ValueError as json_err:
+                        logger.debug(f"Failed to parse JSON from {service_url}: {json_err}")
+                        continue
                 else:
                     # ipapi.co and ipinfo.io return plain text
                     country_code = response.text.strip().upper()

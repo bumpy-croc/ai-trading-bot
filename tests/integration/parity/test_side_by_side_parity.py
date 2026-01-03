@@ -14,10 +14,8 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
-from src.engines.backtest.engine import Backtester
 from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 from src.engines.shared.cost_calculator import CostCalculator
-from src.engines.shared.models import PositionSide as SharedPositionSide
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.strategies.components import Signal, SignalDirection, Strategy
 from src.strategies.components.position_sizer import PositionSizer
@@ -197,6 +195,18 @@ class TestPnLCalculationParity:
         )
         live_engine.data_provider.get_current_price = Mock(return_value=exit_price)
 
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
+
         balance_before_entry = live_engine.current_balance
         # Execute entry via modular handler API
         live_engine._execute_entry(
@@ -231,9 +241,9 @@ class TestPnLCalculationParity:
         assert perf_metrics.total_pnl > 0, "Winning long trade should have positive P&L"
 
         # Balance should increase (10% price gain on 10% position = ~1% gross gain)
-        assert live_engine.current_balance > initial_balance, (
-            f"Balance {live_engine.current_balance} should increase on winning trade"
-        )
+        assert (
+            live_engine.current_balance > initial_balance
+        ), f"Balance {live_engine.current_balance} should increase on winning trade"
 
         # Fees were charged (performance tracker syncs exit fees)
         assert perf_metrics.total_fees_paid > 0, "Fees should be charged"
@@ -256,7 +266,9 @@ class TestPnLCalculationParity:
         notional = initial_balance * position_size
         calc = CostCalculator(fee_rate=fee_rate, slippage_rate=slippage_rate)
         entry_result = calc.calculate_entry_costs(entry_price, notional, "short")
-        exit_result = calc.calculate_exit_costs(exit_price, notional * (exit_price / entry_price), "short")
+        exit_result = calc.calculate_exit_costs(
+            exit_price, notional * (exit_price / entry_price), "short"
+        )
 
         pnl_pct = pnl_percent(entry_price, exit_price, Side.SHORT, position_size)
         gross_pnl = cash_pnl(pnl_pct, initial_balance)
@@ -274,6 +286,18 @@ class TestPnLCalculationParity:
             resume_from_last_balance=False,
         )
         live_engine.data_provider.get_current_price = Mock(return_value=exit_price)
+
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
 
         # Execute entry via modular handler API
         live_engine._execute_entry(
@@ -299,12 +323,12 @@ class TestPnLCalculationParity:
 
         # CRITICAL ASSERTIONS
         perf_metrics = live_engine.performance_tracker.get_metrics()
-        assert perf_metrics.total_pnl == pytest.approx(net_pnl, rel=0.05), (
-            f"Short P&L {perf_metrics.total_pnl} != expected {net_pnl}"
-        )
-        assert live_engine.current_balance > initial_balance, (
-            "Short trade should be profitable (price dropped)"
-        )
+        assert perf_metrics.total_pnl == pytest.approx(
+            net_pnl, rel=0.05
+        ), f"Short P&L {perf_metrics.total_pnl} != expected {net_pnl}"
+        assert (
+            live_engine.current_balance > initial_balance
+        ), "Short trade should be profitable (price dropped)"
 
     def test_losing_trade_pnl_parity(self):
         """Verify losing trade P&L is calculated identically."""
@@ -335,6 +359,18 @@ class TestPnLCalculationParity:
         )
         live_engine.data_provider.get_current_price = Mock(return_value=exit_price)
 
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
+
         # Execute entry via modular handler API
         live_engine._execute_entry(
             symbol="BTCUSDT",
@@ -361,9 +397,9 @@ class TestPnLCalculationParity:
         perf_metrics = live_engine.performance_tracker.get_metrics()
         assert perf_metrics.total_pnl < 0, "Losing trade should have negative P&L"
         assert live_engine.current_balance < initial_balance, "Balance should decrease on loss"
-        assert perf_metrics.total_pnl == pytest.approx(net_pnl, rel=0.1), (
-            f"Loss P&L {perf_metrics.total_pnl} != expected {net_pnl}"
-        )
+        assert perf_metrics.total_pnl == pytest.approx(
+            net_pnl, rel=0.1
+        ), f"Loss P&L {perf_metrics.total_pnl} != expected {net_pnl}"
 
 
 class TestFeeCalculationParity:
@@ -404,9 +440,9 @@ class TestFeeCalculationParity:
         )
 
         # CRITICAL ASSERTION: Fee matches expected
-        assert exec_result.entry_fee == pytest.approx(expected_result.fee, rel=0.01), (
-            f"Entry fee {exec_result.entry_fee} != expected {expected_result.fee}"
-        )
+        assert exec_result.entry_fee == pytest.approx(
+            expected_result.fee, rel=0.01
+        ), f"Entry fee {exec_result.entry_fee} != expected {expected_result.fee}"
 
     def test_round_trip_fees_parity(self):
         """Verify fees are charged and affect balance on a complete trade.
@@ -444,13 +480,13 @@ class TestFeeCalculationParity:
         )
 
         expected_entry_fee = initial_balance * position_size * fee_rate
-        assert entry_result.entry_fee == pytest.approx(expected_entry_fee, rel=0.01), (
-            f"Entry fee {entry_result.entry_fee} != expected {expected_entry_fee}"
-        )
+        assert entry_result.entry_fee == pytest.approx(
+            expected_entry_fee, rel=0.01
+        ), f"Entry fee {entry_result.entry_fee} != expected {expected_entry_fee}"
 
         # Create and register position
-        from datetime import datetime
         from src.engines.live.trading_engine import Position
+
         position = Position(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -489,9 +525,9 @@ class TestFeeCalculationParity:
 
         # Net P&L should be less than or approximately equal to gross P&L (fees reduce it)
         # Use tolerance for floating-point comparison errors
-        assert net_pnl <= gross_pnl + 1e-9, (
-            f"Net P&L {net_pnl} should be less than or equal to gross P&L {gross_pnl}"
-        )
+        assert (
+            net_pnl <= gross_pnl + 1e-9
+        ), f"Net P&L {net_pnl} should be less than or equal to gross P&L {gross_pnl}"
 
 
 class TestMultipleTradesParity:
@@ -514,6 +550,18 @@ class TestMultipleTradesParity:
             resume_from_last_balance=False,
         )
         live_engine.data_provider.get_current_price = Mock(return_value=100.0)
+
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
 
         # Trade 1: Long 100 -> 105 (+5%)
         live_engine._execute_entry(
@@ -564,8 +612,12 @@ class TestMultipleTradesParity:
         pnl_after_trade2 = live_engine.performance_tracker.get_metrics().total_pnl
 
         # CRITICAL ASSERTIONS
-        assert balance_after_trade1 > initial_balance, "First profitable trade should increase balance"
-        assert balance_after_trade2 > balance_after_trade1, "Second profitable trade should increase balance"
+        assert (
+            balance_after_trade1 > initial_balance
+        ), "First profitable trade should increase balance"
+        assert (
+            balance_after_trade2 > balance_after_trade1
+        ), "Second profitable trade should increase balance"
         assert pnl_after_trade2 > pnl_after_trade1, "Total P&L should accumulate"
         assert len(live_engine.completed_trades) == 2, "Should have 2 completed trades"
         perf_metrics = live_engine.performance_tracker.get_metrics()
@@ -588,6 +640,18 @@ class TestMultipleTradesParity:
             resume_from_last_balance=False,
         )
         live_engine.data_provider.get_current_price = Mock(return_value=100.0)
+
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
 
         # Trade 1: Win (+5%)
         live_engine._execute_entry(
@@ -660,8 +724,8 @@ class TestStopLossTriggerParity:
         )
 
         # Create and register position manually
-        from datetime import datetime
         from src.engines.live.trading_engine import Position
+
         position = Position(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -677,9 +741,15 @@ class TestStopLossTriggerParity:
         live_engine.live_position_tracker.open_position(position)
 
         # SL at 95 - should trigger when low <= 95
-        assert live_engine.live_exit_handler._check_stop_loss(position, 96.0, 97.0, 95.0) is True  # low = 95
-        assert live_engine.live_exit_handler._check_stop_loss(position, 94.0, 95.0, 93.0) is True  # low = 93
-        assert live_engine.live_exit_handler._check_stop_loss(position, 96.0, 97.0, 96.0) is False  # low = 96 > 95
+        assert (
+            live_engine.live_exit_handler._check_stop_loss(position, 96.0, 97.0, 95.0) is True
+        )  # low = 95
+        assert (
+            live_engine.live_exit_handler._check_stop_loss(position, 94.0, 95.0, 93.0) is True
+        )  # low = 93
+        assert (
+            live_engine.live_exit_handler._check_stop_loss(position, 96.0, 97.0, 96.0) is False
+        )  # low = 96 > 95
 
     def test_short_stop_loss_triggers_on_high_breach(self):
         """Verify short SL triggers when high breaches stop level."""
@@ -698,8 +768,8 @@ class TestStopLossTriggerParity:
         )
 
         # Create and register position manually
-        from datetime import datetime
         from src.engines.live.trading_engine import Position
+
         position = Position(
             symbol="BTCUSDT",
             side=PositionSide.SHORT,
@@ -715,9 +785,15 @@ class TestStopLossTriggerParity:
         live_engine.live_position_tracker.open_position(position)
 
         # SL at 105 - should trigger when high >= 105
-        assert live_engine.live_exit_handler._check_stop_loss(position, 104.0, 105.0, 103.0) is True  # high = 105
-        assert live_engine.live_exit_handler._check_stop_loss(position, 106.0, 107.0, 105.0) is True  # high = 107
-        assert live_engine.live_exit_handler._check_stop_loss(position, 104.0, 104.5, 103.0) is False  # high = 104.5
+        assert (
+            live_engine.live_exit_handler._check_stop_loss(position, 104.0, 105.0, 103.0) is True
+        )  # high = 105
+        assert (
+            live_engine.live_exit_handler._check_stop_loss(position, 106.0, 107.0, 105.0) is True
+        )  # high = 107
+        assert (
+            live_engine.live_exit_handler._check_stop_loss(position, 104.0, 104.5, 103.0) is False
+        )  # high = 104.5
 
 
 class TestTakeProfitTriggerParity:
@@ -740,8 +816,8 @@ class TestTakeProfitTriggerParity:
         )
 
         # Create and register position manually
-        from datetime import datetime
         from src.engines.live.trading_engine import Position
+
         position = Position(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -794,6 +870,18 @@ class TestPositionSizingParity:
             resume_from_last_balance=False,
         )
 
+        # Create a trading session (required for balance updates)
+        live_engine.trading_session_id = live_engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=initial_balance,
+        )
+        live_engine.db_manager.update_balance(
+            initial_balance, "session_start", "system", live_engine.trading_session_id
+        )
+
         # Try to open 50% position via _execute_entry - should be capped to 10%
         live_engine._execute_entry(
             symbol="BTCUSDT",
@@ -809,9 +897,9 @@ class TestPositionSizingParity:
         # Verify position was created with capped size
         assert len(live_engine.live_position_tracker._positions) == 1
         position = list(live_engine.live_position_tracker._positions.values())[0]
-        assert position.size == pytest.approx(max_position_size), (
-            f"Position size {position.size} should be capped to {max_position_size}"
-        )
+        assert position.size == pytest.approx(
+            max_position_size
+        ), f"Position size {position.size} should be capped to {max_position_size}"
 
 
 # =============================================================================
@@ -843,7 +931,9 @@ class TestSharedModuleIdentity:
 
     def test_partial_exit_executor_identity(self):
         """Verify both engines use the same PartialExitExecutor."""
-        from src.engines.backtest.execution.position_tracker import PartialExitExecutor as BacktestPEE
+        from src.engines.backtest.execution.position_tracker import (
+            PartialExitExecutor as BacktestPEE,
+        )
         from src.engines.live.execution.position_tracker import PartialExitExecutor as LivePEE
         from src.engines.shared.partial_exit_executor import PartialExitExecutor as SharedPEE
 

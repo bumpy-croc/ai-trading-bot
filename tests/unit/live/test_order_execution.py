@@ -30,6 +30,7 @@ from src.engines.live.execution.position_tracker import LivePosition, LivePositi
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import default_fill_policy
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from tests.mocks import MockDatabaseManager
 
 # ============================================================================
 # Test Fixtures
@@ -97,7 +98,7 @@ def live_exit_handler(execution_engine_with_exchange, live_position_tracker):
 @pytest.fixture
 def engine_with_exchange(mock_data_provider, mock_exchange, mock_order_tracker):
     """Create a LiveTradingEngine with mocked exchange and order tracker."""
-    with patch("src.engines.live.trading_engine.DatabaseManager"):
+    with patch("src.engines.live.trading_engine.DatabaseManager", MockDatabaseManager):
         engine = LiveTradingEngine(
             strategy=Mock(),
             data_provider=mock_data_provider,
@@ -107,6 +108,8 @@ def engine_with_exchange(mock_data_provider, mock_exchange, mock_order_tracker):
         engine.exchange_interface = mock_exchange
         engine.order_tracker = mock_order_tracker
         engine.enable_live_trading = True
+        # Set the fallback balance for sessionless tests
+        engine.db_manager.set_fallback_balance(10000.0)
         return engine
 
 
@@ -194,9 +197,7 @@ class TestExecuteEntry:
         # (0.123456 * 10000) / 50000 = 0.0246912, rounded to 0.025
         assert call_kwargs["quantity"] == 0.025
 
-    def test_execute_entry_below_min_quantity(
-        self, execution_engine_with_exchange, mock_exchange
-    ):
+    def test_execute_entry_below_min_quantity(self, execution_engine_with_exchange, mock_exchange):
         """Order fails if quantity is below minimum."""
         mock_exchange.get_symbol_info.return_value = {
             "step_size": 0.001,
@@ -211,9 +212,7 @@ class TestExecuteEntry:
         assert result.success is False
         mock_exchange.place_order.assert_not_called()
 
-    def test_execute_entry_below_min_notional(
-        self, execution_engine_with_exchange, mock_exchange
-    ):
+    def test_execute_entry_below_min_notional(self, execution_engine_with_exchange, mock_exchange):
         """Order fails if value is below minimum notional."""
         mock_exchange.get_symbol_info.return_value = {
             "step_size": 0.00001,
@@ -228,9 +227,7 @@ class TestExecuteEntry:
         assert result.success is False
         mock_exchange.place_order.assert_not_called()
 
-    def test_execute_entry_place_fails(
-        self, execution_engine_with_exchange, mock_exchange
-    ):
+    def test_execute_entry_place_fails(self, execution_engine_with_exchange, mock_exchange):
         """Order returns failure when exchange place_order fails."""
         mock_exchange.place_order.return_value = None
 
@@ -240,9 +237,7 @@ class TestExecuteEntry:
 
         assert result.success is False
 
-    def test_execute_entry_no_symbol_info(
-        self, execution_engine_with_exchange, mock_exchange
-    ):
+    def test_execute_entry_no_symbol_info(self, execution_engine_with_exchange, mock_exchange):
         """Order succeeds without symbol info (uses defaults)."""
         mock_exchange.get_symbol_info.return_value = None
 
@@ -296,9 +291,7 @@ class TestExecuteExit:
 class TestExecuteFilledExit:
     """Tests for LiveExitHandler execute_filled_exit."""
 
-    def test_execute_filled_exit_closes_position(
-        self, live_exit_handler, live_position_tracker
-    ):
+    def test_execute_filled_exit_closes_position(self, live_exit_handler, live_position_tracker):
         """Filled exits close the position and return results."""
         position = LivePosition(
             symbol="BTCUSDT",
@@ -321,6 +314,32 @@ class TestExecuteFilledExit:
         assert result.success is True
         assert not live_position_tracker.has_position("entry_order_123")
 
+    def test_execute_filled_exit_closes_position_on_large_deviation(
+        self, live_exit_handler, live_position_tracker
+    ):
+        """Filled exits still close the position on large price deviations."""
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            entry_price=100.0,
+            entry_time=datetime.now(UTC),
+            order_id="entry_order_456",
+            entry_balance=10000.0,
+        )
+        live_position_tracker.track_recovered_position(position, db_id=None)
+
+        result = live_exit_handler.execute_filled_exit(
+            position=position,
+            exit_reason="stop_loss",
+            filled_price=220.0,
+            current_balance=10000.0,
+        )
+
+        assert result.success is True
+        assert result.exit_price == pytest.approx(220.0)
+        assert not live_position_tracker.has_position("entry_order_456")
+
 
 # ============================================================================
 # Tests for _handle_order_fill
@@ -333,16 +352,12 @@ class TestHandleOrderFill:
     def test_handle_fill_logs_event(self, engine_with_exchange):
         """Fill callback logs the event."""
         with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
-            engine_with_exchange._handle_order_fill(
-                "order123", "BTCUSDT", 1.5, 50000.0
-            )
+            engine_with_exchange._handle_order_fill("order123", "BTCUSDT", 1.5, 50000.0)
 
             mock_log.assert_called_once()
             assert mock_log.call_args.args[0] == "order_filled"
 
-    def test_handle_fill_detects_stop_loss_fill(
-        self, engine_with_exchange, sample_position
-    ):
+    def test_handle_fill_detects_stop_loss_fill(self, engine_with_exchange, sample_position):
         """Fill callback detects and handles stop-loss fills."""
         sample_position.stop_loss_order_id = "sl_order_456"
         engine_with_exchange.live_position_tracker.track_recovered_position(
@@ -350,9 +365,7 @@ class TestHandleOrderFill:
         )
 
         with patch.object(engine_with_exchange, "_execute_exit") as mock_close:
-            engine_with_exchange._handle_order_fill(
-                "sl_order_456", "BTCUSDT", 0.02, 48000.0
-            )
+            engine_with_exchange._handle_order_fill("sl_order_456", "BTCUSDT", 0.02, 48000.0)
 
             mock_close.assert_called_once()
             call_args = mock_close.call_args
@@ -372,24 +385,18 @@ class TestHandleOrderFill:
         with patch.object(engine_with_exchange.live_position_tracker, "has_position") as mock_has:
             mock_has.return_value = False
             with patch.object(engine_with_exchange, "_execute_exit") as mock_close:
-                engine_with_exchange._handle_order_fill(
-                    "sl_order_456", "BTCUSDT", 0.02, 48000.0
-                )
+                engine_with_exchange._handle_order_fill("sl_order_456", "BTCUSDT", 0.02, 48000.0)
 
                 mock_close.assert_not_called()
 
-    def test_handle_fill_ignores_entry_orders(
-        self, engine_with_exchange, sample_position
-    ):
+    def test_handle_fill_ignores_entry_orders(self, engine_with_exchange, sample_position):
         """Fill callback does not trigger close for entry order fills."""
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
         )
 
         with patch.object(engine_with_exchange, "_execute_exit") as mock_close:
-            engine_with_exchange._handle_order_fill(
-                "entry_order_123", "BTCUSDT", 0.02, 50000.0
-            )
+            engine_with_exchange._handle_order_fill("entry_order_123", "BTCUSDT", 0.02, 50000.0)
 
             mock_close.assert_not_called()
 
@@ -409,9 +416,7 @@ class TestHandlePartialFill:
     def test_handle_partial_fill_logs_event(self, engine_with_exchange):
         """Partial fill callback logs the event."""
         with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
-            engine_with_exchange._handle_partial_fill(
-                "order123", "BTCUSDT", 0.5, 50000.0
-            )
+            engine_with_exchange._handle_partial_fill("order123", "BTCUSDT", 0.5, 50000.0)
 
             mock_log.assert_called_once()
             assert mock_log.call_args.args[0] == "partial_fill"
@@ -428,15 +433,11 @@ class TestHandlePartialFill:
         import logging
 
         with caplog.at_level(logging.CRITICAL):
-            engine_with_exchange._handle_partial_fill(
-                "sl_order_456", "BTCUSDT", 0.01, 48000.0
-            )
+            engine_with_exchange._handle_partial_fill("sl_order_456", "BTCUSDT", 0.01, 48000.0)
 
         assert "PARTIAL STOP-LOSS FILL" in caplog.text
 
-    def test_handle_partial_fill_logs_sl_warning_event(
-        self, engine_with_exchange, sample_position
-    ):
+    def test_handle_partial_fill_logs_sl_warning_event(self, engine_with_exchange, sample_position):
         """Partial fill warning logs event details."""
         sample_position.stop_loss_order_id = "sl_order_456"
         engine_with_exchange.live_position_tracker.track_recovered_position(
@@ -444,9 +445,7 @@ class TestHandlePartialFill:
         )
 
         with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
-            engine_with_exchange._handle_partial_fill(
-                "sl_order_456", "BTCUSDT", 0.01, 48000.0
-            )
+            engine_with_exchange._handle_partial_fill("sl_order_456", "BTCUSDT", 0.01, 48000.0)
 
             mock_log.assert_any_call(
                 "partial_sl_fill_warning",
@@ -478,9 +477,7 @@ class TestHandleOrderCancel:
             mock_log.assert_called_once()
             assert mock_log.call_args.args[0] == "order_cancelled"
 
-    def test_handle_cancel_removes_phantom_position(
-        self, engine_with_exchange, sample_position
-    ):
+    def test_handle_cancel_removes_phantom_position(self, engine_with_exchange, sample_position):
         """Cancel callback removes phantom position."""
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
@@ -490,9 +487,7 @@ class TestHandleOrderCancel:
 
         assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
 
-    def test_handle_cancel_thread_safe_with_pop(
-        self, engine_with_exchange, sample_position
-    ):
+    def test_handle_cancel_thread_safe_with_pop(self, engine_with_exchange, sample_position):
         """Cancel callback is thread-safe when removing positions."""
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
@@ -530,9 +525,7 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange.live_position_tracker.reset()
         engine_with_exchange._reconcile_positions_with_exchange()
 
-    def test_reconcile_sl_still_active_no_action(
-        self, engine_with_exchange, sample_position
-    ):
+    def test_reconcile_sl_still_active_no_action(self, engine_with_exchange, sample_position):
         """Positions remain when stop-loss order is still active."""
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
@@ -545,9 +538,7 @@ class TestReconcilePositionsWithExchange:
 
         assert engine_with_exchange.live_position_tracker.has_position("entry_order_123")
 
-    def test_reconcile_detects_filled_stop_loss(
-        self, engine_with_exchange, sample_position
-    ):
+    def test_reconcile_detects_filled_stop_loss(self, engine_with_exchange, sample_position):
         """Reconciliation detects filled stop-loss and removes position."""
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
@@ -567,15 +558,11 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
         )
-        engine_with_exchange.exchange_interface.get_open_orders.side_effect = Exception(
-            "API error"
-        )
+        engine_with_exchange.exchange_interface.get_open_orders.side_effect = Exception("API error")
 
         engine_with_exchange._reconcile_positions_with_exchange()
 
-    def test_reconcile_uses_entry_balance_not_current(
-        self, engine_with_exchange, sample_position
-    ):
+    def test_reconcile_uses_entry_balance_not_current(self, engine_with_exchange, sample_position):
         """Reconciliation uses entry balance for PnL calculations."""
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None

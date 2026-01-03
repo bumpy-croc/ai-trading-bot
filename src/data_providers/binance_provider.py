@@ -19,6 +19,9 @@ from typing import Any, TypeVar
 import pandas as pd
 
 from src.config import get_config
+from src.config.constants import DEFAULT_DATA_FETCH_TIMEOUT
+from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
+from src.infrastructure.timeout import run_with_timeout
 from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
@@ -372,7 +375,22 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             start_ts = int(start.timestamp() * 1000)
             end_ts = int(end.timestamp() * 1000) if end else None
 
-            klines = self._client.get_historical_klines(symbol, interval, start_ts, end_ts)
+            # Wrap API call with timeout to prevent indefinite hangs
+            # Configurable via DATA_FETCH_TIMEOUT_SECONDS env var
+            data_timeout = get_config().get_float(
+                "DATA_FETCH_TIMEOUT_SECONDS", DEFAULT_DATA_FETCH_TIMEOUT
+            )
+            try:
+                klines = run_with_timeout(
+                    self._client.get_historical_klines,
+                    args=(symbol, interval, start_ts, end_ts),
+                    timeout_seconds=data_timeout,
+                    operation_name="Binance get_historical_klines",
+                )
+            except InfraTimeoutError as timeout_err:
+                raise TimeoutError(
+                    f"Binance API timeout after {data_timeout}s fetching {symbol} {timeframe}"
+                ) from timeout_err
 
             df = self._process_klines(klines)
             self.data = df
@@ -451,14 +469,27 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             raise
 
     def get_current_price(self, symbol: str) -> float:
-        """Get latest price for a symbol"""
+        """Get latest price for a symbol.
+
+        Raises:
+            RuntimeError: If price cannot be fetched from exchange.
+                         Caller must handle this to prevent trading with invalid prices.
+        """
         try:
             ticker = self._client.get_symbol_ticker(symbol=symbol)
-            return float(ticker["price"])
+            price = float(ticker["price"])
+            # Validate price is positive to prevent downstream calculation errors
+            if price <= 0:
+                raise ValueError(f"Invalid price {price} <= 0 for {symbol}")
+            return price
         except Exception as e:
             error_type = type(e).__name__
             logger.error(f"Error fetching current price for {symbol}: {error_type}: {str(e)}")
-            return 0.0
+            # Don't return 0.0 - that could cause division by zero or infinite position sizes
+            # Force caller to handle price fetch failures explicitly
+            raise RuntimeError(
+                f"Failed to fetch current price for {symbol}: {error_type}: {str(e)}"
+            ) from e
 
     # ========================================
     # ExchangeInterface Implementation
@@ -581,7 +612,28 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                                 f"{balance.asset}-USD", "binance"
                             )
                         )
+
+                        # Validate ticker response before accessing price
+                        if not isinstance(ticker, dict) or "price" not in ticker:
+                            logger.warning(
+                                "Invalid ticker response for %s: %s. Position not loaded.",
+                                balance.asset,
+                                ticker,
+                            )
+                            continue
+
                         current_price = float(ticker["price"])
+
+                        # Validate price is finite to prevent inf/nan in positions
+                        import math
+
+                        if not math.isfinite(current_price) or current_price <= 0:
+                            logger.warning(
+                                "Invalid price %.8f for %s. Position not loaded.",
+                                current_price,
+                                balance.asset,
+                            )
+                            continue
 
                         position = Position(
                             symbol=f"{balance.asset}USDT",
@@ -599,13 +651,84 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         positions.append(position)
 
                     except Exception as e:
-                        logger.debug(f"Could not get price for {balance.asset}: {e}")
+                        logger.warning(
+                            "Failed to load position for %s (balance %.8f): %s",
+                            balance.asset,
+                            balance.total,
+                            e,
+                        )
 
             return positions
 
         except Exception as e:
             logger.error(f"Failed to get positions: {e}")
             return []
+
+    def _parse_order_data(self, order_data: dict) -> Order | None:
+        """Safely parse order data from Binance API response.
+
+        Args:
+            order_data: Raw order data dictionary from Binance API
+
+        Returns:
+            Order object or None if data is invalid
+        """
+        try:
+            # Validate required fields exist
+            required_fields = [
+                "orderId",
+                "symbol",
+                "side",
+                "type",
+                "origQty",
+                "status",
+                "executedQty",
+                "time",
+                "updateTime",
+            ]
+            for field in required_fields:
+                if field not in order_data:
+                    logger.error(
+                        "Invalid order data from Binance: missing required field '%s'. Data: %s",
+                        field,
+                        order_data,
+                    )
+                    return None
+
+            # Safe extraction with type validation
+            order_id_raw = order_data["orderId"]
+            if not isinstance(order_id_raw, (int, str)):
+                logger.error("Invalid orderId type: %s", type(order_id_raw))
+                return None
+
+            return Order(
+                order_id=str(order_id_raw),
+                symbol=str(order_data["symbol"]),
+                side=OrderSide.BUY if order_data["side"] == SIDE_BUY else OrderSide.SELL,
+                order_type=self._convert_order_type(order_data["type"]),
+                quantity=float(order_data["origQty"]),
+                price=float(order_data.get("price", 0)) if order_data.get("price") != "0" else None,
+                status=self._convert_order_status(order_data["status"]),
+                filled_quantity=float(order_data.get("executedQty", 0)),
+                average_price=(
+                    float(order_data.get("avgPrice", 0))
+                    if order_data.get("avgPrice") and order_data.get("avgPrice") != "0"
+                    else None
+                ),
+                commission=0.0,  # Will be updated from trade history
+                commission_asset="",
+                create_time=datetime.fromtimestamp(int(order_data["time"]) / 1000),
+                update_time=datetime.fromtimestamp(int(order_data["updateTime"]) / 1000),
+                stop_price=(
+                    float(order_data["stopPrice"])
+                    if order_data.get("stopPrice") and order_data["stopPrice"] != "0"
+                    else None
+                ),
+                time_in_force=order_data.get("timeInForce", "GTC"),
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error("Failed to parse order data: %s. Data: %s", e, order_data)
+            return None
 
     def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         """Get all open orders"""
@@ -621,28 +744,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             orders = []
             for order_data in orders_data:
-                order = Order(
-                    order_id=str(order_data["orderId"]),
-                    symbol=order_data["symbol"],
-                    side=OrderSide.BUY if order_data["side"] == SIDE_BUY else OrderSide.SELL,
-                    order_type=self._convert_order_type(order_data["type"]),
-                    quantity=float(order_data["origQty"]),
-                    price=float(order_data["price"]) if order_data["price"] != "0" else None,
-                    status=self._convert_order_status(order_data["status"]),
-                    filled_quantity=float(order_data["executedQty"]),
-                    average_price=(
-                        float(order_data["avgPrice"]) if order_data["avgPrice"] != "0" else None
-                    ),
-                    commission=0.0,  # Will be updated from trade history
-                    commission_asset="",
-                    create_time=datetime.fromtimestamp(order_data["time"] / 1000),
-                    update_time=datetime.fromtimestamp(order_data["updateTime"] / 1000),
-                    stop_price=(
-                        float(order_data["stopPrice"]) if order_data.get("stopPrice") else None
-                    ),
-                    time_in_force=order_data.get("timeInForce", "GTC"),
-                )
-                orders.append(order)
+                order = self._parse_order_data(order_data)
+                if order is not None:
+                    orders.append(order)
 
             return orders
 
@@ -658,30 +762,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         try:
             order_data = self._client.get_order(symbol=symbol, orderId=order_id)
-
-            order = Order(
-                order_id=str(order_data["orderId"]),
-                symbol=order_data["symbol"],
-                side=OrderSide.BUY if order_data["side"] == SIDE_BUY else OrderSide.SELL,
-                order_type=self._convert_order_type(order_data["type"]),
-                quantity=float(order_data["origQty"]),
-                price=float(order_data["price"]) if order_data["price"] != "0" else None,
-                status=self._convert_order_status(order_data["status"]),
-                filled_quantity=float(order_data["executedQty"]),
-                average_price=(
-                    float(order_data["avgPrice"]) if order_data["avgPrice"] != "0" else None
-                ),
-                commission=0.0,
-                commission_asset="",
-                create_time=datetime.fromtimestamp(order_data["time"] / 1000),
-                update_time=datetime.fromtimestamp(order_data["updateTime"] / 1000),
-                stop_price=(
-                    float(order_data.get("stopPrice")) if order_data.get("stopPrice") else None
-                ),
-                time_in_force=order_data.get("timeInForce", "GTC"),
-            )
-
-            return order
+            return self._parse_order_data(order_data)
 
         except Exception as e:
             logger.error(f"Failed to get order {order_id}: {e}")
@@ -698,18 +779,28 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             trades = []
             for trade_data in trades_data:
-                trade = Trade(
-                    trade_id=str(trade_data["id"]),
-                    order_id=str(trade_data["orderId"]),
-                    symbol=trade_data["symbol"],
-                    side=OrderSide.BUY if trade_data["isBuyer"] else OrderSide.SELL,
-                    quantity=float(trade_data["qty"]),
-                    price=float(trade_data["price"]),
-                    commission=float(trade_data["commission"]),
-                    commission_asset=trade_data["commissionAsset"],
-                    time=datetime.fromtimestamp(trade_data["time"] / 1000),
-                )
-                trades.append(trade)
+                # Validate critical fields to prevent KeyError/TypeError from malformed API response
+                try:
+                    trade_time_ms = trade_data.get("time")
+                    if trade_time_ms is None or not isinstance(trade_time_ms, (int, float)):
+                        logger.warning("Skipping trade with invalid timestamp: %s", trade_data)
+                        continue
+
+                    trade = Trade(
+                        trade_id=str(trade_data["id"]),
+                        order_id=str(trade_data["orderId"]),
+                        symbol=trade_data["symbol"],
+                        side=OrderSide.BUY if trade_data["isBuyer"] else OrderSide.SELL,
+                        quantity=float(trade_data["qty"]),
+                        price=float(trade_data["price"]),
+                        commission=float(trade_data["commission"]),
+                        commission_asset=trade_data["commissionAsset"],
+                        time=datetime.fromtimestamp(trade_time_ms / 1000),
+                    )
+                    trades.append(trade)
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.warning("Skipping malformed trade record: %s. Error: %s", trade_data, e)
+                    continue
 
             return trades
 
@@ -727,8 +818,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         price: float | None = None,
         stop_price: float | None = None,
         time_in_force: str = "GTC",
+        client_order_id: str | None = None,
     ) -> str | None:
-        """Place a new order and return order ID"""
+        """
+        Place a new order and return order ID.
+
+        Uses client_order_id for idempotency - if provided and an order with the same
+        client ID already exists, Binance will reject the duplicate order.
+        """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place order")
             return None
@@ -763,6 +860,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             if time_in_force != "GTC":
                 order_params["timeInForce"] = time_in_force
 
+            # Add client order ID for idempotency if provided
+            if client_order_id:
+                order_params["newClientOrderId"] = client_order_id
+                logger.debug(f"Placing order with client ID: {client_order_id}")
+
             # Place the order
             response = self._client.create_order(**order_params)
 
@@ -777,6 +879,15 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return order_id
 
         except BinanceOrderException as e:
+            error_msg = str(e)
+            # Check if this is a duplicate client order ID error (idempotency working as expected)
+            if client_order_id and ("Duplicate order sent" in error_msg or "-2010" in error_msg):
+                logger.warning(
+                    f"Duplicate client order ID detected: {client_order_id}. "
+                    "This order may have already been placed. Check order status manually."
+                )
+                # Return None to signal failure, but log as warning since idempotency prevented duplicate
+                return None
             logger.error(f"Binance order error: {e}")
             return None
         except Exception as e:
@@ -817,12 +928,20 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # Round prices to valid tick size
             symbol_info = self.get_symbol_info(symbol)
             if symbol_info:
-                tick_size = symbol_info.get("tick_size", 0.01)
+                # Validate tick_size is numeric before division to prevent TypeError
+                tick_size_raw = symbol_info.get("tick_size", 0.01)
+                tick_size = (
+                    float(tick_size_raw) if isinstance(tick_size_raw, (int, float)) else 0.01
+                )
                 if tick_size > 0:
                     stop_price = round(stop_price / tick_size) * tick_size
                     limit_price = round(limit_price / tick_size) * tick_size
 
-                step_size = symbol_info.get("step_size", 0.00001)
+                # Validate step_size is numeric before division to prevent TypeError
+                step_size_raw = symbol_info.get("step_size", 0.00001)
+                step_size = (
+                    float(step_size_raw) if isinstance(step_size_raw, (int, float)) else 0.00001
+                )
                 if step_size > 0:
                     quantity = round(quantity / step_size) * step_size
 

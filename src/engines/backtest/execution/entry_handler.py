@@ -13,8 +13,17 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import ActiveTrade
+from src.engines.shared.entry_utils import (
+    extract_entry_plan,
+    resolve_stop_loss_take_profit_pct,
+)
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
@@ -24,7 +33,10 @@ from src.engines.shared.execution.snapshot_builder import (
     coerce_float,
     map_entry_order_side_from_string,
 )
+from src.engines.shared.models import PositionSide
+from src.engines.shared.side_utils import to_side_string
 from src.strategies.components import SignalDirection
+from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -89,6 +101,7 @@ class EntryHandler:
         dynamic_risk_manager: DynamicRiskManager | None = None,
         correlation_handler: Any | None = None,
         default_take_profit_pct: float | None = None,
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize entry handler.
@@ -102,6 +115,7 @@ class EntryHandler:
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             correlation_handler: Handler for correlation-based sizing.
             default_take_profit_pct: Default take profit percentage.
+            max_position_size: Maximum position size as fraction (default 10% for parity with live).
             max_filled_price_deviation: Threshold for logging suspicious fill prices.
         """
         self.execution_engine = execution_engine
@@ -112,6 +126,7 @@ class EntryHandler:
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
         self.default_take_profit_pct = default_take_profit_pct
+        self.max_position_size = max_position_size
         self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared DynamicRiskHandler for consistent risk adjustment logic
         self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
@@ -187,6 +202,10 @@ class EntryHandler:
                 reasons=reasons,
             )
 
+        # Enforce maximum position size to prevent over-concentration risk
+        # (matches live engine behavior for backtest-live parity)
+        size_fraction = min(size_fraction, self.max_position_size)
+
         # Apply correlation control if available
         if self.correlation_handler is not None and size_fraction > 0:
             size_fraction = self.correlation_handler.apply_correlation_control(
@@ -220,10 +239,11 @@ class EntryHandler:
             entry_side=entry_side,
             runtime_decision=runtime_decision,
         )
+        side_str = to_side_string(entry_side)
 
         # Build entry reasons
         reasons.append("runtime_entry")
-        reasons.append(f"side_{entry_side}")
+        reasons.append(f"side_{side_str}")
         reasons.append(f"position_size_{size_fraction:.4f}")
         reasons.append(f"balance_{balance:.2f}")
 
@@ -237,17 +257,17 @@ class EntryHandler:
             else size_fraction * balance
         )
 
-        # Calculate SL/TP prices
-        if entry_side == "long":
-            stop_loss = current_price * (1 - sl_pct)
-            take_profit = current_price * (1 + tp_pct)
-        else:
-            stop_loss = current_price * (1 + sl_pct)
-            take_profit = current_price * (1 - tp_pct)
+        # Calculate SL/TP prices using shared calculator
+        stop_loss, take_profit = PriceTargetCalculator.sl_tp(
+            entry_price=current_price,
+            sl_pct=sl_pct,
+            tp_pct=tp_pct,
+            side=side_str,
+        )
 
         return EntrySignalResult(
             should_enter=True,
-            side=entry_side,
+            side=side_str,
             size_fraction=size_fraction,
             stop_loss=stop_loss,
             take_profit=take_profit,
@@ -284,29 +304,27 @@ class EntryHandler:
             )
 
         # Calculate SL/TP percentages for pending order
-        default_sl_pct = 0.05
-        default_tp_pct = 0.04
         if signal.side == "long":
             sl_pct = (
                 (current_price - signal.stop_loss) / current_price
                 if signal.stop_loss
-                else default_sl_pct
+                else DEFAULT_STOP_LOSS_PCT
             )
             tp_pct = (
                 (signal.take_profit - current_price) / current_price
                 if signal.take_profit
-                else default_tp_pct
+                else DEFAULT_TAKE_PROFIT_PCT
             )
         else:
             sl_pct = (
                 (signal.stop_loss - current_price) / current_price
                 if signal.stop_loss
-                else default_sl_pct
+                else DEFAULT_STOP_LOSS_PCT
             )
             tp_pct = (
                 (current_price - signal.take_profit) / current_price
                 if signal.take_profit
-                else default_tp_pct
+                else DEFAULT_TAKE_PROFIT_PCT
             )
 
         # Use next-bar execution if enabled
@@ -372,8 +390,8 @@ class EntryHandler:
             base_price=base_price,
             current_time=current_time,
             balance=balance,
-            stop_loss=signal.stop_loss or current_price * 0.95,
-            take_profit=signal.take_profit or current_price * 1.04,
+            stop_loss=signal.stop_loss or current_price * (1 - DEFAULT_STOP_LOSS_PCT),
+            take_profit=signal.take_profit or current_price * (1 + DEFAULT_TAKE_PROFIT_PCT),
             component_notional=signal.component_notional,
             liquidity=decision.liquidity,
         )
@@ -526,7 +544,7 @@ class EntryHandler:
         self,
         decision: Any,
         balance: float,
-    ) -> tuple[str | None, float]:
+    ) -> tuple[PositionSide | None, float]:
         """Extract entry side and size from runtime decision.
 
         Args:
@@ -536,36 +554,15 @@ class EntryHandler:
         Returns:
             Tuple of (side, size_fraction).
         """
-        if decision is None:
+        plan = extract_entry_plan(decision, balance)
+        if plan is None:
             return None, 0.0
-
-        if balance <= 0:
-            return None, 0.0
-
-        # Check signal direction
-        if decision.signal.direction == SignalDirection.HOLD or decision.position_size <= 0:
-            return None, 0.0
-
-        # Check for short entry authorization
-        metadata = getattr(decision, "metadata", {}) or {}
-        if decision.signal.direction == SignalDirection.SELL and not bool(
-            metadata.get("enter_short")
-        ):
-            return None, 0.0
-
-        # Determine side
-        side = "long" if decision.signal.direction == SignalDirection.BUY else "short"
-
-        # Calculate size fraction
-        size_fraction = float(decision.position_size) / float(balance)
-        size_fraction = max(0.0, min(1.0, size_fraction))
-
-        return side, size_fraction
+        return plan.side, plan.size_fraction
 
     def _calculate_sl_tp_pct(
         self,
         current_price: float,
-        entry_side: str,
+        entry_side: PositionSide,
         runtime_decision: Any,
     ) -> tuple[float, float]:
         """Calculate stop loss and take profit percentages.
@@ -578,31 +575,16 @@ class EntryHandler:
         Returns:
             Tuple of (sl_pct, tp_pct).
         """
-        # Try to get stop loss from strategy
-        sl_pct = 0.05  # Default 5%
-        if self.component_strategy is not None:
-            try:
-                stop_loss_price = self.component_strategy.get_stop_loss_price(
-                    current_price,
-                    runtime_decision.signal if runtime_decision else None,
-                    runtime_decision.regime if runtime_decision else None,
-                )
-                if entry_side == "long":
-                    sl_pct = (current_price - stop_loss_price) / current_price
-                else:
-                    sl_pct = (stop_loss_price - current_price) / current_price
-                sl_pct = max(0.01, min(0.20, sl_pct))  # Clamp 1-20%
-            except Exception:
-                pass
-
-        # Get take profit
-        tp_pct = self.default_take_profit_pct
-        if tp_pct is None and self.component_strategy is not None:
-            tp_pct = getattr(self.component_strategy, "take_profit_pct", 0.04)
-        if tp_pct is None:
-            tp_pct = 0.04
-
-        return sl_pct, tp_pct
+        return resolve_stop_loss_take_profit_pct(
+            current_price=current_price,
+            entry_side=entry_side,
+            runtime_decision=runtime_decision,
+            component_strategy=self.component_strategy,
+            default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
+            default_take_profit_pct=self.default_take_profit_pct,
+            use_strategy_take_profit=True,
+            stop_loss_exceptions=(Exception,),
+        )
 
     def _apply_dynamic_risk(
         self,

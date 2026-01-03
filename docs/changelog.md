@@ -15,9 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PSB system analysis documentation (`docs/PSB_SYSTEM_ANALYSIS.md`)
 - Automated documentation system (changelog.md, project_status.md, architecture.md)
 - `/update-docs` slash command for documentation maintenance
+- Shared entry utilities and validation helpers for consistent engine behavior
 
 ### Changed
 - Enhanced CLAUDE.md with regression prevention section
+- Unified backtest/live entry and partial-exit logic via shared helpers
+
+### Fixed
+- Recorded live exits even when filled prices exceed deviation thresholds to keep state consistent
+- Aligned live exit-condition evaluation order with backtest engine parity
 
 ---
 

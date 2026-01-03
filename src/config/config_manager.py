@@ -117,6 +117,11 @@ class ConfigManager:
         if value is None:
             return default
 
+        # Validate value is string to prevent AttributeError from custom providers
+        if not isinstance(value, str):
+            # Convert to string first for robustness
+            value = str(value)
+
         # Handle common boolean representations
         return value.lower() in ("true", "1", "yes", "on", "enabled")
 
@@ -127,6 +132,11 @@ class ConfigManager:
         value = self.get(key)
         if value is None:
             return default or []
+
+        # Validate value is string to prevent AttributeError from custom providers
+        if not isinstance(value, str):
+            # Convert to string first for robustness
+            value = str(value)
 
         return [item.strip() for item in value.split(delimiter) if item.strip()]
 
@@ -203,23 +213,21 @@ class ConfigManager:
 
 # Global configuration instance
 _config_instance: ConfigManager | None = None
-_config_lock: Lock | None = None
+# Create lock at module load time to avoid race condition in lazy initialization
+_config_lock: Lock = threading.Lock()
 
 
 def get_config() -> ConfigManager:
     """
-    Get the global configuration instance.
+    Get the global configuration instance (thread-safe singleton).
 
     Returns:
         Global ConfigManager instance
     """
-    global _config_instance, _config_lock
+    global _config_instance
 
-    # Initialize lock if not already done (thread-safe)
-    if _config_lock is None:
-        _config_lock = threading.Lock()
-
-    # Thread-safe singleton creation
+    # Thread-safe singleton creation using double-check locking pattern
+    # Lock is created at module load time, not lazily, to prevent race condition
     if _config_instance is None:
         with _config_lock:
             # Double-check pattern to avoid race condition

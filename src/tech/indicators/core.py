@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from src.config.constants import DEFAULT_ATR_PERIOD
+
 
 def calculate_moving_averages(df: pd.DataFrame, periods: list) -> pd.DataFrame:
     """Calculate simple moving averages for multiple periods"""
@@ -24,12 +26,15 @@ def calculate_rsi(data, period: int = 14):
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
+
+    # Prevent division by zero by adding epsilon to loss
+    # When loss is 0, RS approaches infinity and RSI approaches 100
+    rs = gain / (loss + 1e-10)
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
 
-def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+def calculate_atr(df: pd.DataFrame, period: int = DEFAULT_ATR_PERIOD) -> pd.DataFrame:
     """Calculate Average True Range"""
     df = df.copy()
     high_low = df["high"] - df["low"]

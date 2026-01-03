@@ -5,8 +5,8 @@ the same market data and configuration, ensuring backtest results accurately
 predict live trading behavior.
 """
 
-from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock, patch
+from datetime import UTC, datetime
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -16,20 +16,17 @@ from src.engines.live.trading_engine import LiveTradingEngine, Position, Positio
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.models import PositionSide as SharedPositionSide
-from src.engines.shared.trailing_stop_manager import TrailingStopManager, TrailingStopUpdate
+from src.engines.shared.trailing_stop_manager import TrailingStopManager
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.strategies.components import (
-    FixedFractionSizer,
-    FixedRiskManager,
-    HoldSignalGenerator,
     Signal,
     SignalDirection,
     Strategy,
 )
-from src.strategies.components.signal_generator import SignalGenerator
-from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.signal_generator import SignalGenerator
 
 pytestmark = pytest.mark.integration
 
@@ -152,9 +149,9 @@ class TestCostCalculatorParity:
         "fee_rate,slippage_rate",
         [
             (0.001, 0.0005),  # Default rates
-            (0.002, 0.001),   # Higher rates
-            (0.0, 0.0),       # Zero costs
-            (0.0005, 0.0001), # Lower rates
+            (0.002, 0.001),  # Higher rates
+            (0.0, 0.0),  # Zero costs
+            (0.0005, 0.0001),  # Lower rates
         ],
     )
     def test_entry_cost_calculation_consistency(self, fee_rate: float, slippage_rate: float):
@@ -291,10 +288,10 @@ class TestTrailingStopParity:
     @pytest.mark.parametrize(
         "side,entry_price,current_price,expected_direction",
         [
-            (SharedPositionSide.LONG, 100.0, 105.0, "up"),   # Long profit
+            (SharedPositionSide.LONG, 100.0, 105.0, "up"),  # Long profit
             (SharedPositionSide.LONG, 100.0, 95.0, "none"),  # Long loss (no trail)
-            (SharedPositionSide.SHORT, 100.0, 95.0, "down"), # Short profit
-            (SharedPositionSide.SHORT, 100.0, 105.0, "none"),# Short loss (no trail)
+            (SharedPositionSide.SHORT, 100.0, 95.0, "down"),  # Short profit
+            (SharedPositionSide.SHORT, 100.0, 105.0, "none"),  # Short loss (no trail)
         ],
     )
     def test_trailing_direction_consistency(
@@ -414,7 +411,6 @@ class TestPositionSizingParity:
 
     def test_max_position_size_enforcement(self):
         """Verify max position size is enforced the same way."""
-        from src.engines.live.execution.entry_handler import LiveEntryHandler
 
         strategy = Mock()
         strategy.get_risk_overrides.return_value = None
@@ -504,7 +500,9 @@ class TestFeeSlippageIntegration:
         # Verify fee was charged
         assert entry_result.entry_fee == pytest.approx(expected_fee)
         # Balance should be reduced by the fee
-        assert engine.live_entry_handler.execution_engine.total_fees_paid == pytest.approx(expected_fee)
+        assert engine.live_entry_handler.execution_engine.total_fees_paid == pytest.approx(
+            expected_fee
+        )
 
     def test_slippage_affects_entry_price(self):
         """Verify slippage is applied to entry prices identically."""
@@ -544,7 +542,6 @@ class TestStopLossTakeProfitParity:
 
     def test_long_sl_triggers_on_low_breach(self):
         """Verify long SL triggers when low breaches SL level."""
-        from src.engines.live.execution.exit_handler import LiveExitHandler
 
         strategy = Mock()
         strategy.get_risk_overrides.return_value = None
@@ -586,7 +583,6 @@ class TestStopLossTakeProfitParity:
 
     def test_short_sl_triggers_on_high_breach(self):
         """Verify short SL triggers when high breaches SL level."""
-        from src.engines.live.execution.exit_handler import LiveExitHandler
 
         strategy = Mock()
         strategy.get_risk_overrides.return_value = None
@@ -682,8 +678,8 @@ class TestSharedModelConsistency:
 
     def test_position_side_enum_consistency(self):
         """Verify PositionSide enum values match between modules."""
-        from src.engines.shared.models import PositionSide as SharedSide
         from src.engines.live.trading_engine import PositionSide as LiveSide
+        from src.engines.shared.models import PositionSide as SharedSide
 
         assert SharedSide.LONG.value == LiveSide.LONG.value
         assert SharedSide.SHORT.value == LiveSide.SHORT.value

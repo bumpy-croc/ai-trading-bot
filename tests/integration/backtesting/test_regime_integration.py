@@ -4,14 +4,14 @@ from types import ModuleType, SimpleNamespace
 
 import pandas as pd
 
+from src.data_providers.mock_data_provider import MockDataProvider
 from src.engines.backtest import engine as backtesting_engine
 from src.engines.backtest.engine import Backtester
-from src.data_providers.mock_data_provider import MockDataProvider
 from src.regime.detector import RegimeConfig, RegimeDetector
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
-from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.strategies.components.strategy import Strategy
 
 
 class PeriodicSignalGenerator(SignalGenerator):

@@ -127,7 +127,7 @@ class StrategySelector:
 
         # Correlation matrix cache
         self.correlation_matrix: dict[tuple[str, str], float] = {}
-        self.correlation_cache_expiry = datetime.min
+        self.correlation_cache_expiry = datetime.min.replace(tzinfo=UTC)
         self.correlation_strategy_set: frozenset[str] | None = (
             None  # Track which strategies are cached
         )
@@ -453,6 +453,16 @@ class StrategySelector:
 
     def _calculate_regime_score(self, regime_perf) -> float:
         """Calculate score for regime-specific performance"""
+        import math
+
+        # Validate inputs are finite to prevent NaN/inf propagation
+        # Return 0.0 for invalid metrics rather than propagating corrupt values
+        if not all(
+            math.isfinite(getattr(regime_perf, attr, 0.0))
+            for attr in ["sharpe_ratio", "win_rate", "max_drawdown", "avg_return"]
+        ):
+            return 0.0
+
         # Weighted combination of regime performance metrics
         sharpe_score = min(1.0, max(0.0, regime_perf.sharpe_ratio / 2.0))
         win_rate_score = min(1.0, max(0.0, (regime_perf.win_rate - 0.3) / 0.4))
@@ -767,6 +777,6 @@ class StrategySelector:
         self.performance_cache.clear()
         self.cache_expiry.clear()
         self.correlation_matrix.clear()
-        self.correlation_cache_expiry = datetime.min
+        self.correlation_cache_expiry = datetime.min.replace(tzinfo=UTC)
 
         self.logger.info("Strategy selector cache cleared")

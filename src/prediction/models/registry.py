@@ -118,6 +118,19 @@ class PredictionModelRegistry:
         """Load a single bundle directory into a ModelBundle."""
         # Resolve real directory in case of symlink
         real_dir = vdir.resolve()
+
+        # Validate resolved path is still within registry to prevent path traversal
+        # This prevents malicious symlinks from escaping the model registry directory
+        registry_base = Path(self.config.model_registry_path).resolve()
+        try:
+            # Raises ValueError if real_dir is not relative to registry_base
+            real_dir.relative_to(registry_base)
+        except ValueError as e:
+            raise ModelLoadError(
+                f"Path traversal detected: Model path {real_dir} is outside registry {registry_base}. "
+                f"Symlinks must point to locations within the model registry."
+            ) from e
+
         version_id = real_dir.name
         # Require metadata.json and a model file
         metadata_path = real_dir / "metadata.json"
@@ -141,8 +154,16 @@ class PredictionModelRegistry:
             with open(metadata_path, encoding="utf-8") as f:
                 try:
                     md = json.load(f)
+                    # Validate metadata is a dictionary before using
+                    if not isinstance(md, dict):
+                        raise ModelLoadError(
+                            f"Invalid metadata.json: expected dict, got {type(md).__name__}. "
+                            f"File may be corrupted."
+                        )
                     metadata.update(md)
                     timeframe = str(md.get("timeframe", timeframe))
+                except json.JSONDecodeError as e:
+                    raise ModelLoadError(f"Malformed metadata.json: {e}") from e
                 except Exception as e:
                     raise ModelLoadError(f"Invalid metadata.json: {e}") from e
         else:
@@ -158,7 +179,18 @@ class PredictionModelRegistry:
             import json
 
             with open(p, encoding="utf-8") as f:
-                return json.load(f)
+                try:
+                    data = json.load(f)
+                    # Validate is dictionary - silently skip if corrupted
+                    if not isinstance(data, dict):
+                        logger.warning(
+                            "Skipping %s: expected dict, got %s", p.name, type(data).__name__
+                        )
+                        return None
+                    return data
+                except json.JSONDecodeError as e:
+                    logger.warning("Skipping %s: malformed JSON - %s", p.name, e)
+                    return None
 
         feature_schema = _load_json(feature_schema_path)
         metrics = _load_json(metrics_path)

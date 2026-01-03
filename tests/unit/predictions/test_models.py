@@ -18,13 +18,16 @@ from src.prediction.utils.caching import ModelCache, cache_prediction
 def test_get_preferred_providers_mac_prioritizes_coreml():
     """Ensure CoreML is preferred on macOS when available."""
 
-    with patch(
-        "src.prediction.models.execution_providers.platform.system",
-        return_value="Darwin",
-    ), patch(
-        "src.prediction.models.execution_providers.ort.get_available_providers",
-        return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"],
-        create=True,
+    with (
+        patch(
+            "src.prediction.models.execution_providers.platform.system",
+            return_value="Darwin",
+        ),
+        patch(
+            "src.prediction.models.execution_providers.ort.get_available_providers",
+            return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+            create=True,
+        ),
     ):
         providers = get_preferred_providers()
 

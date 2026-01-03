@@ -1,21 +1,20 @@
 from datetime import datetime
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from src.engines.backtest.engine import Backtester
 from src.data_providers.data_provider import DataProvider
+from src.engines.backtest.engine import Backtester
 from src.strategies.components import (
+    EnhancedRegimeDetector,
     Signal,
     SignalDirection,
     SignalGenerator,
     Strategy,
-    EnhancedRegimeDetector,
 )
-from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
 
 pytestmark = pytest.mark.unit
 
@@ -26,7 +25,7 @@ class DummyDataProvider(DataProvider):
         self._df = df
 
     def get_historical_data(
-        self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ):
         return self._df.copy()
 

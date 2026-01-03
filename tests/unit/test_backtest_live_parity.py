@@ -11,6 +11,22 @@ from unittest.mock import Mock
 import pytest
 
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from tests.mocks import MockDatabaseManager
+
+
+@pytest.fixture(autouse=True)
+def mock_database_manager(monkeypatch):
+    """Mock the DatabaseManager for all tests in this module."""
+    # Create a factory that sets fallback balance from initial_balance
+    original_init = MockDatabaseManager.__init__
+
+    def patched_init(self, database_url=None):
+        original_init(self, database_url)
+        # Default fallback balance for tests - will be overwritten by trading session creation
+        self._fallback_balance = 10_000.0  # Default test balance
+
+    monkeypatch.setattr(MockDatabaseManager, "__init__", patched_init)
+    monkeypatch.setattr("src.engines.live.trading_engine.DatabaseManager", MockDatabaseManager)
 
 
 def _execute_entry(
@@ -424,7 +440,9 @@ class TestExitPriceParity:
         # Long: (exit - entry) / entry * size = (95 - 100) / 100 * 0.1 = -0.005 = -0.5%
         # Cash P&L on $10,000: -0.5% of $10,000 = -$50
         expected_cash_pnl = -50.0
-        assert engine.performance_tracker.get_metrics().total_pnl == pytest.approx(expected_cash_pnl)
+        assert engine.performance_tracker.get_metrics().total_pnl == pytest.approx(
+            expected_cash_pnl
+        )
 
     def test_take_profit_exit_uses_tp_level(self):
         """When TP triggers, exit should be at TP level, not close price."""
@@ -470,7 +488,9 @@ class TestExitPriceParity:
         # Long: (exit - entry) / entry * size = (110 - 100) / 100 * 0.1 = 0.01 = 1%
         # Cash P&L on $10,000: 1% of $10,000 = $100
         expected_cash_pnl = 100.0
-        assert engine.performance_tracker.get_metrics().total_pnl == pytest.approx(expected_cash_pnl)
+        assert engine.performance_tracker.get_metrics().total_pnl == pytest.approx(
+            expected_cash_pnl
+        )
 
 
 class TestPositionSizeParity:

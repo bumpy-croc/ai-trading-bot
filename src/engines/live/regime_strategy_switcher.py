@@ -13,6 +13,27 @@ from typing import Any
 
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_REGIME_CONFIG_1D,
+    DEFAULT_REGIME_CONFIG_1H,
+    DEFAULT_REGIME_CONFIG_4H,
+    DEFAULT_REGIME_MAX_DRAWDOWN_SWITCH,
+    DEFAULT_REGIME_MIN_CONFIDENCE,
+    DEFAULT_REGIME_MIN_DATA_LENGTH,
+    DEFAULT_REGIME_MIN_DURATION_BARS,
+    DEFAULT_REGIME_MULTIPLIER_BEAR_HIGH_VOL,
+    DEFAULT_REGIME_MULTIPLIER_BEAR_LOW_VOL,
+    DEFAULT_REGIME_MULTIPLIER_BULL_HIGH_VOL,
+    DEFAULT_REGIME_MULTIPLIER_BULL_LOW_VOL,
+    DEFAULT_REGIME_MULTIPLIER_RANGE_HIGH_VOL,
+    DEFAULT_REGIME_MULTIPLIER_RANGE_LOW_VOL,
+    DEFAULT_REGIME_SWITCH_COOLDOWN_MINUTES,
+    DEFAULT_REGIME_TIMEFRAME_AGREEMENT,
+    DEFAULT_REGIME_TIMEFRAME_WEIGHTS,
+    DEFAULT_REGIME_TIMEFRAMES,
+    DEFAULT_REGIME_TRANSITION_SIZE_MULTIPLIER,
+    DEFAULT_REGIME_UNKNOWN_MULTIPLIER,
+)
 from src.engines.live.strategy_manager import StrategyManager
 from src.regime.detector import RegimeConfig, RegimeDetector, TrendLabel, VolLabel
 
@@ -35,36 +56,36 @@ class RegimeStrategyMapping:
     range_low_vol: str = "ml_basic"  # Use ML in calm range markets
     range_high_vol: str = "ml_basic"  # Use ML with reduced size in volatile ranges
 
-    # Position size adjustments by regime
-    bull_low_vol_multiplier: float = 1.0  # Full size in ideal conditions
-    bull_high_vol_multiplier: float = 0.7  # Reduced size in volatile bull
-    bear_low_vol_multiplier: float = 0.8  # Reduced size in bear market
-    bear_high_vol_multiplier: float = 0.5  # Much reduced in volatile bear
-    range_low_vol_multiplier: float = 0.6  # Reduced in range market
-    range_high_vol_multiplier: float = 0.3  # Very reduced in volatile range
+    # Position size adjustments by regime (use centralized constants)
+    bull_low_vol_multiplier: float = DEFAULT_REGIME_MULTIPLIER_BULL_LOW_VOL
+    bull_high_vol_multiplier: float = DEFAULT_REGIME_MULTIPLIER_BULL_HIGH_VOL
+    bear_low_vol_multiplier: float = DEFAULT_REGIME_MULTIPLIER_BEAR_LOW_VOL
+    bear_high_vol_multiplier: float = DEFAULT_REGIME_MULTIPLIER_BEAR_HIGH_VOL
+    range_low_vol_multiplier: float = DEFAULT_REGIME_MULTIPLIER_RANGE_LOW_VOL
+    range_high_vol_multiplier: float = DEFAULT_REGIME_MULTIPLIER_RANGE_HIGH_VOL
 
 
 @dataclass
 class SwitchingConfig:
     """Configuration for regime-based strategy switching"""
 
-    # Switching criteria
-    min_regime_confidence: float = 0.4  # Minimum confidence to switch
-    min_regime_duration: int = 15  # Minimum bars in regime before switching
-    switch_cooldown_minutes: int = 60  # Cooldown between switches
+    # Switching criteria (use centralized constants)
+    min_regime_confidence: float = DEFAULT_REGIME_MIN_CONFIDENCE
+    min_regime_duration: int = DEFAULT_REGIME_MIN_DURATION_BARS
+    switch_cooldown_minutes: int = DEFAULT_REGIME_SWITCH_COOLDOWN_MINUTES
 
     # Enhanced regime detection
     enable_multi_timeframe: bool = True  # Use multiple timeframes for confirmation
     timeframes: list = None  # Timeframes to analyze ['1h', '4h', '1d']
-    require_timeframe_agreement: float = 0.6  # Require 60% agreement across timeframes
+    require_timeframe_agreement: float = DEFAULT_REGIME_TIMEFRAME_AGREEMENT
 
     # Position management during switches
     close_positions_on_switch: bool = False  # Whether to close positions when switching
     reduce_size_during_transition: bool = True  # Reduce position sizes during transitions
-    transition_size_multiplier: float = 0.5  # Size multiplier during transitions
+    transition_size_multiplier: float = DEFAULT_REGIME_TRANSITION_SIZE_MULTIPLIER
 
     # Risk management
-    max_drawdown_switch_threshold: float = 0.15  # Switch to defensive if drawdown > 15%
+    max_drawdown_switch_threshold: float = DEFAULT_REGIME_MAX_DRAWDOWN_SWITCH
     emergency_strategy: str = "ml_basic"  # Strategy to use in emergencies
 
 
@@ -87,7 +108,7 @@ class RegimeStrategySwitcher:
 
         # Initialize timeframes for multi-timeframe analysis
         if self.switching_config.timeframes is None:
-            self.switching_config.timeframes = ["1h", "4h", "1d"]
+            self.switching_config.timeframes = list(DEFAULT_REGIME_TIMEFRAMES)
 
         # State tracking
         self.current_regime: str | None = None
@@ -116,21 +137,28 @@ class RegimeStrategySwitcher:
         logger.info("RegimeStrategySwitcher initialized")
 
     def _get_timeframe_config(self, timeframe: str) -> RegimeConfig:
-        """Get regime detection config adjusted for timeframe"""
+        """Get regime detection config adjusted for timeframe.
 
-        base_config = RegimeConfig()
+        Uses centralized constants for consistent configuration across engines.
+        """
+        # Map timeframe to centralized config
+        config_map = {
+            "1h": DEFAULT_REGIME_CONFIG_1H,
+            "4h": DEFAULT_REGIME_CONFIG_4H,
+            "1d": DEFAULT_REGIME_CONFIG_1D,
+        }
 
-        # Adjust parameters based on timeframe
-        if timeframe == "1h":
+        if timeframe in config_map:
+            cfg = config_map[timeframe]
             return RegimeConfig(
-                slope_window=30, hysteresis_k=3, min_dwell=10, trend_threshold=0.001
+                slope_window=cfg["slope_window"],
+                hysteresis_k=cfg["hysteresis_k"],
+                min_dwell=cfg["min_dwell"],
+                trend_threshold=cfg["trend_threshold"],
             )
-        elif timeframe == "4h":
-            return RegimeConfig(slope_window=20, hysteresis_k=2, min_dwell=5, trend_threshold=0.002)
-        elif timeframe == "1d":
-            return RegimeConfig(slope_window=15, hysteresis_k=2, min_dwell=3, trend_threshold=0.003)
-        else:
-            return base_config
+
+        # Fallback to default config for unknown timeframes
+        return RegimeConfig()
 
     def analyze_market_regime(self, price_data: dict[str, pd.DataFrame]) -> dict[str, Any]:
         """
@@ -151,11 +179,19 @@ class RegimeStrategySwitcher:
                 continue
 
             df = price_data[timeframe]
-            if len(df) < 60:  # Need sufficient data
+            if len(df) < DEFAULT_REGIME_MIN_DATA_LENGTH:  # Need sufficient data
                 continue
 
             detector = self.timeframe_detectors.get(timeframe, self.regime_detector)
             df_with_regime = detector.annotate(df)
+
+            # Validate annotated DataFrame is not empty before iloc access
+            if len(df_with_regime) == 0:
+                logger.warning(
+                    "Regime detector returned empty DataFrame for timeframe %s - skipping",
+                    timeframe,
+                )
+                continue
 
             # Get current regime for this timeframe
             trend_label, vol_label, confidence = detector.current_labels(df_with_regime)
@@ -195,8 +231,8 @@ class RegimeStrategySwitcher:
         confidence_sum = 0.0
         weight_sum = 0.0
 
-        # Weight longer timeframes more heavily
-        timeframe_weights = {"1h": 1.0, "4h": 1.5, "1d": 2.0}
+        # Weight longer timeframes more heavily (use centralized constant)
+        timeframe_weights = DEFAULT_REGIME_TIMEFRAME_WEIGHTS
 
         for tf, result in regime_results.items():
             regime = result["regime_label"]
@@ -353,7 +389,7 @@ class RegimeStrategySwitcher:
         """Get position size multiplier for regime"""
 
         if ":" not in regime_label:
-            return 0.5  # Conservative default
+            return DEFAULT_REGIME_UNKNOWN_MULTIPLIER
 
         trend_label, vol_label = regime_label.split(":")
 

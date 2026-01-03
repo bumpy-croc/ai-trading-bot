@@ -1,13 +1,13 @@
 # Project Status
 
-> **Last Updated**: 2025-12-22
+> **Last Updated**: 2026-01-02
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## Current Focus
 
-Implementing PSB (Plan, Setup, Build) system improvements for better development workflows and documentation maintenance.
+Reducing backtest/live engine duplication by centralizing shared entry and exit logic.
 
 ---
 
@@ -73,21 +73,18 @@ Implementing PSB (Plan, Setup, Build) system improvements for better development
 
 ## Last Session Summary
 
-**Date**: 2025-12-22
+**Date**: 2026-01-02
 
 **Work Completed**:
-- Analyzed PSB (Plan, Setup, Build) framework from Avthar's video
-- Created comprehensive PSB system analysis (`docs/PSB_SYSTEM_ANALYSIS.md`)
-- Implementing automated documentation system
+- Added shared entry and validation helpers under `src/engines/shared/`
+- Wired backtest/live entry handlers and partial-exit loops to shared helpers
+- Added unit coverage for shared entry and validation utilities
 
 **Ended At**:
-- Creating core automated docs (changelog.md, project_status.md, architecture.md)
+- Shared entry/exit helper wiring and targeted unit tests
 
 **Next Steps**:
-- Complete architecture.md
-- Add regression prevention section to CLAUDE.md
-- Create `/update-docs` slash command
-- Test the new documentation workflow
+- Run full unit test suite for shared helper changes
 
 ---
 

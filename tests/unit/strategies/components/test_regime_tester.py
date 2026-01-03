@@ -2,14 +2,13 @@
 Unit tests for RegimeTester component
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from src.strategies.components.testing.regime_tester import RegimeTester
-from src.strategies.components.regime_context import RegimeContext
+import numpy as np
+import pandas as pd
+
 from src.regime.detector import TrendLabel, VolLabel
+from src.strategies.components.testing.regime_tester import RegimeTester
 
 
 class TestRegimeTesterVolatilityParsing:
