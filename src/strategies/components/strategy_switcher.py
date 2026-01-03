@@ -886,7 +886,7 @@ class StrategySwitcher:
             relative_improvement = improvement / estimated_current_score
         else:
             # If current score is 0 or negative, any positive improvement is significant
-            relative_improvement = improvement if improvement > 0 else 0
+            relative_improvement = max(0, improvement)
 
         # Check if improvement meets the threshold
         meets_threshold = relative_improvement >= self.config.min_improvement_threshold
