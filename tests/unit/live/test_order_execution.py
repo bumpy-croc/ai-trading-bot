@@ -247,6 +247,36 @@ class TestExecuteEntry:
 
         assert result.order_id == "order123"
 
+    def test_execute_entry_rescales_fee_without_commission(self, mock_exchange):
+        """Entry reconciliation rescales fees when commission is unavailable."""
+        engine = LiveExecutionEngine(
+            fee_rate=0.001,
+            slippage_rate=0.0,
+            enable_live_trading=True,
+            exchange_interface=mock_exchange,
+        )
+        engine._cost_calculator.maker_fee_rate = 0.0002
+
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.FILLED
+        order_details.average_price = 100.0
+        order_details.filled_quantity = 0.5
+        order_details.commission = 0.0
+        mock_exchange.get_order.return_value = order_details
+
+        result = engine.execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size_fraction=0.1,
+            base_price=100.0,
+            balance=1000.0,
+            liquidity="maker",
+        )
+
+        expected_fee = 50.0 * engine._cost_calculator.maker_fee_rate
+        assert result.entry_fee == pytest.approx(expected_fee)
+        assert engine.total_fees_paid == pytest.approx(expected_fee)
+
 
 # ============================================================================
 # Tests for LiveExecutionEngine exit execution
@@ -281,6 +311,35 @@ class TestExecuteExit:
         assert result.success is True
         call_kwargs = mock_exchange.place_order.call_args.kwargs
         assert call_kwargs["side"] == OrderSide.BUY
+
+    def test_execute_exit_preserves_maker_fee_without_commission(self, mock_exchange):
+        """Exit reconciliation preserves maker fee when commission is missing."""
+        engine = LiveExecutionEngine(
+            fee_rate=0.001,
+            slippage_rate=0.0,
+            enable_live_trading=True,
+            exchange_interface=mock_exchange,
+        )
+        engine._cost_calculator.maker_fee_rate = 0.0002
+
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.FILLED
+        order_details.average_price = 100.0
+        order_details.filled_quantity = 10.0
+        order_details.commission = 0.0
+        mock_exchange.get_order.return_value = order_details
+
+        result = engine.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="order123",
+            base_price=100.0,
+            position_notional=1000.0,
+            liquidity="maker",
+        )
+
+        expected_fee = 1000.0 * engine._cost_calculator.maker_fee_rate
+        assert result.exit_fee == pytest.approx(expected_fee)
 
 
 # ============================================================================

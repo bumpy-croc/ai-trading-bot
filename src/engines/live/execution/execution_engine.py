@@ -301,6 +301,7 @@ class LiveExecutionEngine:
 
             # Calculate position value and costs using shared cost calculator
             position_value = size_fraction * balance
+            original_position_value = position_value
             side_str = self._position_side_to_str(side)
 
             cost_result = self._cost_calculator.calculate_entry_costs(
@@ -360,12 +361,20 @@ class LiveExecutionEngine:
                             slippage_delta = slippage_cost - cost_result.slippage_cost
                             self._adjust_cost_totals(fee_delta, slippage_delta)
                         else:
+                            # Preserves liquidity-aware fee rate when commissions are unavailable.
+                            fee_rate = (
+                                cost_result.fee / original_position_value
+                                if original_position_value > 0
+                                else 0.0
+                            )
+                            entry_fee = position_value * fee_rate
                             slippage_cost = self._calculate_slippage_from_fill(
                                 base_price, executed_price, position_value
                             )
+                            fee_delta = entry_fee - cost_result.fee
                             slippage_delta = slippage_cost - cost_result.slippage_cost
-                            if slippage_delta != 0:
-                                self._adjust_cost_totals(0.0, slippage_delta)
+                            if fee_delta != 0 or slippage_delta != 0:
+                                self._adjust_cost_totals(fee_delta, slippage_delta)
                     else:
                         logger.debug(
                             "Entry order %s fill missing average price; using simulated execution",
@@ -434,6 +443,8 @@ class LiveExecutionEngine:
                     success=False, error=f"Invalid position notional: {position_notional}"
                 )
 
+            original_notional = position_notional
+
             # Calculate costs using shared cost calculator
             side_str = self._position_side_to_str(side)
 
@@ -489,7 +500,11 @@ class LiveExecutionEngine:
                             slippage_delta = slippage_cost - cost_result.slippage_cost
                             self._adjust_cost_totals(fee_delta, slippage_delta)
                         else:
-                            exit_fee = self._cost_calculator.calculate_fee(position_notional)
+                            # Preserves liquidity-aware fee rate when commissions are unavailable.
+                            fee_rate = (
+                                cost_result.fee / original_notional if original_notional > 0 else 0.0
+                            )
+                            exit_fee = position_notional * fee_rate
                             slippage_cost = self._calculate_slippage_from_fill(
                                 base_price, executed_price, position_notional
                             )

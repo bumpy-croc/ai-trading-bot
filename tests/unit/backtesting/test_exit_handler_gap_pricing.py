@@ -102,7 +102,7 @@ def test_short_stop_loss_uses_candle_high_on_gap() -> None:
 
 
 def test_execute_exit_preserves_gap_price_for_stop_loss() -> None:
-    """Stop-loss exits should not override worst-case gap pricing."""
+    """Stop-loss exits should use execution-model gap pricing and keep slippage enabled."""
     position_tracker = PositionTracker()
     trade = ActiveTrade(
         symbol="TEST",
@@ -119,7 +119,7 @@ def test_execute_exit_preserves_gap_price_for_stop_loss() -> None:
     execution_model = Mock()
     execution_model.decide_fill.return_value = ExecutionDecision(
         should_fill=True,
-        fill_price=95.0,
+        fill_price=94.0,
         filled_quantity=trade.size,
         liquidity="taker",
         reason="stop order triggered",
@@ -144,7 +144,7 @@ def test_execute_exit_preserves_gap_price_for_stop_loss() -> None:
     )
 
     exit_handler.execute_exit(
-        exit_price=94.0,
+        exit_price=95.0,
         exit_reason="Stop loss",
         current_time=datetime(2024, 1, 1, 1),
         current_price=98.0,
@@ -157,4 +157,4 @@ def test_execute_exit_preserves_gap_price_for_stop_loss() -> None:
     base_price = call_kwargs["base_price"]
     apply_slippage = call_kwargs["apply_slippage"]
     assert base_price == pytest.approx(94.0)
-    assert apply_slippage is False
+    assert apply_slippage is True
