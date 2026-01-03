@@ -47,6 +47,56 @@ Run `atb dev setup` to execute helper scripts (pre-commit hooks, git config) use
 - `atb tests download` – smoke test data downloads via CCXT.
 - `atb tests parse-junit tests/reports/unit.xml --label "Unit Tests"` – parse a JUnit XML report and print condensed failure summaries in CI logs.
 
+## Test reproducibility guidelines
+
+Regression tests must produce identical results across environments (local macOS, CI Linux, etc.). Follow these principles:
+
+### Dependency injection for test isolation
+
+When testing components that import and instantiate classes at runtime, use dependency injection instead of monkeypatching:
+
+```python
+# ❌ Bad: Monkeypatching doesn't work for runtime imports
+monkeypatch.setattr("src.module.ClassName", StubClass)
+
+# ✅ Good: Inject test doubles via constructor parameters
+backtester = Backtester(
+    strategy=test_strategy,
+    _regime_switcher_class=StubRegimeStrategySwitcher,  # Internal testing param
+    _strategy_manager_class=stub_manager,  # Can be class or instance
+)
+```
+
+**Why this matters**: Monkeypatching module-level attributes fails when the target code imports the class inside a method (after the patch is applied). Dependency injection ensures test doubles are actually used.
+
+### Deterministic test fixtures
+
+- Use deterministic data: fixed seeds, static arrays, or deterministic generators
+- Avoid system time (`datetime.now()`) - use fixed timestamps
+- Pin all randomness with explicit seeds
+- Use lowercase frequency strings in pandas (`freq="h"` not `freq="H"`) to avoid deprecation warnings
+
+### Verifying determinism
+
+Run regression tests 10 times consecutively to confirm identical results:
+
+```bash
+for i in {1..10}; do
+  pytest tests/integration/backtesting/test_regime_regression.py -v || exit 1
+done
+```
+
+All assertions should pass with exact floating-point equality (`==`) or very tight tolerances (`rel=1e-5, abs=1e-5`).
+
+### Example: Regime regression test
+
+The regime regression test (`tests/integration/backtesting/test_regime_regression.py`) demonstrates these principles:
+
+1. **Deterministic fixtures**: `_build_fixture_dataframe()` creates reproducible OHLCV data
+2. **Stub components**: `StubRegimeStrategySwitcher` and `StubStrategyManager` provide controlled behavior
+3. **Dependency injection**: Backtester accepts `_regime_switcher_class` and `_strategy_manager_class` for testing
+4. **Snapshot validation**: Results are compared against a committed JSON snapshot
+
 ## Code quality
 
 - `atb dev quality` – run Black formatting, Ruff linting, MyPy type checks, and Bandit security scans.

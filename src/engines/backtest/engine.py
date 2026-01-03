@@ -157,6 +157,8 @@ class Backtester:
         use_next_bar_execution: bool = False,
         use_high_low_for_stops: bool = True,
         max_position_size: float | None = None,
+        _regime_switcher_class: type | None = None,
+        _strategy_manager_class: type | None = None,
     ) -> None:
         """Initialize backtester with strategy and configuration.
 
@@ -185,6 +187,8 @@ class Backtester:
             use_next_bar_execution: Execute entries on next bar's open.
             use_high_low_for_stops: Use high/low for SL/TP detection.
             max_position_size: Maximum position size as fraction of balance (backward compatibility).
+            _regime_switcher_class: Optional regime switcher class for testing (internal).
+            _strategy_manager_class: Optional strategy manager class for testing (internal).
         """
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
@@ -308,6 +312,8 @@ class Backtester:
         # Regime switching
         self.enable_regime_switching = enable_regime_switching
         self.regime_handler: RegimeHandler | None = None
+        self._regime_switcher_class = _regime_switcher_class
+        self._strategy_manager_class = _strategy_manager_class
         self._init_regime_switching(regime_config, strategy_mapping, switching_config)
 
         # Database logging
@@ -413,14 +419,30 @@ class Backtester:
             return
 
         try:
-            from src.engines.live.regime_strategy_switcher import RegimeStrategySwitcher
-            from src.engines.live.strategy_manager import StrategyManager
+            # Use injected classes/instances for testing, or import real classes
+            if self._regime_switcher_class is not None and self._strategy_manager_class is not None:
+                RegimeStrategySwitcherClass = self._regime_switcher_class
+                # Allow passing instance or class for strategy manager
+                if callable(self._strategy_manager_class):
+                    strategy_manager = self._strategy_manager_class()
+                else:
+                    strategy_manager = self._strategy_manager_class
+            else:
+                from src.engines.live.regime_strategy_switcher import RegimeStrategySwitcher
+                from src.engines.live.strategy_manager import StrategyManager
 
-            strategy_manager = StrategyManager()
-            strategy_key = self._normalize_strategy_key(self.strategy.name)
-            strategy_manager.load_strategy(strategy_key)
+                RegimeStrategySwitcherClass = RegimeStrategySwitcher
+                strategy_manager = StrategyManager()
 
-            regime_switcher = RegimeStrategySwitcher(
+            # Load initial strategy if needed
+            if (
+                not hasattr(strategy_manager, "current_strategy")
+                or strategy_manager.current_strategy is None
+            ):
+                strategy_key = self._normalize_strategy_key(self.strategy.name)
+                strategy_manager.load_strategy(strategy_key)
+
+            regime_switcher = RegimeStrategySwitcherClass(
                 strategy_manager=strategy_manager,
                 regime_config=regime_config,
                 strategy_mapping=strategy_mapping,
