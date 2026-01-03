@@ -74,6 +74,34 @@ class TestNormalizeTimezone:
         assert result1 == ts1.tz_localize("UTC")
         assert result2 == ts2
 
+    def test_non_utc_timezone_preserved(self):
+        # Arrange - use non-UTC timezone to verify it's preserved
+        ts1 = pd.Timestamp("2024-01-01 12:00:00", tz="America/New_York")
+        ts2 = pd.Timestamp("2024-01-02 12:00:00")  # naive
+
+        # Act
+        result1, result2 = normalize_timezone(ts1, ts2)
+
+        # Assert - non-UTC timezone is preserved, naive becomes UTC
+        assert result1.tzinfo is not None
+        assert result2.tzinfo is not None
+        # Original non-UTC timestamp preserved (not converted to UTC)
+        assert str(result1.tz) == "America/New_York"
+        # Naive timestamp localized to UTC
+        assert str(result2.tz) == "UTC"
+
+    def test_both_non_utc_timezones(self):
+        # Arrange - both timestamps have non-UTC timezones
+        ts1 = pd.Timestamp("2024-01-01 12:00:00", tz="America/New_York")
+        ts2 = pd.Timestamp("2024-01-02 12:00:00", tz="Europe/London")
+
+        # Act
+        result1, result2 = normalize_timezone(ts1, ts2)
+
+        # Assert - both timezones preserved (pandas handles cross-tz comparison)
+        assert str(result1.tz) == "America/New_York"
+        assert str(result2.tz) == "Europe/London"
+
 
 @pytest.mark.fast
 class TestAssessSentimentDataQuality:

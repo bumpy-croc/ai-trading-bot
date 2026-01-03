@@ -339,7 +339,7 @@ def save_artifacts(
             try:
                 temp_link.unlink()
             except OSError:
-                # Ignore cleanup errors - primary error already logged
+                # Ignores cleanup errors - primary error takes precedence
                 pass
         logger.error(f"Failed to update 'latest' symlink: {e}")
         raise RuntimeError(f"Failed to update 'latest' symlink at {latest_link}") from e

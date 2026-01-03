@@ -29,17 +29,18 @@ EPSILON_RSI_DIVISION = 1e-10  # Prevents division by zero in RSI calculation (av
 
 def normalize_timezone(ts1: pd.Timestamp, ts2: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
     """
-    Normalize two timestamps to both be UTC-aware for safe comparison.
+    Normalize two timestamps to both be timezone-aware for safe comparison.
 
-    Converts naive timestamps to UTC and ensures both timestamps have timezone
-    information. This follows the CODE.md guideline to always use UTC-aware datetimes.
+    Converts naive timestamps to UTC. Already timezone-aware timestamps are
+    preserved as-is (pandas handles cross-timezone comparison correctly).
+    This follows the CODE.md guideline to always use timezone-aware datetimes.
 
     Args:
-        ts1: First timestamp
-        ts2: Second timestamp
+        ts1: First timestamp (naive or timezone-aware)
+        ts2: Second timestamp (naive or timezone-aware)
 
     Returns:
-        Tuple of UTC-aware timestamps that can be compared safely
+        Tuple of timezone-aware timestamps that can be compared safely
     """
     # Avoid reassigning function parameters (CODE.md line 77)
     normalized_ts1 = ts1.tz_localize("UTC") if ts1.tzinfo is None else ts1

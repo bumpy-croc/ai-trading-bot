@@ -302,13 +302,12 @@ class CloudTrainingOrchestrator:
         import tempfile
 
         job_suffix = job_id.split("/")[-1] if job_id else ""
-        # Validate: alphanumeric/hyphens/underscores, reasonable length, no path separators
+        # Validate: alphanumeric/hyphens/underscores only, reasonable length
+        # Note: regex ^[\w\-]+$ already excludes path separators (/, \)
         if (
             not job_suffix
             or not re.match(r"^[\w\-]+$", job_suffix)
             or len(job_suffix) > MAX_JOB_SUFFIX_LENGTH
-            or "/" in job_suffix
-            or "\\" in job_suffix
         ):
             job_suffix = "download"
 
