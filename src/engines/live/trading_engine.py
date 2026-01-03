@@ -59,6 +59,7 @@ from src.engines.shared.models import (
     BaseTrade,
     PositionSide,
 )
+from src.performance.metrics import Side, pnl_percent
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
@@ -3482,17 +3483,19 @@ class LiveTradingEngine:
                         if position.current_size is not None
                         else position.size
                     )
-                    # Guard against division by zero
+                    # Guard against division by zero (pnl_percent handles this but we log)
                     if position.entry_price <= 0:
                         logger.error(
                             f"Invalid entry_price {position.entry_price} for position "
                             f"{position.symbol} - skipping reconciliation"
                         )
                         continue
-                    if position.side == PositionSide.LONG:
-                        pnl_pct = (exit_price - position.entry_price) / position.entry_price
-                    else:
-                        pnl_pct = (position.entry_price - exit_price) / position.entry_price
+
+                    # Use shared pnl_percent for parity with backtest engine
+                    side_enum = Side.LONG if position.side == PositionSide.LONG else Side.SHORT
+                    pnl_pct_sized = pnl_percent(
+                        position.entry_price, exit_price, side_enum, fraction
+                    )
 
                     # Use entry_balance for PnL calculation to maintain backtest-live parity
                     basis_balance = (
@@ -3508,7 +3511,7 @@ class LiveTradingEngine:
                     exit_slippage_cost = self.live_execution_engine.calculate_slippage_cost(
                         exit_position_notional
                     )
-                    realized_pnl = pnl_pct * fraction * basis_balance - exit_fee
+                    realized_pnl = pnl_pct_sized * basis_balance - exit_fee
 
                     # Atomic balance update for offline stop-loss reconciliation
                     if self.trading_session_id is not None:
@@ -3547,7 +3550,7 @@ class LiveTradingEngine:
                         entry_time=position.entry_time,
                         exit_time=datetime.now(UTC),
                         pnl=realized_pnl,
-                        pnl_percent=pnl_pct,
+                        pnl_percent=pnl_pct_sized,
                         exit_reason="stop_loss_offline",
                     )
                     self.performance_tracker.record_trade(
