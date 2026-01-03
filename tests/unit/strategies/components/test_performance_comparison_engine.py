@@ -450,19 +450,15 @@ class TestPerformanceComparisonEngine:
         assert len(result.recommendations) > 0
         assert any("should not proceed" in rec.lower() for rec in result.recommendations)
 
-    @patch("src.strategies.components.testing.performance_comparison_engine.Path")
-    def test_export_results(self, mock_path, mock_backtest_engine):
+    def test_export_results(self, mock_backtest_engine, tmp_path):
         """Test results export functionality."""
         from src.strategies.components.testing.performance_parity_validator import (
             PerformanceComparisonReport,
         )
 
-        # Mock Path operations
-        mock_export_dir = Mock()
-        mock_path.return_value = mock_export_dir
-        mock_export_dir.mkdir.return_value = None
-
-        config = ComparisonConfig(export_results=True, export_directory="test_exports")
+        # Use a real temporary directory instead of mocking Path
+        export_dir = tmp_path / "test_exports"
+        config = ComparisonConfig(export_results=True, export_directory=str(export_dir))
         engine = PerformanceComparisonEngine(config, mock_backtest_engine)
 
         # Create a sample result
@@ -489,8 +485,11 @@ class TestPerformanceComparisonEngine:
         # Should not raise exception
         engine._export_results(result)
 
-        # Verify directory creation was attempted
-        mock_export_dir.mkdir.assert_called_once_with(exist_ok=True)
+        # Verify directory was created and files were written
+        assert export_dir.exists()
+        # Check that at least one export file was created
+        files = list(export_dir.iterdir())
+        assert len(files) > 0
 
     def test_generate_text_report(self, mock_backtest_engine):
         """Test text report generation."""

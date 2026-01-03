@@ -638,7 +638,7 @@ class Strategy:
         """Detect market regime"""
         try:
             return self.regime_detector.detect_regime(df, index)
-        except (ValueError, KeyError, IndexError) as e:
+        except Exception as e:
             self.logger.warning("Regime detection failed: %s", e)
             return None
 
@@ -651,7 +651,7 @@ class Strategy:
         """Generate trading signal"""
         try:
             return self.signal_generator.generate_signal(df, index, regime)
-        except (ValueError, KeyError, IndexError) as e:
+        except Exception as e:
             self.logger.exception("Signal generation failed")
             return Signal(
                 direction=SignalDirection.HOLD,
@@ -756,7 +756,7 @@ class Strategy:
                 regime,
                 **filtered_context,
             )
-        except (ValueError, KeyError, AttributeError):
+        except Exception:
             self.logger.exception("Risk position size calculation failed")
             return 0.0
 
@@ -770,7 +770,7 @@ class Strategy:
         """Calculate final position size using position sizer"""
         try:
             return self.position_sizer.calculate_size(signal, balance, risk_amount, regime)
-        except (ValueError, KeyError, AttributeError):
+        except Exception:
             self.logger.exception("Final position size calculation failed")
             return risk_amount  # Fallback to risk manager's calculation
 

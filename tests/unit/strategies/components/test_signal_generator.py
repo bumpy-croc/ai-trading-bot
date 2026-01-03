@@ -34,7 +34,7 @@ class TestSignal:
 
     def test_signal_validation_direction(self):
         """Test signal direction validation"""
-        with pytest.raises(ValueError, match="direction must be a SignalDirection enum"):
+        with pytest.raises(TypeError, match="direction must be a SignalDirection enum"):
             Signal(direction="invalid", strength=0.5, confidence=0.5, metadata={})
 
     def test_signal_validation_strength_bounds(self):
@@ -59,7 +59,7 @@ class TestSignal:
 
     def test_signal_validation_metadata_type(self):
         """Test signal metadata type validation"""
-        with pytest.raises(ValueError, match="metadata must be a dictionary"):
+        with pytest.raises(TypeError, match="metadata must be a dictionary"):
             Signal(direction=SignalDirection.BUY, strength=0.5, confidence=0.5, metadata="invalid")
 
 
@@ -635,7 +635,7 @@ class TestHierarchicalSignalGenerator:
                 super().__init__(name)
 
             def generate_signal(self, df, index, regime=None):
-                raise Exception("Primary failed")
+                raise ValueError("Primary failed")
 
             def get_confidence(self, df, index):
                 return 0.5
@@ -659,7 +659,7 @@ class TestHierarchicalSignalGenerator:
                 super().__init__(name)
 
             def generate_signal(self, df, index, regime=None):
-                raise Exception(f"{name} failed")
+                raise ValueError(f"{self.name} failed")
 
             def get_confidence(self, df, index):
                 return 0.5
@@ -874,7 +874,7 @@ class TestRegimeAdaptiveSignalGenerator:
                 super().__init__(name)
 
             def generate_signal(self, df, index, regime=None):
-                raise Exception(f"{name} failed")
+                raise ValueError(f"{self.name} failed")
 
             def get_confidence(self, df, index):
                 return 0.5

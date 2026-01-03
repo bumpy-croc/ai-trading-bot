@@ -225,7 +225,7 @@ class PerformanceComparisonEngine:
             self.logger.info(f"Strategy comparison completed: {result.overall_validation_result}")
             return result
 
-        except (ValueError, KeyError, TypeError) as e:
+        except Exception as e:
             self.logger.exception("Strategy comparison failed")
             # Return a failed result
             return StrategyComparisonResult(
