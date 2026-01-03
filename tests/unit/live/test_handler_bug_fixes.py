@@ -228,7 +228,7 @@ class TestStopLossGapPricing:
     """Test stop-loss exits use adverse candle extremes on gap-through moves."""
 
     def test_stop_loss_uses_candle_low_for_long_gap(self) -> None:
-        """Long stop-loss exits should use the candle low when price gaps through."""
+        """Long stop-loss exits should use the candle low and keep slippage enabled."""
         position_tracker = LivePositionTracker()
         execution_engine = MagicMock()
         execution_engine.execute_exit.return_value = MagicMock(
@@ -272,10 +272,10 @@ class TestStopLossGapPricing:
         apply_slippage = call_kwargs["apply_slippage"]
 
         assert base_price == pytest.approx(80.0)
-        assert apply_slippage is False
+        assert apply_slippage is True
 
     def test_stop_loss_uses_candle_high_for_short_gap(self) -> None:
-        """Short stop-loss exits should use the candle high when price gaps through."""
+        """Short stop-loss exits should use the candle high and keep slippage enabled."""
         position_tracker = LivePositionTracker()
         execution_engine = MagicMock()
         execution_engine.execute_exit.return_value = MagicMock(
@@ -319,7 +319,56 @@ class TestStopLossGapPricing:
         apply_slippage = call_kwargs["apply_slippage"]
 
         assert base_price == pytest.approx(120.0)
-        assert apply_slippage is False
+        assert apply_slippage is True
+
+    def test_stop_loss_ignores_nan_candle_values(self) -> None:
+        """NaN candle values should be ignored, using base exit price instead."""
+        import math
+
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        execution_engine.execute_exit.return_value = MagicMock(
+            success=True,
+            executed_price=100.0,
+            exit_fee=0.0,
+            slippage_cost=0.0,
+        )
+
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            entry_price=120.0,
+            entry_time=datetime.now(UTC),
+            entry_balance=1000.0,
+            order_id="sl-nan-test",
+            stop_loss=100.0,
+        )
+        position_tracker.open_position(position)
+
+        # Pass NaN as candle_low - should fall back to limit_price
+        exit_handler.execute_exit(
+            position=position,
+            exit_reason="Stop loss",
+            current_price=105.0,
+            limit_price=100.0,
+            current_balance=1000.0,
+            candle_high=110.0,
+            candle_low=math.nan,  # NaN should be ignored
+        )
+
+        execute_exit_call = execution_engine.execute_exit.call_args
+        call_kwargs = execute_exit_call.kwargs
+        base_price = call_kwargs["base_price"]
+
+        # Should use limit_price (100.0) not NaN candle_low
+        assert base_price == pytest.approx(100.0)
 
 
 class TestExitConditionOrdering:

@@ -6,6 +6,7 @@ to ensure consistent snapshot construction and order side mapping.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -24,17 +25,24 @@ DEFAULT_VOLUME = 0.0
 def coerce_float(value: object, fallback: float) -> float:
     """Coerce a value to float or return fallback on failure.
 
+    Returns the fallback for None, non-coercible values, NaN, or infinity
+    to prevent invalid data from corrupting position state.
+
     Args:
         value: Value to coerce (may be None, int, float, str, etc.)
-        fallback: Value to return if coercion fails.
+        fallback: Value to return if coercion fails or value is non-finite.
 
     Returns:
-        The coerced float value, or fallback if coercion fails.
+        The coerced float value, or fallback if coercion fails or value is NaN/infinity.
     """
     if value is None:
         return fallback
     try:
-        return float(value)
+        result = float(value)
+        # Return fallback for NaN/infinity to prevent state corruption
+        if not math.isfinite(result):
+            return fallback
+        return result
     except (TypeError, ValueError):
         return fallback
 

@@ -7,6 +7,7 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -217,12 +218,14 @@ class LiveExitHandler:
             return base_exit_price
 
         if position.side == PositionSide.LONG:
-            if candle_low is None:
+            # Use candle low for worst-case gap-through execution on long stop-loss
+            if candle_low is None or not math.isfinite(candle_low):
                 return base_exit_price
             return min(base_exit_price, candle_low)
 
         if position.side == PositionSide.SHORT:
-            if candle_high is None:
+            # Use candle high for worst-case gap-through execution on short stop-loss
+            if candle_high is None or not math.isfinite(candle_high):
                 return base_exit_price
             return max(base_exit_price, candle_high)
 
@@ -374,19 +377,6 @@ class LiveExitHandler:
         )
 
         apply_slippage = True
-        if self.use_high_low_for_stops and self._is_stop_loss_reason(exit_reason):
-            if (
-                position.side == PositionSide.LONG
-                and candle_low is not None
-                and base_exit_price <= candle_low
-            ):
-                apply_slippage = False
-            elif (
-                position.side == PositionSide.SHORT
-                and candle_high is not None
-                and base_exit_price >= candle_high
-            ):
-                apply_slippage = False
 
         # IMPORTANT: Use exit notional (accounting for price change) for accurate fee calculation.
         # This correctly models real exchange behavior where fees are charged on the actual
