@@ -7,7 +7,6 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -23,8 +22,13 @@ from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
 )
+from src.engines.shared.side_utils import to_side_string
 from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
+from src.engines.shared.validation import (
+    convert_exit_fraction_to_current,
+    is_position_fully_closed,
+)
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -208,21 +212,21 @@ class ExitHandler:
                 # Calculate exit size from fraction of original
                 exit_size_of_original = result.exit_fraction
                 # Convert from fraction-of-original to fraction-of-current
-                current_size_fraction = trade.current_size / trade.original_size
-
-                # Protect against division by zero (position fully closed)
-                if abs(current_size_fraction) < EPSILON:
+                if is_position_fully_closed(
+                    trade.current_size,
+                    trade.original_size,
+                    epsilon=EPSILON,
+                ):
                     logger.debug("Position fully closed, skipping further partial exits")
                     break
 
-                exit_size_of_current = exit_size_of_original / current_size_fraction
-
-                # Validate bounds and check for NaN/Infinity
-                if (
-                    exit_size_of_current <= 0
-                    or exit_size_of_current > 1.0
-                    or not math.isfinite(exit_size_of_current)
-                ):
+                exit_size_of_current = convert_exit_fraction_to_current(
+                    exit_fraction_of_original=exit_size_of_original,
+                    current_size=trade.current_size,
+                    original_size=trade.original_size,
+                    epsilon=EPSILON,
+                )
+                if exit_size_of_current is None:
                     break
 
                 iteration_count += 1
@@ -354,7 +358,7 @@ class ExitHandler:
             candle_low = current_price
 
         # Convert PositionSide enum to string for comparisons
-        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        side_str = to_side_string(trade.side)
 
         # Check stop loss
         hit_stop_loss = False
@@ -516,7 +520,7 @@ class ExitHandler:
 
         # Calculate exit costs
         # Convert PositionSide enum to string for cost calculation
-        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        side_str = to_side_string(trade.side)
         final_exit_price, exit_fee, slippage_cost = self.execution_engine.calculate_exit_costs(
             base_price=exit_price,
             side=side_str,

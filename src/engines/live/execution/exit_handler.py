@@ -7,7 +7,6 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -31,6 +30,10 @@ from src.engines.shared.partial_operations_manager import (
 )
 from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
+from src.engines.shared.validation import (
+    convert_exit_fraction_to_current,
+    is_position_fully_closed,
+)
 
 if TYPE_CHECKING:
     from src.position_management.time_exits import TimeExitPolicy
@@ -634,24 +637,24 @@ class LiveExitHandler:
 
                     # Convert from fraction of original to fraction of current
                     exit_size_of_original = exit_result.exit_fraction
-                    current_size_fraction = position.current_size / position.original_size
-
-                    # Protect against division by zero (position fully closed)
-                    if abs(current_size_fraction) < EPSILON:
+                    if is_position_fully_closed(
+                        position.current_size,
+                        position.original_size,
+                        epsilon=EPSILON,
+                    ):
                         logger.debug(
                             "Position %s fully closed, skipping further partial exits",
                             position.symbol,
                         )
                         break
 
-                    exit_size_of_current = exit_size_of_original / current_size_fraction
-
-                    # Validate bounds and check for NaN/Infinity
-                    if (
-                        exit_size_of_current <= 0
-                        or exit_size_of_current > 1.0
-                        or not math.isfinite(exit_size_of_current)
-                    ):
+                    exit_size_of_current = convert_exit_fraction_to_current(
+                        exit_fraction_of_original=exit_size_of_original,
+                        current_size=position.current_size,
+                        original_size=position.original_size,
+                        epsilon=EPSILON,
+                    )
+                    if exit_size_of_current is None:
                         break
 
                     self._execute_partial_exit(

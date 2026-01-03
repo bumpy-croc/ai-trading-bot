@@ -19,9 +19,13 @@ from src.config.constants import (
     DEFAULT_TAKE_PROFIT_PCT,
 )
 from src.engines.backtest.models import ActiveTrade
+from src.engines.shared.entry_utils import (
+    extract_entry_plan,
+    resolve_stop_loss_take_profit_pct,
+)
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
-from src.strategies.components import SignalDirection
-from src.utils.bounds import clamp_fraction, clamp_stop_loss_pct
+from src.engines.shared.models import PositionSide
+from src.engines.shared.side_utils import to_side_string
 from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
@@ -192,10 +196,11 @@ class EntryHandler:
             entry_side=entry_side,
             runtime_decision=runtime_decision,
         )
+        side_str = to_side_string(entry_side)
 
         # Build entry reasons
         reasons.append("runtime_entry")
-        reasons.append(f"side_{entry_side}")
+        reasons.append(f"side_{side_str}")
         reasons.append(f"position_size_{size_fraction:.4f}")
         reasons.append(f"balance_{balance:.2f}")
 
@@ -214,12 +219,12 @@ class EntryHandler:
             entry_price=current_price,
             sl_pct=sl_pct,
             tp_pct=tp_pct,
-            side=entry_side,
+            side=side_str,
         )
 
         return EntrySignalResult(
             should_enter=True,
-            side=entry_side,
+            side=side_str,
             size_fraction=size_fraction,
             stop_loss=stop_loss,
             take_profit=take_profit,
@@ -392,7 +397,7 @@ class EntryHandler:
         self,
         decision: Any,
         balance: float,
-    ) -> tuple[str | None, float]:
+    ) -> tuple[PositionSide | None, float]:
         """Extract entry side and size from runtime decision.
 
         Args:
@@ -402,36 +407,15 @@ class EntryHandler:
         Returns:
             Tuple of (side, size_fraction).
         """
-        if decision is None:
+        plan = extract_entry_plan(decision, balance)
+        if plan is None:
             return None, 0.0
-
-        if balance <= 0:
-            return None, 0.0
-
-        # Check signal direction
-        if decision.signal.direction == SignalDirection.HOLD or decision.position_size <= 0:
-            return None, 0.0
-
-        # Check for short entry authorization
-        metadata = getattr(decision, "metadata", {}) or {}
-        if decision.signal.direction == SignalDirection.SELL and not bool(
-            metadata.get("enter_short")
-        ):
-            return None, 0.0
-
-        # Determine side
-        side = "long" if decision.signal.direction == SignalDirection.BUY else "short"
-
-        # Calculate size fraction
-        size_fraction = float(decision.position_size) / float(balance)
-        size_fraction = clamp_fraction(size_fraction)
-
-        return side, size_fraction
+        return plan.side, plan.size_fraction
 
     def _calculate_sl_tp_pct(
         self,
         current_price: float,
-        entry_side: str,
+        entry_side: PositionSide,
         runtime_decision: Any,
     ) -> tuple[float, float]:
         """Calculate stop loss and take profit percentages.
@@ -444,31 +428,16 @@ class EntryHandler:
         Returns:
             Tuple of (sl_pct, tp_pct).
         """
-        # Try to get stop loss from strategy
-        sl_pct = DEFAULT_STOP_LOSS_PCT
-        if self.component_strategy is not None:
-            try:
-                stop_loss_price = self.component_strategy.get_stop_loss_price(
-                    current_price,
-                    runtime_decision.signal if runtime_decision else None,
-                    runtime_decision.regime if runtime_decision else None,
-                )
-                if entry_side == "long":
-                    sl_pct = (current_price - stop_loss_price) / current_price
-                else:
-                    sl_pct = (stop_loss_price - current_price) / current_price
-                sl_pct = clamp_stop_loss_pct(sl_pct)  # Clamp 1-20%
-            except Exception:
-                pass
-
-        # Get take profit
-        tp_pct = self.default_take_profit_pct
-        if tp_pct is None and self.component_strategy is not None:
-            tp_pct = getattr(self.component_strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
-        if tp_pct is None:
-            tp_pct = DEFAULT_TAKE_PROFIT_PCT
-
-        return sl_pct, tp_pct
+        return resolve_stop_loss_take_profit_pct(
+            current_price=current_price,
+            entry_side=entry_side,
+            runtime_decision=runtime_decision,
+            component_strategy=self.component_strategy,
+            default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
+            default_take_profit_pct=self.default_take_profit_pct,
+            use_strategy_take_profit=True,
+            stop_loss_exceptions=(Exception,),
+        )
 
     def _apply_dynamic_risk(
         self,
