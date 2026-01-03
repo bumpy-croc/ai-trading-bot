@@ -286,7 +286,21 @@ LOG_JSON=true  # Enable structured logging
    atb test unit
    ```
 
-5. **Commit frequently** with clear messages:
+5. **Review code with agents** after significant changes:
+   - Use the `architecture-reviewer` agent for:
+     - New features or modules
+     - Refactoring or architectural changes
+     - Trading logic (position management, risk management, order execution)
+     - Financial calculations (P&L, fees, position sizing)
+   - Use the `code-reviewer` agent for:
+     - Bug fixes and code correctness
+     - Pull request reviews
+   - Run both agents in parallel for comprehensive reviews:
+     ```
+     Launch the architecture-reviewer and code-reviewer agents in parallel to review these changes
+     ```
+
+6. **Commit frequently** with clear messages:
    ```bash
    # Use imperative, present-tense
    git commit -m "Add short-entry guardrails to ml_basic strategy"
@@ -494,6 +508,7 @@ When Claude makes a mistake or you discover a best practice during development, 
 - Never use `.iloc[]` without bounds checking in the backtesting engine
 - ML models require feature schema validation even when features appear unused
 - Always run `atb dev quality` before committing to catch type errors early
+- Run `architecture-reviewer` and `code-reviewer` agents after significant changes (features, refactoring, trading logic, financial calculations)
 - Use `--paper-trading` flag when testing live trading changes
 - Check for existing branches before creating new ones to avoid duplicates
 - Verify database connection before running integration tests
