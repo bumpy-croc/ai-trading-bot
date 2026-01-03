@@ -521,7 +521,7 @@ class ComponentPerformanceTester:
             all_signals.extend(scenario_signals)
 
         # Calculate regime breakdown accuracies
-        for _regime_key, regime_data in regime_breakdown.items():
+        for regime_data in regime_breakdown.values():
             signals = regime_data["signals"]
             if signals:
                 regime_data["accuracy"] = sum(signals) / len(signals)

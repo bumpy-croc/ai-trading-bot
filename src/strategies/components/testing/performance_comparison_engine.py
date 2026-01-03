@@ -243,8 +243,8 @@ class PerformanceComparisonEngine:
                 statistical_tests={},
                 equivalence_tests=[],
                 overall_validation_result=ValidationResult.FAIL,
-                certification_status=f"Failed: {str(e)}",
-                recommendations=[f"Fix error: {str(e)}"],
+                certification_status=f"Failed: {e!s}",
+                recommendations=[f"Fix error: {e!s}"],
             )
 
     def _run_backtest(
