@@ -24,7 +24,6 @@ from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
 from src.engines.shared.execution.snapshot_builder import (
     build_snapshot_from_candle,
-    coerce_float,
     map_exit_order_side_from_trade,
 )
 from src.engines.shared.partial_operations_manager import (
@@ -430,12 +429,16 @@ class ExitHandler:
             if side_str == "long":
                 hit_stop_loss = candle_low <= stop_loss_val
                 if hit_stop_loss:
-                    # Use candle low for worst-case gap-through execution.
+                    # When price gaps through the stop, the position could have exited
+                    # anywhere between the stop price and the candle low. Use the worst
+                    # case (candle low) for conservative backtest assumptions.
                     sl_exit_price = candle_low
             else:
                 hit_stop_loss = candle_high >= stop_loss_val
                 if hit_stop_loss:
-                    # Use candle high for worst-case gap-through execution.
+                    # When price gaps through the stop, the position could have exited
+                    # anywhere between the stop price and the candle high. Use the worst
+                    # case (candle high) for conservative backtest assumptions.
                     sl_exit_price = candle_high
 
         # Check take profit
@@ -455,6 +458,10 @@ class ExitHandler:
         if self.time_exit_policy is not None:
             try:
                 current_time = candle.name if hasattr(candle, "name") else datetime.now(UTC)
+                # Ensure consistent timezone handling - localize naive timestamps to UTC
+                # to prevent TypeError when comparing with UTC-aware entry_time
+                if hasattr(current_time, "tzinfo") and current_time.tzinfo is None:
+                    current_time = current_time.replace(tzinfo=UTC)
                 should_time_exit, _ = self.time_exit_policy.check_time_exit_conditions(
                     trade.entry_time, current_time
                 )
@@ -580,8 +587,7 @@ class ExitHandler:
         liquidity = None
         if decision.should_fill and decision.fill_price is not None:
             liquidity = decision.liquidity
-            if order_intent.order_type != OrderType.STOP_LOSS:
-                base_exit_price = decision.fill_price
+            base_exit_price = decision.fill_price
         else:
             logger.warning(
                 "Exit fill decision fallback for %s: %s",
@@ -610,18 +616,6 @@ class ExitHandler:
         # Convert PositionSide enum to string for cost calculation
         side_str = to_side_string(trade.side)
         apply_slippage = True
-        if (
-            order_intent.order_type == OrderType.STOP_LOSS
-            and self.use_high_low_for_stops
-            and candle is not None
-            and hasattr(candle, "get")
-        ):
-            candle_low = coerce_float(candle.get("low"), base_exit_price)
-            candle_high = coerce_float(candle.get("high"), base_exit_price)
-            if side_str == "long" and base_exit_price <= candle_low:
-                apply_slippage = False
-            elif side_str == "short" and base_exit_price >= candle_high:
-                apply_slippage = False
 
         # Calculate exit costs
         final_exit_price, exit_fee, slippage_cost = self.execution_engine.calculate_exit_costs(
