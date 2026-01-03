@@ -91,6 +91,30 @@ class TestBuildSnapshotFromOhlc:
         assert snapshot.high == 50000.0
         assert snapshot.low == 50000.0
 
+    def test_nan_high_low_uses_current_price(self) -> None:
+        """NaN high/low should fall back to current price for defense-in-depth."""
+        snapshot = build_snapshot_from_ohlc(
+            symbol="BTCUSDT",
+            current_price=50000.0,
+            candle_high=math.nan,
+            candle_low=math.nan,
+        )
+
+        assert snapshot.high == 50000.0
+        assert snapshot.low == 50000.0
+
+    def test_infinity_high_low_uses_current_price(self) -> None:
+        """Infinity high/low should fall back to current price."""
+        snapshot = build_snapshot_from_ohlc(
+            symbol="BTCUSDT",
+            current_price=50000.0,
+            candle_high=math.inf,
+            candle_low=-math.inf,
+        )
+
+        assert snapshot.high == 50000.0
+        assert snapshot.low == 50000.0
+
 
 class TestBuildSnapshotFromCandle:
     """Test build_snapshot_from_candle creates valid snapshots."""

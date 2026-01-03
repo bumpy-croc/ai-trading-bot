@@ -86,25 +86,27 @@ def build_snapshot_from_ohlc(
     """Build a MarketSnapshot from explicit high/low values.
 
     Used when high/low extremes are provided separately (e.g., live exit checks).
+    Uses coerce_float for consistency with build_snapshot_from_candle, ensuring
+    NaN/infinity values fall back to current_price.
 
     Args:
         symbol: Trading symbol.
         current_price: Current market price (used as close).
-        candle_high: Candle high price (defaults to current_price if None).
-        candle_low: Candle low price (defaults to current_price if None).
+        candle_high: Candle high price (defaults to current_price if None/NaN/inf).
+        candle_low: Candle low price (defaults to current_price if None/NaN/inf).
         volume: Trading volume (defaults to 0).
 
     Returns:
         MarketSnapshot with the provided OHLC values.
     """
-    high = candle_high if candle_high is not None else current_price
-    low = candle_low if candle_low is not None else current_price
+    high = coerce_float(candle_high, current_price)
+    low = coerce_float(candle_low, current_price)
     return MarketSnapshot(
         symbol=symbol,
         timestamp=datetime.now(UTC),
         last_price=current_price,
-        high=float(high),
-        low=float(low),
+        high=high,
+        low=low,
         close=current_price,
         volume=volume,
     )
