@@ -232,7 +232,7 @@ class TestValidateModelRobustness:
         feature_names = ["feature1"]
 
         # Act & Assert
-        with pytest.raises(AssertionError, match="Expected 3D tensor"):
+        with pytest.raises(ValueError, match="Expected 3D tensor"):
             validate_model_robustness(model, X_test, y_test, feature_names, has_sentiment=False)
 
     def test_validates_sentiment_feature_indices(self):
@@ -249,7 +249,7 @@ class TestValidateModelRobustness:
         feature_names = ["f1", "f2", "f3", "sentiment_invalid"]
 
         # Act & Assert
-        with pytest.raises(AssertionError, match="exceed feature dimension"):
+        with pytest.raises(ValueError, match="exceed feature dimension"):
             validate_model_robustness(model, X_test, y_test, feature_names, has_sentiment=True)
 
 

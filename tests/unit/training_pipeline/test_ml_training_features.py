@@ -25,11 +25,11 @@ class TestNormalizeTimezone:
         # Act
         result1, result2 = normalize_timezone(ts1, ts2)
 
-        # Assert
-        assert result1 == ts1
-        assert result2 == ts2
-        assert result1.tzinfo is None
-        assert result2.tzinfo is None
+        # Assert - both naive timestamps are converted to UTC-aware
+        assert result1 == ts1.tz_localize("UTC")
+        assert result2 == ts2.tz_localize("UTC")
+        assert result1.tzinfo is not None
+        assert result2.tzinfo is not None
 
     def test_both_aware(self):
         # Arrange
@@ -53,9 +53,11 @@ class TestNormalizeTimezone:
         # Act
         result1, result2 = normalize_timezone(ts1, ts2)
 
-        # Assert
-        assert result1.tzinfo is None
-        assert result2.tzinfo is None
+        # Assert - naive timestamp is converted to UTC, aware stays as-is
+        assert result1.tzinfo is not None
+        assert result2.tzinfo is not None
+        assert result1 == ts1
+        assert result2 == ts2.tz_localize("UTC")
 
     def test_first_naive_second_aware(self):
         # Arrange
@@ -65,9 +67,11 @@ class TestNormalizeTimezone:
         # Act
         result1, result2 = normalize_timezone(ts1, ts2)
 
-        # Assert
-        assert result1.tzinfo is None
-        assert result2.tzinfo is None
+        # Assert - naive timestamp is converted to UTC, aware stays as-is
+        assert result1.tzinfo is not None
+        assert result2.tzinfo is not None
+        assert result1 == ts1.tz_localize("UTC")
+        assert result2 == ts2
 
 
 @pytest.mark.fast
