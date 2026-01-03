@@ -374,7 +374,7 @@ def test_regime_backtester_regression(monkeypatch):
         log_to_database=False,
         enable_dynamic_risk=False,
         _regime_switcher_class=StubRegimeStrategySwitcher,
-        _strategy_manager_class=strategy_manager,
+        _strategy_manager=strategy_manager,
     )
 
     start = frame.index[0].to_pydatetime()

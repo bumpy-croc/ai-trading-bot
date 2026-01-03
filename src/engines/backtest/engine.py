@@ -7,6 +7,7 @@ regime switching, and logging.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 from collections import Counter
@@ -158,7 +159,7 @@ class Backtester:
         use_high_low_for_stops: bool = True,
         max_position_size: float | None = None,
         _regime_switcher_class: type | None = None,
-        _strategy_manager_class: type | None = None,
+        _strategy_manager: Any | None = None,
     ) -> None:
         """Initialize backtester with strategy and configuration.
 
@@ -188,7 +189,7 @@ class Backtester:
             use_high_low_for_stops: Use high/low for SL/TP detection.
             max_position_size: Maximum position size as fraction of balance (backward compatibility).
             _regime_switcher_class: Optional regime switcher class for testing (internal).
-            _strategy_manager_class: Optional strategy manager class for testing (internal).
+            _strategy_manager: Optional strategy manager class or instance for testing (internal).
         """
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
@@ -312,8 +313,16 @@ class Backtester:
         # Regime switching
         self.enable_regime_switching = enable_regime_switching
         self.regime_handler: RegimeHandler | None = None
+
+        # Validate test injection parameters (both or neither must be provided)
+        if (_regime_switcher_class is None) != (_strategy_manager is None):
+            raise ValueError(
+                "Test injection requires both _regime_switcher_class and _strategy_manager, "
+                "or neither. Partial injection silently falls back to production classes."
+            )
+
         self._regime_switcher_class = _regime_switcher_class
-        self._strategy_manager_class = _strategy_manager_class
+        self._strategy_manager = _strategy_manager
         self._init_regime_switching(regime_config, strategy_mapping, switching_config)
 
         # Database logging
@@ -420,13 +429,13 @@ class Backtester:
 
         try:
             # Use injected classes/instances for testing, or import real classes
-            if self._regime_switcher_class is not None and self._strategy_manager_class is not None:
+            if self._regime_switcher_class is not None and self._strategy_manager is not None:
                 RegimeStrategySwitcherClass = self._regime_switcher_class
-                # Allow passing instance or class for strategy manager
-                if callable(self._strategy_manager_class):
-                    strategy_manager = self._strategy_manager_class()
+                # Instantiate class or use instance directly
+                if inspect.isclass(self._strategy_manager):
+                    strategy_manager = self._strategy_manager()
                 else:
-                    strategy_manager = self._strategy_manager_class
+                    strategy_manager = self._strategy_manager
             else:
                 from src.engines.live.regime_strategy_switcher import RegimeStrategySwitcher
                 from src.engines.live.strategy_manager import StrategyManager

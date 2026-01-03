@@ -63,7 +63,7 @@ monkeypatch.setattr("src.module.ClassName", StubClass)
 backtester = Backtester(
     strategy=test_strategy,
     _regime_switcher_class=StubRegimeStrategySwitcher,  # Internal testing param
-    _strategy_manager_class=stub_manager,  # Can be class or instance
+    _strategy_manager=stub_manager,  # Can be class or instance
 )
 ```
 
@@ -94,7 +94,7 @@ The regime regression test (`tests/integration/backtesting/test_regime_regressio
 
 1. **Deterministic fixtures**: `_build_fixture_dataframe()` creates reproducible OHLCV data
 2. **Stub components**: `StubRegimeStrategySwitcher` and `StubStrategyManager` provide controlled behavior
-3. **Dependency injection**: Backtester accepts `_regime_switcher_class` and `_strategy_manager_class` for testing
+3. **Dependency injection**: Backtester accepts `_regime_switcher_class` and `_strategy_manager` for testing
 4. **Snapshot validation**: Results are compared against a committed JSON snapshot
 
 ## Code quality
