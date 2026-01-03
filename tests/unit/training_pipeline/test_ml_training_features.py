@@ -6,6 +6,7 @@ import pytest
 
 from src.ml.training_pipeline.features import (
     SMA_WINDOWS,
+    _calculate_rsi_fast,
     assess_sentiment_data_quality,
     create_robust_features,
     merge_price_sentiment_data,
@@ -461,3 +462,46 @@ class TestCreateRobustFeatures:
         assert "rsi_scaled" in result_df.columns
         assert result_df["rsi_scaled"].min() >= 0
         assert result_df["rsi_scaled"].max() <= 1
+
+
+@pytest.mark.fast
+class TestCalculateRsiFast:
+    """Test _calculate_rsi_fast function."""
+
+    def test_rsi_window_zero_raises_error(self):
+        # Arrange
+        close_prices = np.array([100.0, 101.0, 102.0, 101.0, 103.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="RSI window must be positive"):
+            _calculate_rsi_fast(close_prices, window=0)
+
+    def test_rsi_window_negative_raises_error(self):
+        # Arrange
+        close_prices = np.array([100.0, 101.0, 102.0, 101.0, 103.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="RSI window must be positive"):
+            _calculate_rsi_fast(close_prices, window=-5)
+
+    def test_rsi_basic_calculation(self):
+        # Arrange - monotonically increasing prices should have high RSI
+        close_prices = np.linspace(100, 120, 50)
+
+        # Act
+        rsi = _calculate_rsi_fast(close_prices, window=14)
+
+        # Assert - RSI for uptrend should be high (near 100)
+        valid_rsi = rsi[~np.isnan(rsi)]
+        assert len(valid_rsi) > 0
+        assert np.mean(valid_rsi) > 50  # Uptrend should be above neutral
+
+    def test_rsi_returns_nans_for_insufficient_data(self):
+        # Arrange - less data than window size
+        close_prices = np.array([100.0, 101.0, 102.0])
+
+        # Act
+        rsi = _calculate_rsi_fast(close_prices, window=14)
+
+        # Assert - all values should be NaN since window > data length
+        assert np.all(np.isnan(rsi))

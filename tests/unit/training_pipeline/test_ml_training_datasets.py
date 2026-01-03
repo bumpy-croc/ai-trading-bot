@@ -208,6 +208,60 @@ class TestSplitSequences:
         assert len(X_train) == 1
         assert len(X_val) == 0  # With only 1 sample, validation set is empty (expected behavior)
 
+    def test_empty_sequences_raises_error(self):
+        # Arrange
+        sequences = np.array([]).reshape(0, 5, 3)  # Empty 3D array
+        targets = np.array([])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="Cannot split empty"):
+            split_sequences(sequences, targets)
+
+    def test_empty_targets_raises_error(self):
+        # Arrange
+        sequences = np.array([[[1.0]], [[2.0]]])
+        targets = np.array([])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="Cannot split empty"):
+            split_sequences(sequences, targets)
+
+    def test_split_ratio_zero_raises_error(self):
+        # Arrange
+        sequences = np.array([[[1.0]], [[2.0]], [[3.0]]])
+        targets = np.array([10.0, 20.0, 30.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="split_ratio must be between 0 and 1"):
+            split_sequences(sequences, targets, split_ratio=0.0)
+
+    def test_split_ratio_one_raises_error(self):
+        # Arrange
+        sequences = np.array([[[1.0]], [[2.0]], [[3.0]]])
+        targets = np.array([10.0, 20.0, 30.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="split_ratio must be between 0 and 1"):
+            split_sequences(sequences, targets, split_ratio=1.0)
+
+    def test_split_ratio_negative_raises_error(self):
+        # Arrange
+        sequences = np.array([[[1.0]], [[2.0]], [[3.0]]])
+        targets = np.array([10.0, 20.0, 30.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="split_ratio must be between 0 and 1"):
+            split_sequences(sequences, targets, split_ratio=-0.5)
+
+    def test_mismatched_lengths_raises_error(self):
+        # Arrange
+        sequences = np.array([[[1.0]], [[2.0]], [[3.0]]])
+        targets = np.array([10.0, 20.0])  # Mismatched length
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="must have same length"):
+            split_sequences(sequences, targets)
+
 
 @pytest.mark.fast
 class TestBuildTfDatasets:
@@ -338,3 +392,25 @@ class TestBuildTfDatasets:
         for batch_X, batch_y in train_ds.take(1):
             assert batch_X.shape[0] == 3  # All samples in one batch
             assert batch_y.shape[0] == 3
+
+    def test_batch_size_zero_raises_error(self):
+        # Arrange
+        X_train = np.array([[[1.0]], [[2.0]]])
+        y_train = np.array([10.0, 20.0])
+        X_val = np.array([[[3.0]]])
+        y_val = np.array([30.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="batch_size must be positive"):
+            build_tf_datasets(X_train, y_train, X_val, y_val, batch_size=0)
+
+    def test_batch_size_negative_raises_error(self):
+        # Arrange
+        X_train = np.array([[[1.0]], [[2.0]]])
+        y_train = np.array([10.0, 20.0])
+        X_val = np.array([[[3.0]]])
+        y_val = np.array([30.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="batch_size must be positive"):
+            build_tf_datasets(X_train, y_train, X_val, y_val, batch_size=-1)
