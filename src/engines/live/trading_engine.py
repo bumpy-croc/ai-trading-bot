@@ -20,6 +20,7 @@ from src.config.constants import (
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_EXECUTION_FILL_POLICY,
     DEFAULT_ERROR_COOLDOWN,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
@@ -59,6 +60,8 @@ from src.engines.shared.models import (
     PositionSide,
 )
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
@@ -514,6 +517,10 @@ class LiveTradingEngine:
         else:
             logger.debug("Skipping signal handler registration outside main thread")
 
+        # Execution modeling
+        self.execution_fill_policy = self._resolve_execution_fill_policy()
+        self.execution_model = ExecutionModel(self.execution_fill_policy)
+
         # Initialize modular handlers (use injected or create defaults)
         self._init_modular_handlers(
             position_tracker=position_tracker,
@@ -616,6 +623,7 @@ class LiveTradingEngine:
         # Entry handler
         self.live_entry_handler = entry_handler or LiveEntryHandler(
             execution_engine=self.live_execution_engine,
+            execution_model=self.execution_model,
             risk_manager=self.risk_manager,
             component_strategy=(
                 self.strategy if isinstance(self.strategy, ComponentStrategy) else None
@@ -636,6 +644,7 @@ class LiveTradingEngine:
         self.live_exit_handler = exit_handler or LiveExitHandler(
             execution_engine=self.live_execution_engine,
             position_tracker=self.live_position_tracker,
+            execution_model=self.execution_model,
             risk_manager=self.risk_manager,
             trailing_stop_policy=self.trailing_stop_policy,
             partial_manager=partial_ops_manager,
@@ -2213,6 +2222,17 @@ class LiveTradingEngine:
             return float(value)
         except (TypeError, ValueError):
             return 0.04
+
+    def _resolve_execution_fill_policy(self) -> FillPolicy:
+        """Resolve execution fill policy from configuration."""
+        policy_name = DEFAULT_EXECUTION_FILL_POLICY
+        try:
+            cfg = get_config()
+            policy_name = cfg.get("EXECUTION_FILL_POLICY", DEFAULT_EXECUTION_FILL_POLICY)
+        except Exception as exc:
+            logger.warning("Failed to read execution fill policy config: %s", exc)
+
+        return resolve_fill_policy(policy_name)
 
     def _execute_entry(
         self,

@@ -3,7 +3,6 @@
 Tests the input validation utilities for financial calculations.
 """
 
-import math
 
 import pytest
 

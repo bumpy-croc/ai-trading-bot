@@ -17,7 +17,15 @@ from src.config.constants import (
     DEFAULT_BASIS_BALANCE_FALLBACK,
     DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
 )
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import Trade
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.market_snapshot import MarketSnapshot
+from src.engines.shared.execution.order_intent import OrderIntent
+from src.engines.shared.execution.snapshot_builder import (
+    build_snapshot_from_candle,
+    map_exit_order_side_from_trade,
+)
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -39,8 +47,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Use centralized constant for partial exits limit
+# Use centralized constant for partial exits limit (defense-in-depth against malformed policies)
 MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
+ZERO_VALUE = 0.0
 
 
 @dataclass
@@ -81,6 +90,7 @@ class ExitHandler:
         execution_engine: ExecutionEngine,
         position_tracker: PositionTracker,
         risk_manager: RiskManager,
+        execution_model: ExecutionModel,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
         partial_manager: PartialOperationsManager | None = None,
@@ -93,6 +103,7 @@ class ExitHandler:
             execution_engine: Engine for executing exits.
             position_tracker: Tracker for position state.
             risk_manager: Risk manager for position updates.
+            execution_model: Execution model for fill decisions.
             trailing_stop_policy: Policy for trailing stops.
             time_exit_policy: Policy for time-based exits.
             partial_manager: Unified partial operations manager.
@@ -102,6 +113,7 @@ class ExitHandler:
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
         self.risk_manager = risk_manager
+        self.execution_model = execution_model
         self.trailing_stop_policy = trailing_stop_policy
         self.time_exit_policy = time_exit_policy
         self.partial_manager = partial_manager
@@ -110,6 +122,55 @@ class ExitHandler:
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
+
+    def _build_snapshot(
+        self,
+        symbol: str,
+        current_time: datetime,
+        current_price: float,
+        candle: pd.Series | None,
+    ) -> MarketSnapshot:
+        """Build a MarketSnapshot from the available candle data."""
+        return build_snapshot_from_candle(
+            symbol=symbol,
+            current_time=current_time,
+            current_price=current_price,
+            candle=candle,
+            default_volume=ZERO_VALUE,
+        )
+
+    def _map_exit_order_side(self, trade: Trade) -> OrderSide:
+        """Map a position side to an exit order side."""
+        return map_exit_order_side_from_trade(trade)
+
+    def _build_exit_intent(
+        self,
+        trade: Trade,
+        exit_reason: str,
+        order_side: OrderSide,
+    ) -> OrderIntent:
+        """Build an OrderIntent for the exit based on the exit reason."""
+        order_type = OrderType.MARKET
+        limit_price = None
+        stop_price = None
+
+        if "Stop loss" in exit_reason:
+            order_type = OrderType.STOP_LOSS
+            stop_price = trade.stop_loss
+        elif "Take profit" in exit_reason:
+            order_type = OrderType.TAKE_PROFIT
+            limit_price = trade.take_profit
+
+        quantity = trade.current_size if trade.current_size is not None else trade.size
+        return OrderIntent(
+            symbol=trade.symbol,
+            side=order_side,
+            order_type=order_type,
+            quantity=quantity,
+            limit_price=limit_price,
+            stop_price=stop_price,
+            exit_reason=exit_reason,
+        )
 
     def update_trailing_stop(
         self,
@@ -368,13 +429,17 @@ class ExitHandler:
             if side_str == "long":
                 hit_stop_loss = candle_low <= stop_loss_val
                 if hit_stop_loss:
-                    # Use max(stop_loss, candle_low) for realistic worst-case execution
-                    sl_exit_price = max(stop_loss_val, candle_low)
+                    # When price gaps through the stop, the position could have exited
+                    # anywhere between the stop price and the candle low. Use the worst
+                    # case (candle low) for conservative backtest assumptions.
+                    sl_exit_price = candle_low
             else:
                 hit_stop_loss = candle_high >= stop_loss_val
                 if hit_stop_loss:
-                    # Use min(stop_loss, candle_high) for realistic worst-case execution
-                    sl_exit_price = min(stop_loss_val, candle_high)
+                    # When price gaps through the stop, the position could have exited
+                    # anywhere between the stop price and the candle high. Use the worst
+                    # case (candle high) for conservative backtest assumptions.
+                    sl_exit_price = candle_high
 
         # Check take profit
         hit_take_profit = False
@@ -393,6 +458,10 @@ class ExitHandler:
         if self.time_exit_policy is not None:
             try:
                 current_time = candle.name if hasattr(candle, "name") else datetime.now(UTC)
+                # Ensure consistent timezone handling - localize naive timestamps to UTC
+                # to prevent TypeError when comparing with UTC-aware entry_time
+                if hasattr(current_time, "tzinfo") and current_time.tzinfo is None:
+                    current_time = current_time.replace(tzinfo=UTC)
                 should_time_exit, _ = self.time_exit_policy.check_time_exit_conditions(
                     trade.entry_time, current_time
                 )
@@ -477,8 +546,10 @@ class ExitHandler:
         exit_price: float,
         exit_reason: str,
         current_time: datetime,
+        current_price: float,
         balance: float,
         symbol: str,
+        candle: pd.Series | None = None,
     ) -> tuple[Trade, float, float, float]:
         """Execute exit and close position.
 
@@ -486,8 +557,10 @@ class ExitHandler:
             exit_price: Base exit price (before slippage).
             exit_reason: Reason for exit.
             current_time: Current timestamp.
+            current_price: Current market price.
             balance: Current account balance.
             symbol: Trading symbol.
+            candle: Optional candle data for execution modeling.
 
         Returns:
             Tuple of (completed_trade, pnl_cash, exit_fee, slippage_cost).
@@ -498,6 +571,28 @@ class ExitHandler:
         if trade.entry_price <= 0:
             raise ValueError(
                 f"Invalid entry_price {trade.entry_price} - cannot calculate exit fees"
+            )
+
+        order_side = self._map_exit_order_side(trade)
+        snapshot = self._build_snapshot(
+            symbol=symbol,
+            current_time=current_time,
+            current_price=current_price,
+            candle=candle,
+        )
+        order_intent = self._build_exit_intent(trade, exit_reason, order_side)
+        decision = self.execution_model.decide_fill(order_intent, snapshot)
+
+        base_exit_price = exit_price
+        liquidity = None
+        if decision.should_fill and decision.fill_price is not None:
+            liquidity = decision.liquidity
+            base_exit_price = decision.fill_price
+        else:
+            logger.warning(
+                "Exit fill decision fallback for %s: %s",
+                symbol,
+                decision.reason,
             )
 
         # Get position notional for fee calculation
@@ -516,15 +611,19 @@ class ExitHandler:
         fraction = float(getattr(trade, "current_size", trade.size))
         entry_notional = basis_balance * fraction
         # Scale by price change to get exit notional (this is intentional and correct)
-        position_notional = entry_notional * (exit_price / trade.entry_price)
+        position_notional = entry_notional * (base_exit_price / trade.entry_price)
 
-        # Calculate exit costs
         # Convert PositionSide enum to string for cost calculation
         side_str = to_side_string(trade.side)
+        apply_slippage = True
+
+        # Calculate exit costs
         final_exit_price, exit_fee, slippage_cost = self.execution_engine.calculate_exit_costs(
-            base_price=exit_price,
+            base_price=base_exit_price,
             side=side_str,
             position_notional=position_notional,
+            liquidity=liquidity,
+            apply_slippage=apply_slippage,
         )
 
         # Close position and get completed trade

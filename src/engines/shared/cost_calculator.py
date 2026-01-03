@@ -6,9 +6,14 @@ backtesting and live trading engines.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
+
+LIQUIDITY_MAKER = "maker"
+LIQUIDITY_TAKER = "taker"
+ZERO_VALUE = 0.0
 
 
 @dataclass
@@ -40,6 +45,7 @@ class CostCalculator:
 
     Attributes:
         fee_rate: Fee rate as a decimal (e.g., 0.001 for 0.1%).
+        maker_fee_rate: Fee rate applied to maker liquidity (defaults to fee_rate).
         slippage_rate: Slippage rate as a decimal (e.g., 0.0005 for 0.05%).
         total_fees_paid: Running total of fees paid.
         total_slippage_cost: Running total of slippage costs.
@@ -49,23 +55,35 @@ class CostCalculator:
         self,
         fee_rate: float = DEFAULT_FEE_RATE,
         slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+        maker_fee_rate: float | None = None,
     ) -> None:
         """Initialize the cost calculator.
 
         Args:
             fee_rate: Fee rate as a decimal (default 0.1%).
             slippage_rate: Slippage rate as a decimal (default 0.05%).
+            maker_fee_rate: Fee rate for maker liquidity (defaults to fee_rate).
         """
         self.fee_rate = fee_rate
+        self.maker_fee_rate = fee_rate if maker_fee_rate is None else maker_fee_rate
         self.slippage_rate = slippage_rate
-        self.total_fees_paid: float = 0.0
-        self.total_slippage_cost: float = 0.0
+        self.total_fees_paid: float = ZERO_VALUE
+        self.total_slippage_cost: float = ZERO_VALUE
+
+    def _resolve_fee_rate(self, liquidity: str | None) -> float:
+        """Resolve the fee rate based on liquidity type."""
+        if liquidity == LIQUIDITY_MAKER:
+            return self.maker_fee_rate
+        if liquidity == LIQUIDITY_TAKER:
+            return self.fee_rate
+        return self.fee_rate
 
     def calculate_entry_costs(
         self,
         price: float,
         notional: float,
         side: str,
+        liquidity: str | None = None,
     ) -> CostResult:
         """Calculate entry costs including slippage and fees.
 
@@ -77,16 +95,21 @@ class CostCalculator:
             price: The intended entry price.
             notional: The notional value of the trade.
             side: Trade side ('long' or 'short').
+            liquidity: Liquidity type ('maker' or 'taker').
 
         Returns:
             CostResult with executed price, fee, and slippage cost.
 
         Raises:
-            ValueError: If price <= 0, notional < 0, or side is invalid.
+            ValueError: If price <= 0, notional < 0, side is invalid, or values are NaN/infinity.
         """
-        # Input validation
+        # Input validation - check for NaN/infinity to prevent corrupted state
+        if not math.isfinite(price):
+            raise ValueError(f"Price must be finite, got {price}")
         if price <= 0:
             raise ValueError(f"Price must be positive, got {price}")
+        if not math.isfinite(notional):
+            raise ValueError(f"Notional must be finite, got {notional}")
         if notional < 0:
             raise ValueError(f"Notional must be non-negative, got {notional}")
 
@@ -94,15 +117,20 @@ class CostCalculator:
         if side_lower not in ("long", "short"):
             raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
 
-        # Apply slippage adversely for entry
-        if side_lower == "long":
-            executed_price = price * (1 + self.slippage_rate)
-        else:  # short
-            executed_price = price * (1 - self.slippage_rate)
+        # Apply slippage adversely for entry unless maker liquidity is specified
+        if liquidity == LIQUIDITY_MAKER:
+            executed_price = price
+            slippage_cost = ZERO_VALUE
+        else:
+            if side_lower == "long":
+                executed_price = price * (1 + self.slippage_rate)
+            else:  # short
+                executed_price = price * (1 - self.slippage_rate)
+            slippage_cost = abs(executed_price - price) * (notional / price)
 
         # Calculate costs
-        slippage_cost = abs(executed_price - price) * (notional / price)
-        fee = notional * self.fee_rate
+        fee_rate = self._resolve_fee_rate(liquidity)
+        fee = notional * fee_rate
 
         # Track totals
         self.total_fees_paid += fee
@@ -119,6 +147,8 @@ class CostCalculator:
         price: float,
         notional: float,
         side: str,
+        liquidity: str | None = None,
+        apply_slippage: bool = True,
     ) -> CostResult:
         """Calculate exit costs including slippage and fees.
 
@@ -130,16 +160,22 @@ class CostCalculator:
             price: The intended exit price.
             notional: The notional value of the trade (at exit).
             side: Trade side ('long' or 'short').
+            liquidity: Liquidity type ('maker' or 'taker').
+            apply_slippage: When False, slippage is suppressed.
 
         Returns:
             CostResult with executed price, fee, and slippage cost.
 
         Raises:
-            ValueError: If price <= 0, notional < 0, or side is invalid.
+            ValueError: If price <= 0, notional < 0, side is invalid, or values are NaN/infinity.
         """
-        # Input validation
+        # Input validation - check for NaN/infinity to prevent corrupted state
+        if not math.isfinite(price):
+            raise ValueError(f"Price must be finite, got {price}")
         if price <= 0:
             raise ValueError(f"Price must be positive, got {price}")
+        if not math.isfinite(notional):
+            raise ValueError(f"Notional must be finite, got {notional}")
         if notional < 0:
             raise ValueError(f"Notional must be non-negative, got {notional}")
 
@@ -147,15 +183,20 @@ class CostCalculator:
         if side_lower not in ("long", "short"):
             raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
 
-        # Apply slippage adversely for exit (opposite of entry)
-        if side_lower == "long":
-            executed_price = price * (1 - self.slippage_rate)
-        else:  # short
-            executed_price = price * (1 + self.slippage_rate)
+        # Apply slippage adversely for exit unless maker liquidity is specified
+        if not apply_slippage or liquidity == LIQUIDITY_MAKER:
+            executed_price = price
+            slippage_cost = ZERO_VALUE
+        else:
+            if side_lower == "long":
+                executed_price = price * (1 - self.slippage_rate)
+            else:  # short
+                executed_price = price * (1 + self.slippage_rate)
+            slippage_cost = abs(executed_price - price) * (notional / price)
 
         # Calculate costs
-        slippage_cost = abs(executed_price - price) * (notional / price)
-        fee = notional * self.fee_rate
+        fee_rate = self._resolve_fee_rate(liquidity)
+        fee = notional * fee_rate
 
         # Track totals
         self.total_fees_paid += fee
@@ -180,8 +221,8 @@ class CostCalculator:
 
     def reset_totals(self) -> None:
         """Reset the running totals of fees and slippage."""
-        self.total_fees_paid = 0.0
-        self.total_slippage_cost = 0.0
+        self.total_fees_paid = ZERO_VALUE
+        self.total_slippage_cost = ZERO_VALUE
 
     def get_settings(self) -> dict:
         """Get the current cost calculator settings.
@@ -191,6 +232,7 @@ class CostCalculator:
         """
         return {
             "fee_rate": self.fee_rate,
+            "maker_fee_rate": self.maker_fee_rate,
             "slippage_rate": self.slippage_rate,
         }
 

@@ -18,12 +18,20 @@ from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
 )
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import ActiveTrade
+from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.entry_utils import (
     extract_entry_plan,
     resolve_stop_loss_take_profit_pct,
 )
-from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.market_snapshot import MarketSnapshot
+from src.engines.shared.execution.order_intent import OrderIntent
+from src.engines.shared.execution.snapshot_builder import (
+    build_snapshot_from_candle,
+    map_entry_order_side_from_string,
+)
 from src.engines.shared.models import PositionSide
 from src.engines.shared.side_utils import to_side_string
 from src.utils.price_targets import PriceTargetCalculator
@@ -36,6 +44,13 @@ if TYPE_CHECKING:
     from src.strategies.components import Strategy as ComponentStrategy
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_VOLUME = 0.0
+# Maximum age (in seconds) before a pending entry is considered stale and discarded.
+# Default of 1 hour prevents very old signals from executing in changed conditions.
+MAX_PENDING_ENTRY_AGE_SECONDS = 3600
+# Maximum acceptable filled-price deviation from signal price before logging a critical warning.
+MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -79,11 +94,13 @@ class EntryHandler:
         execution_engine: ExecutionEngine,
         position_tracker: PositionTracker,
         risk_manager: RiskManager,
+        execution_model: ExecutionModel,
         component_strategy: ComponentStrategy | None = None,
         dynamic_risk_manager: DynamicRiskManager | None = None,
         correlation_handler: Any | None = None,
         default_take_profit_pct: float | None = None,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
+        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize entry handler.
 
@@ -91,20 +108,24 @@ class EntryHandler:
             execution_engine: Engine for executing entries.
             position_tracker: Tracker for position state.
             risk_manager: Risk manager for position sizing.
+            execution_model: Execution model for fill decisions.
             component_strategy: Component strategy for signals.
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             correlation_handler: Handler for correlation-based sizing.
             default_take_profit_pct: Default take profit percentage.
             max_position_size: Maximum position size as fraction (default 10% for parity with live).
+            max_filled_price_deviation: Threshold for logging suspicious fill prices.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
         self.risk_manager = risk_manager
+        self.execution_model = execution_model
         self.component_strategy = component_strategy
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
         self.default_take_profit_pct = default_take_profit_pct
         self.max_position_size = max_position_size
+        self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared DynamicRiskHandler for consistent risk adjustment logic
         self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
 
@@ -115,6 +136,26 @@ class EntryHandler:
             strategy: New component strategy.
         """
         self.component_strategy = strategy
+
+    def _build_snapshot(
+        self,
+        symbol: str,
+        current_time: datetime,
+        current_price: float,
+        candle: pd.Series | None,
+    ) -> MarketSnapshot:
+        """Build a MarketSnapshot from the available candle data."""
+        return build_snapshot_from_candle(
+            symbol=symbol,
+            current_time=current_time,
+            current_price=current_price,
+            candle=candle,
+            default_volume=DEFAULT_VOLUME,
+        )
+
+    def _map_order_side(self, side: str) -> OrderSide:
+        """Map a position side string to an order side."""
+        return map_entry_order_side_from_string(side)
 
     def process_runtime_decision(
         self,
@@ -239,6 +280,7 @@ class EntryHandler:
         current_price: float,
         current_time: datetime,
         balance: float,
+        candle: pd.Series | None = None,
     ) -> EntryExecutionResult:
         """Execute an entry based on the signal result.
 
@@ -248,6 +290,7 @@ class EntryHandler:
             current_price: Current market price.
             current_time: Current timestamp.
             balance: Current account balance.
+            candle: Optional candle data for execution modeling.
 
         Returns:
             EntryExecutionResult with execution details.
@@ -298,17 +341,57 @@ class EntryHandler:
                 reasons=signal.reasons,
             )
 
+        try:
+            order_side = self._map_order_side(signal.side)
+        except ValueError as exc:
+            reasons = list(signal.reasons or [])
+            reasons.append(f"entry_side_invalid_{exc}")
+            return EntryExecutionResult(executed=False, reasons=reasons)
+
+        snapshot = self._build_snapshot(
+            symbol=symbol,
+            current_time=current_time,
+            current_price=current_price,
+            candle=candle,
+        )
+        order_intent = OrderIntent(
+            symbol=symbol,
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=signal.size_fraction,
+        )
+        decision = self.execution_model.decide_fill(order_intent, snapshot)
+        if not decision.should_fill or decision.fill_price is None:
+            reasons = list(signal.reasons or [])
+            reasons.append(f"entry_no_fill_{decision.reason}")
+            return EntryExecutionResult(executed=False, reasons=reasons)
+
+        base_price = decision.fill_price
+
+        # Validate filled price is within reasonable bounds of signal price.
+        if current_price > 0:
+            price_change = abs(base_price - current_price) / current_price
+            if price_change > self.max_filled_price_deviation:
+                logger.critical(
+                    "Suspicious entry fill price for %s: signal=%.2f filled=%.2f (%.1f%% move)",
+                    symbol,
+                    current_price,
+                    base_price,
+                    price_change * 100,
+                )
+
         # Immediate execution
         result = self.execution_engine.execute_immediate_entry(
             symbol=symbol,
             side=signal.side,
             size_fraction=signal.size_fraction,
-            current_price=current_price,
+            base_price=base_price,
             current_time=current_time,
             balance=balance,
             stop_loss=signal.stop_loss or current_price * (1 - DEFAULT_STOP_LOSS_PCT),
             take_profit=signal.take_profit or current_price * (1 + DEFAULT_TAKE_PROFIT_PCT),
             component_notional=signal.component_notional,
+            liquidity=decision.liquidity,
         )
 
         if result.executed and result.trade:
@@ -345,6 +428,7 @@ class EntryHandler:
         open_price: float,
         current_time: datetime,
         balance: float,
+        candle: pd.Series | None = None,
     ) -> EntryExecutionResult:
         """Process a pending entry on bar open.
 
@@ -353,6 +437,7 @@ class EntryHandler:
             open_price: Opening price of current bar.
             current_time: Current timestamp.
             balance: Current account balance.
+            candle: Optional candle data for execution modeling.
 
         Returns:
             EntryExecutionResult with execution details.
@@ -360,11 +445,71 @@ class EntryHandler:
         if not self.execution_engine.has_pending_entry:
             return EntryExecutionResult(executed=False)
 
+        pending = self.execution_engine.pending_entry
+        if pending is None:
+            return EntryExecutionResult(executed=False)
+
+        # Check for stale pending entries to prevent indefinite retries.
+        signal_time = pending.get("signal_time")
+        if signal_time is not None:
+            age = (current_time - signal_time).total_seconds()
+            if age > MAX_PENDING_ENTRY_AGE_SECONDS:
+                logger.warning(
+                    "Pending entry for %s is stale (age=%.0fs > %ds), discarding",
+                    symbol,
+                    age,
+                    MAX_PENDING_ENTRY_AGE_SECONDS,
+                )
+                self.execution_engine.clear_pending_entry()
+                return EntryExecutionResult(executed=False, pending=False)
+
+        try:
+            order_side = self._map_order_side(pending["side"])
+        except ValueError as exc:
+            logger.warning("Pending entry side invalid for %s: %s", symbol, exc)
+            self.execution_engine.clear_pending_entry()
+            return EntryExecutionResult(executed=False)
+
+        snapshot = self._build_snapshot(
+            symbol=symbol,
+            current_time=current_time,
+            current_price=open_price,
+            candle=candle,
+        )
+        order_intent = OrderIntent(
+            symbol=symbol,
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=pending["size_fraction"],
+        )
+        decision = self.execution_model.decide_fill(order_intent, snapshot)
+        if not decision.should_fill or decision.fill_price is None:
+            logger.warning(
+                "Pending entry fill decision failed for %s: %s",
+                symbol,
+                decision.reason,
+            )
+            return EntryExecutionResult(executed=False, pending=True)
+
+        # Validate filled price is within reasonable bounds of open price.
+        if open_price > 0 and decision.fill_price is not None:
+            price_change = abs(decision.fill_price - open_price) / open_price
+            if price_change > self.max_filled_price_deviation:
+                logger.critical(
+                    "Suspicious pending entry fill price for %s: open=%.2f filled=%.2f (%.1f%% move)",
+                    symbol,
+                    open_price,
+                    decision.fill_price,
+                    price_change * 100,
+                )
+
         result = self.execution_engine.execute_pending_entry(
             symbol=symbol,
             open_price=open_price,
             current_time=current_time,
             balance=balance,
+            base_price=decision.fill_price if decision.fill_price is not None else open_price,
+            liquidity=decision.liquidity if decision.should_fill else None,
         )
 
         if result.executed and result.trade:

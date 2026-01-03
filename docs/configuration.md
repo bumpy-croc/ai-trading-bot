@@ -71,6 +71,18 @@ Runtime defaults such as `DEFAULT_INITIAL_BALANCE`, `DEFAULT_CHECK_INTERVAL`, an
 or strategy parameters instead of editing the constant file directly. For example, the backtest CLI allows overriding
 initial balance and risk per trade via command-line flags.
 
+## Execution fill policy
+
+`EXECUTION_FILL_POLICY` controls simulated fill behavior in backtests and paper/live
+simulation. The default is `ohlc_conservative`.
+
+- `ohlc_conservative`: limit orders fill at their limit price when a bar crosses the
+  level, no price improvement without quotes, and stop orders behave like stop-market
+  orders (taker liquidity).
+
+Unknown values fall back to the default. Live trading still reconciles fills with the
+exchange when available.
+
 ## Local configuration workflow
 
 1. Copy `.env.example` to `.env` and fill in secrets (API keys, database URL, webhook endpoints):
