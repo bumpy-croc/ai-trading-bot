@@ -222,7 +222,9 @@ class PerformanceMonitoringSystem:
 
             self.last_monitoring_update = datetime.now(UTC)
 
-        except (ValueError, KeyError, AttributeError) as e:
+        except Exception as e:
+            # Catch all exceptions to prevent monitoring failures from crashing
+            # the live trading system - log and return error in results
             self.logger.exception("Monitoring update failed")
             results["error"] = str(e)
 

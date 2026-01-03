@@ -156,6 +156,9 @@ class MomentumSignalGenerator(SignalGenerator):
         if index < periods:
             return None
         try:
+            # Use max(..., 1e-12) to prevent division by zero. ZeroDivisionError in
+            # except is defense-in-depth for edge cases where max() might not help
+            # (e.g., negative values close to zero that could cause floating point issues)
             return float(
                 (df[col].iloc[index] - df[col].iloc[index - periods])
                 / max(df[col].iloc[index - periods], 1e-12)

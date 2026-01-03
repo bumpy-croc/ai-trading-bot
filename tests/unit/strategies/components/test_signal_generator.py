@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.strategies.components.momentum_signal_generator import MomentumSignalGenerator
 from src.strategies.components.signal_generator import (
     HierarchicalSignalGenerator,
     HoldSignalGenerator,
@@ -915,3 +916,62 @@ class TestRegimeAdaptiveSignalGenerator:
         assert params["total_regime_generators"] == 2
         assert "bull_low_vol" in params["regime_generators"]
         assert "bear_high_vol" in params["regime_generators"]
+
+
+class TestMomentumSignalGenerator:
+    """Tests for MomentumSignalGenerator including warmup_period property."""
+
+    def create_test_dataframe(self, length: int = 100) -> pd.DataFrame:
+        """Create test DataFrame with OHLCV data."""
+        dates = pd.date_range("2023-01-01", periods=length, freq="1h")
+        np.random.seed(42)
+        base_price = 50000
+        prices = [base_price]
+        for _ in range(length - 1):
+            prices.append(prices[-1] * (1 + np.random.normal(0, 0.01)))
+
+        return pd.DataFrame(
+            {
+                "open": prices,
+                "high": [p * 1.01 for p in prices],
+                "low": [p * 0.99 for p in prices],
+                "close": prices,
+                "volume": np.random.uniform(1000, 10000, length),
+            },
+            index=dates,
+        )
+
+    def test_warmup_period_default_values(self):
+        """Test warmup_period returns max of EMA slow and breakout lookback."""
+        generator = MomentumSignalGenerator()
+
+        # Default values: ema_slow=50, breakout_lookback=20
+        expected_warmup = max(generator.ema_slow, generator.breakout_lookback)
+        assert generator.warmup_period == expected_warmup
+        assert generator.warmup_period == 50  # ema_slow is default max
+
+    def test_warmup_period_custom_ema_slow(self):
+        """Test warmup_period with custom EMA slow period."""
+        generator = MomentumSignalGenerator(ema_slow=50, breakout_lookback=20)
+        assert generator.warmup_period == 50
+
+    def test_warmup_period_custom_breakout_lookback(self):
+        """Test warmup_period with custom breakout lookback."""
+        generator = MomentumSignalGenerator(ema_slow=26, breakout_lookback=40)
+        assert generator.warmup_period == 40
+
+    def test_warmup_period_equal_values(self):
+        """Test warmup_period when EMA slow equals breakout lookback."""
+        generator = MomentumSignalGenerator(ema_slow=30, breakout_lookback=30)
+        assert generator.warmup_period == 30
+
+    def test_generate_signal_respects_warmup(self):
+        """Test that signals at indices less than warmup are handled gracefully."""
+        generator = MomentumSignalGenerator(ema_slow=26, breakout_lookback=20)
+        df = self.create_test_dataframe(100)
+
+        # Signal at index less than warmup_period should still work
+        # (may return HOLD or a valid signal depending on data)
+        signal = generator.generate_signal(df, 5)
+        assert isinstance(signal, Signal)
+        assert isinstance(signal.direction, SignalDirection)
