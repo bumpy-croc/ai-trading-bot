@@ -6,8 +6,7 @@ __pycache__/
 .pytest_cache/
 
 .vscode/
-.claude/
-!.claude/hooks/
+.claude/settings.local.json
 .cursor/mcp.json
 .codex/
 
