@@ -20,11 +20,22 @@ from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
 )
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
-from src.strategies.components import SignalDirection
-from src.utils.bounds import clamp_fraction
+from src.engines.shared.entry_utils import (
+    extract_entry_plan,
+    resolve_stop_loss_take_profit_pct,
+)
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.market_snapshot import MarketSnapshot
+from src.engines.shared.execution.order_intent import OrderIntent
+from src.engines.shared.execution.snapshot_builder import (
+    build_snapshot_from_price,
+    map_entry_order_side_from_enum,
+)
+from src.engines.shared.side_utils import to_side_string
 from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
@@ -34,6 +45,10 @@ if TYPE_CHECKING:
     from src.strategies.components import Strategy as ComponentStrategy
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_VOLUME = 0.0
+# Maximum acceptable filled-price deviation from signal price before logging a critical warning.
+MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -75,31 +90,37 @@ class LiveEntryHandler:
     def __init__(
         self,
         execution_engine: LiveExecutionEngine,
+        execution_model: ExecutionModel,
         risk_manager: RiskManager | None = None,
         component_strategy: ComponentStrategy | None = None,
         dynamic_risk_manager: DynamicRiskManager | None = None,
         correlation_handler: CorrelationHandler | None = None,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         default_take_profit_pct: float | None = None,
+        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize entry handler.
 
         Args:
             execution_engine: Engine for executing entries.
+            execution_model: Execution model for fill decisions.
             risk_manager: Risk manager for position sizing.
             component_strategy: Component strategy for signals.
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             correlation_handler: Handler for correlation-based position sizing.
             max_position_size: Maximum position size as fraction.
             default_take_profit_pct: Default take profit percentage.
+            max_filled_price_deviation: Threshold for logging suspicious fill prices.
         """
         self.execution_engine = execution_engine
+        self.execution_model = execution_model
         self.risk_manager = risk_manager
         self.component_strategy = component_strategy
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
         self.max_position_size = max_position_size
         self.default_take_profit_pct = default_take_profit_pct
+        self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared DynamicRiskHandler for consistent risk adjustment logic
         self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
 
@@ -110,6 +131,22 @@ class LiveEntryHandler:
             strategy: New component strategy.
         """
         self.component_strategy = strategy
+
+    def _build_snapshot(
+        self,
+        symbol: str,
+        current_price: float,
+    ) -> MarketSnapshot:
+        """Build a MarketSnapshot from the current price."""
+        return build_snapshot_from_price(
+            symbol=symbol,
+            current_price=current_price,
+            volume=DEFAULT_VOLUME,
+        )
+
+    def _map_order_side(self, side: PositionSide) -> OrderSide:
+        """Map a position side to an order side."""
+        return map_entry_order_side_from_enum(side)
 
     def process_runtime_decision(
         self,
@@ -260,13 +297,36 @@ class LiveEntryHandler:
                 reasons=signal.reasons,
             )
 
+        try:
+            order_side = self._map_order_side(signal.side)
+        except ValueError as exc:
+            reasons = list(signal.reasons or [])
+            reasons.append(f"entry_side_invalid_{exc}")
+            return LiveEntryResult(executed=False, reasons=reasons, error=str(exc))
+
+        snapshot = self._build_snapshot(symbol, current_price)
+        order_intent = OrderIntent(
+            symbol=symbol,
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=signal.size_fraction,
+        )
+        decision = self.execution_model.decide_fill(order_intent, snapshot)
+        if not decision.should_fill or decision.fill_price is None:
+            return LiveEntryResult(
+                executed=False,
+                reasons=signal.reasons,
+                error=f"entry_no_fill_{decision.reason}",
+            )
+
         # Execute via execution engine
         exec_result = self.execution_engine.execute_entry(
             symbol=symbol,
             side=signal.side,
             size_fraction=signal.size_fraction,
-            base_price=current_price,
+            base_price=decision.fill_price,
             balance=balance,
+            liquidity=decision.liquidity,
         )
 
         if not exec_result.success:
@@ -275,6 +335,18 @@ class LiveEntryHandler:
                 reasons=signal.reasons,
                 error=exec_result.error,
             )
+
+        # Validate filled price is within reasonable bounds of signal price.
+        if current_price > 0:
+            price_change = abs(exec_result.executed_price - current_price) / current_price
+            if price_change > self.max_filled_price_deviation:
+                logger.critical(
+                    "Suspicious entry fill price for %s: signal=%.2f filled=%.2f (%.1f%% move)",
+                    symbol,
+                    current_price,
+                    exec_result.executed_price,
+                    price_change * 100,
+                )
 
         # CRITICAL: Subtract entry fee from entry_balance to match backtest behavior.
         # This ensures P&L calculations use the same basis in both engines.
@@ -317,34 +389,10 @@ class LiveEntryHandler:
         Returns:
             Tuple of (side, size_fraction).
         """
-        if decision is None:
+        plan = extract_entry_plan(decision, balance)
+        if plan is None:
             return None, 0.0
-
-        if balance <= 0:
-            return None, 0.0
-
-        # Check signal direction
-        if decision.signal.direction == SignalDirection.HOLD or decision.position_size <= 0:
-            return None, 0.0
-
-        # Check for short entry authorization
-        metadata = getattr(decision, "metadata", {}) or {}
-        if decision.signal.direction == SignalDirection.SELL and not bool(
-            metadata.get("enter_short")
-        ):
-            return None, 0.0
-
-        # Determine side
-        if decision.signal.direction == SignalDirection.BUY:
-            side = PositionSide.LONG
-        else:
-            side = PositionSide.SHORT
-
-        # Calculate size fraction using shared utility for parity with backtest
-        size_fraction = float(decision.position_size) / float(balance)
-        size_fraction = clamp_fraction(size_fraction)
-
-        return side, size_fraction
+        return plan.side, plan.size_fraction
 
     def _calculate_sl_tp(
         self,
@@ -370,29 +418,21 @@ class LiveEntryHandler:
             )
             return None, None
 
-        # Default percentages
-        default_sl_pct = DEFAULT_STOP_LOSS_PCT
-        tp_pct = self.default_take_profit_pct or DEFAULT_TAKE_PROFIT_PCT
-
-        # Try to get stop loss from strategy
-        sl_pct = default_sl_pct
-        if self.component_strategy is not None:
-            try:
-                signal = runtime_decision.signal if runtime_decision else None
-                regime = runtime_decision.regime if runtime_decision else None
-                stop_loss_price = self.component_strategy.get_stop_loss_price(
-                    current_price, signal, regime
-                )
-                if entry_side == PositionSide.LONG:
-                    sl_pct = (current_price - stop_loss_price) / current_price
-                else:
-                    sl_pct = (stop_loss_price - current_price) / current_price
-                sl_pct = max(DEFAULT_MIN_STOP_LOSS_PCT, min(DEFAULT_MAX_STOP_LOSS_PCT, sl_pct))
-            except (AttributeError, ValueError, TypeError, ZeroDivisionError):
-                pass
+        default_tp_pct = self.default_take_profit_pct or DEFAULT_TAKE_PROFIT_PCT
+        sl_pct, tp_pct = resolve_stop_loss_take_profit_pct(
+            current_price=current_price,
+            entry_side=entry_side,
+            runtime_decision=runtime_decision,
+            component_strategy=self.component_strategy,
+            default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
+            default_take_profit_pct=default_tp_pct,
+            min_stop_loss_pct=DEFAULT_MIN_STOP_LOSS_PCT,
+            max_stop_loss_pct=DEFAULT_MAX_STOP_LOSS_PCT,
+            use_strategy_take_profit=False,
+        )
 
         # Calculate prices using shared calculator
-        side_str = "long" if entry_side == PositionSide.LONG else "short"
+        side_str = to_side_string(entry_side)
         stop_loss, take_profit = PriceTargetCalculator.sl_tp(
             entry_price=current_price,
             sl_pct=sl_pct,

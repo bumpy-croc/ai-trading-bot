@@ -134,11 +134,21 @@ class TestCloudTrainingConfig:
         assert config.docker_image_uri == "123456.ecr.amazonaws.com/training:v1"
 
     @patch.dict("os.environ", {}, clear=True)
+    def test_from_env_requires_s3_bucket(self, training_config: TrainingConfig) -> None:
+        """Verify from_env raises ValueError when SAGEMAKER_S3_BUCKET is not set."""
+        with pytest.raises(ValueError, match="SAGEMAKER_S3_BUCKET environment variable is required"):
+            CloudTrainingConfig.from_env(training_config)
+
+    @patch.dict(
+        "os.environ",
+        {"SAGEMAKER_S3_BUCKET": "test-bucket"},
+        clear=True,
+    )
     def test_from_env_defaults(self, training_config: TrainingConfig) -> None:
-        """Verify from_env uses defaults when environment is empty."""
+        """Verify from_env uses defaults when only required env vars are set."""
         config = CloudTrainingConfig.from_env(training_config)
 
-        assert config.storage_config.s3_bucket == ""
+        assert config.storage_config.s3_bucket == "test-bucket"
         assert config.instance_config.instance_type == DEFAULT_INSTANCE_TYPE
         assert config.instance_config.use_spot_instances is True
         assert config.instance_config.max_runtime_hours == DEFAULT_MAX_RUNTIME_HOURS

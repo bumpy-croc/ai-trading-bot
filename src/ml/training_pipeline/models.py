@@ -119,8 +119,8 @@ def default_callbacks(patience: int = 15, reduce_lr_patience: int | None = None)
     """
     _ensure_tensorflow_available()
 
-    if reduce_lr_patience is None:
-        reduce_lr_patience = max(patience // 3, 3)
+    # Avoid reassigning function parameter (CODE.md line 77)
+    lr_patience = reduce_lr_patience if reduce_lr_patience is not None else max(patience // 3, 3)
 
     return [
         callbacks.EarlyStopping(
@@ -132,16 +132,16 @@ def default_callbacks(patience: int = 15, reduce_lr_patience: int | None = None)
         callbacks.ReduceLROnPlateau(
             monitor="val_loss",
             factor=0.5,
-            patience=reduce_lr_patience,
+            patience=lr_patience,
             min_lr=1e-6,
             verbose=1,
         ),
     ]
 
 
-# Legacy function for backwards compatibility
+# Backwards compatibility function
 def build_price_only_model(sequence_length: int, num_features: int) -> Any:
-    """Build a price-only model (legacy compatibility function).
+    """Provides backwards compatibility for code using the old function signature.
 
     Args:
         sequence_length: Length of input sequences

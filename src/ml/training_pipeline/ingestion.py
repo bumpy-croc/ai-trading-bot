@@ -40,6 +40,8 @@ def download_price_data(ctx: TrainingContext) -> pd.DataFrame:
         ctx.config.start_date.date(),
         ctx.config.end_date.date(),
     )
+    # Note: Uses internal CLI command directly to avoid subprocess overhead
+    # This is intentional coupling as training pipeline needs programmatic access
     status = data_commands._download(ns)
     if status != 0:
         raise RuntimeError("Price data download failed")

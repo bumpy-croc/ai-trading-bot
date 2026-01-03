@@ -60,7 +60,7 @@ def configure_gpu() -> str | None:
             else:
                 logger.info("ℹ️  No Apple Silicon GPU detected, using CPU")
                 return None
-        except Exception as exc:  # noqa: BLE001
+        except (RuntimeError, ValueError, ImportError, AttributeError) as exc:
             logger.warning(f"Failed to configure Apple Silicon GPU: {exc}")
             logger.info("Falling back to CPU")
             return None
@@ -75,13 +75,13 @@ def configure_gpu() -> str | None:
                 # Enable memory growth to avoid allocating all GPU memory at once
                 try:
                     tf.config.experimental.set_memory_growth(gpu, True)
-                except Exception as exc:  # noqa: BLE001
+                except (RuntimeError, ValueError, AttributeError) as exc:
                     logger.warning(f"Failed to set memory growth for {gpu.name}: {exc}")
             return gpus[0].name
         else:
             logger.info("ℹ️  No GPU detected, using CPU")
             return None
-    except Exception as exc:  # noqa: BLE001
+    except (RuntimeError, ValueError, ImportError, AttributeError) as exc:
         logger.warning(f"Failed to detect GPU devices: {exc}")
         logger.info("Falling back to CPU")
         return None
@@ -102,5 +102,5 @@ def get_compute_device() -> str:
         if gpus:
             return gpus[0].name
         return "CPU"
-    except Exception:  # noqa: BLE001
+    except (RuntimeError, ValueError, ImportError, AttributeError):
         return "CPU"

@@ -6,6 +6,7 @@ import pytest
 
 from src.ml.training_pipeline.features import (
     SMA_WINDOWS,
+    _calculate_rsi_fast,
     assess_sentiment_data_quality,
     create_robust_features,
     merge_price_sentiment_data,
@@ -25,11 +26,11 @@ class TestNormalizeTimezone:
         # Act
         result1, result2 = normalize_timezone(ts1, ts2)
 
-        # Assert
-        assert result1 == ts1
-        assert result2 == ts2
-        assert result1.tzinfo is None
-        assert result2.tzinfo is None
+        # Assert - both naive timestamps are converted to UTC-aware
+        assert result1 == ts1.tz_localize("UTC")
+        assert result2 == ts2.tz_localize("UTC")
+        assert result1.tzinfo is not None
+        assert result2.tzinfo is not None
 
     def test_both_aware(self):
         # Arrange
@@ -53,9 +54,11 @@ class TestNormalizeTimezone:
         # Act
         result1, result2 = normalize_timezone(ts1, ts2)
 
-        # Assert
-        assert result1.tzinfo is None
-        assert result2.tzinfo is None
+        # Assert - naive timestamp is converted to UTC, aware stays as-is
+        assert result1.tzinfo is not None
+        assert result2.tzinfo is not None
+        assert result1 == ts1
+        assert result2 == ts2.tz_localize("UTC")
 
     def test_first_naive_second_aware(self):
         # Arrange
@@ -65,9 +68,39 @@ class TestNormalizeTimezone:
         # Act
         result1, result2 = normalize_timezone(ts1, ts2)
 
-        # Assert
-        assert result1.tzinfo is None
-        assert result2.tzinfo is None
+        # Assert - naive timestamp is converted to UTC, aware stays as-is
+        assert result1.tzinfo is not None
+        assert result2.tzinfo is not None
+        assert result1 == ts1.tz_localize("UTC")
+        assert result2 == ts2
+
+    def test_non_utc_timezone_preserved(self):
+        # Arrange - use non-UTC timezone to verify it's preserved
+        ts1 = pd.Timestamp("2024-01-01 12:00:00", tz="America/New_York")
+        ts2 = pd.Timestamp("2024-01-02 12:00:00")  # naive
+
+        # Act
+        result1, result2 = normalize_timezone(ts1, ts2)
+
+        # Assert - non-UTC timezone is preserved, naive becomes UTC
+        assert result1.tzinfo is not None
+        assert result2.tzinfo is not None
+        # Original non-UTC timestamp preserved (not converted to UTC)
+        assert str(result1.tz) == "America/New_York"
+        # Naive timestamp localized to UTC
+        assert str(result2.tz) == "UTC"
+
+    def test_both_non_utc_timezones(self):
+        # Arrange - both timestamps have non-UTC timezones
+        ts1 = pd.Timestamp("2024-01-01 12:00:00", tz="America/New_York")
+        ts2 = pd.Timestamp("2024-01-02 12:00:00", tz="Europe/London")
+
+        # Act
+        result1, result2 = normalize_timezone(ts1, ts2)
+
+        # Assert - both timezones preserved (pandas handles cross-tz comparison)
+        assert str(result1.tz) == "America/New_York"
+        assert str(result2.tz) == "Europe/London"
 
 
 @pytest.mark.fast
@@ -457,3 +490,46 @@ class TestCreateRobustFeatures:
         assert "rsi_scaled" in result_df.columns
         assert result_df["rsi_scaled"].min() >= 0
         assert result_df["rsi_scaled"].max() <= 1
+
+
+@pytest.mark.fast
+class TestCalculateRsiFast:
+    """Test _calculate_rsi_fast function."""
+
+    def test_rsi_window_zero_raises_error(self):
+        # Arrange
+        close_prices = np.array([100.0, 101.0, 102.0, 101.0, 103.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="RSI window must be positive"):
+            _calculate_rsi_fast(close_prices, window=0)
+
+    def test_rsi_window_negative_raises_error(self):
+        # Arrange
+        close_prices = np.array([100.0, 101.0, 102.0, 101.0, 103.0])
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="RSI window must be positive"):
+            _calculate_rsi_fast(close_prices, window=-5)
+
+    def test_rsi_basic_calculation(self):
+        # Arrange - monotonically increasing prices should have high RSI
+        close_prices = np.linspace(100, 120, 50)
+
+        # Act
+        rsi = _calculate_rsi_fast(close_prices, window=14)
+
+        # Assert - RSI for uptrend should be high (near 100)
+        valid_rsi = rsi[~np.isnan(rsi)]
+        assert len(valid_rsi) > 0
+        assert np.mean(valid_rsi) > 50  # Uptrend should be above neutral
+
+    def test_rsi_returns_nans_for_insufficient_data(self):
+        # Arrange - less data than window size
+        close_prices = np.array([100.0, 101.0, 102.0])
+
+        # Act
+        rsi = _calculate_rsi_fast(close_prices, window=14)
+
+        # Assert - all values should be NaN since window > data length
+        assert np.all(np.isnan(rsi))

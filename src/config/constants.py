@@ -83,6 +83,7 @@ DEFAULT_MAX_FILLED_PRICE_DEVIATION = 0.5  # 50% max deviation for suspicious fil
 DEFAULT_END_OF_DAY_FLAT = False
 DEFAULT_WEEKEND_FLAT = False
 DEFAULT_MARKET_TIMEZONE = "UTC"
+DEFAULT_EXECUTION_FILL_POLICY = "ohlc_conservative"
 DEFAULT_TIME_RESTRICTIONS = {
     "no_overnight": True,
     "no_weekend": True,

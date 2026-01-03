@@ -28,6 +28,11 @@ class TrainingPaths:
 
     @classmethod
     def default(cls) -> TrainingPaths:
+        """Create default training paths based on project root.
+
+        Returns:
+            TrainingPaths configured for local development
+        """
         root = get_project_root()
         data_dir = root / "data"
         models_dir = root / "src" / "ml" / "models"
@@ -54,6 +59,11 @@ class TrainingConfig:
     diagnostics: DiagnosticsOptions = field(default_factory=DiagnosticsOptions)
 
     def days_requested(self) -> int:
+        """Calculate number of days in the training date range.
+
+        Returns:
+            Number of days between start_date and end_date
+        """
         return (self.end_date - self.start_date).days
 
 
@@ -66,18 +76,38 @@ class TrainingContext:
 
     @property
     def symbol_exchange(self) -> str:
+        """Convert symbol to exchange format (e.g., BTCUSDT → BTC-USD).
+
+        Returns:
+            Symbol in exchange-specific format for data providers
+        """
         from src.trading.symbols.factory import SymbolFactory
 
         return SymbolFactory.to_exchange_symbol(self.config.symbol, "binance")
 
     @property
     def start_iso(self) -> str:
+        """Get start date in ISO format.
+
+        Returns:
+            Start date as ISO 8601 string (YYYY-MM-DD)
+        """
         return self.config.start_date.strftime("%Y-%m-%dT00:00:00Z")
 
     @property
     def end_iso(self) -> str:
+        """Get end date in ISO format.
+
+        Returns:
+            End date as ISO 8601 string (YYYY-MM-DD)
+        """
         return self.config.end_date.strftime("%Y-%m-%dT23:59:59Z")
 
     @property
     def price_data_glob(self) -> str:
+        """Generate glob pattern for finding downloaded price data files.
+
+        Returns:
+            Glob pattern matching price data files (e.g., 'BTCUSDT_1h_*.csv')
+        """
         return f"{self.symbol_exchange}_{self.config.timeframe}_{self.start_iso}_{self.end_iso}.*"
