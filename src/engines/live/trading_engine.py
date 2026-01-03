@@ -2812,7 +2812,11 @@ class LiveTradingEngine:
             entry_slippage_cost = float(position.metadata.get("entry_slippage_cost", 0.0))
             total_fee = entry_fee + exit_fee
             total_slippage = entry_slippage_cost + exit_slippage_cost
-            net_trade_pnl = realized_pnl - entry_fee
+
+            # Store GROSS P&L in Trade.pnl for parity with backtest engine
+            # Fees are tracked separately via performance_tracker.record_trade()
+            # This matches backtest behavior where Trade.pnl is price movement only
+            gross_pnl = exit_result.realized_pnl
 
             trade = Trade(
                 symbol=position.symbol,
@@ -2824,7 +2828,7 @@ class LiveTradingEngine:
                 exit_price=exit_price,
                 entry_time=position.entry_time,
                 exit_time=datetime.now(UTC),
-                pnl=net_trade_pnl,
+                pnl=gross_pnl,
                 pnl_percent=pnl_percent,
                 exit_reason=reason,
             )
@@ -2848,7 +2852,7 @@ class LiveTradingEngine:
                         if position.current_size is not None
                         else position.size
                     ),
-                    pnl=net_trade_pnl,
+                    pnl=gross_pnl,
                     strategy_name=self._strategy_name(),
                     exit_reason=reason,
                     entry_time=position.entry_time,
@@ -2888,7 +2892,7 @@ class LiveTradingEngine:
                 "📈 Closed %s position for %s: PnL=$%.2f, Reason=%s, Balance=$%.2f",
                 position.side.value,
                 position.symbol,
-                net_trade_pnl,
+                gross_pnl,
                 reason,
                 self.current_balance,
             )
@@ -2898,7 +2902,7 @@ class LiveTradingEngine:
                 symbol=position.symbol,
                 side=position.side.value,
                 exit_price=exit_price,
-                pnl=net_trade_pnl,
+                pnl=gross_pnl,
                 pnl_percent=trade.pnl_percent,
                 reason=reason,
             )
