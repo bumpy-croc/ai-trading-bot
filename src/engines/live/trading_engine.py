@@ -3504,14 +3504,14 @@ class LiveTradingEngine:
                         if position.entry_balance is not None and position.entry_balance > 0
                         else self.current_balance
                     )
-                    # Calculate exit fee and slippage (matching normal exit flow)
+                    # Calculate exit fee for filled offline stop-loss
+                    # Slippage is zero for filled orders - slippage already occurred on exchange
+                    # and is reflected in the fill price. Matches execute_filled_exit behavior.
                     exit_position_notional = (
                         basis_balance * fraction * (exit_price / position.entry_price)
                     )
                     exit_fee = self.live_execution_engine.calculate_exit_fee(exit_position_notional)
-                    exit_slippage_cost = self.live_execution_engine.calculate_slippage_cost(
-                        exit_position_notional
-                    )
+                    exit_slippage_cost = 0.0  # Slippage already in fill price
                     realized_pnl = pnl_pct_sized * basis_balance - exit_fee
 
                     # Atomic balance update for offline stop-loss reconciliation
