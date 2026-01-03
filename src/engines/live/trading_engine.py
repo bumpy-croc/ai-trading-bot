@@ -1872,21 +1872,18 @@ class LiveTradingEngine:
 
             # Log exit decision for each position
             if self.db_manager:
-                # Calculate current P&L for context
-                # Validate entry_price to prevent division by zero from corrupted position data
+                # Calculate current P&L for context using shared function for consistency
+                # Note: Using fraction=1.0 to get raw P&L percentage for logging (unsized)
                 if position.entry_price <= 0:
                     logger.error(
                         f"Invalid entry_price {position.entry_price} for position {position.symbol} - "
                         "skipping P&L calculation for logging"
                     )
                     current_pnl = 0.0  # Fallback value for logging
-                elif position.side == PositionSide.LONG:
-                    current_pnl = (float(current_price) - float(position.entry_price)) / float(
-                        position.entry_price
-                    )
                 else:
-                    current_pnl = (float(position.entry_price) - float(current_price)) / float(
-                        position.entry_price
+                    side_enum = Side.LONG if position.side == PositionSide.LONG else Side.SHORT
+                    current_pnl = pnl_percent(
+                        position.entry_price, float(current_price), side_enum, 1.0
                     )
 
                 # Prepare logging reasons with TradingDecision data if available

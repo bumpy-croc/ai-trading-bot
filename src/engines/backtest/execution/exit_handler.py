@@ -37,6 +37,7 @@ from src.engines.shared.validation import (
     convert_exit_fraction_to_current,
     is_position_fully_closed,
 )
+from src.performance.metrics import Side, pnl_percent
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -648,6 +649,9 @@ class ExitHandler:
     def calculate_current_pnl_pct(self, current_price: float) -> float:
         """Calculate current unrealized PnL percentage.
 
+        Uses shared pnl_percent function for consistency with live engine.
+        Note: Returns raw P&L percentage (unsized, fraction=1.0) for logging.
+
         Args:
             current_price: Current market price.
 
@@ -658,8 +662,9 @@ class ExitHandler:
         if trade is None:
             return 0.0
 
-        pnl_pct = (current_price - trade.entry_price) / trade.entry_price
-        if trade.side != "long":
-            pnl_pct = -pnl_pct
+        if trade.entry_price <= 0:
+            return 0.0
 
-        return pnl_pct
+        side_str = to_side_string(trade.side)
+        side_enum = Side.LONG if side_str == "long" else Side.SHORT
+        return pnl_percent(trade.entry_price, current_price, side_enum, 1.0)
