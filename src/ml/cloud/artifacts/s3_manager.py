@@ -49,8 +49,18 @@ class S3ArtifactManager:
         if self._s3_client is None:
             try:
                 import boto3
+                from botocore.config import Config
 
-                self._s3_client = boto3.client("s3", region_name=self.region)
+                # Configure timeouts for external API calls (CODE.md: line 178)
+                # connect_timeout: time to establish connection
+                # read_timeout: time to read response from server
+                config = Config(
+                    connect_timeout=10,  # 10 seconds to connect
+                    read_timeout=60,  # 60 seconds to read response
+                    retries={"max_attempts": 3, "mode": "standard"},  # Retry with backoff
+                )
+
+                self._s3_client = boto3.client("s3", region_name=self.region, config=config)
             except ImportError as exc:
                 raise ArtifactSyncError(
                     "boto3 is required for S3 operations. " "Install with: pip install '.[cloud]'"
@@ -78,7 +88,8 @@ class S3ArtifactManager:
             ArtifactSyncError: If upload fails
         """
         self._ensure_client()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
 
         timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
         s3_prefix = f"training-data/{symbol}/{timeframe}/{timestamp}"
@@ -125,7 +136,8 @@ class S3ArtifactManager:
             ArtifactSyncError: If download fails
         """
         self._ensure_client()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
 
         bucket, prefix = self._parse_s3_uri(s3_uri)
 
@@ -223,7 +235,8 @@ class S3ArtifactManager:
             ArtifactSyncError: If upload fails
         """
         self._ensure_client()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
 
         s3_prefix = f"models/{symbol}/{model_type}/{version_id}"
 
@@ -262,7 +275,8 @@ class S3ArtifactManager:
             List of version IDs sorted by date (newest first)
         """
         self._ensure_client()
-        assert self._s3_client is not None
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
 
         prefix = f"models/{symbol}/{model_type}/"
 
@@ -362,10 +376,10 @@ class S3ArtifactManager:
             if temp_link.exists() or temp_link.is_symlink():
                 temp_link.unlink()
 
-            # Create new symlink with temporary name
+            # Create symlink with temporary name
             temp_link.symlink_to(version_dir.name)
 
-            # Atomically replace old symlink (os.replace is atomic on POSIX)
+            # Atomically replace existing symlink (os.replace is atomic on POSIX)
             os.replace(str(temp_link), str(latest_link))
 
             logger.info(f"Updated 'latest' symlink to {version_dir.name}")
@@ -376,6 +390,7 @@ class S3ArtifactManager:
                 try:
                     temp_link.unlink()
                 except OSError:
+                    # Ignores cleanup errors - primary error takes precedence
                     pass
             logger.error(f"Failed to update 'latest' symlink: {exc}")
             raise ArtifactSyncError(f"Failed to update 'latest' symlink: {exc}") from exc

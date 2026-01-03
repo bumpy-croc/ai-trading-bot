@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 # Default poll interval for checking job status (seconds)
 DEFAULT_POLL_INTERVAL = 60
 
+# Spot instance interruption allowance multiplier (AWS recommends 2x for spot)
+# SageMaker spot training may be interrupted and restarted, requiring extended wait time
+SPOT_WAIT_TIME_MULTIPLIER = 2
+
+# Maximum length for job ID suffix used in temporary directory naming
+# Prevents excessively long paths while allowing for timestamp-based job IDs
+MAX_JOB_SUFFIX_LENGTH = 100
+
 
 class CloudTrainingOrchestrator:
     """Orchestrates cloud training workflow.
@@ -72,6 +80,27 @@ class CloudTrainingOrchestrator:
         self.provider = provider
         self.s3_manager = s3_manager or S3ArtifactManager(
             bucket_name=config.storage_config.s3_bucket,
+        )
+
+    def _create_failure_result(self, error_message: str, start_time: float) -> CloudTrainingResult:
+        """Create a failure result with consistent structure.
+
+        Avoids duplication of error result creation (CODE.md line 62).
+
+        Args:
+            error_message: Error description
+            start_time: Training start time from perf_counter()
+
+        Returns:
+            CloudTrainingResult indicating failure
+        """
+        return CloudTrainingResult(
+            success=False,
+            job_id=None,
+            job_status="Failed",
+            provider=self.provider.provider_name,
+            error=error_message,
+            duration_seconds=perf_counter() - start_time,
         )
 
     def run_training(self, wait: bool = True) -> CloudTrainingResult:
@@ -134,24 +163,10 @@ class CloudTrainingOrchestrator:
 
         except CloudTrainingError as exc:
             logger.error(f"Cloud training failed: {exc}")
-            return CloudTrainingResult(
-                success=False,
-                job_id=None,
-                job_status="Failed",
-                provider=self.provider.provider_name,
-                error=str(exc),
-                duration_seconds=perf_counter() - start_time,
-            )
+            return self._create_failure_result(str(exc), start_time)
         except Exception as exc:
             logger.exception("Unexpected error during cloud training")
-            return CloudTrainingResult(
-                success=False,
-                job_id=None,
-                job_status="Failed",
-                provider=self.provider.provider_name,
-                error=f"Unexpected error: {exc}",
-                duration_seconds=perf_counter() - start_time,
-            )
+            return self._create_failure_result(f"Unexpected error: {exc}", start_time)
 
     def submit_job(self) -> str:
         """Submit training job without waiting.
@@ -243,7 +258,7 @@ class CloudTrainingOrchestrator:
             JobTimeoutError: If job exceeds max runtime
         """
 
-        max_wait = self.config.max_runtime_seconds * 2  # Allow extra time for spot interruptions
+        max_wait = self.config.max_runtime_seconds * SPOT_WAIT_TIME_MULTIPLIER
         elapsed = 0
 
         while elapsed < max_wait:
@@ -284,16 +299,22 @@ class CloudTrainingOrchestrator:
 
         # Extract and validate job_id suffix for temp directory naming
         import re
+        import tempfile
 
         job_suffix = job_id.split("/")[-1] if job_id else ""
-        # Only allow alphanumeric, hyphens, and underscores
-        if not job_suffix or not re.match(r"^[\w\-]+$", job_suffix):
+        # Validate: alphanumeric/hyphens/underscores only, reasonable length
+        # Note: regex ^[\w\-]+$ already excludes path separators (/, \)
+        if (
+            not job_suffix
+            or not re.match(r"^[\w\-]+$", job_suffix)
+            or len(job_suffix) > MAX_JOB_SUFFIX_LENGTH
+        ):
             job_suffix = "download"
 
         temp_dir: Path | None = None
         try:
-            # Create temp directory inside try block
-            temp_dir = Path("/tmp") / f"model-download-{job_suffix}"
+            # Create temp directory inside try block (cross-platform)
+            temp_dir = Path(tempfile.gettempdir()) / f"model-download-{job_suffix}"
 
             # Download from provider (S3 for cloud, local path for local provider)
             artifact_path = self.provider.download_artifacts(job_id, temp_dir)

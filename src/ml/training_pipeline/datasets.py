@@ -89,11 +89,26 @@ def split_sequences(
     Args:
         sequences: 3D array of sequences (samples, timesteps, features)
         targets: 1D array of target values
-        split_ratio: Ratio of data to use for training (default 0.8)
+        split_ratio: Ratio of data to use for training (default 0.8, range: 0 < ratio < 1)
 
     Returns:
         Tuple of (X_train, y_train, X_val, y_val)
+
+    Raises:
+        ValueError: If arrays are empty or split_ratio is out of range
     """
+    # Validate inputs
+    if len(sequences) == 0 or len(targets) == 0:
+        raise ValueError("Cannot split empty sequences or targets")
+
+    if not 0 < split_ratio < 1:
+        raise ValueError(f"split_ratio must be between 0 and 1, got {split_ratio}")
+
+    if len(sequences) != len(targets):
+        raise ValueError(
+            f"sequences and targets must have same length, got {len(sequences)} and {len(targets)}"
+        )
+
     # Ensure at least 1 sample in training set (if possible)
     if len(sequences) == 1:
         split_index = 1  # Put the single sample in training
@@ -114,12 +129,31 @@ def build_tf_datasets(
     y_val: np.ndarray,
     batch_size: int,
 ) -> tuple[Any, Any]:
-    """Build TensorFlow datasets for training and validation."""
+    """Build TensorFlow datasets for training and validation.
+
+    Args:
+        X_train: Training features
+        y_train: Training targets
+        X_val: Validation features
+        y_val: Validation targets
+        batch_size: Batch size for training (must be positive)
+
+    Returns:
+        Tuple of (train_dataset, validation_dataset)
+
+    Raises:
+        ImportError: If TensorFlow is not installed
+        ValueError: If batch_size is invalid
+    """
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(
             "tensorflow is required for dataset building but is not installed. "
             "Install it with: pip install tensorflow"
         )
+
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+
     train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train))
     train_ds = (
         train_ds.cache()

@@ -159,7 +159,7 @@ class TestConfigureGpu:
         from src.ml.training_pipeline.gpu_config import configure_gpu
 
         mock_tf = MagicMock()
-        mock_tf.config.list_physical_devices.side_effect = Exception("GPU detection failed")
+        mock_tf.config.list_physical_devices.side_effect = RuntimeError("GPU detection failed")
 
         with patch("platform.system", return_value="Linux"):
             with patch("platform.machine", return_value="x86_64"):
@@ -226,7 +226,7 @@ class TestGetComputeDevice:
         from src.ml.training_pipeline.gpu_config import get_compute_device
 
         mock_tf = MagicMock()
-        mock_tf.config.list_physical_devices.side_effect = Exception("Error")
+        mock_tf.config.list_physical_devices.side_effect = RuntimeError("Error")
 
         with patch(
             "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True

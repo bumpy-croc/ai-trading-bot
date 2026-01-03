@@ -104,6 +104,11 @@ class CloudTrainingConfig:
             CloudTrainingConfig populated from environment
         """
         s3_bucket = os.getenv("SAGEMAKER_S3_BUCKET", "")
+        if not s3_bucket:
+            raise ValueError(
+                "SAGEMAKER_S3_BUCKET environment variable is required for cloud training. "
+                "Set it to your S3 bucket name for storing training artifacts."
+            )
 
         storage_config = CloudStorageConfig(s3_bucket=s3_bucket)
 

@@ -5,6 +5,6 @@ This module contains machine learning models and utilities for trading strategie
 """
 
 # Model registry has been moved to src.prediction.models.registry
-# Use PredictionModelRegistry for new implementations
+# Use PredictionModelRegistry for all model implementations
 
 __all__: list[str] = []

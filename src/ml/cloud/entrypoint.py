@@ -94,9 +94,15 @@ def run_training(parsed_params: dict) -> int:
         )
         from src.ml.training_pipeline.pipeline import run_training_pipeline
 
-        # Parse dates
-        start_date = datetime.fromisoformat(parsed_params["start_date"])
-        end_date = datetime.fromisoformat(parsed_params["end_date"])
+        # Parse dates (raises ValueError if format is invalid)
+        try:
+            start_date = datetime.fromisoformat(parsed_params["start_date"])
+            end_date = datetime.fromisoformat(parsed_params["end_date"])
+        except ValueError as exc:
+            error_msg = f"Invalid date format: {exc}"
+            logger.error(error_msg)
+            write_failure_file(error_msg)
+            return 1
 
         # Create training config
         config = TrainingConfig(
@@ -142,9 +148,19 @@ def run_training(parsed_params: dict) -> int:
             write_failure_file(result.metadata.get("error", "Unknown error"))
             return 1
 
-    except Exception as exc:
-        logger.exception("Training failed with exception")
+    except (ImportError, ValueError, RuntimeError, OSError, KeyError) as exc:
+        # ImportError: Missing training dependencies
+        # ValueError: Invalid configuration or data format
+        # RuntimeError: Training pipeline failures
+        # OSError: File system errors
+        # KeyError: Missing required configuration
+        logger.error("Training failed: %s", exc, exc_info=True)
         write_failure_file(str(exc))
+        return 1
+    except Exception as exc:
+        # Unexpected errors - log with full traceback
+        logger.exception("Training failed with unexpected error")
+        write_failure_file(f"Unexpected error: {exc}")
         return 1
 
 
