@@ -170,6 +170,11 @@ class RiskManager:
 
     def __init__(self, parameters: RiskParameters | None = None, max_concurrent_positions: int = 3):
         self.params = parameters or RiskParameters()
+
+        # Validate max_concurrent_positions
+        if max_concurrent_positions <= 0:
+            raise ValueError(f"max_concurrent_positions must be positive, got {max_concurrent_positions}")
+
         # Tracks total exposure (capital allocation), not actual capital at risk
         # See class docstring for details on this design decision
         self.daily_risk_used = 0.0
@@ -929,7 +934,22 @@ class RiskManager:
         executed_fraction_of_original is the fraction of ORIGINAL size removed.
 
         Thread-safe: protected by internal lock.
+
+        Parameters
+        ----------
+        symbol : str
+            Symbol identifier.
+        executed_fraction_of_original : float
+            Fraction of the original position size that was exited (must be positive).
         """
+        # Validate input
+        if not math.isfinite(executed_fraction_of_original) or executed_fraction_of_original <= 0:
+            logging.warning(
+                "Invalid executed_fraction for partial exit: %s, ignoring adjustment",
+                executed_fraction_of_original,
+            )
+            return
+
         with self._state_lock:
             pos = self.positions.get(symbol)
             if not pos:
@@ -951,7 +971,22 @@ class RiskManager:
         """Increase tracked exposure after a scale-in, enforcing daily and per-position caps.
 
         Thread-safe: protected by internal lock.
+
+        Parameters
+        ----------
+        symbol : str
+            Symbol identifier.
+        added_fraction_of_original : float
+            Fraction of the original position size to add (must be positive).
         """
+        # Validate input
+        if not math.isfinite(added_fraction_of_original) or added_fraction_of_original <= 0:
+            logging.warning(
+                "Invalid added_fraction for scale-in: %s, ignoring adjustment",
+                added_fraction_of_original,
+            )
+            return
+
         with self._state_lock:
             pos = self.positions.get(symbol)
             if not pos:
