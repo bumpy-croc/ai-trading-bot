@@ -3,6 +3,7 @@ Geo-location detection utilities for determining the appropriate Binance API end
 """
 
 import logging
+import os
 
 import requests
 
@@ -16,10 +17,21 @@ def get_country_code() -> str | None:
     """
     Get the current country code using IP geolocation.
 
+    Environment variable override:
+        FORCE_BINANCE_REGION: Force a specific region code (e.g., 'US', 'GB', 'GLOBAL')
+                              Useful for testing or when geo-detection is unreliable
+
     Returns:
         str: Two-letter country code (e.g., 'US', 'GB', 'DE') or None if detection fails
     """
     global _geo_cache
+
+    # Check for environment variable override first
+    forced_region = os.environ.get('FORCE_BINANCE_REGION', '').strip().upper()
+    if forced_region:
+        logger.info(f"Using forced region from FORCE_BINANCE_REGION: {forced_region}")
+        _geo_cache = (forced_region, "environment_override")
+        return forced_region
 
     # Return cached result if available
     if _geo_cache is not None:
