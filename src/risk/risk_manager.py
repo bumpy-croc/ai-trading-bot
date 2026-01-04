@@ -173,7 +173,9 @@ class RiskManager:
 
         # Validate max_concurrent_positions
         if max_concurrent_positions <= 0:
-            raise ValueError(f"max_concurrent_positions must be positive, got {max_concurrent_positions}")
+            raise ValueError(
+                f"max_concurrent_positions must be positive, got {max_concurrent_positions}"
+            )
 
         # Tracks total exposure (capital allocation), not actual capital at risk
         # See class docstring for details on this design decision
@@ -699,9 +701,11 @@ class RiskManager:
 
         if take_profit_pct is not None:
             try:
+                # Convert to float first to satisfy type checker
+                tp_pct_float = float(take_profit_pct)
                 tp_price = PriceTargetCalculator.take_profit(
                     entry_price=entry_price,
-                    pct=float(take_profit_pct),
+                    pct=tp_pct_float,
                     side=side,
                 )
             except (TypeError, ValueError) as e:
