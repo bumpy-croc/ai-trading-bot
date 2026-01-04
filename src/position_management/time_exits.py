@@ -8,16 +8,23 @@ market-session and timezone awareness.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
+
+logger = logging.getLogger(__name__)
 
 try:
     # Python 3.11+ standard library
     from zoneinfo import ZoneInfo
 except (ImportError, ModuleNotFoundError):  # pragma: no cover
     # Fallback for environments without zoneinfo; will behave as naive UTC
-    ZoneInfo = None  # type: ignore
+    logger.warning(
+        "zoneinfo unavailable, timezone-aware operations will fall back to naive UTC. "
+        "Install tzdata package or upgrade to Python 3.11+ for proper timezone support."
+    )
+    ZoneInfo = None  # type: ignore[misc,assignment]
 
 
 @dataclass
@@ -57,7 +64,8 @@ class MarketSessionDef:
         if not self.open_time or not self.close_time:
             return None
 
-        # Bound the search to a reasonable number of days to avoid infinite loops
+        # Maximum days to scan for next session close - prevents infinite loops
+        # while accommodating weekly schedules with holidays (2 weeks = ~10 trading days)
         MAX_DAYS_TO_SCAN = 14
 
         tz = ZoneInfo(self.timezone) if ZoneInfo else None
@@ -206,6 +214,7 @@ class TimeExitPolicy:
         if preserve_naive:
             try:
                 return nxt.replace(tzinfo=None)
-            except Exception:
+            except (AttributeError, ValueError) as e:
+                logger.debug(f"Could not strip timezone from result: {e}")
                 return nxt
         return nxt

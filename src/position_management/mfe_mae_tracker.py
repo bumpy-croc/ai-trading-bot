@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -53,6 +54,12 @@ class MFEMAETracker:
         If `as_sized` is True, returns sized PnL fractions using `position_fraction`.
         Net MFE/MAE accounts for exit fees and slippage to reflect achievable profit/loss.
         """
+        # Validate prices to prevent NaN/Infinity propagation in MFE/MAE calculations
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            return 0.0, 0.0
+        if not math.isfinite(current_price) or current_price <= 0:
+            return 0.0, 0.0
+
         side_enum = side if isinstance(side, Side) else Side(side)
 
         # Calculate gross price movement
