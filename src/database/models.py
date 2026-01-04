@@ -3,6 +3,7 @@ Database models for trade logging and performance tracking
 """
 
 import enum
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -569,11 +570,11 @@ class AccountBalance(Base):
 
     id = Column(Integer, primary_key=True)
 
-    # Balance information
+    # Balance information - use Numeric(18,8) for financial precision (not Float)
     base_currency = Column(String(10), nullable=False, default="USD")  # USD, BTC, ETH, etc.
-    total_balance = Column(Float, nullable=False)  # Total balance in base currency
-    available_balance = Column(Float, nullable=False)  # Available for trading
-    reserved_balance = Column(Float, default=0.0)  # Reserved in open positions
+    total_balance = Column(Numeric(18, 8), nullable=False)  # Total balance in base currency
+    available_balance = Column(Numeric(18, 8), nullable=False)  # Available for trading
+    reserved_balance = Column(Numeric(18, 8), default=0.0)  # Reserved in open positions
 
     # Balance breakdown by asset (for multi-asset support)
     asset_balances = Column(JSONType, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
@@ -592,22 +593,42 @@ class AccountBalance(Base):
     created_at = Column(DateTime, default=utc_now)
 
     @classmethod
-    def get_current_balance(cls, session_id: int, db_session) -> float:
-        """Get the current balance for a session"""
-        latest_balance = (
+    def get_current_balance(cls, session_id: int, db_session, for_update: bool = False) -> float:
+        """Get the current balance for a session.
+
+        Args:
+            session_id: Trading session ID
+            db_session: SQLAlchemy database session
+            for_update: If True, acquires row-level lock to prevent concurrent updates
+
+        Returns:
+            Current balance as float (0.0 if no balance record exists)
+        """
+        query = (
             db_session.query(cls)
             .filter(cls.session_id == session_id)
             .order_by(cls.last_updated.desc())
-            .first()
         )
 
-        return latest_balance.total_balance if latest_balance else 0.0
+        # Acquire row-level lock for concurrent update safety
+        if for_update:
+            query = query.with_for_update()
+
+        latest_balance = query.first()
+
+        return float(latest_balance.total_balance) if latest_balance else 0.0
 
     @classmethod
     def update_balance(
         cls, session_id: int, new_balance: float, update_reason: str, updated_by: str, db_session
     ) -> "AccountBalance":
         """Update the current balance for a session"""
+        # Validate new_balance
+        if not math.isfinite(new_balance):
+            raise ValueError(f"new_balance must be finite, got {new_balance}")
+        if new_balance < 0:
+            raise ValueError(f"new_balance cannot be negative, got {new_balance}")
+
         balance_record = cls(
             session_id=session_id,
             base_currency="USD",
