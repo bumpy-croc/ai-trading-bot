@@ -146,6 +146,7 @@ def create_app() -> "Flask":
     from flask_login import (  # type: ignore
         LoginManager,
         UserMixin,
+        current_user,
         login_required,
         login_user,
         logout_user,
@@ -160,6 +161,14 @@ def create_app() -> "Flask":
         can_view_details = True
         page_size = 50
         form_base_class = SecureForm
+
+        def is_accessible(self):
+            """Require authentication to access Flask-Admin views."""
+            return current_user.is_authenticated
+
+        def inaccessible_callback(self, name, **kwargs):
+            """Redirect unauthenticated users to login page."""
+            return redirect(url_for("login", next=request.url))
 
         def __init__(self, model, session, **kwargs):
             # Dynamically determine searchable string columns
@@ -314,15 +323,17 @@ def create_app() -> "Flask":
         """Simple health-check endpoint used by load-balancers and uptime monitors."""
         return {"status": "ok"}
 
-    # Database info route (helpful for debugging)
+    # Database info route (helpful for debugging) - requires authentication
     @app.route("/db_info")
+    @login_required
     def db_info() -> Response:
         """Return live connection-pool statistics and configuration details."""
         return jsonify(db_manager.get_database_info())
 
-    # Simple schema "migration" route to ensure new tables are created
-    @app.route("/migrate", methods=["POST", "GET"])
-    @csrf.exempt
+    # Simple schema "migration" route to ensure new tables are created - requires authentication
+    # POST-only to prevent accidental triggering via GET requests (link prefetching, etc.)
+    @app.route("/migrate", methods=["POST"])
+    @login_required
     def migrate():
         """Synchronise database schema (creates any missing tables)."""
         try:
@@ -330,7 +341,7 @@ def create_app() -> "Flask":
             return {"status": "success", "message": "Schema synchronised."}
         except Exception as exc:  # pragma: no cover
             logger.exception("Schema migration failed: %s", exc)
-            return {"status": "error", "message": str(exc)}, 500
+            return {"status": "error", "message": "Schema synchronization failed. Check logs."}, 500
 
     # Clean up DB sessions after each request
     @app.teardown_appcontext

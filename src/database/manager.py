@@ -58,6 +58,17 @@ class QueryTimeout:
     DEFAULT = 30000  # 30s - Fallback for uncategorized queries
 
 
+# Maximum profit factor to prevent infinity values in reporting.
+# When gross_loss is 0 but gross_profit > 0, profit factor would be infinite.
+# This cap indicates "extremely profitable" while remaining storable in Numeric(18, 8).
+MAX_PROFIT_FACTOR = 999999.99
+
+# Connection pool configuration constants.
+# Used for QueuePool (PostgreSQL) - keep in sync with _get_engine_config().
+POOL_SIZE = 10  # Base pool size for concurrent operations
+MAX_OVERFLOW = 20  # Burst capacity above pool_size for peak load
+
+
 if TYPE_CHECKING:  # pragma: no cover
     # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
     # Import only for static analysis; guarded to avoid hard runtime dependency.
@@ -284,9 +295,9 @@ class DatabaseManager:
         return {
             "poolclass": QueuePool,
             # Increased from 5 to 10 for concurrent operations (main loop + OrderTracker + health checks)
-            "pool_size": 10,
+            "pool_size": POOL_SIZE,
             # Increased from 10 to 20 to handle burst load without exhaustion
-            "max_overflow": 20,
+            "max_overflow": MAX_OVERFLOW,
             # Add timeout to prevent indefinite blocking when pool is exhausted
             "pool_timeout": 30,  # Wait max 30s for available connection
             "pool_pre_ping": True,
@@ -424,17 +435,17 @@ class DatabaseManager:
             "size": pool.size(),
             "checked_out": pool.checkedout(),
             "overflow": pool.overflow(),
-            "total_available": pool.size() - pool.checkedout() + (20 - pool.overflow()),
+            "total_available": pool.size() - pool.checkedout() + (MAX_OVERFLOW - pool.overflow()),
         }
 
         # Warn if pool is >80% utilized (high contention risk)
-        utilization_pct = (stats["checked_out"] / (pool.size() + 20)) * 100
+        utilization_pct = (stats["checked_out"] / (pool.size() + MAX_OVERFLOW)) * 100
         if utilization_pct > 80:
             logger.warning(
                 "Database pool near exhaustion: %d/%d connections in use (%.1f%% utilization). "
                 "High contention risk - critical operations may block.",
                 stats["checked_out"],
-                pool.size() + 20,
+                pool.size() + MAX_OVERFLOW,
                 utilization_pct,
             )
 
@@ -533,7 +544,15 @@ class DatabaseManager:
                 session_id=session_id,
             )
             session.add(oc)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to record optimization cycle for {strategy_name}/{symbol}: {e}",
+                    exc_info=True,
+                )
+                raise
             return int(oc.id)
 
     def fetch_optimization_cycles(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
@@ -593,6 +612,10 @@ class DatabaseManager:
         Returns:
             Trading session ID
         """
+        # Validate initial_balance
+        if not math.isfinite(initial_balance) or initial_balance <= 0:
+            raise ValueError(f"initial_balance must be positive and finite, got {initial_balance}")
+
         with self.get_session() as session:
             # Convert string enum if necessary
             if isinstance(mode, str):
@@ -618,7 +641,15 @@ class DatabaseManager:
             )
 
             session.add(trading_session)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to create trading session {session_name}: {e}",
+                    exc_info=True,
+                )
+                raise
 
             # Set as current session
             self._current_session_id = trading_session.id
@@ -771,6 +802,14 @@ class DatabaseManager:
         Returns:
             Trade ID
         """
+        # Validate financial inputs at API boundary
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError(f"entry_price must be positive and finite, got {entry_price}")
+        if not math.isfinite(exit_price) or exit_price <= 0:
+            raise ValueError(f"exit_price must be positive and finite, got {exit_price}")
+        if not math.isfinite(size) or size <= 0:
+            raise ValueError(f"size must be positive and finite, got {size}")
+
         # Use WRITE timeout - trade logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             # Convert string enums if necessary
@@ -779,15 +818,11 @@ class DatabaseManager:
             if isinstance(source, str):
                 source = TradeSource[source.upper()]
 
-            # Calculate percentage P&L with division by zero protection
-            if entry_price > 0:
-                if side == PositionSide.LONG:
-                    pnl_percent = ((exit_price - entry_price) / entry_price) * 100
-                else:
-                    pnl_percent = ((entry_price - exit_price) / entry_price) * 100
+            # Calculate percentage P&L (entry_price validated positive above)
+            if side == PositionSide.LONG:
+                pnl_percent = ((exit_price - entry_price) / entry_price) * 100
             else:
-                logger.warning(f"Invalid entry price {entry_price} for trade calculation")
-                pnl_percent = 0.0
+                pnl_percent = ((entry_price - exit_price) / entry_price) * 100
 
             trade = Trade(
                 symbol=symbol,
@@ -882,6 +917,12 @@ class DatabaseManager:
         Returns:
             Position ID
         """
+        # Validate financial inputs at API boundary
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError(f"entry_price must be positive and finite, got {entry_price}")
+        if not math.isfinite(size) or size <= 0:
+            raise ValueError(f"size must be positive and finite, got {size}")
+
         # Use WRITE timeout - position logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             # Convert string enum if necessary
@@ -998,13 +1039,35 @@ class DatabaseManager:
         mfe_time: datetime | None = None,
         mae_time: datetime | None = None,
         stop_loss_order_id: str | None = None,
-    ):
-        """Update an existing position with current market data."""
+    ) -> bool:
+        """Update an existing position with current market data.
+
+        Returns:
+            True if update successful, False if position not found.
+
+        Raises:
+            ValueError: If any price field is not finite or negative.
+        """
+        # Validate financial inputs - prices must be non-negative and finite if provided
+        price_fields = [
+            ("current_price", current_price),
+            ("stop_loss", stop_loss),
+            ("take_profit", take_profit),
+            ("trailing_stop_price", trailing_stop_price),
+            ("last_partial_exit_price", last_partial_exit_price),
+            ("last_scale_in_price", last_scale_in_price),
+            ("mfe_price", mfe_price),
+            ("mae_price", mae_price),
+        ]
+        for name, val in price_fields:
+            if val is not None and (not math.isfinite(val) or val < 0):
+                raise ValueError(f"{name} must be non-negative and finite, got {val}")
+
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
                 logger.error(f"Position {position_id} not found")
-                return
+                return False
 
             if current_price is not None:
                 position.current_price = Decimal(str(current_price))
@@ -1079,6 +1142,7 @@ class DatabaseManager:
 
             try:
                 session.commit()
+                return True
             except Exception as e:
                 session.rollback()
                 logger.error(
@@ -1095,6 +1159,12 @@ class DatabaseManager:
         pnl: float | None = None,
     ) -> bool:
         """Mark a position as closed with optional exit details."""
+        # Validate financial inputs if provided
+        if exit_price is not None and (not math.isfinite(exit_price) or exit_price <= 0):
+            raise ValueError(f"exit_price must be positive and finite, got {exit_price}")
+        if pnl is not None and not math.isfinite(pnl):
+            raise ValueError(f"pnl must be finite, got {pnl}")
+
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
@@ -1123,35 +1193,42 @@ class DatabaseManager:
                 return False
 
     def get_pending_orders(self, session_id: int | None = None) -> list[dict]:
-        """Get all pending orders for a session."""
+        """Get all pending orders for a session.
+
+        Note: This method queries the Order table for PENDING orders.
+        Use get_pending_orders_new() for full order details including exchange_order_id.
+        """
         session_id = session_id or self._current_session_id
         if not session_id:
             return []
 
         with self.get_session() as session:
             orders = (
-                session.query(Position)
-                .filter(Position.session_id == session_id, Position.status == "PENDING")
+                session.query(Order)
+                .filter(Order.session_id == session_id, Order.status == OrderStatus.PENDING)
                 .all()
             )
 
             return [
                 {
                     "id": order.id,
-                    "order_id": order.order_id,
+                    "order_id": order.internal_order_id,
                     "symbol": order.symbol,
                     "side": order.side.value,
-                    "quantity": order.quantity,
-                    "price": order.entry_price,
+                    "quantity": float(order.quantity) if order.quantity else 0,
+                    "price": float(order.price) if order.price else None,
                     "status": order.status.value,
                 }
                 for order in orders
             ]
 
     def update_order_status(self, order_id: int, status: str) -> bool:
-        """Update the status of an order."""
+        """Update the status of an order.
+
+        Note: This is a legacy method. Prefer update_order_status_new() for full functionality.
+        """
         with self.get_session() as session:
-            order = session.query(Position).filter_by(id=order_id).first()
+            order = session.query(Order).filter_by(id=order_id).first()
             if not order:
                 logger.error(f"Order {order_id} not found")
                 return False
@@ -1168,6 +1245,13 @@ class DatabaseManager:
                 return True
             except ValueError as exc:
                 logger.error(f"Invalid order status: {status} ({exc})")
+                return False
+            except Exception as exc:
+                session.rollback()
+                logger.error(
+                    f"Failed to update order {order_id} status: {exc}",
+                    exc_info=True,
+                )
                 return False
 
     def validate_position_status_consistency(self) -> dict[str, int]:
@@ -1203,18 +1287,28 @@ class DatabaseManager:
         """Fix position status inconsistencies and return count of fixes applied."""
         with self.get_session() as session:
             # * Fix positions marked as OPEN but missing data (mark as CLOSED)
+            # Use parameterized timestamp for database portability (PostgreSQL and SQLite)
             result_orphaned = session.execute(
                 sa.text(
                     """
                     UPDATE positions
-                    SET status = 'CLOSED', last_update = NOW()
+                    SET status = 'CLOSED', last_update = :now
                     WHERE status = 'OPEN'
                     AND (entry_price IS NULL OR quantity IS NULL OR quantity <= 0)
                 """
-                )
+                ),
+                {"now": datetime.now(UTC)},
             )
 
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to fix position status inconsistencies: {e}",
+                    exc_info=True,
+                )
+                raise
 
             fixes_applied = {
                 "orphaned_to_closed": result_orphaned.rowcount,
@@ -1249,7 +1343,7 @@ class DatabaseManager:
             return [
                 {
                     "id": trade.id,
-                    "trade_id": trade.trade_id,  # Correctly using trade_id
+                    "trade_id": trade.id,  # Trade model uses 'id' as primary key
                     "symbol": trade.symbol,
                     "side": trade.side.value,
                     "entry_price": float(trade.entry_price),
@@ -1275,6 +1369,24 @@ class DatabaseManager:
         session_id: int | None = None,
     ):
         """Log a snapshot of account state."""
+        # Validate all financial fields
+        for name, val in [
+            ("balance", balance),
+            ("equity", equity),
+            ("total_pnl", total_pnl),
+            ("drawdown", drawdown),
+            ("total_exposure", total_exposure),
+        ]:
+            if not math.isfinite(val):
+                raise ValueError(f"{name} must be finite, got {val}")
+
+        # Validate margin_used is non-negative and doesn't exceed balance
+        if margin_used is not None:
+            if margin_used < 0:
+                raise ValueError(f"margin_used cannot be negative, got {margin_used}")
+            if margin_used > balance:
+                raise ValueError(f"margin_used ({margin_used}) cannot exceed balance ({balance})")
+
         with self.get_session() as session:
             snapshot = AccountHistory(
                 timestamp=datetime.now(UTC),
@@ -1291,7 +1403,15 @@ class DatabaseManager:
             )
 
             session.add(snapshot)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to log account snapshot: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
     def log_event(
         self,
@@ -1314,8 +1434,7 @@ class DatabaseManager:
                 event_type = EventType[event_type.upper()]
 
             # Ensure JSON is serializable – convert Decimal objects to float.
-            from decimal import Decimal  # Local import to avoid global dependency
-
+            # Decimal is already imported at module level.
             def _convert_decimals(obj):
                 if isinstance(obj, dict):
                     return {k: _convert_decimals(v) for k, v in obj.items()}
@@ -1340,7 +1459,15 @@ class DatabaseManager:
             )
 
             session.add(event)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to log event: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
             return event.id
 
@@ -1411,14 +1538,22 @@ class DatabaseManager:
                 session_id=session_id or self._current_session_id,
             )
             session.add(execution)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to log strategy execution for {strategy_name}/{symbol}: {e}",
+                    exc_info=True,
+                )
+                raise
 
     def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions with their associated orders."""
         # Use CRITICAL_READ timeout - position queries are in trading loop critical path
         with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
-            # Use string comparison for robustness against enum issues
-            query = session.query(Position).filter(Position.status == "OPEN")
+            # Use enum for type safety - will catch enum definition changes at compile time
+            query = session.query(Position).filter(Position.status == PositionStatus.OPEN)
 
             if session_id:
                 query = query.filter(Position.session_id == session_id)
@@ -1595,11 +1730,9 @@ class DatabaseManager:
             gross_profit = sum(t.pnl for t in winning_trades)
             gross_loss = abs(sum(t.pnl for t in losing_trades))
             if gross_loss > 0:
-                profit_factor = gross_profit / gross_loss
-                # Cap profit factor at a reasonable maximum to avoid infinite values
-                profit_factor = min(profit_factor, 999999.99)
+                profit_factor = min(gross_profit / gross_loss, MAX_PROFIT_FACTOR)
             else:
-                profit_factor = 999999.99  # Use a large finite value instead of infinity
+                profit_factor = MAX_PROFIT_FACTOR
 
             # Get account history for drawdown calculation
             history_query = session.query(AccountHistory)
@@ -1653,12 +1786,19 @@ class DatabaseManager:
                 ),
             }
 
-    def _update_performance_metrics(self, session_id: int):
-        """Update performance metrics after each trade."""
+    def _update_performance_metrics(self, session_id: int) -> bool:
+        """Update performance metrics after each trade.
+
+        This is called after trade commit, so metrics failure is non-blocking.
+        Metrics can be recalculated from trades table if needed.
+
+        Returns:
+            True if metrics updated successfully, False otherwise.
+        """
         # Guard against None session_id
         if not session_id:
             logger.warning("Cannot update performance metrics: session_id is None")
-            return
+            return False
 
         try:
             # Calculate daily metrics
@@ -1710,9 +1850,18 @@ class DatabaseManager:
                     db.add(metrics)
 
                 db.commit()
+                return True
 
         except Exception as e:
-            logger.error(f"Failed to update performance metrics: {e}")
+            # Log at WARNING level since metrics can be recalculated from trades
+            # This is non-blocking - the trade is already committed
+            logger.warning(
+                "Failed to update performance metrics for session %s: %s. "
+                "Metrics may be out of sync until next successful update.",
+                session_id,
+                e,
+            )
+            return False
 
     def cleanup_old_data(self, days_to_keep: int = 90):
         """Clean up old data to prevent database bloat."""
@@ -1730,7 +1879,15 @@ class DatabaseManager:
                 # SQLAlchemy will cascade delete related records
                 session.delete(old_session)
 
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to cleanup old data: {e}",
+                    exc_info=True,
+                )
+                raise
 
             logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
 
@@ -1866,8 +2023,16 @@ class DatabaseManager:
             total_pnl = sum(trade.pnl for trade in trades)
             current_balance = trading_session.initial_balance + total_pnl
 
-            # Update the balance tracking
-            self.update_balance(current_balance, "recovered_from_trades", "system", session_id)
+            # Update the balance tracking and warn if persistence fails
+            success = self.update_balance(
+                current_balance, "recovered_from_trades", "system", session_id
+            )
+            if not success:
+                logger.warning(
+                    "Failed to persist recovered balance for session %s (calculated: %.2f)",
+                    session_id,
+                    current_balance,
+                )
 
             return current_balance
 
@@ -1888,6 +2053,10 @@ class DatabaseManager:
         self, new_balance: float, reason: str, updated_by: str = "user"
     ) -> bool:
         """Manual balance adjustment (for user-initiated changes)"""
+        # Validate new_balance at API boundary
+        if not math.isfinite(new_balance) or new_balance < 0:
+            raise ValueError(f"new_balance must be non-negative and finite, got {new_balance}")
+
         current_balance = self.get_current_balance()
 
         if current_balance == 0:
@@ -1949,10 +2118,15 @@ class DatabaseManager:
         if not session_id:
             raise ValueError("No active trading session for balance update")
 
+        # Validate balance_change is finite (can be negative for withdrawals)
+        if not math.isfinite(balance_change):
+            raise ValueError(f"balance_change must be finite, got {balance_change}")
+
         # Use ExitStack to properly manage the session context manager lifecycle
         # across the yield boundary. This ensures session cleanup even if caller
         # doesn't fully consume the generator.
         with ExitStack() as stack:
+            session = None  # Initialize to avoid NameError in exception handlers
             try:
                 # Enter the session context - ExitStack handles cleanup
                 session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
@@ -1960,7 +2134,9 @@ class DatabaseManager:
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with session.begin_nested():
                     # Get current balance with row-level lock to prevent concurrent updates
-                    current_balance = AccountBalance.get_current_balance(session_id, session)
+                    current_balance = AccountBalance.get_current_balance(
+                        session_id, session, for_update=True
+                    )
 
                     new_balance = current_balance + balance_change
 
@@ -1997,6 +2173,7 @@ class DatabaseManager:
                             Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0")
                         ),
                         drawdown=Decimal("0.0"),
+                        session_id=session_id,  # Link to trading session for audit trail
                     )
                     session.add(history_entry)
 
@@ -2028,13 +2205,15 @@ class DatabaseManager:
 
             except ValueError as ve:
                 # Validation error - rollback and re-raise
-                session.rollback()
+                if session is not None:
+                    session.rollback()
                 logger.error("Balance update validation failed: %s", ve)
                 raise
 
             except SQLAlchemyError as se:
                 # Database error - rollback and re-raise
-                session.rollback()
+                if session is not None:
+                    session.rollback()
                 logger.error(
                     "Balance update failed for session %s: %s | Change: %+.2f | Reason: %s",
                     session_id,
@@ -2046,7 +2225,8 @@ class DatabaseManager:
 
             except Exception as e:
                 # Unexpected error - rollback and re-raise
-                session.rollback()
+                if session is not None:
+                    session.rollback()
                 logger.critical(
                     "Unexpected error during balance update for session %s: %s",
                     session_id,
@@ -2104,18 +2284,27 @@ class DatabaseManager:
         if not session_id:
             raise ValueError("No active trading session for position reconciliation")
 
+        # Validate financial inputs
+        if not math.isfinite(realized_pnl):
+            raise ValueError(f"realized_pnl must be finite, got {realized_pnl}")
+        if not math.isfinite(exit_price) or exit_price <= 0:
+            raise ValueError(f"exit_price must be positive and finite, got {exit_price}")
+
         # Use ExitStack to properly manage the session context manager lifecycle
         # across the yield boundary. This ensures session cleanup even if caller
         # doesn't fully consume the generator.
         with ExitStack() as stack:
+            db_session = None  # Initialize to avoid NameError in exception handlers
             try:
                 # Enter the session context - ExitStack handles cleanup
                 db_session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
 
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with db_session.begin_nested():
-                    # 1. Atomic balance update
-                    current_balance = AccountBalance.get_current_balance(session_id, db_session)
+                    # 1. Atomic balance update with row-level lock to prevent race conditions
+                    current_balance = AccountBalance.get_current_balance(
+                        session_id, db_session, for_update=True
+                    )
                     new_balance = current_balance + realized_pnl
 
                     # Validate balance won't go negative
@@ -2143,6 +2332,16 @@ class DatabaseManager:
                     if isinstance(side, str):
                         side = PositionSide[side.upper()]
 
+                    # Validate pnl_percent to prevent NaN/Inf from corrupting data
+                    pnl_percent = trade_data.get("pnl_percent", 0.0)
+                    if not math.isfinite(pnl_percent):
+                        logger.warning(
+                            "Invalid pnl_percent %.4f for %s, defaulting to 0.0",
+                            pnl_percent,
+                            trade_data.get("symbol", "unknown"),
+                        )
+                        pnl_percent = 0.0
+
                     trade = Trade(
                         symbol=trade_data["symbol"],
                         side=side,
@@ -2154,7 +2353,7 @@ class DatabaseManager:
                         entry_time=trade_data["entry_time"],
                         exit_time=datetime.now(UTC),
                         pnl=realized_pnl,
-                        pnl_percent=trade_data.get("pnl_percent", 0.0),
+                        pnl_percent=pnl_percent,
                         commission=trade_data.get("commission", 0.0),
                         exit_reason=exit_reason,
                         strategy_name=trade_data.get("strategy_name", "unknown"),
@@ -2166,16 +2365,17 @@ class DatabaseManager:
                     db_session.flush()  # Get trade ID
 
                     # 3. Close position in database
+                    # Note: Position model tracks current state; exit details are stored in Trade.
+                    # We update current_price and unrealized_pnl to reflect final state at close.
                     position = (
                         db_session.query(Position).filter(Position.id == position_db_id).first()
                     )
                     if position:
                         position.status = PositionStatus.CLOSED
-                        position.exit_price = exit_price
-                        position.exit_time = datetime.now(UTC)
-                        position.pnl = realized_pnl
-                        position.pnl_percent = trade_data.get("pnl_percent", 0.0)
-                        position.exit_reason = exit_reason
+                        position.current_price = exit_price
+                        position.last_update = datetime.now(UTC)
+                        position.unrealized_pnl = realized_pnl
+                        position.unrealized_pnl_percent = pnl_percent  # Use validated value
 
                     logger.info(
                         "Atomic reconciliation: Balance %.2f -> %.2f (PnL: %+.2f) | Trade ID: %s | Position: %s",
@@ -2203,13 +2403,15 @@ class DatabaseManager:
 
             except ValueError as ve:
                 # Validation error - rollback and re-raise
-                db_session.rollback()
+                if db_session is not None:
+                    db_session.rollback()
                 logger.error("Position reconciliation validation failed: %s", ve)
                 raise
 
             except SQLAlchemyError as se:
                 # Database error - rollback and re-raise
-                db_session.rollback()
+                if db_session is not None:
+                    db_session.rollback()
                 logger.error(
                     "Position reconciliation failed for position %s: %s",
                     position_db_id,
@@ -2219,7 +2421,8 @@ class DatabaseManager:
 
             except Exception as e:
                 # Unexpected error - rollback and re-raise
-                db_session.rollback()
+                if db_session is not None:
+                    db_session.rollback()
                 logger.critical(
                     "Unexpected error during position reconciliation: %s",
                     e,
@@ -2298,9 +2501,17 @@ class DatabaseManager:
         elif isinstance(obj, (np.integer,)):
             return int(obj)
         elif isinstance(obj, (np.floating,)):
-            return float(obj)
+            val = float(obj)
+            # Check for NaN/Inf after converting numpy float to Python float
+            if math.isnan(val) or math.isinf(val):
+                return None
+            return val
         elif isinstance(obj, np.generic):
-            return obj.item()
+            val = obj.item()
+            # Handle NaN/Inf for other numpy generic types that convert to float
+            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                return None
+            return val
         return obj
 
     # ----------------------
@@ -2370,6 +2581,20 @@ class DatabaseManager:
         Returns:
             ID of the created record
         """
+        # Validate optional numeric parameters are finite if provided
+        for name, val in [
+            ("rolling_win_rate", rolling_win_rate),
+            ("rolling_sharpe_ratio", rolling_sharpe_ratio),
+            ("current_drawdown", current_drawdown),
+            ("volatility_30d", volatility_30d),
+            ("risk_adjustment_factor", risk_adjustment_factor),
+            ("profit_factor", profit_factor),
+            ("expectancy", expectancy),
+            ("avg_trade_duration_hours", avg_trade_duration_hours),
+        ]:
+            if val is not None and not math.isfinite(val):
+                raise ValueError(f"{name} must be finite, got {val}")
+
         try:
             with self.get_session() as session:
                 metrics = DynamicPerformanceMetrics(
@@ -2404,7 +2629,15 @@ class DatabaseManager:
                 )
 
                 session.add(metrics)
-                session.commit()
+                try:
+                    session.commit()
+                except Exception as e:
+                    session.rollback()
+                    logger.error(
+                        f"Failed to log dynamic performance metrics for session {session_id}: {e}",
+                        exc_info=True,
+                    )
+                    raise
 
                 logger.debug(f"Logged dynamic performance metrics for session {session_id}")
                 return metrics.id
@@ -2450,6 +2683,16 @@ class DatabaseManager:
         Returns:
             ID of the created record
         """
+        # Validate required numeric inputs are finite
+        if not math.isfinite(original_value):
+            raise ValueError(f"original_value must be finite, got {original_value}")
+        if not math.isfinite(adjusted_value):
+            raise ValueError(f"adjusted_value must be finite, got {adjusted_value}")
+        if not math.isfinite(adjustment_factor) or adjustment_factor <= 0:
+            raise ValueError(
+                f"adjustment_factor must be positive and finite, got {adjustment_factor}"
+            )
+
         try:
             with self.get_session() as session:
                 adjustment = RiskAdjustment(
@@ -2480,7 +2723,15 @@ class DatabaseManager:
                 )
 
                 session.add(adjustment)
-                session.commit()
+                try:
+                    session.commit()
+                except Exception as e:
+                    session.rollback()
+                    logger.error(
+                        f"Failed to commit risk adjustment for session {session_id}: {e}",
+                        exc_info=True,
+                    )
+                    raise
 
                 logger.debug(
                     f"Logged risk adjustment {adjustment_type} for session {session_id}: {parameter_name} {original_value} -> {adjusted_value}"
@@ -2548,13 +2799,11 @@ class DatabaseManager:
                 gross_profit = sum(float(t.pnl) for t in winning_trades)
                 gross_loss = abs(sum(float(t.pnl) for t in losing_trades))
 
-                profit_factor = (
-                    gross_profit / gross_loss
-                    if gross_loss > 0
-                    else float("inf") if gross_profit > 0 else 1.0
-                )
-                if profit_factor == float("inf"):
-                    profit_factor = 10.0  # Cap at reasonable value
+                # Calculate profit factor consistently with get_performance_metrics
+                if gross_loss > 0:
+                    profit_factor = min(gross_profit / gross_loss, MAX_PROFIT_FACTOR)
+                else:
+                    profit_factor = MAX_PROFIT_FACTOR if gross_profit > 0 else 1.0
 
                 # Calculate expectancy
                 total_pnl = sum(float(t.pnl) for t in trades)
@@ -2590,24 +2839,6 @@ class DatabaseManager:
                             break
                     # Skip break-even trades
 
-                # Calculate max drawdown
-                max_drawdown = 0.0
-                if trades:
-                    # Sort trades by exit time to calculate running balance
-                    sorted_trades = sorted(trades, key=lambda t: t.exit_time)
-                    running_balance = 0.0
-                    peak_balance = 0.0
-
-                    for trade in sorted_trades:
-                        running_balance += float(trade.pnl)
-                        if running_balance > peak_balance:
-                            peak_balance = running_balance
-
-                        # Calculate drawdown from peak
-                        if peak_balance > 0:
-                            drawdown = (peak_balance - running_balance) / peak_balance
-                            max_drawdown = max(max_drawdown, drawdown)
-
                 # Calculate Sharpe ratio (simplified)
                 if len(trades) > 1:
                     pnls = [float(t.pnl) for t in trades]
@@ -2640,8 +2871,9 @@ class DatabaseManager:
                             if peak_balance > 0:
                                 drawdown = (peak_balance - record.balance) / peak_balance
                                 max_drawdown = max(max_drawdown, drawdown)
-                except Exception:
-                    # If account history is not available or fails, default to 0
+                except Exception as e:
+                    # Log the error for debugging, then default to 0
+                    logger.warning("Failed to calculate max drawdown from account history: %s", e)
                     max_drawdown = 0.0
 
                 return {
@@ -2687,6 +2919,12 @@ class DatabaseManager:
         target_level: int | None = None,
     ) -> int:
         """Log a partial exit or scale-in operation for a position."""
+        # Validate financial inputs
+        if not math.isfinite(size) or size <= 0:
+            raise ValueError(f"size must be positive and finite, got {size}")
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"price must be positive and finite, got {price}")
+
         with self.get_session() as session:
             try:
                 op_type = (
@@ -2719,6 +2957,14 @@ class DatabaseManager:
         target_level: int,
     ) -> None:
         """Convenience method: append partial trade, decrement current size, increment counters."""
+        # Validate financial inputs
+        if not math.isfinite(executed_fraction_of_original) or executed_fraction_of_original <= 0:
+            raise ValueError(
+                f"executed_fraction_of_original must be positive and finite, got {executed_fraction_of_original}"
+            )
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"price must be positive and finite, got {price}")
+
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
@@ -2759,6 +3005,14 @@ class DatabaseManager:
         threshold_level: int,
     ) -> None:
         """Convenience method: append scale-in trade, increment current size and counters."""
+        # Validate financial inputs
+        if not math.isfinite(added_fraction_of_original) or added_fraction_of_original <= 0:
+            raise ValueError(
+                f"added_fraction_of_original must be positive and finite, got {added_fraction_of_original}"
+            )
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"price must be positive and finite, got {price}")
+
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
@@ -2829,6 +3083,12 @@ class DatabaseManager:
         Returns:
             Order ID
         """
+        # Validate financial inputs
+        if not math.isfinite(quantity) or quantity <= 0:
+            raise ValueError(f"quantity must be positive and finite, got {quantity}")
+        if price is not None and (not math.isfinite(price) or price <= 0):
+            raise ValueError(f"price must be positive and finite, got {price}")
+
         with self.get_session() as session:
             # * Convert string enums if necessary
             if isinstance(order_type, str):
@@ -2867,15 +3127,41 @@ class DatabaseManager:
             except IntegrityError as exc:
                 session.rollback()
                 if "internal_order_id" in str(exc).lower():
-                    # * Handle duplicate internal order ID
+                    # Handle duplicate internal order ID by creating a new Order instance.
+                    # The original order object is detached after rollback and should not be reused.
                     retry_timestamp = int(datetime.now(UTC).timestamp() * 1000000)  # microseconds
-                    order.internal_order_id = (
+                    retry_internal_id = (
                         f"{order_type.value.lower()}_{position_id}_{retry_timestamp}"
                     )
-                    session.add(order)
-                    session.commit()
-                    logger.info(f"Created order #{order.id} with retry internal_order_id")
-                    return order.id
+                    retry_order = Order(
+                        position_id=position_id,
+                        order_type=order_type,
+                        status=OrderStatus.PENDING,
+                        exchange_order_id=exchange_order_id,
+                        internal_order_id=retry_internal_id,
+                        symbol=symbol,
+                        side=side,
+                        quantity=Decimal(str(quantity)),
+                        price=Decimal(str(price)) if price is not None else None,
+                        strategy_name=strategy_name,
+                        session_id=session_id or self._current_session_id,
+                        target_level=target_level,
+                        size_fraction=(
+                            Decimal(str(size_fraction)) if size_fraction is not None else None
+                        ),
+                    )
+                    session.add(retry_order)
+                    try:
+                        session.commit()
+                    except Exception as retry_exc:
+                        session.rollback()
+                        logger.error(
+                            f"Failed to create order on retry for position {position_id}: {retry_exc}",
+                            exc_info=True,
+                        )
+                        raise
+                    logger.info(f"Created order #{retry_order.id} with retry internal_order_id")
+                    return retry_order.id
                 else:
                     raise
 
@@ -2901,6 +3187,18 @@ class DatabaseManager:
         Returns:
             True if successful, False otherwise
         """
+        # Validate financial inputs if provided
+        if filled_quantity is not None and (
+            not math.isfinite(filled_quantity) or filled_quantity < 0
+        ):
+            raise ValueError(
+                f"filled_quantity must be non-negative and finite, got {filled_quantity}"
+            )
+        if filled_price is not None and (not math.isfinite(filled_price) or filled_price <= 0):
+            raise ValueError(f"filled_price must be positive and finite, got {filled_price}")
+        if commission is not None and (not math.isfinite(commission) or commission < 0):
+            raise ValueError(f"commission must be non-negative and finite, got {commission}")
+
         with self.get_session() as session:
             order = session.query(Order).filter_by(id=order_id).first()
             if not order:
