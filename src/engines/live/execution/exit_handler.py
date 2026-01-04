@@ -476,10 +476,10 @@ class LiveExitHandler:
                 error="Position already closed",
             )
 
-        if filled_price <= 0:
+        if filled_price <= 0 or not math.isfinite(filled_price):
             return LiveExitResult(
                 success=False,
-                error="Invalid filled price",
+                error=f"Invalid filled price: {filled_price}",
             )
 
         # Validate filled price against entry price for flash crash detection

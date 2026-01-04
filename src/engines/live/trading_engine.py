@@ -2728,6 +2728,14 @@ class LiveTradingEngine:
     ) -> None:
         """Close a position using shared execution modules."""
         try:
+            # Defensive check: verify position still exists (prevents race with concurrent close)
+            if position.order_id and not self.live_position_tracker.has_position(position.order_id):
+                logger.debug(
+                    "Position %s no longer exists (already closed) - skipping exit",
+                    position.order_id,
+                )
+                return
+
             if position.entry_price <= 0:
                 logger.error(
                     "Invalid entry_price %s for position %s - cannot close position safely",
