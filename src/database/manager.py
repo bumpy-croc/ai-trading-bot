@@ -1331,10 +1331,20 @@ class DatabaseManager:
         session_id: int | None = None,
     ):
         """Log a snapshot of account state."""
-        # Validate core financial fields
-        for name, val in [("balance", balance), ("equity", equity)]:
+        # Validate all financial fields
+        for name, val in [
+            ("balance", balance),
+            ("equity", equity),
+            ("total_pnl", total_pnl),
+            ("drawdown", drawdown),
+            ("total_exposure", total_exposure),
+        ]:
             if not math.isfinite(val):
                 raise ValueError(f"{name} must be finite, got {val}")
+
+        # Validate margin_used doesn't exceed balance
+        if margin_used is not None and margin_used > balance:
+            raise ValueError(f"margin_used ({margin_used}) cannot exceed balance ({balance})")
 
         with self.get_session() as session:
             snapshot = AccountHistory(
@@ -1487,7 +1497,15 @@ class DatabaseManager:
                 session_id=session_id or self._current_session_id,
             )
             session.add(execution)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to log strategy execution for {strategy_name}/{symbol}: {e}",
+                    exc_info=True,
+                )
+                raise
 
     def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions with their associated orders."""
@@ -1978,6 +1996,10 @@ class DatabaseManager:
         self, new_balance: float, reason: str, updated_by: str = "user"
     ) -> bool:
         """Manual balance adjustment (for user-initiated changes)"""
+        # Validate new_balance at API boundary
+        if not math.isfinite(new_balance) or new_balance < 0:
+            raise ValueError(f"new_balance must be non-negative and finite, got {new_balance}")
+
         current_balance = self.get_current_balance()
 
         if current_balance == 0:
@@ -2484,6 +2506,20 @@ class DatabaseManager:
         Returns:
             ID of the created record
         """
+        # Validate optional numeric parameters are finite if provided
+        for name, val in [
+            ("rolling_win_rate", rolling_win_rate),
+            ("rolling_sharpe_ratio", rolling_sharpe_ratio),
+            ("current_drawdown", current_drawdown),
+            ("volatility_30d", volatility_30d),
+            ("risk_adjustment_factor", risk_adjustment_factor),
+            ("profit_factor", profit_factor),
+            ("expectancy", expectancy),
+            ("avg_trade_duration_hours", avg_trade_duration_hours),
+        ]:
+            if val is not None and not math.isfinite(val):
+                raise ValueError(f"{name} must be finite, got {val}")
+
         try:
             with self.get_session() as session:
                 metrics = DynamicPerformanceMetrics(
