@@ -737,7 +737,17 @@ class RiskManager:
         bool
             True if drawdown exceeds configured maximum, False otherwise.
         """
-        if peak_balance == 0:
+        # Validate inputs
+        if not math.isfinite(current_balance) or not math.isfinite(peak_balance):
+            logging.warning(
+                "Non-finite balance in drawdown check: current=%s, peak=%s",
+                current_balance,
+                peak_balance,
+            )
+            return False
+
+        # Cannot calculate drawdown with non-positive peak
+        if peak_balance <= 0:
             return False
 
         drawdown = (peak_balance - current_balance) / peak_balance
@@ -963,11 +973,18 @@ class RiskManager:
                 return
             current = float(pos.get("size", 0.0))
             new_size = max(0.0, current - float(executed_fraction_of_original))
-            pos["size"] = new_size
-            # Reduce daily risk used proportionally (approximation)
-            self.daily_risk_used = max(
-                0.0, self.daily_risk_used - float(executed_fraction_of_original)
-            )
+
+            # Calculate actual reduction (handles case where executed_fraction > current)
+            actual_reduction = current - new_size
+
+            # If position fully exited, remove from tracking
+            if new_size < 1e-9:  # Effectively zero
+                del self.positions[symbol]
+            else:
+                pos["size"] = new_size
+
+            # Reduce daily risk used by actual amount removed
+            self.daily_risk_used = max(0.0, self.daily_risk_used - actual_reduction)
 
     def adjust_position_after_scale_in(
         self, symbol: str, added_fraction_of_original: float
