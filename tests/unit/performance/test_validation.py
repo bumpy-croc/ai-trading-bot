@@ -3,7 +3,6 @@
 Tests all input validation paths to ensure robust error handling.
 """
 
-import math
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
