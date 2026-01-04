@@ -27,25 +27,21 @@ def main():
             # Find the last assistant message
             for line in reversed(lines):
                 try:
-                    message = json.loads(line)
-                    if message.get("role") == "assistant":
-                        # Check if the assistant's message contains "All done"
-                        content = message.get("content", "")
+                    entry = json.loads(line)
+                    # Check if this is an assistant message
+                    if entry.get("message", {}).get("role") == "assistant":
+                        content = entry.get("message", {}).get("content", [])
                         if isinstance(content, list):
-                            # Content can be a list of blocks
-                            content_text = " ".join(
-                                block.get("text", "") if isinstance(block, dict) else str(block)
-                                for block in content
-                            )
-                        else:
-                            content_text = str(content)
-
-                        if "All done" in content_text:
-                            output = {"decision": "continue"}
-                            print(json.dumps(output))
-                            sys.exit(0)
+                            # Check all text blocks for "All done"
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    text = block.get("text", "")
+                                    if "All done" in text:
+                                        output = {"decision": "continue"}
+                                        print(json.dumps(output))
+                                        sys.exit(0)
                         break  # Only check the last assistant message
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, KeyError, AttributeError):
                     continue
 
     except (json.JSONDecodeError, KeyError, AttributeError, IOError):
