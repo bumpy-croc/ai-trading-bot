@@ -636,7 +636,15 @@ class DatabaseManager:
             )
 
             session.add(trading_session)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to create trading session {session_name}: {e}",
+                    exc_info=True,
+                )
+                raise
 
             # Set as current session
             self._current_session_id = trading_session.id
@@ -1232,6 +1240,13 @@ class DatabaseManager:
                 return True
             except ValueError as exc:
                 logger.error(f"Invalid order status: {status} ({exc})")
+                return False
+            except Exception as exc:
+                session.rollback()
+                logger.error(
+                    f"Failed to update order {order_id} status: {exc}",
+                    exc_info=True,
+                )
                 return False
 
     def validate_position_status_consistency(self) -> dict[str, int]:
@@ -2578,7 +2593,15 @@ class DatabaseManager:
                 )
 
                 session.add(metrics)
-                session.commit()
+                try:
+                    session.commit()
+                except Exception as e:
+                    session.rollback()
+                    logger.error(
+                        f"Failed to log dynamic performance metrics for session {session_id}: {e}",
+                        exc_info=True,
+                    )
+                    raise
 
                 logger.debug(f"Logged dynamic performance metrics for session {session_id}")
                 return metrics.id
@@ -2664,7 +2687,15 @@ class DatabaseManager:
                 )
 
                 session.add(adjustment)
-                session.commit()
+                try:
+                    session.commit()
+                except Exception as e:
+                    session.rollback()
+                    logger.error(
+                        f"Failed to commit risk adjustment for session {session_id}: {e}",
+                        exc_info=True,
+                    )
+                    raise
 
                 logger.debug(
                     f"Logged risk adjustment {adjustment_type} for session {session_id}: {parameter_name} {original_value} -> {adjusted_value}"
@@ -3102,7 +3133,15 @@ class DatabaseManager:
                         ),
                     )
                     session.add(retry_order)
-                    session.commit()
+                    try:
+                        session.commit()
+                    except Exception as retry_exc:
+                        session.rollback()
+                        logger.error(
+                            f"Failed to create order on retry for position {position_id}: {retry_exc}",
+                            exc_info=True,
+                        )
+                        raise
                     logger.info(f"Created order #{retry_order.id} with retry internal_order_id")
                     return retry_order.id
                 else:
