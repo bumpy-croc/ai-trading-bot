@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import pickle  # nosec B403: used for internal caching; no untrusted inputs
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -70,6 +71,7 @@ class FeatureCache:
             "quick_hash_matches": 0,  # Track quick hash performance
             "full_hash_verifications": 0,  # Track full hash usage
         }
+        self._lock = threading.RLock()  # Reentrant lock to protect cache and stats from concurrent access
 
     def _generate_quick_hash(self, data: pd.DataFrame) -> str:
         """
@@ -208,23 +210,24 @@ class FeatureCache:
         Returns:
             Cached DataFrame if available and valid, None otherwise
         """
-        # Try quick hash first for performance
-        result = self._find_by_quick_hash(data, extractor_name, config)
-        if result is None:
-            self._stats["misses"] += 1
-            return None
+        with self._lock:
+            # Try quick hash first for performance
+            result = self._find_by_quick_hash(data, extractor_name, config)
+            if result is None:
+                self._stats["misses"] += 1
+                return None
 
-        cache_key, entry = result
+            cache_key, entry = result
 
-        # Check TTL using entry's own TTL value
-        if not entry.is_valid():
-            del self._cache[cache_key]
-            self._stats["evictions"] += 1
-            self._stats["misses"] += 1
-            return None
+            # Check TTL using entry's own TTL value
+            if not entry.is_valid():
+                del self._cache[cache_key]
+                self._stats["evictions"] += 1
+                self._stats["misses"] += 1
+                return None
 
-        self._stats["hits"] += 1
-        return entry.data.copy() if copy else entry.data
+            self._stats["hits"] += 1
+            return entry.data.copy() if copy else entry.data
 
     def set(
         self,
@@ -244,21 +247,22 @@ class FeatureCache:
             result: Feature extraction result to cache
             ttl: Time-to-live for this entry (uses default if None)
         """
-        quick_key = self._generate_cache_key(data, extractor_name, config, use_quick_hash=True)
-        full_hash = self._generate_full_data_hash(data)
-        quick_hash = self._generate_quick_hash(data)
-        ttl = ttl or self.default_ttl
+        with self._lock:
+            quick_key = self._generate_cache_key(data, extractor_name, config, use_quick_hash=True)
+            full_hash = self._generate_full_data_hash(data)
+            quick_hash = self._generate_quick_hash(data)
+            ttl = ttl or self.default_ttl
 
-        entry = CacheEntry(
-            data=result.copy(),
-            timestamp=time.time(),
-            ttl=ttl,
-            data_hash=full_hash,
-            quick_hash=quick_hash,
-        )
+            entry = CacheEntry(
+                data=result.copy(),
+                timestamp=time.time(),
+                ttl=ttl,
+                data_hash=full_hash,
+                quick_hash=quick_hash,
+            )
 
-        self._cache[quick_key] = entry
-        self._stats["sets"] += 1
+            self._cache[quick_key] = entry
+            self._stats["sets"] += 1
 
     def has(self, data: pd.DataFrame, extractor_name: str, config: dict[str, Any]) -> bool:
         """
@@ -384,6 +388,7 @@ class PredictionCacheManager:
             "evictions": 0,
             "expired_cleanups": 0,
         }
+        self._stats_lock = threading.Lock()  # Protect stats from concurrent updates
 
     def _generate_features_hash(self, features: np.ndarray) -> str:
         """
@@ -465,7 +470,8 @@ class PredictionCacheManager:
                 )
 
                 if cache_entry is None:
-                    self._stats["misses"] += 1
+                    with self._stats_lock:
+                        self._stats["misses"] += 1
                     return None
 
                 # Update access statistics
@@ -473,7 +479,8 @@ class PredictionCacheManager:
                 cache_entry.last_accessed = datetime.now(UTC)
                 session.commit()
 
-                self._stats["hits"] += 1
+                with self._stats_lock:
+                    self._stats["hits"] += 1
 
                 return {
                     "price": float(cache_entry.predicted_price),
@@ -485,7 +492,8 @@ class PredictionCacheManager:
 
         except Exception as e:
             logger.warning("Error accessing prediction cache: %s", e)
-            self._stats["misses"] += 1
+            with self._stats_lock:
+                self._stats["misses"] += 1
             return None
 
     def set(
@@ -544,7 +552,8 @@ class PredictionCacheManager:
                     session.add(cache_entry)
 
                 session.commit()
-                self._stats["sets"] += 1
+                with self._stats_lock:
+                    self._stats["sets"] += 1
 
                 # Clean up expired entries and enforce size limit
                 self._cleanup_expired(session)
@@ -571,7 +580,8 @@ class PredictionCacheManager:
             )
 
             session.commit()
-            self._stats["expired_cleanups"] += expired_count
+            with self._stats_lock:
+                self._stats["expired_cleanups"] += expired_count
             return expired_count
 
         except Exception as e:
@@ -609,7 +619,8 @@ class PredictionCacheManager:
                 session.delete(entry)
 
             session.commit()
-            self._stats["evictions"] += entries_to_remove
+            with self._stats_lock:
+                self._stats["evictions"] += entries_to_remove
             return entries_to_remove
 
         except Exception as e:
@@ -705,20 +716,23 @@ class PredictionCacheManager:
                     .count()
                 )
 
-                total_requests = self._stats["hits"] + self._stats["misses"]
-                hit_rate = self._stats["hits"] / total_requests if total_requests > 0 else 0.0
+                with self._stats_lock:
+                    total_requests = self._stats["hits"] + self._stats["misses"]
+                    hit_rate = self._stats["hits"] / total_requests if total_requests > 0 else 0.0
+                    stats_snapshot = self._stats.copy()
 
                 return {
                     "total_entries": total_entries,
                     "expired_entries": expired_entries,
                     "hit_rate": hit_rate,
                     "total_requests": total_requests,
-                    **self._stats,
+                    **stats_snapshot,
                 }
 
         except Exception as e:
             logger.warning("Error getting cache stats: %s", e)
-            return self._stats.copy()
+            with self._stats_lock:
+                return self._stats.copy()
 
 
 def get_global_feature_cache() -> FeatureCache:
