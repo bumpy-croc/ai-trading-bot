@@ -1,6 +1,7 @@
 """Project path utilities for finding project root and managing paths."""
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -53,13 +54,10 @@ def find_project_root() -> Path:
     return cwd
 
 
-# Cache the project root to avoid repeated filesystem operations
-_PROJECT_ROOT: Path | None = None
-
-
+@lru_cache(maxsize=1)
 def get_project_root() -> Path:
-    """Get the cached project root, computing it if necessary."""
-    global _PROJECT_ROOT
-    if _PROJECT_ROOT is None:
-        _PROJECT_ROOT = find_project_root()
-    return _PROJECT_ROOT
+    """Get the cached project root, computing it if necessary.
+
+    Uses lru_cache for thread-safe lazy initialization.
+    """
+    return find_project_root()

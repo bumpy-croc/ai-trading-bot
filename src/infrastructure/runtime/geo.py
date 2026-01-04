@@ -3,6 +3,8 @@ Geo-location detection utilities for determining the appropriate Binance API end
 """
 
 import logging
+import threading
+import time
 
 import requests
 
@@ -10,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 # Cache for geo-location to avoid repeated API calls
 _geo_cache: tuple[str, str] | None = None
+_geo_cache_lock = threading.Lock()
+
+# Retry configuration for geo API calls
+_MAX_RETRIES_PER_SERVICE = 2
+_RETRY_BASE_DELAY = 0.5  # seconds
 
 
 def get_country_code() -> str | None:
@@ -17,14 +24,15 @@ def get_country_code() -> str | None:
     Get the current country code using IP geolocation.
 
     Returns:
-        str: Two-letter country code (e.g., 'US', 'GB', 'DE') or None if detection fails
+        str: Two-letter country code (e.g., 'US', 'GB', 'DE') or None if detection fails.
     """
     global _geo_cache
 
-    # Return cached result if available
-    if _geo_cache is not None:
-        country_code, _ = _geo_cache
-        return country_code
+    # Return cached result if available (double-checked locking pattern)
+    with _geo_cache_lock:
+        if _geo_cache is not None:
+            country_code, _ = _geo_cache
+            return country_code
 
     try:
         # Try multiple geolocation services for reliability
@@ -35,36 +43,64 @@ def get_country_code() -> str | None:
         ]
 
         for service_url in services:
-            try:
-                response = requests.get(service_url, timeout=5)
-                response.raise_for_status()
+            # Retry each service with exponential backoff
+            for attempt in range(_MAX_RETRIES_PER_SERVICE):
+                try:
+                    response = requests.get(service_url, timeout=5)
+                    response.raise_for_status()
 
-                if service_url.endswith("countryCode"):
-                    # ip-api.com returns JSON
-                    try:
-                        data = response.json()
-                        # Validate response is dict before accessing keys
-                        if not isinstance(data, dict):
-                            logger.debug(
-                                f"Invalid JSON response from {service_url}: expected dict, got {type(data).__name__}"
-                            )
-                            continue
-                        country_code = data.get("countryCode", "").upper()
-                    except ValueError as json_err:
-                        logger.debug(f"Failed to parse JSON from {service_url}: {json_err}")
+                    if service_url.endswith("countryCode"):
+                        # ip-api.com returns JSON
+                        try:
+                            data = response.json()
+                            # Validate response is dict before accessing keys
+                            if not isinstance(data, dict):
+                                logger.debug(
+                                    "Invalid JSON response from %s: expected dict, got %s",
+                                    service_url,
+                                    type(data).__name__,
+                                )
+                                break  # Try next service
+                            country_code = data.get("countryCode", "").upper()
+                        except ValueError as json_err:
+                            logger.debug("Failed to parse JSON from %s: %s", service_url, json_err)
+                            break  # Try next service
+                    else:
+                        # ipapi.co and ipinfo.io return plain text
+                        country_code = response.text.strip().upper()
+
+                    if country_code and len(country_code) == 2:
+                        logger.info("Detected country code: %s using %s", country_code, service_url)
+                        with _geo_cache_lock:
+                            _geo_cache = (country_code, service_url)
+                        return country_code
+                    break  # Got response but invalid format, try next service
+
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    # Transient network errors - retry with backoff
+                    if attempt < _MAX_RETRIES_PER_SERVICE - 1:
+                        delay = _RETRY_BASE_DELAY * (2**attempt)
+                        logger.debug(
+                            "Network error from %s (attempt %d/%d): %s. Retrying in %.1fs",
+                            service_url,
+                            attempt + 1,
+                            _MAX_RETRIES_PER_SERVICE,
+                            e,
+                            delay,
+                        )
+                        time.sleep(delay)
                         continue
-                else:
-                    # ipapi.co and ipinfo.io return plain text
-                    country_code = response.text.strip().upper()
+                    logger.debug(
+                        "Network error from %s after %d attempts: %s",
+                        service_url,
+                        _MAX_RETRIES_PER_SERVICE,
+                        e,
+                    )
+                    break  # Try next service
 
-                if country_code and len(country_code) == 2:
-                    logger.info(f"Detected country code: {country_code} using {service_url}")
-                    _geo_cache = (country_code, service_url)
-                    return country_code
-
-            except Exception as e:
-                logger.debug(f"Failed to get country from {service_url}: {e}")
-                continue
+                except Exception as e:
+                    logger.debug("Failed to get country from %s: %s", service_url, e)
+                    break  # Non-retryable error, try next service
 
         logger.warning("Failed to detect country code from all geolocation services")
         return None
@@ -100,8 +136,9 @@ def get_binance_api_endpoint() -> str:
         return "binance"
 
 
-def clear_geo_cache():
+def clear_geo_cache() -> None:
     """Clear the geo-location cache to force re-detection."""
     global _geo_cache
-    _geo_cache = None
+    with _geo_cache_lock:
+        _geo_cache = None
     logger.debug("Geo-location cache cleared")

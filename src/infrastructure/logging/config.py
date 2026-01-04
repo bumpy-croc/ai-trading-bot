@@ -260,15 +260,30 @@ class SimpleJsonFormatter(logging.Formatter):
             ]:
                 log_entry[key] = value
 
-        return json.dumps(log_entry)
+        try:
+            return json.dumps(log_entry, default=str)
+        except (TypeError, ValueError):
+            # Fallback if serialization still fails
+            return json.dumps(
+                {"level": record.levelname, "message": message, "error": "serialization_failed"}
+            )
 
 
-def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
+def build_logging_config(level_name: str | None = None, use_json: bool = False) -> dict[str, Any]:
+    """Build a logging configuration dictionary.
+
+    Args:
+        level_name: Log level name (e.g., "INFO", "DEBUG"). Falls back to LOG_LEVEL env var.
+        use_json: Whether to use JSON formatter for structured logging.
+
+    Returns:
+        dict: Logging configuration dictionary suitable for logging.config.dictConfig().
+    """
     cfg = get_config()
     level = (level_name or cfg.get("LOG_LEVEL", "INFO")).upper()
 
-    # * Use custom JSON formatter for structured logging
-    if json:
+    # Use custom JSON formatter for structured logging
+    if use_json:
         formatter = {
             "()": "src.infrastructure.logging.config.SimpleJsonFormatter",
         }
@@ -332,5 +347,5 @@ def configure_logging(level_name: str | None = None, use_json: bool | None = Non
             ).lower()
             is_production = env_name == "production"
             use_json = is_railway or is_production
-    config = build_logging_config(level_name, json=use_json)
+    config = build_logging_config(level_name, use_json=use_json)
     logging.config.dictConfig(config)
