@@ -36,6 +36,12 @@ class TradeProtocol(Protocol):
 
 logger = logging.getLogger(__name__)
 
+# Value at Risk (VaR) calculation thresholds
+# Minimum balance points required for meaningful VaR calculation (30 daily points = ~1 month)
+MIN_VAR_BALANCE_POINTS = 30
+# Minimum returns required after pct_change for stable percentile calculation
+MIN_VAR_RETURNS = 20
+
 
 @dataclass
 class PerformanceMetrics:
@@ -184,13 +190,13 @@ class PerformanceTracker:
         if timestamp is None:
             return datetime.now(UTC)
         if isinstance(timestamp, pd.Timestamp):
-            # Convert pandas Timestamp to datetime
-            ts_converted: pd.Timestamp = timestamp
-            if ts_converted.tzinfo is None:
-                ts_converted = ts_converted.tz_localize(UTC)
+            # Normalize pandas Timestamp to UTC, then convert to native datetime
+            ts_utc: pd.Timestamp = timestamp
+            if ts_utc.tzinfo is None:
+                ts_utc = ts_utc.tz_localize(UTC)
             else:
-                ts_converted = ts_converted.tz_convert(UTC)
-            return ts_converted.to_pydatetime()
+                ts_utc = ts_utc.tz_convert(UTC)
+            return ts_utc.to_pydatetime()
         if timestamp.tzinfo is None:
             return timestamp.replace(tzinfo=UTC)
         return timestamp.astimezone(UTC)
@@ -386,7 +392,7 @@ class PerformanceTracker:
 
             # Limit memory usage (same cap as trade history)
             if len(self._balance_history) > self._max_trade_history:
-                self._balance_history = self._balance_history[-self._max_trade_history:]
+                self._balance_history = self._balance_history[-self._max_trade_history :]
 
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics.
@@ -483,11 +489,8 @@ class PerformanceTracker:
             calmar_ratio = perf_metrics.calmar_ratio(annualized_return, max_dd_pct)
 
             # Value at Risk (95%) - requires minimum sample size for statistical validity
-            # 30 daily balance points = ~1 month of data for meaningful volatility estimates
-            # 20 returns after pct_change = sufficient for percentile calculation stability
-            MIN_VAR_BALANCE_POINTS = 30
-            MIN_VAR_RETURNS = 20
-
+            # Uses module-level constants: MIN_VAR_BALANCE_POINTS (30 = ~1 month of data)
+            # and MIN_VAR_RETURNS (20 = sufficient for stable percentile calculation)
             var_95 = 0.0
             if len(balance_series) >= MIN_VAR_BALANCE_POINTS:
                 returns = balance_series.pct_change().dropna()
@@ -561,9 +564,15 @@ class PerformanceTracker:
             fill for missing days. Intraday volatility is not captured in the
             risk-adjusted metrics, which is acceptable for most trading strategies
             that hold positions for days or longer.
+
+            Thread safety: Copy under lock then process outside lock to reduce
+            contention. Readers may see slightly stale data (eventual consistency),
+            which is acceptable for performance tracking.
         """
         # Copy data under lock, then release before expensive operations
         # to reduce lock contention during pandas resampling
+        # Note: Another thread could append to _balance_history after the copy,
+        # but we read from balance_history_copy, so we always get consistent data
         with self._lock:
             if not self._balance_history:
                 return pd.Series(dtype=float)
