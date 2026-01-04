@@ -359,10 +359,6 @@ class RiskManager:
         except (TypeError, ValueError):
             max_fraction = float(self.params.max_position_size)
 
-        # Clamp to configured max position size
-        # NOTE: Daily risk clamping happens later in _finalize_fraction_with_risk_limits
-        max_fraction = min(max_fraction, self.params.max_position_size)
-
         # Default fraction baseline
         try:
             base_fraction = float(
@@ -370,7 +366,22 @@ class RiskManager:
             )
         except (TypeError, ValueError):
             base_fraction = float(self.params.base_risk_per_trade)
+
+        # Validate and clamp all fractions to valid ranges
+        min_fraction = max(0.0, min_fraction)  # Ensure non-negative
+        max_fraction = max(
+            0.0, min(max_fraction, self.params.max_position_size)
+        )  # Clamp to [0, max_position_size]
         base_fraction = max(0.0, min(base_fraction, self.params.max_position_size))
+
+        # Ensure min_fraction <= max_fraction
+        if min_fraction > max_fraction:
+            logging.warning(
+                "min_fraction (%.4f) > max_fraction (%.4f), swapping to maintain validity",
+                min_fraction,
+                max_fraction,
+            )
+            min_fraction, max_fraction = max_fraction, min_fraction
 
         return min_fraction, max_fraction, base_fraction
 
