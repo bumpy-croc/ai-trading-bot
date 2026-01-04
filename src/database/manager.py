@@ -1712,12 +1712,19 @@ class DatabaseManager:
                 ),
             }
 
-    def _update_performance_metrics(self, session_id: int):
-        """Update performance metrics after each trade."""
+    def _update_performance_metrics(self, session_id: int) -> bool:
+        """Update performance metrics after each trade.
+
+        This is called after trade commit, so metrics failure is non-blocking.
+        Metrics can be recalculated from trades table if needed.
+
+        Returns:
+            True if metrics updated successfully, False otherwise.
+        """
         # Guard against None session_id
         if not session_id:
             logger.warning("Cannot update performance metrics: session_id is None")
-            return
+            return False
 
         try:
             # Calculate daily metrics
@@ -1769,9 +1776,18 @@ class DatabaseManager:
                     db.add(metrics)
 
                 db.commit()
+                return True
 
         except Exception as e:
-            logger.error(f"Failed to update performance metrics: {e}")
+            # Log at WARNING level since metrics can be recalculated from trades
+            # This is non-blocking - the trade is already committed
+            logger.warning(
+                "Failed to update performance metrics for session %s: %s. "
+                "Metrics may be out of sync until next successful update.",
+                session_id,
+                e,
+            )
+            return False
 
     def cleanup_old_data(self, days_to_keep: int = 90):
         """Clean up old data to prevent database bloat."""
