@@ -14,6 +14,20 @@ def main():
     if os.environ.get("CLAUDE_CODE_REMOTE") != "true":
         sys.exit(0)
 
+    # Read input from stdin to check message content
+    try:
+        input_data = json.loads(sys.stdin.read())
+        message = input_data.get("message", "")
+
+        # Skip hook if message contains "All done"
+        if "All done" in message:
+            output = {"decision": "continue"}
+            print(json.dumps(output))
+            sys.exit(0)
+    except (json.JSONDecodeError, KeyError):
+        # If we can't read the message, continue with normal behavior
+        pass
+
     reason = (
         "If you have identified issues to be fixed, fix them. "
         "If there's any unfinished tasks, finish them. "
