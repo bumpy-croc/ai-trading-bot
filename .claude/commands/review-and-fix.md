@@ -12,7 +12,18 @@ Run architecture-reviewer and code-reviewer agents on the current branch changes
      gh pr view <PR_NUMBER> --json title,body,number
      ```
 
-2. **Launch both review agents in parallel**
+2. **Check for conflicts with develop and merge if needed**
+   - Fetch latest develop: `git fetch origin develop`
+   - Check for merge conflicts: `git merge-tree $(git merge-base HEAD origin/develop) HEAD origin/develop`
+   - If conflicts detected:
+     - Merge develop into current branch: `git merge origin/develop --no-edit`
+     - If merge has conflicts, resolve them using your best judgment. Fetch additional context from the git history of both branches if needed.
+     - After merge completes (clean or resolved):
+       - Run unit tests: `python tests/run_tests.py unit`
+       - If tests fail, fix failures using TodoWrite to track fixes
+       - Only proceed to review after tests pass
+
+3. **Launch both review agents in parallel**
    - Use the Task tool to launch both agents in a single message
    - For architecture-reviewer:
      - Describe the changes being reviewed
@@ -23,12 +34,12 @@ Run architecture-reviewer and code-reviewer agents on the current branch changes
      - Include PR context if available
      - Use subagent_type="code-reviewer"
 
-3. **Collect and analyze findings**
+4. **Collect and analyze findings**
    - Wait for both agents to complete
    - Extract all findings with priority tags: [P0], [P1], [P2], [P3]
    - Identify "high confidence" issues (typically P0 and P1)
 
-4. **Fix all high-confidence issues**
+5. **Fix all high-confidence issues**
    - Create a todo list for tracking fixes
    - For each issue:
      - Apply the fix suggested by the reviewer
@@ -36,13 +47,13 @@ Run architecture-reviewer and code-reviewer agents on the current branch changes
      - Mark todo as completed
      - Run relevant tests to verify the fix
 
-5. **Run quality checks**
+6. **Run quality checks**
    - After all fixes are applied, run:
      ```bash
      atb dev quality
      ```
 
-6. **Generate summary report**
+7. **Generate summary report**
    Format output as:
 
    **Review Summary**
@@ -79,3 +90,4 @@ Run architecture-reviewer and code-reviewer agents on the current branch changes
 - If an issue requires clarification from the user, skip and note in summary
 - Always run tests after applying fixes
 - If quality checks fail, report the failures in the summary
+- Merge conflicts with develop are automatically resolved by keeping both changes where sensible
