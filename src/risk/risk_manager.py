@@ -664,13 +664,18 @@ class RiskManager:
         Raises
         ------
         ValueError
-            If entry_price is invalid or side is not "long" or "short".
+            If entry_price is invalid, side is not "long" or "short",
+            df is None/empty, or index is out of bounds.
         """
         # Validate inputs
         if not math.isfinite(entry_price) or entry_price <= 0:
             raise ValueError(f"entry_price must be positive and finite, got {entry_price}")
         if side not in VALID_SIDES:
             raise ValueError(f"side must be 'long' or 'short', got '{side}'")
+        if df is None or df.empty:
+            raise ValueError("df cannot be None or empty")
+        if index < 0 or index >= len(df):
+            raise ValueError(f"index must be in range [0, {len(df)}), got {index}")
 
         strategy_overrides = strategy_overrides or {}
         stop_loss_pct = strategy_overrides.get("stop_loss_pct")
