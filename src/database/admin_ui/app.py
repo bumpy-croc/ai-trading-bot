@@ -146,6 +146,7 @@ def create_app() -> "Flask":
     from flask_login import (  # type: ignore
         LoginManager,
         UserMixin,
+        current_user,
         login_required,
         login_user,
         logout_user,
@@ -160,6 +161,14 @@ def create_app() -> "Flask":
         can_view_details = True
         page_size = 50
         form_base_class = SecureForm
+
+        def is_accessible(self):
+            """Require authentication to access Flask-Admin views."""
+            return current_user.is_authenticated
+
+        def inaccessible_callback(self, name, **kwargs):
+            """Redirect unauthenticated users to login page."""
+            return redirect(url_for("login", next=request.url))
 
         def __init__(self, model, session, **kwargs):
             # Dynamically determine searchable string columns
@@ -322,9 +331,9 @@ def create_app() -> "Flask":
         return jsonify(db_manager.get_database_info())
 
     # Simple schema "migration" route to ensure new tables are created - requires authentication
-    @app.route("/migrate", methods=["POST", "GET"])
+    # POST-only to prevent accidental triggering via GET requests (link prefetching, etc.)
+    @app.route("/migrate", methods=["POST"])
     @login_required
-    @csrf.exempt
     def migrate():
         """Synchronise database schema (creates any missing tables)."""
         try:
