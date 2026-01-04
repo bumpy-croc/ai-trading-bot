@@ -875,9 +875,21 @@ class RiskManager:
         Fallback: sum exposures of provided symbols.
 
         Thread-safe: takes a snapshot of positions at start.
+
+        Raises
+        ------
+        ValueError
+            If threshold is provided but is not finite or not in [-1, 1].
         """
         if not symbols:
             return 0.0
+
+        # Validate threshold if provided
+        if threshold is not None:
+            if not math.isfinite(threshold):
+                raise ValueError(f"threshold must be finite, got {threshold}")
+            if threshold < -1 or threshold > 1:
+                raise ValueError(f"threshold must be in [-1, 1], got {threshold}")
 
         # Take snapshot of positions while holding lock
         with self._state_lock:
