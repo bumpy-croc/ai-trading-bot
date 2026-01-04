@@ -14,6 +14,7 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 - [x] (2025-10-25 20:25Z) Relocated indicator/sentiment extraction helpers into `src/tech/adapters/row_extractors.py` and wired trading/backtesting consumers to it.
 - [x] (2025-10-25 20:50Z) Updated prediction feature extractors, risk/risk managers, dashboards, and trading/backtesting integrations to import from the `src.tech` API while leaving shims for compatibility.
 - [x] (2025-10-27) Refreshed documentation (indicator README, prediction docs, tech_indicators.md created). Note: Repository requires Python 3.11+ due to union-type syntax in multiple modules.
+- [x] (2026-01-04) Removed deprecated `src/indicators` directory and all backward-compatibility shims. All code now imports directly from `src.tech.indicators.core`.
 
 ## Surprises & Discoveries
 
@@ -42,8 +43,7 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 - Documentation updated across the board
 
 ### Remaining Gaps
-- Legacy shims in `src/indicators` remain for backward compatibility (can be fully removed in future major version)
-- Some external documentation may still reference old paths
+- None - migration is complete. The deprecated `src/indicators` directory was removed on 2026-01-04.
 
 ### Lessons Learned
 - Moving TechnicalFeatureExtractor revealed circular import issues that were resolved by creating proper layer separation
@@ -100,7 +100,7 @@ At completion, the following contracts must exist:
 - `src/tech/indicators/core.py` exports pure functions: `calculate_moving_averages(df: pd.DataFrame, periods: list[int]) -> pd.DataFrame`, `calculate_rsi(data: pd.DataFrame | pd.Series, period: int = 14) -> pd.Series`, `calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame`, `calculate_bollinger_bands(df: pd.DataFrame, period: int = 20, std_dev: float = 2.0) -> pd.DataFrame`, `calculate_macd(...)`, `detect_market_regime(...)`, `calculate_support_resistance(...)`, and `calculate_ema(series: pd.Series, period: int = 9) -> pd.Series`.
 - `src/tech/features/technical.py` (new) wraps `core` to provide ML feature extraction utilities that prediction and other modules can import without pulling in prediction-only caching logic.
 - `src/tech/adapters/row_extractors.py` defines `extract_indicators(df: pd.DataFrame, index: int) -> dict[str, float | str]`, `extract_sentiment_data(...)`, and `extract_ml_predictions(...)`, with strict handling of NaNs and numeric casting.
-- `src/indicators/__init__.py` remains as a compatibility shim temporarily but must import from `src.tech.indicators.core` and raise a `DeprecationWarning` documenting the new path.
+- `src/indicators/` has been removed (2026-01-04). All imports now use `src.tech.indicators.core` directly.
 - Documentation in `docs/tech_indicators.md` and `docs/prediction.md` explains where to add new indicators and how `src.tech` fits into the architecture.
 
 Document any future deviations or enhancements in the Decision Log and Progress sections as they arise.
