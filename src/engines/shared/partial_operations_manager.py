@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.config.constants import DEFAULT_EPSILON
 from src.engines.shared.models import normalize_side
+from src.performance.metrics import Side, pnl_percent
 
 if TYPE_CHECKING:
     from src.position_management.partial_manager import PartialExitPolicy
@@ -176,10 +177,9 @@ class PartialOperationsManager:
                 )
                 return PartialExitDecision()
 
-            if side == "long":
-                current_pnl_pct = (current_price - entry_price) / entry_price
-            else:
-                current_pnl_pct = (entry_price - current_price) / entry_price
+            # Use shared pnl_percent for parity with both engines
+            side_enum = Side.LONG if side == "long" else Side.SHORT
+            current_pnl_pct = pnl_percent(entry_price, current_price, side_enum, 1.0)
 
         # Get policy exit configuration
         exit_targets = getattr(self.policy, "exit_targets", [])
@@ -249,10 +249,9 @@ class PartialOperationsManager:
                 )
                 return ScaleInDecision()
 
-            if side == "long":
-                current_pnl_pct = (current_price - entry_price) / entry_price
-            else:
-                current_pnl_pct = (entry_price - current_price) / entry_price
+            # Use shared pnl_percent for parity with both engines
+            side_enum = Side.LONG if side == "long" else Side.SHORT
+            current_pnl_pct = pnl_percent(entry_price, current_price, side_enum, 1.0)
 
         # Get policy scale-in configuration
         scale_in_thresholds = getattr(self.policy, "scale_in_thresholds", [])

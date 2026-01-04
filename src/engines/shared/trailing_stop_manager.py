@@ -15,6 +15,7 @@ import pandas as pd
 
 from src.config.constants import DEFAULT_ATR_PERIOD, DEFAULT_BREAKEVEN_BUFFER
 from src.engines.shared.models import normalize_side
+from src.performance.metrics import Side, pnl_percent
 from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
@@ -114,10 +115,9 @@ class TrailingStopManager:
 
         # Calculate position-level PnL percentage (not sized by position fraction)
         # This provides consistent risk management regardless of position size
-        if side == "long":
-            pnl_pct = (current_price - entry_price) / entry_price
-        else:
-            pnl_pct = (entry_price - current_price) / entry_price
+        # Use shared pnl_percent for parity with both engines
+        side_enum = Side.LONG if side == "long" else Side.SHORT
+        pnl_pct = pnl_percent(entry_price, current_price, side_enum, 1.0)
 
         # Check breakeven first
         breakeven_triggered = False
