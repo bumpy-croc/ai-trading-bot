@@ -34,7 +34,7 @@ class OperationTimeoutError(builtins.TimeoutError):
 TimeoutError = OperationTimeoutError  # noqa: A001
 
 
-def _timeout_handler(signum: int, frame: Any) -> None:
+def _timeout_handler(signum: int, _frame: Any) -> None:
     """Signal handler for SIGALRM timeout."""
     raise OperationTimeoutError("Operation timed out")
 

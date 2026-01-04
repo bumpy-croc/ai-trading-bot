@@ -66,8 +66,8 @@ def log_strategy_execution(
             signal_strength=signal_strength,
             confidence_score=confidence_score,
             indicators=indicators,
-            sentiment_data=sentiment_data if sentiment_data else None,
-            ml_predictions=ml_predictions if ml_predictions else None,
+            sentiment_data=sentiment_data or None,
+            ml_predictions=ml_predictions or None,
             position_size=position_size,
             reasons=reasons or [],
             volume=volume,
@@ -75,7 +75,7 @@ def log_strategy_execution(
             session_id=session_id,
         )
     except Exception as e:
-        # Best-effort logging - log at DEBUG to aid troubleshooting
-        # without failing the trade operation
-        logger.debug("Failed to log strategy execution: %s", e, exc_info=True)
+        # Best-effort logging - log at WARNING to provide visibility into
+        # database issues without failing the trade operation
+        logger.warning("Failed to log strategy execution: %s", e)
         return
