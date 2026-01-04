@@ -222,22 +222,58 @@ class Strategy:
 | `ensemble_weighted` | Weighted signal combination |
 | `momentum_leverage` | Momentum with leverage (experimental) |
 
-### 4. Risk Management (`src/risk/`)
+### 4. Risk Management (Three-Layer Architecture)
 
-Global risk controls applied across the entire system.
+The system uses a **three-layer risk management architecture** that provides defense-in-depth:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  LAYER 1: Strategy-Level Risk                          │
+│  (src/strategies/components/risk_manager.py)           │
+│  • Signal-based position sizing                        │
+│  • Regime-aware adjustments                            │
+│  • Component-based: compose into strategies            │
+└─────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────┐
+│  LAYER 2: Portfolio-Level Risk                         │
+│  (src/risk/risk_manager.py)                            │
+│  • Global constraint enforcement                       │
+│  • Daily risk limits (max_daily_risk)                  │
+│  • Correlation-based sizing                            │
+│  • Multi-symbol position tracking                      │
+└─────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────┐
+│  LAYER 3: Dynamic Risk Adjustment                      │
+│  (src/engines/shared/dynamic_risk_handler.py)          │
+│  • Performance-based adjustments                       │
+│  • Drawdown protection                                 │
+│  • Ensures backtest/live parity                        │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Key Principles:**
+- **Layer 1 (Strategy)**: "What size makes sense for THIS signal?"
+- **Layer 2 (Portfolio)**: "What size is ALLOWED given global constraints?"
+- **Layer 3 (Dynamic)**: "Should we REDUCE size due to performance/drawdown?"
 
 **Key Features:**
-- Daily loss limits
-- Position size constraints
-- Correlation-aware exposure
-- Drawdown protection
+- Daily risk limits (`max_daily_risk`, `daily_risk_used`)
+- Position size constraints (`max_position_size`)
+- Correlation-aware exposure (prevents over-concentration)
+- Drawdown protection (`max_drawdown`)
+- Thread-safe concurrent access for live trading
+- Dynamic performance-based adjustments
 
 **Integration Points:**
-- Strategies request risk approval before trades
-- Engine enforces risk limits on execution
-- Adapters share risk state between backtest and live modes
+- Strategies compose risk managers as components (Layer 1)
+- Engines enforce global constraints via portfolio risk manager (Layer 2)
+- Entry handlers apply dynamic adjustments before execution (Layer 3)
+- Adapters bridge component and portfolio risk managers
 
-See [Component Risk Integration](architecture/component_risk_integration.md) for detailed adapter guidance.
+**Comprehensive Documentation:**
+See [Risk Management Architecture](risk_management_architecture.md) for complete details on the three-layer architecture, data flow, examples, and common pitfalls.
 
 ### 5. Live Trading Engine (`src/engines/live/`)
 

@@ -1,7 +1,94 @@
-"""Unified dynamic risk adjustment logic for trading engines.
+"""
+Dynamic Risk Adjustment Handler (Layer 3 of 3-Layer Risk Architecture)
 
-This module provides consistent dynamic risk adjustment logic used by
-both backtesting and live trading engines to ensure parity in risk management.
+This module provides consistent dynamic risk adjustment logic used by both
+backtesting and live trading engines to ensure parity in risk management.
+
+ARCHITECTURE ROLE:
+    This is LAYER 3 (Dynamic Adjustment Layer) of the three-layer risk management
+    architecture. It applies real-time performance-based adjustments to position sizes.
+
+SCOPE:
+    - Performance-based dynamic adjustments
+    - Drawdown protection
+    - Volatility-based risk reduction
+    - Adjustment history tracking for analysis
+    - Ensures backtest/live parity in risk adjustments
+
+KEY DIFFERENCES FROM OTHER RISK LAYERS:
+    - Strategy risk (Layer 1): "What size makes sense for THIS signal?"
+    - Portfolio risk (Layer 2): "What size is ALLOWED given global constraints?"
+    - Dynamic risk (This file): "Should we REDUCE size due to performance/drawdown?"
+
+RELATIONSHIP TO OTHER RISK LAYERS:
+    Layer 1 (src/strategies/components/risk_manager.py): Strategy component - signal-based decisions
+    Layer 2 (src/risk/risk_manager.py): Portfolio manager - global constraints
+    Layer 3 (This file): Dynamic adjustments - performance-based risk reduction
+
+HOW IT WORKS:
+    1. Receives position size from portfolio risk manager (Layer 2)
+    2. Wraps DynamicRiskManager (from src/position_management/dynamic_risk.py)
+    3. Calculates adjustments based on:
+       - Current drawdown vs thresholds
+       - Recent performance (win rate, profit factor)
+       - Market volatility
+    4. Applies reduction factor to position size
+    5. Tracks adjustment history for post-trade analysis
+
+ADJUSTMENT REASONS:
+    - drawdown_reduction: In drawdown, reduce risk to preserve capital
+    - volatility_increase: High volatility, reduce risk for safety
+    - poor_performance: Recent losses, reduce risk temporarily
+    - recovery_scaling: Recovering from drawdown, gradually scale back up
+
+USAGE:
+    >>> from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
+    >>> from src.position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
+    >>>
+    >>> # Configure dynamic risk
+    >>> config = DynamicRiskConfig(
+    ...     enabled=True,
+    ...     drawdown_thresholds=[0.05, 0.10, 0.15],
+    ...     risk_reduction_factors=[0.8, 0.6, 0.4],
+    ... )
+    >>> dynamic_mgr = DynamicRiskManager(config=config, db_manager=db)
+    >>> handler = DynamicRiskHandler(dynamic_risk_manager=dynamic_mgr)
+    >>>
+    >>> # Apply dynamic adjustments
+    >>> original_size = 0.05  # 5% position from portfolio risk manager
+    >>> adjusted_size = handler.apply_dynamic_risk(
+    ...     original_size=original_size,
+    ...     current_time=datetime.now(UTC),
+    ...     balance=10000,
+    ...     peak_balance=12000,  # 16.7% drawdown
+    ... )
+    >>> # In 15% drawdown, might reduce to: 0.05 × 0.4 = 0.02 (2%)
+
+INTEGRATION WITH ENGINES:
+    Both backtest and live engines use this handler in their entry handlers to ensure
+    consistent risk adjustments. This ensures backtest results accurately reflect
+    live trading behavior.
+
+    >>> # In entry handler (both backtest and live)
+    >>> self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
+    >>>
+    >>> # After portfolio sizing, before execution
+    >>> final_size = self._dynamic_risk_handler.apply_dynamic_risk(
+    ...     original_size=portfolio_size,
+    ...     current_time=current_time,
+    ...     balance=balance,
+    ...     peak_balance=peak_balance,
+    ... )
+
+THREAD SAFETY:
+    All operations on mutable state (_adjustments list) are protected by a lock
+    for safe concurrent access.
+
+See also:
+    - docs/risk_management_architecture.md: Complete architecture documentation
+    - src/strategies/components/risk_manager.py: Strategy-level risk component (Layer 1)
+    - src/risk/risk_manager.py: Portfolio-level risk manager (Layer 2)
+    - src/position_management/dynamic_risk.py: DynamicRiskManager implementation
 """
 
 from __future__ import annotations
