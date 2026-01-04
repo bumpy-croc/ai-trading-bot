@@ -58,6 +58,12 @@ class QueryTimeout:
     DEFAULT = 30000  # 30s - Fallback for uncategorized queries
 
 
+# Maximum profit factor to prevent infinity values in reporting.
+# When gross_loss is 0 but gross_profit > 0, profit factor would be infinite.
+# This cap indicates "extremely profitable" while remaining storable in Numeric(18, 8).
+MAX_PROFIT_FACTOR = 999999.99
+
+
 if TYPE_CHECKING:  # pragma: no cover
     # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
     # Import only for static analysis; guarded to avoid hard runtime dependency.
@@ -771,6 +777,14 @@ class DatabaseManager:
         Returns:
             Trade ID
         """
+        # Validate financial inputs at API boundary
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError(f"entry_price must be positive and finite, got {entry_price}")
+        if not math.isfinite(exit_price) or exit_price <= 0:
+            raise ValueError(f"exit_price must be positive and finite, got {exit_price}")
+        if not math.isfinite(size) or size <= 0:
+            raise ValueError(f"size must be positive and finite, got {size}")
+
         # Use WRITE timeout - trade logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             # Convert string enums if necessary
@@ -779,15 +793,11 @@ class DatabaseManager:
             if isinstance(source, str):
                 source = TradeSource[source.upper()]
 
-            # Calculate percentage P&L with division by zero protection
-            if entry_price > 0:
-                if side == PositionSide.LONG:
-                    pnl_percent = ((exit_price - entry_price) / entry_price) * 100
-                else:
-                    pnl_percent = ((entry_price - exit_price) / entry_price) * 100
+            # Calculate percentage P&L (entry_price validated positive above)
+            if side == PositionSide.LONG:
+                pnl_percent = ((exit_price - entry_price) / entry_price) * 100
             else:
-                logger.warning(f"Invalid entry price {entry_price} for trade calculation")
-                pnl_percent = 0.0
+                pnl_percent = ((entry_price - exit_price) / entry_price) * 100
 
             trade = Trade(
                 symbol=symbol,
@@ -1123,35 +1133,42 @@ class DatabaseManager:
                 return False
 
     def get_pending_orders(self, session_id: int | None = None) -> list[dict]:
-        """Get all pending orders for a session."""
+        """Get all pending orders for a session.
+
+        Note: This method queries the Order table for PENDING orders.
+        Use get_pending_orders_new() for full order details including exchange_order_id.
+        """
         session_id = session_id or self._current_session_id
         if not session_id:
             return []
 
         with self.get_session() as session:
             orders = (
-                session.query(Position)
-                .filter(Position.session_id == session_id, Position.status == "PENDING")
+                session.query(Order)
+                .filter(Order.session_id == session_id, Order.status == OrderStatus.PENDING)
                 .all()
             )
 
             return [
                 {
                     "id": order.id,
-                    "order_id": order.order_id,
+                    "order_id": order.internal_order_id,
                     "symbol": order.symbol,
                     "side": order.side.value,
-                    "quantity": order.quantity,
-                    "price": order.entry_price,
+                    "quantity": float(order.quantity) if order.quantity else 0,
+                    "price": float(order.price) if order.price else None,
                     "status": order.status.value,
                 }
                 for order in orders
             ]
 
     def update_order_status(self, order_id: int, status: str) -> bool:
-        """Update the status of an order."""
+        """Update the status of an order.
+
+        Note: This is a legacy method. Prefer update_order_status_new() for full functionality.
+        """
         with self.get_session() as session:
-            order = session.query(Position).filter_by(id=order_id).first()
+            order = session.query(Order).filter_by(id=order_id).first()
             if not order:
                 logger.error(f"Order {order_id} not found")
                 return False
@@ -1249,7 +1266,7 @@ class DatabaseManager:
             return [
                 {
                     "id": trade.id,
-                    "trade_id": trade.trade_id,  # Correctly using trade_id
+                    "trade_id": trade.id,  # Trade model uses 'id' as primary key
                     "symbol": trade.symbol,
                     "side": trade.side.value,
                     "entry_price": float(trade.entry_price),
@@ -1314,8 +1331,7 @@ class DatabaseManager:
                 event_type = EventType[event_type.upper()]
 
             # Ensure JSON is serializable – convert Decimal objects to float.
-            from decimal import Decimal  # Local import to avoid global dependency
-
+            # Decimal is already imported at module level.
             def _convert_decimals(obj):
                 if isinstance(obj, dict):
                     return {k: _convert_decimals(v) for k, v in obj.items()}
@@ -1417,8 +1433,8 @@ class DatabaseManager:
         """Get all active positions with their associated orders."""
         # Use CRITICAL_READ timeout - position queries are in trading loop critical path
         with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
-            # Use string comparison for robustness against enum issues
-            query = session.query(Position).filter(Position.status == "OPEN")
+            # Use enum for type safety - will catch enum definition changes at compile time
+            query = session.query(Position).filter(Position.status == PositionStatus.OPEN)
 
             if session_id:
                 query = query.filter(Position.session_id == session_id)
@@ -1595,11 +1611,9 @@ class DatabaseManager:
             gross_profit = sum(t.pnl for t in winning_trades)
             gross_loss = abs(sum(t.pnl for t in losing_trades))
             if gross_loss > 0:
-                profit_factor = gross_profit / gross_loss
-                # Cap profit factor at a reasonable maximum to avoid infinite values
-                profit_factor = min(profit_factor, 999999.99)
+                profit_factor = min(gross_profit / gross_loss, MAX_PROFIT_FACTOR)
             else:
-                profit_factor = 999999.99  # Use a large finite value instead of infinity
+                profit_factor = MAX_PROFIT_FACTOR
 
             # Get account history for drawdown calculation
             history_query = session.query(AccountHistory)
@@ -1960,7 +1974,9 @@ class DatabaseManager:
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with session.begin_nested():
                     # Get current balance with row-level lock to prevent concurrent updates
-                    current_balance = AccountBalance.get_current_balance(session_id, session)
+                    current_balance = AccountBalance.get_current_balance(
+                        session_id, session, for_update=True
+                    )
 
                     new_balance = current_balance + balance_change
 
@@ -1997,6 +2013,7 @@ class DatabaseManager:
                             Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0")
                         ),
                         drawdown=Decimal("0.0"),
+                        session_id=session_id,  # Link to trading session for audit trail
                     )
                     session.add(history_entry)
 
@@ -2166,16 +2183,17 @@ class DatabaseManager:
                     db_session.flush()  # Get trade ID
 
                     # 3. Close position in database
+                    # Note: Position model tracks current state; exit details are stored in Trade.
+                    # We update current_price and unrealized_pnl to reflect final state at close.
                     position = (
                         db_session.query(Position).filter(Position.id == position_db_id).first()
                     )
                     if position:
                         position.status = PositionStatus.CLOSED
-                        position.exit_price = exit_price
-                        position.exit_time = datetime.now(UTC)
-                        position.pnl = realized_pnl
-                        position.pnl_percent = trade_data.get("pnl_percent", 0.0)
-                        position.exit_reason = exit_reason
+                        position.current_price = exit_price
+                        position.last_update = datetime.now(UTC)
+                        position.unrealized_pnl = realized_pnl
+                        position.unrealized_pnl_percent = trade_data.get("pnl_percent", 0.0)
 
                     logger.info(
                         "Atomic reconciliation: Balance %.2f -> %.2f (PnL: %+.2f) | Trade ID: %s | Position: %s",
@@ -2640,8 +2658,9 @@ class DatabaseManager:
                             if peak_balance > 0:
                                 drawdown = (peak_balance - record.balance) / peak_balance
                                 max_drawdown = max(max_drawdown, drawdown)
-                except Exception:
-                    # If account history is not available or fails, default to 0
+                except Exception as e:
+                    # Log the error for debugging, then default to 0
+                    logger.warning("Failed to calculate max drawdown from account history: %s", e)
                     max_drawdown = 0.0
 
                 return {
@@ -2867,15 +2886,33 @@ class DatabaseManager:
             except IntegrityError as exc:
                 session.rollback()
                 if "internal_order_id" in str(exc).lower():
-                    # * Handle duplicate internal order ID
+                    # Handle duplicate internal order ID by creating a new Order instance.
+                    # The original order object is detached after rollback and should not be reused.
                     retry_timestamp = int(datetime.now(UTC).timestamp() * 1000000)  # microseconds
-                    order.internal_order_id = (
+                    retry_internal_id = (
                         f"{order_type.value.lower()}_{position_id}_{retry_timestamp}"
                     )
-                    session.add(order)
+                    retry_order = Order(
+                        position_id=position_id,
+                        order_type=order_type,
+                        status=OrderStatus.PENDING,
+                        exchange_order_id=exchange_order_id,
+                        internal_order_id=retry_internal_id,
+                        symbol=symbol,
+                        side=side,
+                        quantity=Decimal(str(quantity)),
+                        price=Decimal(str(price)) if price is not None else None,
+                        strategy_name=strategy_name,
+                        session_id=session_id or self._current_session_id,
+                        target_level=target_level,
+                        size_fraction=(
+                            Decimal(str(size_fraction)) if size_fraction is not None else None
+                        ),
+                    )
+                    session.add(retry_order)
                     session.commit()
-                    logger.info(f"Created order #{order.id} with retry internal_order_id")
-                    return order.id
+                    logger.info(f"Created order #{retry_order.id} with retry internal_order_id")
+                    return retry_order.id
                 else:
                     raise
 
