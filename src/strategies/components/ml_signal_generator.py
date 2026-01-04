@@ -7,6 +7,7 @@ regime-aware threshold adjustments and confidence calculations.
 """
 
 import logging
+import math
 from typing import Any
 
 import pandas as pd
@@ -174,7 +175,23 @@ class MLSignalGenerator(SignalGenerator):
             )
 
         current_price = df["close"].iloc[index]
-        predicted_return = (prediction - current_price) / current_price if current_price > 0 else 0
+
+        # Validate prediction and current_price are finite to prevent NaN/Infinity propagation
+        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+            return Signal(
+                direction=SignalDirection.HOLD,
+                strength=0.0,
+                confidence=0.0,
+                metadata={
+                    "generator": self.name,
+                    "reason": "invalid_prediction_or_price",
+                    "prediction": prediction,
+                    "current_price": current_price,
+                    "index": index,
+                },
+            )
+
+        predicted_return = (prediction - current_price) / current_price
 
         # Determine signal direction
         if predicted_return > 0:
@@ -239,7 +256,12 @@ class MLSignalGenerator(SignalGenerator):
             return 0.0
 
         current_price = df["close"].iloc[index]
-        predicted_return = (prediction - current_price) / current_price if current_price > 0 else 0
+
+        # Return zero confidence if prediction or price are invalid (prevents NaN propagation)
+        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+            return 0.0
+
+        predicted_return = (prediction - current_price) / current_price
 
         return self._calculate_confidence(predicted_return)
 
@@ -535,7 +557,23 @@ class MLBasicSignalGenerator(SignalGenerator):
             )
 
         current_price = df["close"].iloc[index]
-        predicted_return = (prediction - current_price) / current_price if current_price > 0 else 0
+
+        # Validate prediction and current_price are finite to prevent NaN/Infinity propagation
+        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+            return Signal(
+                direction=SignalDirection.HOLD,
+                strength=0.0,
+                confidence=0.0,
+                metadata={
+                    "generator": self.name,
+                    "reason": "invalid_prediction_or_price",
+                    "prediction": prediction,
+                    "current_price": current_price,
+                    "index": index,
+                },
+            )
+
+        predicted_return = (prediction - current_price) / current_price
 
         # Determine signal direction (basic logic without regime awareness)
         if predicted_return > 0:
@@ -596,7 +634,12 @@ class MLBasicSignalGenerator(SignalGenerator):
             return 0.0
 
         current_price = df["close"].iloc[index]
-        predicted_return = (prediction - current_price) / current_price if current_price > 0 else 0
+
+        # Return zero confidence if prediction or price are invalid (prevents NaN propagation)
+        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+            return 0.0
+
+        predicted_return = (prediction - current_price) / current_price
 
         return self._calculate_confidence(predicted_return)
 

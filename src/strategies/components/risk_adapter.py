@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -162,10 +163,16 @@ class CoreRiskAdapter(RiskManager):
 
         if position.side == "long":
             pnl_pct = (price - entry_price) / entry_price
+            # Force exit if PnL calculation is invalid (safety-first for stop-loss)
+            if not math.isfinite(pnl_pct):
+                return True
             threshold = -float(params.max_risk_per_trade)
             return pnl_pct <= threshold
         if position.side == "short":
             pnl_pct = (entry_price - price) / entry_price
+            # Force exit if PnL calculation is invalid (safety-first for stop-loss)
+            if not math.isfinite(pnl_pct):
+                return True
             threshold = -float(params.max_risk_per_trade)
             return pnl_pct <= threshold
         return False

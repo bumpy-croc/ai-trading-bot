@@ -602,8 +602,11 @@ class StrategySelector:
                     and self._computing_strategy_set == current_strategy_set
                 ):
                     self._correlation_lock.release()
-                    time.sleep(0.01)  # Small delay to prevent busy waiting
-                    self._correlation_lock.acquire()
+                    try:
+                        time.sleep(0.01)  # Small delay to prevent busy waiting
+                    finally:
+                        # Ensure lock is re-acquired even if exception occurs during sleep
+                        self._correlation_lock.acquire()
 
                 # Re-check cache after waiting
                 if (
