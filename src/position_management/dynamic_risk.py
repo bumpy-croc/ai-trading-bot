@@ -11,6 +11,7 @@ import pandas as pd
 from src.config.constants import (
     DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT,
     DEFAULT_DRAWDOWN_THRESHOLDS,
+    DEFAULT_EPSILON,
     DEFAULT_GOOD_PERF_DAILY_RISK_FACTOR,
     DEFAULT_GOOD_PERF_POSITION_FACTOR,
     DEFAULT_GOOD_PERF_STOP_TIGHTENING,
@@ -127,6 +128,7 @@ class DynamicRiskManager:
         self._cache_timestamp = None
         self._cache_ttl_seconds = 300  # 5 minutes
         self._cache_lock = threading.Lock()  # Prevents race conditions in cache access
+        self._computing = False  # Flag to prevent duplicate calculations
 
     def calculate_dynamic_risk_adjustments(
         self,
@@ -166,7 +168,7 @@ class DynamicRiskManager:
         # Validate previous_peak_balance is numeric, positive, and finite before division
         if (
             previous_peak_balance
-            and isinstance(previous_peak_balance, (int, float))
+            and isinstance(previous_peak_balance, int | float)
             and previous_peak_balance > 0
             and math.isfinite(previous_peak_balance)
         ):
@@ -258,6 +260,23 @@ class DynamicRiskManager:
             logger.warning(f"Invalid daily_risk_factor: {daily_factor}, using 1.0")
             daily_factor = 1.0
 
+        # Validate risk_parameters fields to prevent NaN propagation through multiplication
+        for field_name in [
+            "base_risk_per_trade",
+            "max_risk_per_trade",
+            "max_position_size",
+            "max_daily_risk",
+            "max_correlated_risk",
+            "position_size_atr_multiplier",
+        ]:
+            value = getattr(risk_parameters, field_name)
+            if not math.isfinite(value) or value < 0:
+                logger.warning(
+                    f"Invalid risk_parameters.{field_name}: {value}, using original value"
+                )
+                # Return unmodified parameters if any field is invalid
+                return risk_parameters
+
         # Create a copy to avoid modifying the original
         adjusted_params = RiskParameters(
             base_risk_per_trade=risk_parameters.base_risk_per_trade * position_factor,
@@ -275,8 +294,7 @@ class DynamicRiskManager:
 
     def _calculate_current_drawdown(self, current_balance: float, peak_balance: float) -> float:
         """Calculate current drawdown percentage with epsilon protection for precision"""
-        EPSILON = 1e-8
-        if peak_balance <= EPSILON:
+        if peak_balance <= DEFAULT_EPSILON:
             return 0.0
         return max(0.0, (peak_balance - current_balance) / peak_balance)
 
@@ -293,6 +311,11 @@ class DynamicRiskManager:
             ):
                 # Return copy to prevent external mutations
                 return self._performance_cache.copy()
+            # If another thread is computing, wait and return stale cache if available
+            if self._computing:
+                return self._performance_cache.copy() if self._performance_cache else {}
+            # Mark that we're computing to prevent other threads from duplicating work
+            self._computing = True
 
         # Calculate new metrics outside lock to minimize lock duration
         metrics = {}
@@ -326,14 +349,15 @@ class DynamicRiskManager:
                             except (ValueError, TypeError, AttributeError):
                                 # Skip invalid equity values that cannot be converted to float
                                 continue
-                        if len(closes) >= 3:  # Need at least 3 points for reliable std
+                        # Need at least 3 prices to calculate 2 log returns (N prices -> N-1 returns)
+                        if len(closes) >= 3:
                             series = pd.Series(closes)
                             # Volatility calculations require positive prices for log returns
                             # Non-positive values from data gaps would corrupt the volatility metric
                             series_positive = series[series > 0]
                             if len(series_positive) >= 3:
                                 log_returns = np.log(series_positive).diff().dropna()
-                                # Require at least 2 returns for reliable std calculation (ddof=1)
+                                # Require at least 2 returns for reliable std (ddof=1 requires 2+ samples)
                                 if len(log_returns) >= 2:
                                     vol = float(log_returns.std())
                                     if math.isfinite(vol):
@@ -350,6 +374,7 @@ class DynamicRiskManager:
         with self._cache_lock:
             self._performance_cache = metrics
             self._cache_timestamp = now
+            self._computing = False
 
         return metrics
 
@@ -361,9 +386,13 @@ class DynamicRiskManager:
         if recovery_return > 0:
             for threshold in sorted(self.config.recovery_thresholds, reverse=True):
                 if recovery_return >= threshold:
-                    # Gradual recovery - scale toward full risk (1.0) proportionally
+                    # Recovery allows aggressive position scaling up to 2x when performance is strong.
+                    # This is intentional: asymmetric response (conservative on drawdown, aggressive
+                    # on recovery) to capitalize on momentum after losses.
                     # Clamp recovery_factor to [0.1, 2.0] to prevent extreme adjustments
-                    raw_recovery_factor = 1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR
+                    raw_recovery_factor = (
+                        1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR
+                    )
                     recovery_factor = max(0.1, min(raw_recovery_factor, 2.0))
                     return RiskAdjustments(
                         position_size_factor=min(1.0, recovery_factor),

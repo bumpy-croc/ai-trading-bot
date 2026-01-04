@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 import pandas as pd
 
 from src.config.constants import (
@@ -45,6 +48,24 @@ class CorrelationEngine:
         # Lightweight memoization to avoid expensive recomputation on each call
         self._last_signature: tuple[tuple[str, ...], pd.Timestamp | None, int] | None = None
 
+    @staticmethod
+    def _safe_size_add(total: float, size: Any) -> float:
+        """Safely add size to total if size is valid, otherwise return total unchanged.
+
+        Validates that size is numeric, finite, and non-negative before adding to prevent
+        TypeError or NaN propagation from corrupted position data.
+
+        Args:
+            total: Current total exposure
+            size: Size value to add if valid
+
+        Returns:
+            total + size if size is valid, otherwise total unchanged
+        """
+        if isinstance(size, int | float) and math.isfinite(size) and size >= 0:
+            return total + float(size)
+        return total
+
     def should_update(self, now: datetime | None = None) -> bool:
         now = now or datetime.now(UTC)
         if self._last_update_at is None:
@@ -71,9 +92,7 @@ class CorrelationEngine:
         # Align and restrict to window
         end_time = None
         for s in price_series_by_symbol.values():
-            # Check both that series is not empty and index is not empty before calling .max()
-            # Empty index raises ValueError on .max() call
-            if not s.empty and len(s.index) > 0:
+            if not s.empty:
                 series_max = s.index.max()
                 end_time = max(end_time or series_max, series_max)
         if end_time is None:
@@ -185,9 +204,7 @@ class CorrelationEngine:
                 info = positions.get(sym)
                 if info:
                     size = info.get("size", 0.0)
-                    # Validate size is numeric and finite to prevent TypeError or NaN propagation
-                    if isinstance(size, (int, float)) and math.isfinite(size) and size >= 0:
-                        total += float(size)
+                    total = self._safe_size_add(total, size)
             exposures[tuple(sorted(group))] = round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         return exposures
 
@@ -231,9 +248,7 @@ class CorrelationEngine:
             current = 0.0
             for sym in g:
                 size = positions.get(sym, {}).get("size", 0.0)
-                # Validate size is numeric and finite to prevent TypeError or NaN propagation
-                if isinstance(size, (int, float)) and math.isfinite(size) and size >= 0:
-                    current += float(size)
+                current = self._safe_size_add(current, size)
             projected = current + candidate_fraction
             if projected > max_allowed and projected > 0:
                 factor = min(factor, max(0.0, max_allowed / projected))
@@ -260,10 +275,9 @@ class CorrelationGroupManager:
             for s in symbols:
                 if s in positions:
                     size = positions[s].get("size", 0.0)
-                    # Validate size is numeric and finite to prevent TypeError or NaN propagation
-                    if isinstance(size, (int, float)) and math.isfinite(size) and size >= 0:
+                    if isinstance(size, int | float) and math.isfinite(size) and size >= 0:
                         present.append(s)
-                        total += float(size)
+                        total = CorrelationEngine._safe_size_add(total, size)
             out[name] = {
                 "total_exposure": round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS),
                 "position_count": len(present),
