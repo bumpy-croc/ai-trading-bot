@@ -20,6 +20,7 @@ from src.config.constants import (
     DEFAULT_SEQUENCE_LENGTH,
 )
 from src.tech.indicators.core import (
+    EPSILON,
     calculate_atr,
     calculate_bollinger_bands,
     calculate_macd,
@@ -67,8 +68,35 @@ class TechnicalFeatureExtractor(FeatureExtractor):
             macd_slow: Slow period for MACD
             macd_signal: Signal period for MACD
             nan_threshold: Maximum allowed ratio of NaN values in features
+
+        Raises:
+            ValueError: If any parameter is invalid
         """
         super().__init__("technical")
+
+        # Validate parameters at initialization for fail-fast behavior
+        if sequence_length <= 0:
+            raise ValueError(f"sequence_length must be positive, got {sequence_length}")
+        if normalization_window <= 0:
+            raise ValueError(f"normalization_window must be positive, got {normalization_window}")
+        if rsi_period <= 0:
+            raise ValueError(f"rsi_period must be positive, got {rsi_period}")
+        if atr_period <= 0:
+            raise ValueError(f"atr_period must be positive, got {atr_period}")
+        if bollinger_period <= 0:
+            raise ValueError(f"bollinger_period must be positive, got {bollinger_period}")
+        if bollinger_std_dev <= 0:
+            raise ValueError(
+                f"bollinger_std_dev must be positive, got {bollinger_std_dev}"
+            )
+        if macd_fast <= 0:
+            raise ValueError(f"macd_fast must be positive, got {macd_fast}")
+        if macd_slow <= 0:
+            raise ValueError(f"macd_slow must be positive, got {macd_slow}")
+        if macd_signal <= 0:
+            raise ValueError(f"macd_signal must be positive, got {macd_signal}")
+        if not 0 <= nan_threshold <= 1:
+            raise ValueError(f"nan_threshold must be in [0, 1], got {nan_threshold}")
 
         # Store configuration
         self.sequence_length = sequence_length
@@ -178,7 +206,12 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         return df
 
     def _extract_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Extract derived features like volatility and trend measures."""
+        """
+        Extract derived features like volatility and trend measures.
+
+        Applies epsilon protection to prevent division by zero in financial calculations.
+        Ensures required MA columns exist before using them.
+        """
         # Calculate returns
         df["returns"] = df["close"].pct_change()
 
@@ -186,11 +219,17 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         df["volatility_20"] = df["returns"].rolling(window=20).std()
         df["volatility_50"] = df["returns"].rolling(window=50).std()
 
-        # Calculate ATR as percentage of price
-        df["atr_pct"] = df["atr"] / df["close"]
+        # Calculate ATR as percentage of price - protected against zero close prices
+        df["atr_pct"] = df["atr"] / (df["close"] + EPSILON)
 
-        # Calculate trend measures (from MlAdaptive)
-        df["trend_strength"] = (df["close"] - df["ma_50"]) / df["ma_50"]
+        # Calculate trend measures (from MlAdaptive) - protected against zero MA values
+        # Ensure required MA columns exist (needed for trend calculations)
+        if "ma_50" not in df.columns:
+            df["ma_50"] = df["close"].rolling(window=50).mean()
+        if "ma_20" not in df.columns:
+            df["ma_20"] = df["close"].rolling(window=20).mean()
+
+        df["trend_strength"] = (df["close"] - df["ma_50"]) / (df["ma_50"] + EPSILON)
         df["trend_direction"] = np.where(df["ma_20"] > df["ma_50"], 1, -1)
 
         return df

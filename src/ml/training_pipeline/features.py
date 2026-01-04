@@ -150,7 +150,12 @@ def merge_price_sentiment_data(
 
 
 def _calculate_rsi_fast(close_prices: np.ndarray, window: int = 14) -> np.ndarray:
-    """Calculate RSI using optimized numpy operations.
+    """
+    Calculate RSI using optimized numpy operations with Wilder's smoothing.
+
+    Note: This uses Wilder's smoothing (EMA-style) which is the traditional RSI formula.
+    The calculate_rsi in src/tech/indicators/core.py uses simple rolling mean.
+    These implementations should be unified in the future to ensure consistency.
 
     Args:
         close_prices: 1D array of close prices

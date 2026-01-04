@@ -7,6 +7,7 @@ from src.tech.indicators.core import (
     calculate_bollinger_bands,
     calculate_ema,
     calculate_macd,
+    calculate_moving_averages,
     calculate_rsi,
     calculate_support_resistance,
     detect_market_regime,
@@ -33,6 +34,53 @@ class TestMovingAverages:
         assert len(ema_single) == 1
         assert ema_single.iloc[0] == 5
 
+    def test_calculate_moving_averages(self):
+        """Test calculate_moving_averages with multiple periods."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+        periods = [3, 5]
+        result = calculate_moving_averages(data, periods)
+
+        assert isinstance(result, pd.DataFrame)
+        assert "ma_3" in result.columns
+        assert "ma_5" in result.columns
+        assert len(result) == len(data)
+
+        # Verify MA calculations
+        expected_ma_3 = data["close"].rolling(window=3).mean()
+        pd.testing.assert_series_equal(result["ma_3"], expected_ma_3, check_names=False)
+
+    def test_calculate_moving_averages_validation(self):
+        """Test input validation for calculate_moving_averages."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
+
+        # Test missing close column
+        with pytest.raises(ValueError, match="must contain 'close' column"):
+            calculate_moving_averages(pd.DataFrame({"high": [1, 2, 3]}), [5])
+
+        # Test empty periods list
+        with pytest.raises(ValueError, match="periods list cannot be empty"):
+            calculate_moving_averages(data, [])
+
+        # Test negative period
+        with pytest.raises(ValueError, match="Period must be positive"):
+            calculate_moving_averages(data, [5, -1])
+
+        # Test zero period
+        with pytest.raises(ValueError, match="Period must be positive"):
+            calculate_moving_averages(data, [0])
+
+    def test_ema_validation(self):
+        """Test input validation for calculate_ema."""
+        data = pd.Series([1, 2, 3, 4, 5])
+
+        # Test negative period
+        with pytest.raises(ValueError, match="EMA period must be positive"):
+            calculate_ema(data, period=-1)
+
+        # Test zero period
+        with pytest.raises(ValueError, match="EMA period must be positive"):
+            calculate_ema(data, period=0)
+
 
 class TestRSI:
     def test_rsi_calculation(self):
@@ -50,6 +98,22 @@ class TestRSI:
         decreasing_data = pd.Series([15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
         rsi_decreasing = calculate_rsi(decreasing_data, period=14)
         assert rsi_decreasing.iloc[-1] < 30
+
+    def test_rsi_validation(self):
+        """Test input validation for calculate_rsi."""
+        data = pd.Series([1, 2, 3, 4, 5])
+
+        # Test negative period
+        with pytest.raises(ValueError, match="RSI period must be positive"):
+            calculate_rsi(data, period=-1)
+
+        # Test zero period
+        with pytest.raises(ValueError, match="RSI period must be positive"):
+            calculate_rsi(data, period=0)
+
+        # Test DataFrame missing close column
+        with pytest.raises(ValueError, match="must contain 'close' column"):
+            calculate_rsi(pd.DataFrame({"high": [1, 2, 3]}), period=5)
 
 
 class TestATR:
@@ -86,6 +150,28 @@ class TestATR:
         high_vol_result = calculate_atr(high_vol_data, period=3)
         assert high_vol_result["atr"].iloc[-1] > low_vol_result["atr"].iloc[-1]
 
+    def test_atr_validation(self):
+        """Test input validation for calculate_atr."""
+        data = pd.DataFrame(
+            {
+                "high": [10, 12, 11],
+                "low": [8, 9, 10],
+                "close": [9, 11, 10.5],
+            }
+        )
+
+        # Test missing columns
+        with pytest.raises(ValueError, match="missing required columns"):
+            calculate_atr(pd.DataFrame({"close": [1, 2, 3]}), period=3)
+
+        # Test negative period
+        with pytest.raises(ValueError, match="ATR period must be positive"):
+            calculate_atr(data, period=-1)
+
+        # Test zero period
+        with pytest.raises(ValueError, match="ATR period must be positive"):
+            calculate_atr(data, period=0)
+
 
 class TestBollingerBands:
     def test_bollinger_bands_calculation(self):
@@ -109,6 +195,22 @@ class TestBollingerBands:
         high_width = bb_high["bb_upper"].iloc[-1] - bb_high["bb_lower"].iloc[-1]
         assert high_width > low_width
 
+    def test_bollinger_bands_validation(self):
+        """Test input validation for calculate_bollinger_bands."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
+
+        # Test missing close column
+        with pytest.raises(ValueError, match="must contain 'close' column"):
+            calculate_bollinger_bands(pd.DataFrame({"high": [1, 2, 3]}))
+
+        # Test negative period
+        with pytest.raises(ValueError, match="Bollinger Bands period must be positive"):
+            calculate_bollinger_bands(data, period=-1)
+
+        # Test negative std_dev
+        with pytest.raises(ValueError, match="Standard deviation multiplier must be positive"):
+            calculate_bollinger_bands(data, period=5, std_dev=-1)
+
 
 class TestMACD:
     def test_macd_calculation(self):
@@ -126,6 +228,26 @@ class TestMACD:
             pd.testing.assert_series_equal(
                 macd["macd"][valid_mask], expected_macd[valid_mask], check_names=False
             )
+
+    def test_macd_validation(self):
+        """Test input validation for calculate_macd."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
+
+        # Test missing close column
+        with pytest.raises(ValueError, match="must contain 'close' column"):
+            calculate_macd(pd.DataFrame({"high": [1, 2, 3]}))
+
+        # Test negative fast period
+        with pytest.raises(ValueError, match="Fast period must be positive"):
+            calculate_macd(data, fast_period=-1)
+
+        # Test negative slow period
+        with pytest.raises(ValueError, match="Slow period must be positive"):
+            calculate_macd(data, slow_period=0)
+
+        # Test negative signal period
+        with pytest.raises(ValueError, match="Signal period must be positive"):
+            calculate_macd(data, signal_period=-1)
 
 
 class TestMarketRegime:
@@ -148,6 +270,50 @@ class TestMarketRegime:
             regime in ["trending", "ranging", "volatile"] for regime in result["regime"].dropna()
         )
 
+    def test_market_regime_constant_prices(self):
+        """Test regime detection with constant prices (edge case)."""
+        # Constant prices should trigger division by zero protection
+        data = pd.DataFrame({"close": [100] * 100})
+        result = detect_market_regime(data, volatility_lookback=20, trend_lookback=50)
+
+        # Should not raise division by zero error
+        assert isinstance(result, pd.DataFrame)
+        assert "regime" in result.columns
+        # All regimes should be valid values (no NaN from division errors)
+        assert all(
+            regime in ["trending", "ranging", "volatile"] for regime in result["regime"].dropna()
+        )
+
+    def test_market_regime_short_data(self):
+        """Test regime detection with data shorter than lookback windows."""
+        # Data shorter than lookback windows
+        data = pd.DataFrame({"close": [100, 101, 102, 103, 104]})
+        result = detect_market_regime(data, volatility_lookback=20, trend_lookback=50)
+
+        # Should not crash, but most values will be NaN
+        assert isinstance(result, pd.DataFrame)
+        assert "regime" in result.columns
+
+    def test_market_regime_validation(self):
+        """Test input validation for detect_market_regime."""
+        data = pd.DataFrame({"close": [100, 101, 102, 103, 104]})
+
+        # Test missing close column
+        with pytest.raises(ValueError, match="must contain 'close' column"):
+            detect_market_regime(pd.DataFrame({"high": [1, 2, 3]}))
+
+        # Test negative volatility lookback
+        with pytest.raises(ValueError, match="Volatility lookback must be positive"):
+            detect_market_regime(data, volatility_lookback=-1)
+
+        # Test negative trend lookback
+        with pytest.raises(ValueError, match="Trend lookback must be positive"):
+            detect_market_regime(data, trend_lookback=0)
+
+        # Test negative regime threshold
+        with pytest.raises(ValueError, match="Regime threshold must be non-negative"):
+            detect_market_regime(data, regime_threshold=-0.1)
+
 
 class TestSupportResistance:
     def test_support_resistance_calculation(self):
@@ -163,6 +329,28 @@ class TestSupportResistance:
         assert isinstance(resistance, pd.Series)
         assert len(support) <= 3
         assert len(resistance) <= 3
+
+    def test_support_resistance_validation(self):
+        """Test input validation for calculate_support_resistance."""
+        data = pd.DataFrame(
+            {
+                "high": [10, 12, 11],
+                "low": [8, 9, 10],
+                "close": [9, 11, 10.5],
+            }
+        )
+
+        # Test missing columns
+        with pytest.raises(ValueError, match="missing required columns"):
+            calculate_support_resistance(pd.DataFrame({"close": [1, 2, 3]}))
+
+        # Test negative period
+        with pytest.raises(ValueError, match="Period must be positive"):
+            calculate_support_resistance(data, period=-1)
+
+        # Test zero num_points
+        with pytest.raises(ValueError, match="num_points must be positive"):
+            calculate_support_resistance(data, period=5, num_points=0)
 
 
 class TestIndicatorIntegration:
