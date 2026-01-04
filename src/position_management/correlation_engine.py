@@ -147,11 +147,20 @@ class CorrelationEngine:
 
         thr = float(self.config.correlation_threshold)
         for i, a in enumerate(symbols):
+            # Skip if symbol was filtered out during correlation calculation
+            if a not in corr.columns:
+                continue
             for j in range(i + 1, len(symbols)):
                 b = symbols[j]
-                val = corr.at[a, b]
-                if pd.notna(val) and val >= thr:
-                    union(a, b)
+                if b not in corr.columns:
+                    continue
+                try:
+                    val = corr.at[a, b]
+                    if pd.notna(val) and val >= thr:
+                        union(a, b)
+                except (KeyError, IndexError):
+                    logger.debug(f"Correlation pair ({a}, {b}) not found in matrix")
+                    continue
 
         groups: dict[str, list[str]] = {}
         for s in symbols:

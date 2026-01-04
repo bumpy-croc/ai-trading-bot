@@ -141,8 +141,8 @@ class MFEMAEAnalyzer:
             out.append(
                 TradeMFERecord(
                     strategy_name=str(t.get("strategy", "")),
-                    mfe=float(t.get("mfe", 0.0) or 0.0),
-                    mae=float(t.get("mae", 0.0) or 0.0),
+                    mfe=self._safe_float(t.get("mfe", 0.0)),
+                    mae=self._safe_float(t.get("mae", 0.0)),
                     mfe_time=t.get("mfe_time"),
                     mae_time=t.get("mae_time"),
                 )

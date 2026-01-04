@@ -274,8 +274,9 @@ class DynamicRiskManager:
         return adjusted_params
 
     def _calculate_current_drawdown(self, current_balance: float, peak_balance: float) -> float:
-        """Calculate current drawdown percentage"""
-        if peak_balance <= 0:
+        """Calculate current drawdown percentage with epsilon protection for precision"""
+        EPSILON = 1e-8
+        if peak_balance <= EPSILON:
             return 0.0
         return max(0.0, (peak_balance - current_balance) / peak_balance)
 
@@ -361,11 +362,12 @@ class DynamicRiskManager:
             for threshold in sorted(self.config.recovery_thresholds, reverse=True):
                 if recovery_return >= threshold:
                     # Gradual recovery - scale toward full risk (1.0) proportionally
-                    # Remove outer min() to allow gradual scaling; clamp at return instead
-                    recovery_factor = 1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR
+                    # Clamp recovery_factor to [0.1, 2.0] to prevent extreme adjustments
+                    raw_recovery_factor = 1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR
+                    recovery_factor = max(0.1, min(raw_recovery_factor, 2.0))
                     return RiskAdjustments(
                         position_size_factor=min(1.0, recovery_factor),
-                        stop_loss_tightening=max(1.0, 1.0 / min(recovery_factor, 1.0)),
+                        stop_loss_tightening=max(1.0, 1.0 / recovery_factor),
                         daily_risk_factor=min(1.0, recovery_factor),
                         primary_reason=f"recovery_{recovery_return:.1%}",
                     )

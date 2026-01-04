@@ -33,6 +33,12 @@ class MFEMAETracker:
         fee_rate: float = DEFAULT_FEE_RATE,
         slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ):
+        # Validate fee and slippage rates to prevent financial calculation corruption
+        if fee_rate < 0 or not math.isfinite(fee_rate):
+            raise ValueError(f"fee_rate must be non-negative and finite, got {fee_rate}")
+        if slippage_rate < 0 or not math.isfinite(slippage_rate):
+            raise ValueError(f"slippage_rate must be non-negative and finite, got {slippage_rate}")
+
         self.precision_decimals = precision_decimals
         self.fee_rate = fee_rate
         self.slippage_rate = slippage_rate
@@ -94,6 +100,10 @@ class MFEMAETracker:
         current_time: datetime,
     ) -> MFEMetrics:
         """Update rolling MFE/MAE for a position and return the updated metrics."""
+        # Validate position_key is hashable before using as dict key
+        if not isinstance(position_key, (str, int)):
+            raise TypeError(f"position_key must be str or int, got {type(position_key)}")
+
         metrics = self._cache.get(position_key, MFEMetrics())
         mfe_cand, mae_cand = self.calculate_mfe_mae(
             entry_price=entry_price,

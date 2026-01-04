@@ -43,6 +43,10 @@ class TrailingStopPolicy:
         ):
             return float(atr) * float(self.atr_multiplier)
         if self.trailing_distance_pct is not None and self.trailing_distance_pct > 0:
+            # Validate price before using for distance calculation
+            if not math.isfinite(price) or price <= 0:
+                logger.debug(f"Invalid price for trailing distance: {price}")
+                return None
             return float(price) * float(self.trailing_distance_pct)
         return None
 
@@ -149,11 +153,17 @@ class TrailingStopPolicy:
             and self.breakeven_threshold is not None
             and self.breakeven_threshold > 0
         ):
+            # Validate breakeven_buffer to prevent NaN/Infinity in stop calculation
+            buffer = self.breakeven_buffer
+            if not math.isfinite(buffer):
+                logger.warning(f"Invalid breakeven_buffer: {buffer}, using 0.0")
+                buffer = 0.0
+
             if side == "long":
-                be = entry_price * (1.0 + max(0.0, self.breakeven_buffer))
+                be = entry_price * (1.0 + max(0.0, buffer))
                 new_stop = be if new_stop is None else max(float(new_stop), float(be))
             else:
-                be = entry_price * (1.0 - max(0.0, self.breakeven_buffer))
+                be = entry_price * (1.0 - max(0.0, buffer))
                 new_stop = be if new_stop is None else min(float(new_stop), float(be))
             return new_stop, trailing_activated, breakeven_triggered
 
