@@ -10,6 +10,7 @@ providing a single interface for all Binance operations including:
 """
 
 import logging
+import math
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -717,8 +718,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 ),
                 commission=0.0,  # Will be updated from trade history
                 commission_asset="",
-                create_time=datetime.fromtimestamp(int(order_data["time"]) / 1000),
-                update_time=datetime.fromtimestamp(int(order_data["updateTime"]) / 1000),
+                create_time=datetime.fromtimestamp(int(order_data["time"]) / 1000, tz=UTC),
+                update_time=datetime.fromtimestamp(int(order_data["updateTime"]) / 1000, tz=UTC),
                 stop_price=(
                     float(order_data["stopPrice"])
                     if order_data.get("stopPrice") and order_data["stopPrice"] != "0"
@@ -911,6 +912,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place stop-loss order")
+            return None
+
+        # Validate stop_price is positive and finite
+        if not (stop_price > 0 and math.isfinite(stop_price)):
+            logger.error("Invalid stop_price: %s", stop_price)
             return None
 
         try:

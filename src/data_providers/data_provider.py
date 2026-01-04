@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 
 
@@ -45,6 +46,20 @@ class DataProvider(ABC):
         # Numeric conversion
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # Validate that critical price columns contain valid finite values
+        # NaN/Infinity in price data would corrupt position sizing and P&L calculations
+        for col in ["open", "high", "low", "close"]:
+            if df[col].isna().any():
+                raise ValueError(
+                    f"Invalid data in {col}: contains NaN values. "
+                    "This indicates malformed data from the exchange or processing error."
+                )
+            if np.isinf(df[col]).any():
+                raise ValueError(
+                    f"Invalid data in {col}: contains Infinity values. "
+                    "This indicates malformed data from the exchange or processing error."
+                )
 
         return df.set_index("timestamp")
 
