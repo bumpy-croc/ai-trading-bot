@@ -14,17 +14,25 @@ def main():
     if os.environ.get("CLAUDE_CODE_REMOTE") != "true":
         sys.exit(0)
 
-    # Read input from stdin to check message content
+    # Read input from stdin to check Claude's response
     try:
         input_data = json.loads(sys.stdin.read())
-        message = input_data.get("message", "")
 
-        # Skip hook if message contains "All done"
-        if "All done" in message:
+        # Try to find Claude's message in various possible field names
+        assistant_message = (
+            input_data.get("assistant_message", "") or
+            input_data.get("response", "") or
+            input_data.get("last_message", "") or
+            input_data.get("content", "") or
+            ""
+        )
+
+        # Skip hook if Claude's response contains "All done"
+        if "All done" in assistant_message:
             output = {"decision": "continue"}
             print(json.dumps(output))
             sys.exit(0)
-    except (json.JSONDecodeError, KeyError):
+    except (json.JSONDecodeError, KeyError, AttributeError):
         # If we can't read the message, continue with normal behavior
         pass
 
