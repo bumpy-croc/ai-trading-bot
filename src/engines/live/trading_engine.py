@@ -2337,11 +2337,11 @@ class LiveTradingEngine:
                                     f"{position.entry_price} for {symbol}"
                                 )
                             else:
-                                # Use quantity from execution result directly - it's already calculated correctly
+                                # Use quantity from position - LiveEntryResult.position.quantity
                                 self.exchange_interface.place_market_order(
                                     symbol=symbol,
                                     side=close_side,
-                                    quantity=result.quantity,
+                                    quantity=result.position.quantity,
                                 )
                             logger.warning(
                                 "Emergency close placed for %s due to balance update failure",
@@ -2384,20 +2384,20 @@ class LiveTradingEngine:
                     try:
                         close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
 
-                        # Use quantity from execution result directly - it's already calculated correctly
+                        # Use quantity from position - LiveEntryResult.position.quantity
                         # No need to recalculate from entry_price which could introduce errors
-                        if result.quantity <= 0:
+                        if result.position.quantity <= 0:
                             logger.critical(
                                 "CRITICAL: Cannot place emergency close for %s - "
                                 "invalid quantity %.8f. MANUAL INTERVENTION REQUIRED.",
                                 symbol,
-                                result.quantity,
+                                result.position.quantity,
                             )
                         else:
                             self.exchange_interface.place_market_order(
                                 symbol=symbol,
                                 side=close_side,
-                                quantity=result.quantity,
+                                quantity=result.position.quantity,
                             )
                             logger.info(
                                 "Emergency close order placed for orphaned position %s", symbol
