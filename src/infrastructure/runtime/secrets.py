@@ -2,6 +2,21 @@ import os
 
 
 def get_secret_key(env_var: str = "FLASK_SECRET_KEY", *, allow_default_in_dev: bool = True) -> str:
+    """Retrieve a secret key from environment variables with development fallback.
+
+    In development/test environments, returns a placeholder key if allow_default_in_dev
+    is True. In production environments, raises RuntimeError if the secret is not set.
+
+    Args:
+        env_var: Environment variable name containing the secret.
+        allow_default_in_dev: If True, allows a default key in dev/test environments.
+
+    Returns:
+        The secret key value.
+
+    Raises:
+        RuntimeError: If secret is missing in non-development environments.
+    """
     value = os.getenv(env_var)
     env = os.getenv("ENV", os.getenv("FLASK_ENV", "development")).lower()
     if value:

@@ -6,6 +6,7 @@ block indefinitely (file I/O, model loading, network calls).
 
 import builtins
 import logging
+import math
 import signal
 import threading
 import time
@@ -55,8 +56,8 @@ def timeout_context(seconds: float, operation_name: str = "operation"):
         with timeout_context(30.0, "model loading"):
             model = load_heavy_model()
     """
-    if seconds <= 0:
-        raise ValueError(f"timeout seconds must be positive, got {seconds}")
+    if seconds <= 0 or not math.isfinite(seconds):
+        raise ValueError(f"timeout seconds must be a positive finite number, got {seconds}")
 
     # Check if signal.SIGALRM is available (Unix-like systems)
     if not hasattr(signal, "SIGALRM"):
@@ -101,8 +102,8 @@ def with_timeout(
         def load_model(path: str):
             return onnx.load(path)
     """
-    if seconds <= 0:
-        raise ValueError(f"timeout seconds must be positive, got {seconds}")
+    if seconds <= 0 or not math.isfinite(seconds):
+        raise ValueError(f"timeout seconds must be a positive finite number, got {seconds}")
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         op_name = operation_name or func.__name__
@@ -159,8 +160,8 @@ def run_with_timeout(
             operation_name="ONNX model loading"
         )
     """
-    if timeout_seconds <= 0:
-        raise ValueError(f"timeout_seconds must be positive, got {timeout_seconds}")
+    if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
+        raise ValueError(f"timeout_seconds must be a positive finite number, got {timeout_seconds}")
     if kwargs is None:
         kwargs = {}
     op_name = operation_name or func.__name__

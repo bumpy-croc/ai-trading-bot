@@ -106,7 +106,7 @@ def get_country_code() -> str | None:
         return None
 
     except Exception as e:
-        logger.error(f"Error in geo-location detection: {e}")
+        logger.error("Error in geo-location detection: %s", e)
         return None
 
 

@@ -5,6 +5,7 @@ retry strategies, exponential backoff, and jitter.
 """
 
 import logging
+import math
 import random
 import time
 from collections.abc import Callable
@@ -78,12 +79,12 @@ def with_network_retry(
     # Validate parameters at decoration time (fail fast)
     if max_retries < 0:
         raise ValueError(f"max_retries must be >= 0, got {max_retries}")
-    if base_delay <= 0:
-        raise ValueError(f"base_delay must be positive, got {base_delay}")
-    if max_delay <= 0:
-        raise ValueError(f"max_delay must be positive, got {max_delay}")
-    if exponential_base <= 1:
-        raise ValueError(f"exponential_base must be > 1, got {exponential_base}")
+    if base_delay <= 0 or not math.isfinite(base_delay):
+        raise ValueError(f"base_delay must be a positive finite number, got {base_delay}")
+    if max_delay <= 0 or not math.isfinite(max_delay):
+        raise ValueError(f"max_delay must be a positive finite number, got {max_delay}")
+    if exponential_base <= 1 or not math.isfinite(exponential_base):
+        raise ValueError(f"exponential_base must be a finite number > 1, got {exponential_base}")
 
     if retryable_status_codes is None:
         retryable_status_codes = RETRYABLE_STATUS_CODES
