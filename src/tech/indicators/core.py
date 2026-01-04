@@ -48,9 +48,10 @@ def calculate_rsi(data: pd.DataFrame | pd.Series, period: int = 14) -> pd.Series
     """
     Calculate Relative Strength Index using simple rolling mean.
 
-    Note: This uses simple rolling mean for averaging. For Wilder's smoothing (traditional RSI),
-    see _calculate_rsi_fast in src/ml/training_pipeline/features.py. The implementations should
-    be unified in the future to ensure consistency.
+    TODO: Unify RSI implementations - this uses simple rolling mean while
+    src/ml/training_pipeline/features.py uses Wilder's smoothing (EMA-style).
+    Different algorithms produce different RSI values, risking train/inference mismatch.
+    Consolidate to single implementation with smoothing_method parameter.
 
     Args:
         data: DataFrame with 'close' column or Series of closing prices

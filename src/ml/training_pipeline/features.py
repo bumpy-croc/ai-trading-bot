@@ -153,9 +153,10 @@ def _calculate_rsi_fast(close_prices: np.ndarray, window: int = 14) -> np.ndarra
     """
     Calculate RSI using optimized numpy operations with Wilder's smoothing.
 
-    Note: This uses Wilder's smoothing (EMA-style) which is the traditional RSI formula.
-    The calculate_rsi in src/tech/indicators/core.py uses simple rolling mean.
-    These implementations should be unified in the future to ensure consistency.
+    TODO: Unify RSI implementations - this uses Wilder's smoothing (EMA-style) while
+    src/tech/indicators/core.py uses simple rolling mean. Different algorithms produce
+    different RSI values, risking train/inference mismatch. Consolidate to single
+    implementation with smoothing_method parameter.
 
     Args:
         close_prices: 1D array of close prices
