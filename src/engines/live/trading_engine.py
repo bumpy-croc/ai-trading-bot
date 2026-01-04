@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import signal
 import sys
@@ -1886,6 +1887,12 @@ class LiveTradingEngine:
                         "skipping P&L calculation for logging"
                     )
                     current_pnl = 0.0  # Fallback value for logging
+                elif float(current_price) <= 0 or not math.isfinite(float(current_price)):
+                    logger.error(
+                        f"Invalid current_price {current_price} for position {position.symbol} - "
+                        "skipping P&L calculation for logging"
+                    )
+                    current_pnl = 0.0  # Fallback value for logging
                 else:
                     side_enum = Side.LONG if position.side == PositionSide.LONG else Side.SHORT
                     current_pnl = pnl_percent(
@@ -3492,6 +3499,12 @@ class LiveTradingEngine:
                     if position.entry_price <= 0:
                         logger.error(
                             f"Invalid entry_price {position.entry_price} for position "
+                            f"{position.symbol} - skipping reconciliation"
+                        )
+                        continue
+                    if exit_price <= 0 or not math.isfinite(exit_price):
+                        logger.error(
+                            f"Invalid exit_price {exit_price} for position "
                             f"{position.symbol} - skipping reconciliation"
                         )
                         continue

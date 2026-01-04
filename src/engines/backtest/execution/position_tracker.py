@@ -7,6 +7,7 @@ scale-ins, and performance metric tracking.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -269,6 +270,12 @@ class PositionTracker:
 
         trade = self.current_trade
         fraction = float(getattr(trade, "current_size", trade.size))
+
+        # Validate prices before calling pnl_percent to prevent ValueError
+        if trade.entry_price <= 0 or not math.isfinite(trade.entry_price):
+            raise ValueError(f"Invalid entry_price: {trade.entry_price}")
+        if exit_price <= 0 or not math.isfinite(exit_price):
+            raise ValueError(f"Invalid exit_price: {exit_price}")
 
         # Calculate PnL using shared function for parity with live engine
         side_str = to_side_string(trade.side)

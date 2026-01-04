@@ -662,7 +662,8 @@ class ExitHandler:
         if trade is None:
             return 0.0
 
-        if trade.entry_price <= 0:
+        # Validate prices before calling pnl_percent to prevent ValueError
+        if trade.entry_price <= 0 or current_price <= 0:
             return 0.0
 
         side_str = to_side_string(trade.side)
