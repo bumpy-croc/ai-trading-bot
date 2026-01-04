@@ -484,7 +484,7 @@ class PredictionCacheManager:
                 }
 
         except Exception as e:
-            logger.warning(f"Error accessing prediction cache: {e}")
+            logger.warning("Error accessing prediction cache: %s", e)
             self._stats["misses"] += 1
             return None
 
@@ -551,7 +551,7 @@ class PredictionCacheManager:
                 self._enforce_size_limit(session)
 
         except Exception as e:
-            logger.warning(f"Error setting prediction cache: {e}")
+            logger.warning("Error setting prediction cache: %s", e)
 
     def _cleanup_expired(self, session) -> int:
         """
@@ -575,7 +575,7 @@ class PredictionCacheManager:
             return expired_count
 
         except Exception as e:
-            logger.warning(f"Error cleaning up expired cache entries: {e}")
+            logger.warning("Error cleaning up expired cache entries: %s", e)
             return 0
 
     def _enforce_size_limit(self, session) -> int:
@@ -613,7 +613,7 @@ class PredictionCacheManager:
             return entries_to_remove
 
         except Exception as e:
-            logger.warning(f"Error enforcing cache size limit: {e}")
+            logger.warning("Error enforcing cache size limit: %s", e)
             return 0
 
     def invalidate_model(self, model_name: str) -> int:
@@ -638,7 +638,7 @@ class PredictionCacheManager:
                 return invalidated_count
 
         except Exception as e:
-            logger.warning(f"Error invalidating model cache: {e}")
+            logger.warning("Error invalidating model cache: %s", e)
             return 0
 
     def invalidate_config(self, model_name: str, config: dict) -> int:
@@ -669,7 +669,7 @@ class PredictionCacheManager:
                 return invalidated_count
 
         except Exception as e:
-            logger.warning(f"Error invalidating config cache: {e}")
+            logger.warning("Error invalidating config cache: %s", e)
             return 0
 
     def clear(self) -> int:
@@ -686,7 +686,7 @@ class PredictionCacheManager:
                 return cleared_count
 
         except Exception as e:
-            logger.warning(f"Error clearing prediction cache: {e}")
+            logger.warning("Error clearing prediction cache: %s", e)
             return 0
 
     def get_stats(self) -> dict:
@@ -717,7 +717,7 @@ class PredictionCacheManager:
                 }
 
         except Exception as e:
-            logger.warning(f"Error getting cache stats: {e}")
+            logger.warning("Error getting cache stats: %s", e)
             return self._stats.copy()
 
 

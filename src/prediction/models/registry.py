@@ -290,6 +290,14 @@ class PredictionModelRegistry:
 
     def reload_models(self) -> None:
         """Reload all bundles from disk."""
+        # Explicitly close old runners before clearing to ensure cleanup
+        for bundle in self._bundles.values():
+            if hasattr(bundle.runner, "close"):
+                try:
+                    bundle.runner.close()
+                except Exception as e:
+                    logger.warning("Failed to close runner for %s: %s", bundle.key, e)
+
         self._bundles.clear()
         self._production_index.clear()
         self._load()
