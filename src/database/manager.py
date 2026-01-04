@@ -892,6 +892,12 @@ class DatabaseManager:
         Returns:
             Position ID
         """
+        # Validate financial inputs at API boundary
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError(f"entry_price must be positive and finite, got {entry_price}")
+        if not math.isfinite(size) or size <= 0:
+            raise ValueError(f"size must be positive and finite, got {size}")
+
         # Use WRITE timeout - position logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             # Convert string enum if necessary
@@ -1008,13 +1014,35 @@ class DatabaseManager:
         mfe_time: datetime | None = None,
         mae_time: datetime | None = None,
         stop_loss_order_id: str | None = None,
-    ):
-        """Update an existing position with current market data."""
+    ) -> bool:
+        """Update an existing position with current market data.
+
+        Returns:
+            True if update successful, False if position not found.
+
+        Raises:
+            ValueError: If any price field is not finite or negative.
+        """
+        # Validate financial inputs - prices must be non-negative and finite if provided
+        price_fields = [
+            ("current_price", current_price),
+            ("stop_loss", stop_loss),
+            ("take_profit", take_profit),
+            ("trailing_stop_price", trailing_stop_price),
+            ("last_partial_exit_price", last_partial_exit_price),
+            ("last_scale_in_price", last_scale_in_price),
+            ("mfe_price", mfe_price),
+            ("mae_price", mae_price),
+        ]
+        for name, val in price_fields:
+            if val is not None and (not math.isfinite(val) or val < 0):
+                raise ValueError(f"{name} must be non-negative and finite, got {val}")
+
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
                 logger.error(f"Position {position_id} not found")
-                return
+                return False
 
             if current_price is not None:
                 position.current_price = Decimal(str(current_price))
@@ -1089,6 +1117,7 @@ class DatabaseManager:
 
             try:
                 session.commit()
+                return True
             except Exception as e:
                 session.rollback()
                 logger.error(
@@ -1308,7 +1337,15 @@ class DatabaseManager:
             )
 
             session.add(snapshot)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to log account snapshot: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
     def log_event(
         self,
@@ -1356,7 +1393,15 @@ class DatabaseManager:
             )
 
             session.add(event)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to log event: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
             return event.id
 

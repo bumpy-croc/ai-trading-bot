@@ -314,14 +314,16 @@ def create_app() -> "Flask":
         """Simple health-check endpoint used by load-balancers and uptime monitors."""
         return {"status": "ok"}
 
-    # Database info route (helpful for debugging)
+    # Database info route (helpful for debugging) - requires authentication
     @app.route("/db_info")
+    @login_required
     def db_info() -> Response:
         """Return live connection-pool statistics and configuration details."""
         return jsonify(db_manager.get_database_info())
 
-    # Simple schema "migration" route to ensure new tables are created
+    # Simple schema "migration" route to ensure new tables are created - requires authentication
     @app.route("/migrate", methods=["POST", "GET"])
+    @login_required
     @csrf.exempt
     def migrate():
         """Synchronise database schema (creates any missing tables)."""
@@ -330,7 +332,7 @@ def create_app() -> "Flask":
             return {"status": "success", "message": "Schema synchronised."}
         except Exception as exc:  # pragma: no cover
             logger.exception("Schema migration failed: %s", exc)
-            return {"status": "error", "message": str(exc)}, 500
+            return {"status": "error", "message": "Schema synchronization failed. Check logs."}, 500
 
     # Clean up DB sessions after each request
     @app.teardown_appcontext
