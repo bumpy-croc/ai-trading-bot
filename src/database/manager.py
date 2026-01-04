@@ -2501,9 +2501,17 @@ class DatabaseManager:
         elif isinstance(obj, (np.integer,)):
             return int(obj)
         elif isinstance(obj, (np.floating,)):
-            return float(obj)
+            val = float(obj)
+            # Check for NaN/Inf after converting numpy float to Python float
+            if math.isnan(val) or math.isinf(val):
+                return None
+            return val
         elif isinstance(obj, np.generic):
-            return obj.item()
+            val = obj.item()
+            # Handle NaN/Inf for other numpy generic types that convert to float
+            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                return None
+            return val
         return obj
 
     # ----------------------
