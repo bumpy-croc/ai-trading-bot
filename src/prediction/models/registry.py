@@ -1,6 +1,7 @@
 """Model registry for managing ML model bundles with metadata and selection."""
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,8 @@ class PredictionModelRegistry:
         self._bundles: dict[tuple[str, str, str], StrategyModel] = {}
         # Optional production selections: (symbol, timeframe, model_type) -> version_id
         self._production_index: dict[tuple[str, str, str], str] = {}
+        # Lock to protect registry state from concurrent access during reload
+        self._lock = threading.RLock()
         # Load structured models
         self._load()
 
@@ -230,7 +233,8 @@ class PredictionModelRegistry:
 
     # ---- Introspection helpers ----
     def list_bundles(self) -> list[StrategyModel]:
-        return list(self._bundles.values())
+        with self._lock:
+            return list(self._bundles.values())
 
     # ---- Structured selection API ----
     def select_bundle(
@@ -246,12 +250,13 @@ class PredictionModelRegistry:
         If stage is provided and a production index exists, use it. Otherwise, use the
         most recently loaded bundle for that key (latest symlink is preferred by _load()).
         """
-        key = (symbol, timeframe, model_type)
-        bundle = self._bundles.get(key)
-        if bundle is None:
-            raise ModelNotAvailableError(f"No model bundle for {symbol} {timeframe} {model_type}.")
-        # Stage currently informational; production_index ensures latest symlink dominance
-        return bundle
+        with self._lock:
+            key = (symbol, timeframe, model_type)
+            bundle = self._bundles.get(key)
+            if bundle is None:
+                raise ModelNotAvailableError(f"No model bundle for {symbol} {timeframe} {model_type}.")
+            # Stage currently informational; production_index ensures latest symlink dominance
+            return bundle
 
     def select_many(
         self,
@@ -289,18 +294,19 @@ class PredictionModelRegistry:
         return [b.runner for b in self.list_bundles()]
 
     def reload_models(self) -> None:
-        """Reload all bundles from disk."""
-        # Explicitly close old runners before clearing to ensure cleanup
-        for bundle in self._bundles.values():
-            if hasattr(bundle.runner, "close"):
-                try:
-                    bundle.runner.close()
-                except Exception as e:
-                    logger.warning("Failed to close runner for %s: %s", bundle.key, e)
+        """Reload all bundles from disk with thread-safe atomic swap."""
+        with self._lock:
+            # Explicitly close old runners before clearing to ensure cleanup
+            for bundle in self._bundles.values():
+                if hasattr(bundle.runner, "close"):
+                    try:
+                        bundle.runner.close()
+                    except Exception as e:
+                        logger.warning("Failed to close runner for %s: %s", bundle.key, e)
 
-        self._bundles.clear()
-        self._production_index.clear()
-        self._load()
+            self._bundles.clear()
+            self._production_index.clear()
+            self._load()
 
     def invalidate_cache(self, model_name: str | None = None) -> int:
         """

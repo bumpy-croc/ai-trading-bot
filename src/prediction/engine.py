@@ -444,6 +444,13 @@ class PredictionEngine:
                 "normalized": not return_denormalized,
             }
 
+        # Validate model session exists (prevents AttributeError with stub runners)
+        if model.session is None:
+            raise ModelInferenceError(
+                f"Model {bundle.key} has no valid session (stub runner). "
+                "Model loading may have failed - check logs for errors."
+            )
+
         session = model.session
         input_name = session.get_inputs()[0].name
 
@@ -858,6 +865,10 @@ class PredictionEngine:
 
         if (data[required_columns] <= 0).any().any():
             raise InvalidInputError("Input data contains non-positive values")
+
+        # Check for infinite values (defense-in-depth before feature extraction)
+        if np.isinf(data[required_columns].select_dtypes(include=[np.number])).any().any():
+            raise InvalidInputError("Input data contains infinite values")
 
     def _extract_features(self, data: pd.DataFrame) -> np.ndarray:
         """Extract features using feature pipeline"""

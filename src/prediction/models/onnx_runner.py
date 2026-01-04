@@ -128,8 +128,9 @@ class OnnxRunner:
             try:
                 del self.session
                 self.session = None
-            except Exception:
-                pass  # Best effort cleanup
+            except Exception as e:
+                # Log cleanup exceptions for troubleshooting resource leaks
+                logging.debug("Exception during ONNX session cleanup: %s", e)
 
     def __del__(self):
         """Ensure ONNX session cleanup on garbage collection.

@@ -280,16 +280,17 @@ class FeatureCache:
 
     def clear(self) -> None:
         """Clear all cached entries."""
-        self._cache.clear()
-        self._quick_hash_cache.clear()
-        self._stats = {
-            "hits": 0,
-            "misses": 0,
-            "evictions": 0,
-            "sets": 0,
-            "quick_hash_matches": 0,
-            "full_hash_verifications": 0,
-        }
+        with self._lock:
+            self._cache.clear()
+            self._quick_hash_cache.clear()
+            self._stats = {
+                "hits": 0,
+                "misses": 0,
+                "evictions": 0,
+                "sets": 0,
+                "quick_hash_matches": 0,
+                "full_hash_verifications": 0,
+            }
 
     def cleanup_expired(self) -> int:
         """
@@ -298,17 +299,18 @@ class FeatureCache:
         Returns:
             Number of entries removed
         """
-        expired_keys = []
+        with self._lock:
+            expired_keys = []
 
-        for key, entry in self._cache.items():
-            if entry.is_expired():
-                expired_keys.append(key)
+            for key, entry in self._cache.items():
+                if entry.is_expired():
+                    expired_keys.append(key)
 
-        for key in expired_keys:
-            del self._cache[key]
-            self._stats["evictions"] += 1
+            for key in expired_keys:
+                del self._cache[key]
+                self._stats["evictions"] += 1
 
-        return len(expired_keys)
+            return len(expired_keys)
 
     def get_stats(self) -> dict[str, Any]:
         """
@@ -340,25 +342,27 @@ class FeatureCache:
         Returns:
             Dictionary with size information
         """
-        total_memory = 0
-        entry_sizes = []
+        with self._lock:
+            total_memory = 0
+            entry_sizes = []
 
-        for entry in self._cache.values():
-            # Rough estimate of DataFrame memory usage
-            entry_size = entry.data.memory_usage(deep=True).sum()
-            entry_sizes.append(entry_size)
-            total_memory += entry_size
+            for entry in self._cache.values():
+                # Rough estimate of DataFrame memory usage
+                entry_size = entry.data.memory_usage(deep=True).sum()
+                entry_sizes.append(entry_size)
+                total_memory += entry_size
 
-        return {
-            "total_entries": len(self._cache),
-            "total_memory_bytes": total_memory,
-            "average_entry_size_bytes": np.mean(entry_sizes) if entry_sizes else 0,
-            "largest_entry_size_bytes": max(entry_sizes) if entry_sizes else 0,
-        }
+            return {
+                "total_entries": len(self._cache),
+                "total_memory_bytes": total_memory,
+                "average_entry_size_bytes": np.mean(entry_sizes) if entry_sizes else 0,
+                "largest_entry_size_bytes": max(entry_sizes) if entry_sizes else 0,
+            }
 
 
 # Global feature cache instance
 _global_feature_cache: FeatureCache | None = None
+_global_cache_lock = threading.Lock()
 
 
 class PredictionCacheManager:
@@ -737,14 +741,18 @@ class PredictionCacheManager:
 
 def get_global_feature_cache() -> FeatureCache:
     """
-    Get the global feature cache instance.
+    Get the global feature cache instance with thread-safe lazy initialization.
 
     Returns:
         Global FeatureCache instance
     """
     global _global_feature_cache
+    # Double-checked locking pattern for thread-safe singleton
     if _global_feature_cache is None:
-        _global_feature_cache = FeatureCache()
+        with _global_cache_lock:
+            # Check again inside lock to prevent race condition
+            if _global_feature_cache is None:
+                _global_feature_cache = FeatureCache()
     return _global_feature_cache
 
 
