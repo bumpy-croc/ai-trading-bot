@@ -268,9 +268,14 @@ The system uses a **three-layer risk management architecture** that provides def
 
 **Integration Points:**
 - Strategies compose risk managers as components (Layer 1)
-- Engines enforce global constraints via portfolio risk manager (Layer 2)
+- Engines enforce global constraints via `PortfolioRiskManager` (Layer 2)
 - Entry handlers apply dynamic adjustments before execution (Layer 3)
 - Adapters bridge component and portfolio risk managers
+
+**Class Names:**
+- **Portfolio Risk**: `PortfolioRiskManager` (Layer 2) - enforces global constraints
+- **Strategy Risk**: `RiskManager` (Layer 1 ABC) - component interface for strategies
+- **Note**: Portfolio class renamed from `RiskManager` to `PortfolioRiskManager` for clarity
 
 **Comprehensive Documentation:**
 See [Risk Management Architecture](risk_management_architecture.md) for complete details on the three-layer architecture, data flow, examples, and common pitfalls.

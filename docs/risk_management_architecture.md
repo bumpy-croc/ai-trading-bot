@@ -2,6 +2,8 @@
 
 This document explains the three-layer risk management architecture and how the components work together to provide comprehensive risk control.
 
+> **Class Naming Update**: The portfolio-level risk manager has been renamed from `RiskManager` to `PortfolioRiskManager` to eliminate naming confusion with the strategy-level `RiskManager` abstract base class. The old name is aliased for backward compatibility.
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -126,10 +128,10 @@ decision = strategy.process_candle(df, index, balance, positions)
 **Usage**:
 ```python
 from src.strategies.components.risk_adapter import CoreRiskAdapter
-from src.risk.risk_manager import RiskManager, RiskParameters
+from src.risk.risk_manager import PortfolioRiskManager, RiskParameters
 
 # Create portfolio risk manager (Layer 2)
-portfolio_risk = RiskManager(parameters=RiskParameters(max_daily_risk=0.06))
+portfolio_risk = PortfolioRiskManager(parameters=RiskParameters(max_daily_risk=0.06))
 
 # Wrap it in an adapter for component strategies (Layer 1)
 adapter = CoreRiskAdapter(core_manager=portfolio_risk)
@@ -192,7 +194,7 @@ Most users don't need to use `CoreRiskAdapter` directly - the engines handle thi
 
 **Configuration**:
 ```python
-from src.risk.risk_manager import RiskManager, RiskParameters
+from src.risk.risk_manager import PortfolioRiskManager, RiskParameters
 
 params = RiskParameters(
     base_risk_per_trade=0.02,           # 2% base risk per trade
@@ -203,7 +205,7 @@ params = RiskParameters(
     max_drawdown=0.20,                  # 20% max drawdown
 )
 
-risk_manager = RiskManager(parameters=params, max_concurrent_positions=3)
+risk_manager = PortfolioRiskManager(parameters=params, max_concurrent_positions=3)
 ```
 
 **Key Methods**:
@@ -529,7 +531,7 @@ entry_handler = EntryHandler(
 ```python
 from src.strategies.components import Strategy
 from src.strategies.components.risk_manager import VolatilityRiskManager
-from src.risk.risk_manager import RiskManager, RiskParameters
+from src.risk.risk_manager import PortfolioRiskManager, RiskParameters
 
 # LAYER 1: Strategy-level risk component
 strategy = Strategy(
@@ -621,7 +623,7 @@ engine = BacktestEngine(
 from src.strategies.components.risk_manager import RiskManager as StrategyRiskComponent
 
 # Portfolio manager (concrete)
-from src.risk.risk_manager import RiskManager as PortfolioRiskManager
+from src.risk.risk_manager import PortfolioRiskManager as PortfolioRiskManager
 ```
 
 ### Pitfall 2: Not Understanding daily_risk_used

@@ -47,7 +47,7 @@ IMPORTANT NOTE ON DAILY RISK ACCOUNTING:
     many positions as theoretical risk would allow. See class docstring for details.
 
 USAGE:
-    >>> from src.risk.risk_manager import RiskManager, RiskParameters
+    >>> from src.risk.risk_manager import PortfolioRiskManager, RiskParameters
     >>>
     >>> # Initialize with parameters
     >>> params = RiskParameters(
@@ -55,7 +55,7 @@ USAGE:
     ...     max_daily_risk=0.06,
     ...     max_position_size=0.10,
     ... )
-    >>> risk_manager = RiskManager(parameters=params, max_concurrent_positions=3)
+    >>> risk_manager = PortfolioRiskManager(parameters=params, max_concurrent_positions=3)
     >>>
     >>> # Calculate allowed position fraction
     >>> fraction = risk_manager.calculate_position_fraction(
@@ -226,8 +226,8 @@ class RiskParameters:
             raise ValueError("correlation_update_frequency_hours must be positive")
 
 
-class RiskManager:
-    """Handles position sizing and risk management.
+class PortfolioRiskManager:
+    """Handles position sizing and risk management across the entire portfolio.
 
     Daily Risk Accounting
     ---------------------
