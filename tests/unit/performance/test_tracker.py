@@ -523,8 +523,8 @@ class TestPerformanceTrackerEdgeCases:
             tracker.record_trade(trade)
 
         metrics = tracker.get_metrics()
-        # Should have 5 total trades: 2 wins, 1 loss, 2 zero
-        assert metrics.total_trades == 3  # Only winning + losing
+        # Should have 5 total trades: 2 wins, 1 loss, 2 zero (all included in total)
+        assert metrics.total_trades == 5  # All trades included (wins + losses + zero-PnL)
         assert metrics.winning_trades == 2
         assert metrics.losing_trades == 1
         # Zero PnL trades should be tracked separately
@@ -549,7 +549,7 @@ class TestPerformanceTrackerEdgeCases:
         assert metrics.avg_trade_duration_hours == 0.0
 
     def test_trade_with_none_pnl(self):
-        """Test recording trade with None PnL value."""
+        """Test recording trade with None PnL value raises ValueError."""
         tracker = PerformanceTracker(initial_balance=10000)
 
         trade = Mock()
@@ -559,12 +559,9 @@ class TestPerformanceTrackerEdgeCases:
         trade.symbol = "BTCUSDT"
         trade.side = "long"
 
-        # Should not raise error, should log warning
-        tracker.record_trade(trade)
-
-        metrics = tracker.get_metrics()
-        assert metrics.total_trades == 0  # None PnL treated as zero
-        assert metrics.total_pnl == 0.0
+        # Should raise ValueError - fail fast on invalid data
+        with pytest.raises(ValueError, match="Cannot record trade with None PnL"):
+            tracker.record_trade(trade)
 
     def test_var_with_insufficient_data(self):
         """Test VaR returns 0 with insufficient samples."""
