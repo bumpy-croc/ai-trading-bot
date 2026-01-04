@@ -1,4 +1,6 @@
 import logging
+import math
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Optional
@@ -120,10 +122,11 @@ class DynamicRiskManager:
         self.config = config or DynamicRiskConfig()
         self.db_manager = db_manager
 
-        # Cache for performance calculations
+        # Cache for performance calculations with thread safety
         self._performance_cache: dict[str, Any] = {}
         self._cache_timestamp = None
         self._cache_ttl_seconds = 300  # 5 minutes
+        self._cache_lock = threading.Lock()  # Prevents race conditions in cache access
 
     def calculate_dynamic_risk_adjustments(
         self,
@@ -147,16 +150,25 @@ class DynamicRiskManager:
         if not self.config.enabled:
             return RiskAdjustments(primary_reason="disabled")
 
+        # Validate balance inputs to prevent NaN/Infinity propagation
+        if not math.isfinite(current_balance) or current_balance < 0:
+            logger.warning(f"Invalid current_balance: {current_balance}")
+            return RiskAdjustments(primary_reason="invalid_balance")
+        if not math.isfinite(peak_balance) or peak_balance <= 0:
+            logger.warning(f"Invalid peak_balance: {peak_balance}")
+            return RiskAdjustments(primary_reason="invalid_balance")
+
         # Calculate current drawdown
         current_drawdown = self._calculate_current_drawdown(current_balance, peak_balance)
 
         # Check for recovery if we have previous peak data
         recovery_return = 0.0
-        # Validate previous_peak_balance is numeric and positive before division
+        # Validate previous_peak_balance is numeric, positive, and finite before division
         if (
             previous_peak_balance
             and isinstance(previous_peak_balance, (int, float))
             and previous_peak_balance > 0
+            and math.isfinite(previous_peak_balance)
         ):
             recovery_return = (current_balance - previous_peak_balance) / previous_peak_balance
 
@@ -230,19 +242,31 @@ class DynamicRiskManager:
         Returns:
                 New RiskParameters with adjustments applied
         """
+        # Validate adjustment factors at boundary to prevent NaN/Infinity corruption
+        position_factor = adjustments.position_size_factor
+        if not math.isfinite(position_factor) or position_factor < 0:
+            logger.warning(f"Invalid position_size_factor: {position_factor}, using 1.0")
+            position_factor = 1.0
+
+        stop_factor = adjustments.stop_loss_tightening
+        if not math.isfinite(stop_factor) or stop_factor < 0:
+            logger.warning(f"Invalid stop_loss_tightening: {stop_factor}, using 1.0")
+            stop_factor = 1.0
+
+        daily_factor = adjustments.daily_risk_factor
+        if not math.isfinite(daily_factor) or daily_factor < 0:
+            logger.warning(f"Invalid daily_risk_factor: {daily_factor}, using 1.0")
+            daily_factor = 1.0
+
         # Create a copy to avoid modifying the original
         adjusted_params = RiskParameters(
-            base_risk_per_trade=risk_parameters.base_risk_per_trade
-            * adjustments.position_size_factor,
-            max_risk_per_trade=risk_parameters.max_risk_per_trade
-            * adjustments.position_size_factor,
-            max_position_size=risk_parameters.max_position_size * adjustments.position_size_factor,
-            max_daily_risk=risk_parameters.max_daily_risk * adjustments.daily_risk_factor,
-            max_correlated_risk=risk_parameters.max_correlated_risk
-            * adjustments.position_size_factor,
+            base_risk_per_trade=risk_parameters.base_risk_per_trade * position_factor,
+            max_risk_per_trade=risk_parameters.max_risk_per_trade * position_factor,
+            max_position_size=risk_parameters.max_position_size * position_factor,
+            max_daily_risk=risk_parameters.max_daily_risk * daily_factor,
+            max_correlated_risk=risk_parameters.max_correlated_risk * position_factor,
             max_drawdown=risk_parameters.max_drawdown,  # Don't adjust max drawdown threshold
-            position_size_atr_multiplier=risk_parameters.position_size_atr_multiplier
-            * adjustments.stop_loss_tightening,
+            position_size_atr_multiplier=risk_parameters.position_size_atr_multiplier * stop_factor,
             default_take_profit_pct=risk_parameters.default_take_profit_pct,
             atr_period=risk_parameters.atr_period,
         )
@@ -250,24 +274,27 @@ class DynamicRiskManager:
         return adjusted_params
 
     def _calculate_current_drawdown(self, current_balance: float, peak_balance: float) -> float:
-        """Calculate current drawdown percentage"""
-        if peak_balance <= 0:
+        """Calculate current drawdown percentage with epsilon protection for precision"""
+        EPSILON = 1e-8
+        if peak_balance <= EPSILON:
             return 0.0
         return max(0.0, (peak_balance - current_balance) / peak_balance)
 
     def _get_performance_metrics(self, session_id: int | None) -> dict[str, Any]:
-        """Get cached performance metrics or calculate new ones"""
+        """Get cached performance metrics or calculate new ones with thread safety."""
         now = datetime.now(UTC)
 
-        # Check cache validity
-        if (
-            self._cache_timestamp
-            and (now - self._cache_timestamp).total_seconds() < self._cache_ttl_seconds
-            and self._performance_cache
-        ):
-            return self._performance_cache
+        # Check cache validity with lock to prevent race conditions
+        with self._cache_lock:
+            if (
+                self._cache_timestamp
+                and (now - self._cache_timestamp).total_seconds() < self._cache_ttl_seconds
+                and self._performance_cache
+            ):
+                # Return copy to prevent external mutations
+                return self._performance_cache.copy()
 
-        # Calculate new metrics
+        # Calculate new metrics outside lock to minimize lock duration
         metrics = {}
 
         if self.db_manager and session_id:
@@ -296,26 +323,33 @@ class DynamicRiskManager:
                         for rec in history:
                             try:
                                 closes.append(float(rec.equity))
-                            except Exception:
+                            except (ValueError, TypeError, AttributeError):
+                                # Skip invalid equity values that cannot be converted to float
                                 continue
-                        if len(closes) >= 2:
+                        if len(closes) >= 3:  # Need at least 3 points for reliable std
                             series = pd.Series(closes)
-                            # Filter out non-positive values before log to prevent NaN/inf
-                            # Log of non-positive values produces NaN which corrupts volatility calculations
+                            # Volatility calculations require positive prices for log returns
+                            # Non-positive values from data gaps would corrupt the volatility metric
                             series_positive = series[series > 0]
-                            if len(series_positive) >= 2:
+                            if len(series_positive) >= 3:
                                 log_returns = np.log(series_positive).diff().dropna()
-                                vol = float(log_returns.std())
-                                metrics["estimated_volatility"] = vol
+                                # Require at least 2 returns for reliable std calculation (ddof=1)
+                                if len(log_returns) >= 2:
+                                    vol = float(log_returns.std())
+                                    if math.isfinite(vol):
+                                        metrics["estimated_volatility"] = vol
+                                    else:
+                                        logger.debug("Volatility std() returned non-finite value")
                 except Exception as vol_err:
-                    logger.debug(f"Volatility estimation failed: {vol_err}")
+                    logger.warning(f"Volatility estimation failed, using fallback: {vol_err}")
 
             except Exception as e:
                 logger.warning(f"Failed to get performance metrics from database: {e}")
 
-        # Cache the results
-        self._performance_cache = metrics
-        self._cache_timestamp = now
+        # Cache the results with lock to prevent race conditions
+        with self._cache_lock:
+            self._performance_cache = metrics
+            self._cache_timestamp = now
 
         return metrics
 
@@ -327,11 +361,10 @@ class DynamicRiskManager:
         if recovery_return > 0:
             for threshold in sorted(self.config.recovery_thresholds, reverse=True):
                 if recovery_return >= threshold:
-                    # Gradual recovery - reduce risk reduction
-                    recovery_factor = min(
-                        1.0,
-                        1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR,
-                    )
+                    # Gradual recovery - scale toward full risk (1.0) proportionally
+                    # Clamp recovery_factor to [0.1, 2.0] to prevent extreme adjustments
+                    raw_recovery_factor = 1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR
+                    recovery_factor = max(0.1, min(raw_recovery_factor, 2.0))
                     return RiskAdjustments(
                         position_size_factor=min(1.0, recovery_factor),
                         stop_loss_tightening=max(1.0, 1.0 / recovery_factor),

@@ -233,52 +233,31 @@ class TestPartialExitPolicyEdgeCases:
 
     def test_zero_original_size_position(self):
         """Test with position having zero original size."""
-        policy = PartialExitPolicy(
-            exit_targets=[0.05],
-            exit_sizes=[0.5],
-        )
-        pos = PositionState(entry_price=100.0, side="long", original_size=0.0, current_size=0.0)
-
-        # The implementation doesn't check original_size in check_partial_exits
-        # It only checks if PnL target is met, so it will return an action
-        actions = policy.check_partial_exits(pos, 105.0)
-        assert len(actions) == 1  # Will trigger based on PnL alone
+        # Zero original_size is now validated in PositionState.__post_init__
+        # Should raise ValueError when creating the position
+        with pytest.raises(ValueError, match="original_size must be positive"):
+            PositionState(entry_price=100.0, side="long", original_size=0.0, current_size=0.0)
 
     def test_negative_current_size_position(self):
         """Test with position having negative current size."""
-        policy = PartialExitPolicy(
-            exit_targets=[0.05],
-            exit_sizes=[0.5],
-        )
-        pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=-0.5)
-
-        # Should still check for exits based on original size and entry price
-        actions = policy.check_partial_exits(pos, 105.0)
-        assert len(actions) == 1
+        # Negative current_size is now validated in PositionState.__post_init__
+        # Should raise ValueError when creating the position
+        with pytest.raises(ValueError, match="current_size cannot be negative"):
+            PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=-0.5)
 
     def test_zero_entry_price(self):
         """Test with zero entry price."""
-        policy = PartialExitPolicy(
-            exit_targets=[0.05],
-            exit_sizes=[0.5],
-        )
-        pos = PositionState(entry_price=0.0, side="long", original_size=1.0, current_size=1.0)
-
-        # Should not crash but may not work as expected
-        actions = policy.check_partial_exits(pos, 105.0)
-        # Behavior depends on implementation - should handle gracefully
-        assert isinstance(actions, list)
+        # Zero entry_price is now validated in PositionState.__post_init__
+        # Should raise ValueError when creating the position
+        with pytest.raises(ValueError, match="entry_price must be finite and positive"):
+            PositionState(entry_price=0.0, side="long", original_size=1.0, current_size=1.0)
 
     def test_negative_entry_price(self):
         """Test with negative entry price."""
-        policy = PartialExitPolicy(
-            exit_targets=[0.05],
-            exit_sizes=[0.5],
-        )
-        pos = PositionState(entry_price=-100.0, side="long", original_size=1.0, current_size=1.0)
-
-        actions = policy.check_partial_exits(pos, 105.0)
-        assert isinstance(actions, list)
+        # Negative entry price is now validated in PositionState.__post_init__
+        # Should raise ValueError when creating the position
+        with pytest.raises(ValueError, match="entry_price must be finite and positive"):
+            PositionState(entry_price=-100.0, side="long", original_size=1.0, current_size=1.0)
 
     def test_short_side_exit_logic(self):
         """Test exit logic for short positions."""
@@ -325,13 +304,14 @@ class TestPartialExitPolicyEdgeCases:
         assert pos.partial_exits_taken == 1  # Still counted
         assert pos.last_partial_exit_price == 105.0
 
-        # Apply negative size exit (acts like scale-in)
+        # Apply negative size exit - now validated and rejected
         pos_reset = PositionState(
             entry_price=100.0, side="long", original_size=1.0, current_size=1.0
         )
         policy.apply_partial_exit(pos_reset, executed_size_fraction_of_original=-0.5, price=105.0)
-        assert pos_reset.current_size == 1.5  # Increased (negative exit = scale in)
-        assert pos_reset.partial_exits_taken == 1
+        # Negative fraction is rejected by validation, position unchanged
+        assert pos_reset.current_size == 1.0
+        assert pos_reset.partial_exits_taken == 0  # Not counted since rejected
 
     def test_apply_scale_in_edge_cases(self):
         """Test apply_scale_in with edge cases."""
@@ -350,13 +330,14 @@ class TestPartialExitPolicyEdgeCases:
         assert pos.scale_ins_taken == 1  # Still counted
         assert pos.last_scale_in_price == 102.0
 
-        # Apply negative size scale-in (acts like partial exit)
+        # Apply negative size scale-in - now validated and rejected
         pos_reset = PositionState(
             entry_price=100.0, side="long", original_size=1.0, current_size=1.0
         )
         policy.apply_scale_in(pos_reset, add_size_fraction_of_original=-0.5, price=102.0)
-        assert pos_reset.current_size == 0.5  # Decreased (negative scale-in = partial exit)
-        assert pos_reset.scale_ins_taken == 1
+        # Negative fraction is rejected by validation, position unchanged
+        assert pos_reset.current_size == 1.0
+        assert pos_reset.scale_ins_taken == 0  # Not counted since rejected
 
     def test_apply_scale_in_size_limit(self):
         """Test apply_scale_in with size limit."""
@@ -488,16 +469,11 @@ class TestPartialExitPolicyEdgeCases:
 
     def test_position_state_edge_cases(self):
         """Test PositionState with edge case values."""
-        # Test with all zero values
-        pos = PositionState(entry_price=0.0, side="long", original_size=0.0, current_size=0.0)
-        assert pos.entry_price == 0.0
-        assert pos.side == "long"
-        assert pos.original_size == 0.0
-        assert pos.current_size == 0.0
-        assert pos.partial_exits_taken == 0
-        assert pos.scale_ins_taken == 0
+        # Test with all zero values - now rejected by validation
+        with pytest.raises(ValueError, match="original_size must be positive"):
+            PositionState(entry_price=0.0, side="long", original_size=0.0, current_size=0.0)
 
-        # Test with extreme values
+        # Test with extreme but valid values
         pos_extreme = PositionState(
             entry_price=999999.99, side="short", original_size=1000000.0, current_size=500000.0
         )
@@ -537,7 +513,7 @@ class TestPositionStateEdgeCases:
 
     def test_position_state_invalid_side(self):
         """Test PositionState with invalid side."""
-        # PositionState doesn't validate side parameter
-        pos = PositionState(entry_price=100.0, side="invalid", original_size=1.0, current_size=1.0)
-
-        assert pos.side == "invalid"  # Should accept any value
+        # PositionState now validates side parameter in __post_init__
+        # Should raise ValueError when creating position with invalid side
+        with pytest.raises(ValueError, match="side must be 'long' or 'short'"):
+            PositionState(entry_price=100.0, side="invalid", original_size=1.0, current_size=1.0)

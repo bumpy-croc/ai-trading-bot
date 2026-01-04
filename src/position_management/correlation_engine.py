@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -146,11 +147,20 @@ class CorrelationEngine:
 
         thr = float(self.config.correlation_threshold)
         for i, a in enumerate(symbols):
+            # Skip if symbol was filtered out during correlation calculation
+            if a not in corr.columns:
+                continue
             for j in range(i + 1, len(symbols)):
                 b = symbols[j]
-                val = corr.at[a, b]
-                if pd.notna(val) and val >= thr:
-                    union(a, b)
+                if b not in corr.columns:
+                    continue
+                try:
+                    val = corr.at[a, b]
+                    if pd.notna(val) and val >= thr:
+                        union(a, b)
+                except (KeyError, IndexError):
+                    logger.debug(f"Correlation pair ({a}, {b}) not found in matrix")
+                    continue
 
         groups: dict[str, list[str]] = {}
         for s in symbols:
@@ -174,7 +184,10 @@ class CorrelationEngine:
             for sym in group:
                 info = positions.get(sym)
                 if info:
-                    total += float(info.get("size", 0.0))
+                    size = info.get("size", 0.0)
+                    # Validate size is numeric and finite to prevent TypeError or NaN propagation
+                    if isinstance(size, (int, float)) and math.isfinite(size) and size >= 0:
+                        total += float(size)
             exposures[tuple(sorted(group))] = round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         return exposures
 
@@ -217,7 +230,10 @@ class CorrelationEngine:
         for g in affected_groups:
             current = 0.0
             for sym in g:
-                current += float(positions.get(sym, {}).get("size", 0.0))
+                size = positions.get(sym, {}).get("size", 0.0)
+                # Validate size is numeric and finite to prevent TypeError or NaN propagation
+                if isinstance(size, (int, float)) and math.isfinite(size) and size >= 0:
+                    current += float(size)
             projected = current + candidate_fraction
             if projected > max_allowed and projected > 0:
                 factor = min(factor, max(0.0, max_allowed / projected))
@@ -243,8 +259,11 @@ class CorrelationGroupManager:
             present: list[str] = []
             for s in symbols:
                 if s in positions:
-                    present.append(s)
-                    total += float(positions[s].get("size", 0.0))
+                    size = positions[s].get("size", 0.0)
+                    # Validate size is numeric and finite to prevent TypeError or NaN propagation
+                    if isinstance(size, (int, float)) and math.isfinite(size) and size >= 0:
+                        present.append(s)
+                        total += float(size)
             out[name] = {
                 "total_exposure": round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS),
                 "position_count": len(present),
