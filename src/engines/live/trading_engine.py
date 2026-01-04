@@ -357,7 +357,7 @@ class LiveTradingEngine:
                 )
                 logger.info("Dynamic risk management enabled")
             except Exception as e:
-                logger.warning(f"Failed to initialize dynamic risk manager: {e}")
+                logger.warning("Failed to initialize dynamic risk manager: %s", e)
                 self.dynamic_risk_manager = None
         self._dynamic_risk_handler = DynamicRiskHandler(self.dynamic_risk_manager)
 
@@ -391,7 +391,7 @@ class LiveTradingEngine:
                         f"{provider_name} API credentials not found - account sync disabled"
                     )
             except Exception as e:
-                logger.warning(f"Failed to initialize exchange interface: {e}")
+                logger.warning("Failed to initialize exchange interface: %s", e)
 
             # Fail fast if live trading requested but exchange interface unavailable
             if self.exchange_interface is None:
@@ -414,7 +414,7 @@ class LiveTradingEngine:
                             f"Resumed from last recorded balance (account_balances): ${self.current_balance:,.2f}"
                         )
             except Exception as e:
-                logger.warning(f"Could not resume from last balance: {e}")
+                logger.warning("Could not resume from last balance: %s", e)
 
         # Initialize strategy manager for hot-swapping
         self.strategy_manager = None
@@ -428,7 +428,7 @@ class LiveTradingEngine:
                 self.strategy_manager.current_strategy = managed_strategy
                 self.strategy_manager.on_strategy_change = self._handle_strategy_change
                 self.strategy_manager.on_model_update = self._handle_model_update
-                logger.info(f"Hot swapping enabled for {managed_strategy.__class__.__name__}")
+                logger.info("Hot swapping enabled for %s", managed_strategy.__class__.__name__)
             else:
                 logger.info("Hot swapping disabled: provided strategy does not implement Strategy")
 
@@ -557,7 +557,7 @@ class LiveTradingEngine:
         """
         merged_config = merge_dynamic_risk_config(base_config, self.strategy)
         if merged_config != base_config:
-            logger.info(f"Merged strategy dynamic risk overrides from {self._strategy_name()}")
+            logger.info("Merged strategy dynamic risk overrides from %s", self._strategy_name())
         return merged_config
 
     def _init_modular_handlers(
@@ -763,7 +763,7 @@ class LiveTradingEngine:
             return adjusted_params
 
         except Exception as e:
-            logger.warning(f"Failed to get dynamic risk adjusted parameters: {e}")
+            logger.warning("Failed to get dynamic risk adjusted parameters: %s", e)
             return self.risk_manager.params
 
     def _extract_component_risk_parameters(
@@ -1145,10 +1145,10 @@ class LiveTradingEngine:
             check_interval=self.check_interval,
             mode="live" if self.enable_live_trading else "paper",
         )
-        logger.info(f"🚀 Starting live trading for {symbol} on {timeframe} timeframe")
-        logger.info(f"Initial balance: ${self.current_balance:,.2f}")
-        logger.info(f"Max position size: {self.max_position_size * 100:.1f}% of balance")
-        logger.info(f"Check interval: {self.check_interval}s")
+        logger.info("🚀 Starting live trading for %s on %s timeframe", symbol, timeframe)
+        logger.info("Initial balance: $%.2f", self.current_balance)
+        logger.info("Max position size: %.1f%% of balance", self.max_position_size * 100)
+        logger.info("Check interval: %ss", self.check_interval)
 
         if not self.enable_live_trading:
             logger.warning("⚠️  PAPER TRADING MODE - No real orders will be executed")
@@ -1159,7 +1159,8 @@ class LiveTradingEngine:
             if recovered_balance is not None:
                 self.current_balance = recovered_balance
                 logger.info(
-                    f"💾 Recovered balance from previous session: ${recovered_balance:,.2f}"
+                    "💾 Recovered balance from previous session: $%.2f",
+                    recovered_balance,
                 )
                 # Also recover active positions
                 self._recover_active_positions()
@@ -1230,16 +1231,17 @@ class LiveTradingEngine:
                             self._pending_balance_correction = True
                             self._pending_corrected_balance = corrected_balance
                         logger.info(
-                            f"💰 Balance corrected from exchange: ${corrected_balance:,.2f}"
+                            "💰 Balance corrected from exchange: $%.2f",
+                            corrected_balance,
                         )
                 else:
-                    logger.warning(f"⚠️ Account synchronization failed: {sync_result.message}")
+                    logger.warning("⚠️ Account synchronization failed: %s", sync_result.message)
 
                 # Reconcile positions with exchange (detect offline stop-loss triggers)
                 self._reconcile_positions_with_exchange()
 
             except Exception as e:
-                logger.error(f"❌ Account synchronization error: {e}", exc_info=True)
+                logger.error("❌ Account synchronization error: %s", e, exc_info=True)
 
         # If a balance correction was pending, log it now (outside session creation conditional)
         # Use lock to ensure atomic check and update
@@ -1254,7 +1256,7 @@ class LiveTradingEngine:
                 )
                 self._pending_balance_correction = False
                 self._pending_corrected_balance = None
-                logger.info(f"💰 Balance corrected in database: ${corrected_balance:,.2f}")
+                logger.info("💰 Balance corrected in database: $%.2f", corrected_balance)
             elif getattr(self, "_pending_balance_correction", False):
                 # Balance correction was pending but no session ID available
                 logger.warning(
@@ -1355,7 +1357,7 @@ class LiveTradingEngine:
 
     def _signal_handler(self, signum: int, frame: Any) -> None:
         """Handle shutdown signals"""
-        logger.info(f"Received signal {signum}")
+        logger.info("Received signal %s", signum)
         self.stop()
         sys.exit(0)
 
@@ -1371,7 +1373,7 @@ class LiveTradingEngine:
             heartbeat_every = 60
         while self.is_running and not self.stop_event.is_set():
             if max_steps is not None and steps >= max_steps:
-                logger.info(f"Reached max_steps={max_steps}, stopping engine for test.")
+                logger.info("Reached max_steps=%s, stopping engine for test.", max_steps)
                 self.stop()
                 break
             steps += 1
@@ -1381,7 +1383,7 @@ class LiveTradingEngine:
                     try:
                         self.data_provider.update_live_data(symbol, timeframe)
                     except Exception as e:
-                        logger.debug(f"update_live_data failed: {e}")
+                        logger.debug("update_live_data failed: %s", e)
                 # Fetch latest market data
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
@@ -1498,7 +1500,7 @@ class LiveTradingEngine:
                         df, current_index, float(current_price)
                     )
                 except Exception as e:
-                    logger.debug(f"Trailing stop update failed: {e}")
+                    logger.debug("Trailing stop update failed: %s", e)
                 # Update rolling MFE/MAE per position and persist lightweight updates
                 self.live_position_tracker.update_mfe_mae(float(current_price))
                 # Check exit conditions for existing positions
@@ -1567,7 +1569,7 @@ class LiveTradingEngine:
                             else:
                                 # All strategies should be component-based
                                 self.logger.error(
-                                    f"Strategy {self.strategy.name} does not support component-based position sizing"
+                                    "Strategy %s does not support component-based position sizing", self.strategy.name
                                 )
                                 short_position_size = 0.0
 
@@ -1634,10 +1636,11 @@ class LiveTradingEngine:
                                 logger.debug("Periodic account sync completed")
                             else:
                                 logger.warning(
-                                    f"Periodic account sync failed: {sync_result.message}"
+                                    "Periodic account sync failed: %s",
+                                    sync_result.message,
                                 )
                         except Exception as e:
-                            logger.error(f"Periodic account sync error: {e}")
+                            logger.error("Periodic account sync error: %s", e)
                 # Log status periodically
                 if (
                     self.performance_tracker.get_metrics().total_trades % 10 == 0
@@ -1723,7 +1726,7 @@ class LiveTradingEngine:
 
             return True, ""
         except Exception as e:
-            logger.debug(f"Context readiness check failed: {e}")
+            logger.debug("Context readiness check failed: %s", e)
             return False, "readiness_check_error"
 
     def _get_latest_data(self, symbol: str, timeframe: str) -> pd.DataFrame | None:
@@ -1734,7 +1737,7 @@ class LiveTradingEngine:
             self.last_data_update = datetime.now(UTC)
             return df
         except Exception as e:
-            logger.error(f"Failed to fetch market data: {e}", exc_info=True)
+            logger.error("Failed to fetch market data: %s", e, exc_info=True)
             return None
 
     def _add_sentiment_data(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -1755,13 +1758,13 @@ class LiveTradingEngine:
                 df["sentiment_freshness"] = 0
                 df.loc[recent_mask, "sentiment_freshness"] = 1
 
-                logger.debug(f"Applied live sentiment to {recent_mask.sum()} recent candles")
+                logger.debug("Applied live sentiment to %s recent candles", recent_mask.sum())
             else:
                 # Fallback to historical sentiment
                 logger.debug("Using historical sentiment data")
 
         except Exception as e:
-            logger.error(f"Failed to add sentiment data: {e}", exc_info=True)
+            logger.error("Failed to add sentiment data: %s", e, exc_info=True)
 
         return df
 
@@ -2030,11 +2033,11 @@ class LiveTradingEngine:
                     runtime_strength = decision.signal.strength
                     runtime_confidence = decision.signal.confidence
             except Exception as e:
-                self.logger.warning(f"Component strategy decision failed: {e}")
+                self.logger.warning("Component strategy decision failed: %s", e)
                 entry_signal = False
         else:
             # All strategies should be component-based
-            self.logger.error(f"Strategy {self.strategy.name} is not a component-based strategy")
+            self.logger.error("Strategy %s is not a component-based strategy", self.strategy.name)
             entry_signal = False
 
         if entry_signal and not use_runtime:
@@ -2155,7 +2158,7 @@ class LiveTradingEngine:
                     float(current_price), signal, None  # regime context
                 )
             except Exception as e:
-                self.logger.debug(f"Component stop loss calculation failed: {e}")
+                self.logger.debug("Component stop loss calculation failed: %s", e)
                 stop_loss = float(current_price) * (
                     0.95 if entry_side == PositionSide.LONG else 1.05
                 )
@@ -2188,7 +2191,8 @@ class LiveTradingEngine:
             else:
                 # All strategies should be component-based
                 self.logger.error(
-                    f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
+                    "Strategy %s does not support component-based stop loss calculation",
+                    self.strategy.name,
                 )
                 stop_loss = current_price * 0.95  # Default 5% stop for long
                 take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
@@ -2662,7 +2666,7 @@ class LiveTradingEngine:
             new_filled_qty: Additional quantity filled since last check
             avg_price: Average fill price
         """
-        logger.info(f"Partial fill: {order_id} {symbol} +{new_filled_qty} @ ${avg_price:.2f}")
+        logger.info("Partial fill: %s %s +%s @ $%.2f", order_id, symbol, new_filled_qty, avg_price)
         log_order_event(
             "partial_fill",
             order_id=order_id,
@@ -2701,7 +2705,7 @@ class LiveTradingEngine:
             order_id: The cancelled/rejected order ID
             symbol: Trading symbol
         """
-        logger.warning(f"Order cancelled/rejected: {order_id} {symbol}")
+        logger.warning("Order cancelled/rejected: %s %s", order_id, symbol)
         log_order_event(
             "order_cancelled",
             order_id=order_id,
@@ -2713,7 +2717,7 @@ class LiveTradingEngine:
         if removed_position:
             self.live_position_tracker.remove_position(order_id)
         if removed_position is not None:
-            logger.error(f"Entry order {order_id} was cancelled - removing phantom position")
+            logger.error("Entry order %s was cancelled - removing phantom position", order_id)
 
     def _execute_exit(
         self,
@@ -3109,7 +3113,7 @@ class LiveTradingEngine:
                 )
 
         except Exception as e:
-            logger.error(f"Failed to log account snapshot: {e}")
+            logger.error("Failed to log account snapshot: %s", e)
 
     def _log_status(self, symbol: str, current_price: float):
         """Log current trading status"""
@@ -3152,7 +3156,7 @@ class LiveTradingEngine:
                 f.write(json.dumps(trade_data) + "\n")
 
         except Exception as e:
-            logger.error(f"Failed to log trade: {e}", exc_info=True)
+            logger.error("Failed to log trade: %s", e, exc_info=True)
 
     def _send_alert(self, message: str):
         """Send trading alert (webhook, email, etc.)"""
@@ -3168,7 +3172,7 @@ class LiveTradingEngine:
             }
             requests.post(self.alert_webhook_url, json=payload, timeout=10)
         except Exception as e:
-            logger.error(f"Failed to send alert: {e}", exc_info=True)
+            logger.error("Failed to send alert: %s", e, exc_info=True)
 
     def _sleep_with_interrupt(self, seconds: float):
         """Sleep in small increments to allow for interrupt and float seconds"""
@@ -3320,14 +3324,16 @@ class LiveTradingEngine:
             # Check if there's an active session
             active_session_id = self.db_manager.get_active_session_id()
             if active_session_id:
-                logger.info(f"🔍 Found active session #{active_session_id}")
+                logger.info("🔍 Found active session #%s", active_session_id)
 
                 # Try to recover balance
                 recovered_balance = self.db_manager.recover_last_balance(active_session_id)
                 if recovered_balance and recovered_balance > 0:
                     self.trading_session_id = active_session_id
                     logger.info(
-                        f"🎯 Recovered session #{active_session_id} with balance ${recovered_balance:,.2f}"
+                        "🎯 Recovered session #%s with balance $%.2f",
+                        active_session_id,
+                        recovered_balance,
                     )
                     return recovered_balance
                 else:
@@ -3337,7 +3343,7 @@ class LiveTradingEngine:
 
             return None
         except Exception as e:
-            logger.error(f"❌ Error recovering session: {e}", exc_info=True)
+            logger.error("❌ Error recovering session: %s", e, exc_info=True)
             return None
 
     def _recover_active_positions(self) -> None:
@@ -3353,7 +3359,7 @@ class LiveTradingEngine:
                 logger.info("📊 No active positions to recover")
                 return
 
-            logger.info(f"🔄 Recovering {len(db_positions)} active positions...")
+            logger.info("🔄 Recovering %s active positions...", len(db_positions))
 
             for pos_data in db_positions:
                 # Convert database position to Position object
@@ -3418,17 +3424,22 @@ class LiveTradingEngine:
                         )
                     except Exception as e:
                         logger.warning(
-                            f"Failed to update risk manager for recovered position {position.symbol}: {e}"
+                            "Failed to update risk manager for recovered position %s: %s",
+                            position.symbol,
+                            e,
                         )
 
                 logger.info(
-                    f"✅ Recovered position: {pos_data['symbol']} {pos_data['side']} @ ${pos_data['entry_price']:.2f}"
+                    "✅ Recovered position: %s %s @ $%.2f",
+                    pos_data["symbol"],
+                    pos_data["side"],
+                    pos_data["entry_price"],
                 )
 
-            logger.info(f"🎯 Successfully recovered {len(db_positions)} positions")
+            logger.info("🎯 Successfully recovered %s positions", len(db_positions))
 
         except Exception as e:
-            logger.error(f"❌ Error recovering positions: {e}", exc_info=True)
+            logger.error("❌ Error recovering positions: %s", e, exc_info=True)
 
     def _reconcile_positions_with_exchange(self) -> None:
         """
@@ -3461,8 +3472,9 @@ class LiveTradingEngine:
                     if position.stop_loss_order_id not in exchange_order_ids:
                         # Stop-loss order is gone - may have triggered
                         logger.warning(
-                            f"⚠️ Stop-loss order {position.stop_loss_order_id} not found "
-                            f"on exchange for {position.symbol} - position may have closed"
+                            "⚠️ Stop-loss order %s not found on exchange for %s - position may have closed",
+                            position.stop_loss_order_id,
+                            position.symbol,
                         )
                         # Check if we can verify the order status
                         try:
@@ -3471,17 +3483,19 @@ class LiveTradingEngine:
                             )
                             if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
                                 logger.info(
-                                    f"✅ Confirmed: Stop-loss triggered for {position.symbol} "
-                                    f"@ ${sl_order.average_price or 'unknown'}"
+                                    "✅ Confirmed: Stop-loss triggered for %s @ $%s",
+                                    position.symbol,
+                                    sl_order.average_price or "unknown",
                                 )
                                 positions_to_close.append((position, sl_order.average_price))
                         except Exception as e:
-                            logger.warning(f"Could not verify stop-loss order status: {e}")
+                            logger.warning("Could not verify stop-loss order status: %s", e)
 
             # Close positions that were stopped out
             for position, exit_price in positions_to_close:
                 logger.info(
-                    f"🔄 Marking position {position.symbol} as closed (stop-loss triggered offline)"
+                    "🔄 Marking position %s as closed (stop-loss triggered offline)",
+                    position.symbol,
                 )
                 # Update balance based on stop-loss exit
                 if exit_price:
@@ -3493,8 +3507,9 @@ class LiveTradingEngine:
                     # Guard against division by zero
                     if position.entry_price <= 0:
                         logger.error(
-                            f"Invalid entry_price {position.entry_price} for position "
-                            f"{position.symbol} - skipping reconciliation"
+                            "Invalid entry_price %s for position %s - skipping reconciliation",
+                            position.entry_price,
+                            position.symbol,
                         )
                         continue
                     if position.side == PositionSide.LONG:
@@ -3597,11 +3612,11 @@ class LiveTradingEngine:
                 logger.info("✅ All positions verified - no offline closures detected")
 
         except Exception as e:
-            logger.error(f"❌ Error reconciling positions with exchange: {e}", exc_info=True)
+            logger.error("❌ Error reconciling positions with exchange: %s", e, exc_info=True)
 
     def _handle_strategy_change(self, swap_data: dict[str, Any]):
         """Handle strategy change callback"""
-        logger.info(f"🔄 Strategy change requested: {swap_data}")
+        logger.info("🔄 Strategy change requested: %s", swap_data)
 
         # If requested to close positions, close them now
         if swap_data.get("close_positions", False):
@@ -3641,7 +3656,7 @@ class LiveTradingEngine:
 
     def _handle_model_update(self, update_data: dict[str, Any]):
         """Handle model update callback"""
-        logger.info(f"🤖 Model update requested: {update_data}")
+        logger.info("🤖 Model update requested: %s", update_data)
         # Model update logic is handled in strategy_manager.apply_pending_update()
 
     def hot_swap_strategy(
@@ -3663,7 +3678,7 @@ class LiveTradingEngine:
             logger.error("Strategy manager not initialized - hot swapping disabled")
             return False
 
-        logger.info(f"🔄 Initiating hot-swap to strategy: {new_strategy_name}")
+        logger.info("🔄 Initiating hot-swap to strategy: %s", new_strategy_name)
 
         success = self.strategy_manager.hot_swap_strategy(
             new_strategy_name=new_strategy_name,
@@ -3697,7 +3712,7 @@ class LiveTradingEngine:
 
         strategy_name = self._strategy_name().lower()
 
-        logger.info(f"🤖 Initiating model update for strategy: {strategy_name}")
+        logger.info("🤖 Initiating model update for strategy: %s", strategy_name)
 
         success = self.strategy_manager.update_model(
             strategy_name=strategy_name, new_model_path=new_model_path, validate_model=True

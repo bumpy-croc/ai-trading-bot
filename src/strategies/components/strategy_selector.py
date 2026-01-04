@@ -596,24 +596,39 @@ class StrategySelector:
                 hasattr(self, "_computing_strategy_set")
                 and self._computing_strategy_set == current_strategy_set
             ):
-                # Another thread is computing, wait for it to complete
-                while (
-                    hasattr(self, "_computing_strategy_set")
-                    and self._computing_strategy_set == current_strategy_set
-                ):
-                    self._correlation_lock.release()
-                    try:
-                        time.sleep(0.01)  # Small delay to prevent busy waiting
-                    finally:
-                        # Ensure lock is re-acquired even if exception occurs during sleep
-                        self._correlation_lock.acquire()
+                # Another thread is computing, exit lock and wait for it to complete
+                # Do NOT release/acquire inside with block - that causes deadlock risk
+                # if an exception is raised during sleep
+                pass
 
-                # Re-check cache after waiting
-                if (
-                    datetime.now(UTC) < self.correlation_cache_expiry
-                    and self.correlation_strategy_set == current_strategy_set
-                ):
-                    return self.correlation_matrix
+        # Wait outside the lock for other thread to complete
+        # This avoids holding the lock during sleep and prevents deadlock
+        max_wait_iterations = 100  # Prevent infinite loop (1 second max)
+        wait_iterations = 0
+        while (
+            hasattr(self, "_computing_strategy_set")
+            and self._computing_strategy_set == current_strategy_set
+            and wait_iterations < max_wait_iterations
+        ):
+            time.sleep(0.01)  # Small delay to prevent busy waiting
+            wait_iterations += 1
+
+        # Re-check cache with lock after waiting
+        with self._correlation_lock:
+            if (
+                datetime.now(UTC) < self.correlation_cache_expiry
+                and self.correlation_strategy_set == current_strategy_set
+            ):
+                return self.correlation_matrix
+
+            # Check if another thread started computing while we waited
+            if (
+                hasattr(self, "_computing_strategy_set")
+                and self._computing_strategy_set == current_strategy_set
+            ):
+                # Another thread is computing, return cached value or wait
+                # Since we already waited once, just return the cached value
+                return self.correlation_matrix
 
             # Mark that we're computing to prevent other threads from computing
             self._computing_strategy_set = current_strategy_set

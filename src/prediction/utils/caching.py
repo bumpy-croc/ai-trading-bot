@@ -275,8 +275,26 @@ class FeatureCache:
 
         Returns:
             True if valid cached result exists, False otherwise
+
+        Note:
+            This method does NOT update cache statistics to avoid side effects
+            from what is semantically a query operation.
         """
-        return self.get(data, extractor_name, config, copy=False) is not None
+        with self._lock:
+            # Use _find_by_quick_hash directly without updating stats
+            result = self._find_by_quick_hash(data, extractor_name, config)
+            if result is None:
+                return False
+
+            cache_key, entry = result
+
+            # Check TTL using entry's own TTL value
+            if not entry.is_valid():
+                del self._cache[cache_key]
+                self._stats["evictions"] += 1
+                return False
+
+            return True
 
     def clear(self) -> None:
         """Clear all cached entries."""
