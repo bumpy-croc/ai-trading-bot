@@ -142,6 +142,25 @@ class RiskParameters:
 class RiskManager:
     """Handles position sizing and risk management.
 
+    Daily Risk Accounting
+    ---------------------
+    IMPORTANT: The `daily_risk_used` attribute tracks EXPOSURE (capital allocation),
+    not actual capital at risk. When a position is opened with 10% of balance,
+    `daily_risk_used` increases by 0.1 (10%), regardless of the stop loss distance.
+
+    This is a conservative approach that:
+    - Prevents over-leveraging by limiting total capital allocation
+    - Simplifies accounting (no need to track stop loss distances)
+    - Provides a margin of safety in volatile markets
+
+    However, it differs from traditional risk management where:
+    - Risk = position_size × stop_loss_distance
+    - A 10% position with 1% stop loss = 0.1% actual capital at risk
+
+    Future Enhancement: Consider tracking actual capital at risk by multiplying
+    position size by stop loss distance percentage. This would allow larger
+    positions with tight stops while maintaining true risk limits.
+
     Thread Safety
     -------------
     All operations on shared state (positions dict and daily_risk_used counter)
@@ -151,6 +170,8 @@ class RiskManager:
 
     def __init__(self, parameters: RiskParameters | None = None, max_concurrent_positions: int = 3):
         self.params = parameters or RiskParameters()
+        # Tracks total exposure (capital allocation), not actual capital at risk
+        # See class docstring for details on this design decision
         self.daily_risk_used = 0.0
         self.positions: dict[str, dict] = {}
         self.max_concurrent_positions = max_concurrent_positions
@@ -293,6 +314,232 @@ class RiskManager:
         )
 
     # NEW HIGHER-LEVEL API (fraction-based + SL/TP policies)
+
+    def _parse_position_sizing_params(
+        self, strategy_overrides: dict[str, Any]
+    ) -> tuple[float, float, float]:
+        """Parse and validate position sizing parameters from strategy overrides.
+
+        Parameters
+        ----------
+        strategy_overrides : dict
+            Strategy-specific override parameters.
+
+        Returns
+        -------
+        tuple[float, float, float]
+            (min_fraction, max_fraction, base_fraction) - all validated and clamped.
+        """
+        # Handle Mock objects in tests by converting to float safely
+        try:
+            min_fraction = float(strategy_overrides.get("min_fraction", 0.0))
+        except (TypeError, ValueError):
+            min_fraction = 0.0
+
+        try:
+            max_fraction = float(
+                strategy_overrides.get("max_fraction", self.params.max_position_size)
+            )
+        except (TypeError, ValueError):
+            max_fraction = float(self.params.max_position_size)
+
+        max_fraction = min(max_fraction, self.params.max_position_size)
+
+        # Respect remaining daily risk
+        with self._state_lock:
+            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+        max_fraction = min(max_fraction, remaining_daily_risk)
+
+        # Default fraction baseline
+        try:
+            base_fraction = float(
+                strategy_overrides.get("base_fraction", self.params.base_risk_per_trade)
+            )
+        except (TypeError, ValueError):
+            base_fraction = float(self.params.base_risk_per_trade)
+        base_fraction = max(0.0, min(base_fraction, self.params.max_position_size))
+
+        return min_fraction, max_fraction, base_fraction
+
+    def _calculate_raw_fraction(
+        self,
+        sizer: str,
+        base_fraction: float,
+        df: pd.DataFrame,
+        index: int,
+        balance: float,
+        price: float | None,
+        regime: str,
+        indicators: dict[str, Any],
+        strategy_overrides: dict[str, Any],
+    ) -> float:
+        """Calculate raw position fraction based on selected sizing policy.
+
+        Parameters
+        ----------
+        sizer : str
+            Position sizer type: 'fixed_fraction', 'confidence_weighted', or 'atr_risk'.
+        base_fraction : float
+            Base allocation fraction.
+        df : pd.DataFrame
+            Market data.
+        index : int
+            Current candle index.
+        balance : float
+            Account balance.
+        price : float | None
+            Current price (if available).
+        regime : str
+            Market regime.
+        indicators : dict
+            Indicator values.
+        strategy_overrides : dict
+            Strategy-specific overrides.
+
+        Returns
+        -------
+        float
+            Raw position fraction before limits applied.
+        """
+        if sizer == "fixed_fraction":
+            return base_fraction
+
+        elif sizer == "confidence_weighted":
+            # Look up model confidence from indicators or df
+            conf_key = strategy_overrides.get("confidence_key", "prediction_confidence")
+            confidence = None
+            if conf_key in indicators:
+                confidence = indicators.get(conf_key)
+            elif conf_key in df.columns:
+                confidence = df[conf_key].iloc[index]
+            try:
+                confidence = (
+                    float(confidence) if confidence is not None and not pd.isna(confidence) else 0.0
+                )
+            except (TypeError, ValueError) as e:
+                logging.debug("Could not convert confidence to float: %s, defaulting to 0.0", e)
+                confidence = 0.0
+            return base_fraction * max(0.0, min(1.0, confidence))
+
+        elif sizer == "atr_risk":
+            # Convert legacy quantity sizing to fraction-of-balance
+            df = self._ensure_atr(df)
+            atr = float(df["atr"].iloc[index]) if not pd.isna(df["atr"].iloc[index]) else 0.0
+            px = float(price if price is not None else df["close"].iloc[index])
+            qty = self.calculate_position_size(price=px, atr=atr, balance=balance, regime=regime)
+            position_value = qty * px
+            return position_value / balance if balance > 0 else 0.0
+
+        else:
+            # Unknown sizer -> safest fallback: 0
+            logging.warning("Unknown position sizer '%s', returning 0.0", sizer)
+            return 0.0
+
+    def _apply_correlation_adjustment(
+        self, fraction: float, correlation_ctx: dict[str, Any] | None
+    ) -> float:
+        """Apply correlation-based size reduction if correlation context provided.
+
+        Parameters
+        ----------
+        fraction : float
+            Initial position fraction.
+        correlation_ctx : dict | None
+            Correlation context with engine, symbol, matrix, etc.
+
+        Returns
+        -------
+        float
+            Adjusted fraction after correlation reduction (or original if no adjustment).
+        """
+        if not correlation_ctx or fraction <= 0:
+            return fraction
+
+        try:
+            engine = correlation_ctx.get("engine")
+            candidate_symbol = correlation_ctx.get("candidate_symbol")
+            corr_matrix = correlation_ctx.get("corr_matrix")
+            max_exposure_override = correlation_ctx.get("max_exposure_override")
+
+            if engine is None or not candidate_symbol:
+                return fraction
+
+            with self._state_lock:
+                positions = self.positions.copy()
+
+            raw_factor = engine.compute_size_reduction_factor(
+                positions=positions,
+                corr_matrix=corr_matrix,
+                candidate_symbol=str(candidate_symbol),
+                candidate_fraction=float(fraction),
+                max_exposure_override=max_exposure_override,
+            )
+
+            # Validate factor is numeric and not None/NaN before using
+            try:
+                factor = float(raw_factor)
+                if pd.isna(factor):
+                    logging.warning(
+                        "Correlation engine returned NaN reduction factor - ignoring adjustment"
+                    )
+                    return fraction
+            except (TypeError, ValueError):
+                logging.warning(
+                    "Correlation engine returned non-numeric factor (%s: %s) - ignoring adjustment",
+                    type(raw_factor).__name__,
+                    raw_factor,
+                )
+                return fraction
+
+            if factor < 1.0:
+                return max(0.0, fraction * factor)
+            return fraction
+
+        except (TypeError, ValueError, KeyError, AttributeError) as e:
+            # Fail-safe: never raise from correlation logic
+            logging.warning("Error in correlation-based size reduction logic: %s", e)
+            return fraction
+
+    def _finalize_fraction_with_risk_limits(self, fraction: float) -> float:
+        """Perform final validation and clamping with risk limits (thread-safe).
+
+        This method performs atomic validation inside a lock to prevent TOCTOU races.
+
+        Parameters
+        ----------
+        fraction : float
+            Calculated position fraction before final limits.
+
+        Returns
+        -------
+        float
+            Final validated and clamped position fraction.
+        """
+        with self._state_lock:
+            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+            final_fraction = max(0.0, min(self.params.max_position_size, fraction))
+
+            # Clamp to remaining daily risk
+            if final_fraction > remaining_daily_risk:
+                logging.warning(
+                    "Calculated fraction %.4f exceeds remaining daily risk %.4f, clamping to limit",
+                    final_fraction,
+                    remaining_daily_risk,
+                )
+                final_fraction = remaining_daily_risk
+
+            # Double-check max position size (defensive)
+            if final_fraction > self.params.max_position_size:
+                logging.error(
+                    "CRITICAL: Calculated fraction %.4f exceeds max_position_size %.4f. "
+                    "This indicates a logic error in position sizing.",
+                    final_fraction,
+                    self.params.max_position_size,
+                )
+                final_fraction = self.params.max_position_size
+
+            return final_fraction
+
     def calculate_position_fraction(
         self,
         df: pd.DataFrame,
@@ -322,139 +569,40 @@ class RiskManager:
             )
             # -> returns a fraction such as 0.03 meaning 3% of balance
         """
+        # Early validation
         if balance <= 0 or index < 0 or index >= len(df):
             return 0.0
+
         strategy_overrides = strategy_overrides or {}
         indicators = indicators or {}
         sizer = strategy_overrides.get("position_sizer", "fixed_fraction")
 
-        # * Handle Mock objects in tests by converting to float safely
-        try:
-            min_fraction = float(strategy_overrides.get("min_fraction", 0.0))
-        except (TypeError, ValueError):
-            min_fraction = 0.0
+        # Step 1: Parse and validate parameters
+        min_fraction, max_fraction, base_fraction = self._parse_position_sizing_params(
+            strategy_overrides
+        )
 
-        try:
-            max_fraction = float(
-                strategy_overrides.get("max_fraction", self.params.max_position_size)
-            )
-        except (TypeError, ValueError):
-            max_fraction = float(self.params.max_position_size)
+        # Step 2: Calculate raw fraction based on sizer type
+        raw_fraction = self._calculate_raw_fraction(
+            sizer=sizer,
+            base_fraction=base_fraction,
+            df=df,
+            index=index,
+            balance=balance,
+            price=price,
+            regime=regime,
+            indicators=indicators,
+            strategy_overrides=strategy_overrides,
+        )
 
-        max_fraction = min(max_fraction, self.params.max_position_size)
+        # Step 3: Clamp to min/max bounds
+        clamped_fraction = max(min_fraction, min(max_fraction, raw_fraction))
 
-        # Respect remaining daily risk
-        with self._state_lock:
-            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
-        max_fraction = min(max_fraction, remaining_daily_risk)
+        # Step 4: Apply correlation adjustment if provided
+        adjusted_fraction = self._apply_correlation_adjustment(clamped_fraction, correlation_ctx)
 
-        # Default fraction baseline
-        try:
-            base_fraction = float(
-                strategy_overrides.get("base_fraction", self.params.base_risk_per_trade)
-            )
-        except (TypeError, ValueError):
-            base_fraction = float(self.params.base_risk_per_trade)
-        base_fraction = max(0.0, min(base_fraction, self.params.max_position_size))
-
-        fraction = 0.0
-        if sizer == "fixed_fraction":
-            fraction = base_fraction
-        elif sizer == "confidence_weighted":
-            # Look up model confidence from indicators or df
-            conf_key = strategy_overrides.get("confidence_key", "prediction_confidence")
-            confidence = None
-            if conf_key in indicators:
-                confidence = indicators.get(conf_key)
-            elif conf_key in df.columns:
-                confidence = df[conf_key].iloc[index]
-            try:
-                confidence = (
-                    float(confidence) if confidence is not None and not pd.isna(confidence) else 0.0
-                )
-            except (TypeError, ValueError) as e:
-                logging.debug("Could not convert confidence to float: %s, defaulting to 0.0", e)
-                confidence = 0.0
-            fraction = base_fraction * max(0.0, min(1.0, confidence))
-        elif sizer == "atr_risk":
-            # Convert legacy quantity sizing to fraction-of-balance
-            df = self._ensure_atr(df)
-            atr = float(df["atr"].iloc[index]) if not pd.isna(df["atr"].iloc[index]) else 0.0
-            px = float(price if price is not None else df["close"].iloc[index])
-            qty = self.calculate_position_size(price=px, atr=atr, balance=balance, regime=regime)
-            position_value = qty * px
-            fraction = position_value / balance if balance > 0 else 0.0
-        else:
-            # Unknown sizer -> safest fallback: 0
-            fraction = 0.0
-
-        # Clamp
-        fraction = max(min_fraction, min(max_fraction, fraction))
-
-        # Optional correlation-based size reduction
-        try:
-            if correlation_ctx and fraction > 0:
-                engine = correlation_ctx.get("engine")
-                candidate_symbol = correlation_ctx.get("candidate_symbol")
-                corr_matrix = correlation_ctx.get("corr_matrix")
-                max_exposure_override = correlation_ctx.get("max_exposure_override")
-                if engine is not None and candidate_symbol:
-                    with self._state_lock:
-                        positions = self.positions.copy()
-                    raw_factor = engine.compute_size_reduction_factor(
-                        positions=positions,
-                        corr_matrix=corr_matrix,
-                        candidate_symbol=str(candidate_symbol),
-                        candidate_fraction=float(fraction),
-                        max_exposure_override=max_exposure_override,
-                    )
-                    # Validate factor is numeric and not None/NaN before using
-                    try:
-                        factor = float(raw_factor)
-                        if pd.isna(factor):
-                            logging.warning(
-                                "Correlation engine returned NaN reduction factor - ignoring correlation adjustment"
-                            )
-                            factor = 1.0
-                    except (TypeError, ValueError):
-                        logging.warning(
-                            "Correlation engine returned non-numeric factor (%s: %s) - ignoring correlation adjustment",
-                            type(raw_factor).__name__,
-                            raw_factor,
-                        )
-                        factor = 1.0
-                    if factor < 1.0:
-                        fraction = max(0.0, fraction * factor)
-        except (TypeError, ValueError, KeyError, AttributeError) as e:
-            # Fail-safe: never raise from correlation logic
-            logging.warning("Error in correlation-based size reduction logic: %s", e)
-
-        # Final clamping and validation (thread-safe)
-        # Perform all risk limit checks atomically to prevent TOCTOU race conditions
-        with self._state_lock:
-            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
-            final_fraction = max(0.0, min(self.params.max_position_size, fraction))
-
-            # Clamp to remaining daily risk
-            if final_fraction > remaining_daily_risk:
-                logging.warning(
-                    "Calculated fraction %.4f exceeds remaining daily risk %.4f, clamping to limit",
-                    final_fraction,
-                    remaining_daily_risk,
-                )
-                final_fraction = remaining_daily_risk
-
-            # Double-check max position size (defensive)
-            if final_fraction > self.params.max_position_size:
-                logging.error(
-                    "CRITICAL: Calculated fraction %.4f exceeds max_position_size %.4f. "
-                    "This indicates a logic error in position sizing.",
-                    final_fraction,
-                    self.params.max_position_size,
-                )
-                final_fraction = self.params.max_position_size
-
-        return final_fraction
+        # Step 5: Final validation with risk limits (atomic, thread-safe)
+        return self._finalize_fraction_with_risk_limits(adjusted_fraction)
 
     def compute_sl_tp(
         self,
@@ -597,9 +745,11 @@ class RiskManager:
 
         Notes
         -----
-        - Daily risk accounting increments `daily_risk_used` by `size` so that
-          the sum of concurrently open position fractions respects
-          `params.max_daily_risk` across multiple positions.
+        - Daily risk accounting increments `daily_risk_used` by `size` (full position size).
+        - This tracks EXPOSURE (capital allocation), not actual capital at risk.
+        - Example: 10% position → daily_risk_used += 0.1, regardless of stop loss distance.
+        - The sum of all position fractions is capped by `params.max_daily_risk`.
+        - This is a conservative approach; see class docstring for details.
         - Thread-safe: protected by internal lock.
 
         Raises
