@@ -233,6 +233,8 @@ def detect_market_regime(
     trend_strength = (df["close"] - df["trend"]) / (df["trend"] + EPSILON)
 
     # Determine regime
+    # Note: NaN values in early rows (from rolling windows) cause comparisons to return False,
+    # defaulting to "ranging". This is intentional - we classify insufficient data as neutral/ranging.
     conditions = [
         (vol_ratio > VOLATILITY_RATIO_THRESHOLD)
         & (abs(trend_strength) < regime_threshold),  # Volatile
