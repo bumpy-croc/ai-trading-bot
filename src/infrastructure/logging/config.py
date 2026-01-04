@@ -167,8 +167,11 @@ class SamplingFilter(logging.Filter):
         super().__init__()
         try:
             cfg = get_config()
-            self.rate_debug = float(cfg.get("LOG_SAMPLING_RATE_DEBUG", "1.0"))
-            self.rate_info = float(cfg.get("LOG_SAMPLING_RATE_INFO", "1.0"))
+            rate_debug = float(cfg.get("LOG_SAMPLING_RATE_DEBUG", "1.0"))
+            rate_info = float(cfg.get("LOG_SAMPLING_RATE_INFO", "1.0"))
+            # Clamp to valid range [0.0, 1.0] to prevent undefined behavior
+            self.rate_debug = max(0.0, min(1.0, rate_debug))
+            self.rate_info = max(0.0, min(1.0, rate_info))
         except Exception:
             self.rate_debug = 1.0
             self.rate_info = 1.0
@@ -194,11 +197,16 @@ class MaxMessageLengthFilter(logging.Filter):
     Controlled via config LOG_MAX_MESSAGE_LEN (default 5000 characters).
     """
 
+    # Minimum message length to prevent truncating everything
+    _MIN_MESSAGE_LEN = 100
+
     def __init__(self) -> None:
         super().__init__()
         try:
             cfg = get_config()
-            self.max_len = int(cfg.get("LOG_MAX_MESSAGE_LEN", "5000"))
+            max_len = int(cfg.get("LOG_MAX_MESSAGE_LEN", "5000"))
+            # Ensure max_len is at least _MIN_MESSAGE_LEN to prevent over-truncation
+            self.max_len = max(self._MIN_MESSAGE_LEN, max_len)
         except Exception:
             self.max_len = 5000
 
