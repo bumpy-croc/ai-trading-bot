@@ -320,6 +320,10 @@ class RiskManager:
     ) -> tuple[float, float, float]:
         """Parse and validate position sizing parameters from strategy overrides.
 
+        NOTE: This method does NOT enforce daily risk limits. Daily risk clamping
+        is performed atomically in _finalize_fraction_with_risk_limits() to prevent
+        race conditions.
+
         Parameters
         ----------
         strategy_overrides : dict
@@ -328,7 +332,8 @@ class RiskManager:
         Returns
         -------
         tuple[float, float, float]
-            (min_fraction, max_fraction, base_fraction) - all validated and clamped.
+            (min_fraction, max_fraction, base_fraction) - validated and clamped
+            to parameter limits (but NOT yet clamped to remaining daily risk).
         """
         # Handle Mock objects in tests by converting to float safely
         try:
@@ -343,12 +348,9 @@ class RiskManager:
         except (TypeError, ValueError):
             max_fraction = float(self.params.max_position_size)
 
+        # Clamp to configured max position size
+        # NOTE: Daily risk clamping happens later in _finalize_fraction_with_risk_limits
         max_fraction = min(max_fraction, self.params.max_position_size)
-
-        # Respect remaining daily risk
-        with self._state_lock:
-            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
-        max_fraction = min(max_fraction, remaining_daily_risk)
 
         # Default fraction baseline
         try:
