@@ -298,7 +298,7 @@ class EmergencyControls:
         # Update emergency level
         if current_level > self.emergency_level:
             self.emergency_level = current_level
-            self.logger.warning(f"Emergency level escalated to {current_level.value}")
+            self.logger.warning("Emergency level escalated to %s", current_level.value)
 
             # Auto-activate conservative mode for high/critical levels
             if current_level in [EmergencyLevel.HIGH, EmergencyLevel.CRITICAL]:
@@ -386,7 +386,7 @@ class EmergencyControls:
             from_strategy, to_strategy, reason, requested_by
         )
 
-        self.logger.info(f"Manual switch request submitted directly: {request_id}")
+        self.logger.info("Manual switch request submitted directly: %s", request_id)
         return request_id
 
     def approve_request(
@@ -404,7 +404,7 @@ class EmergencyControls:
             True if request was processed, False if not found or already processed
         """
         if request_id not in self.pending_approvals:
-            self.logger.warning(f"Approval request not found: {request_id}")
+            self.logger.warning("Approval request not found: %s", request_id)
             return False
 
         approval_request = self.pending_approvals[request_id]
@@ -412,7 +412,7 @@ class EmergencyControls:
         # Check if request has expired
         if datetime.now(UTC) > approval_request.expires_at:
             approval_request.status = ApprovalStatus.EXPIRED
-            self.logger.warning(f"Approval request expired: {request_id}")
+            self.logger.warning("Approval request expired: %s", request_id)
             return False
 
         # Process approval/rejection
@@ -441,9 +441,9 @@ class EmergencyControls:
                     f"Approved: {approval_request.switch_request.reason}",
                     approved_by,
                 )
-                self.logger.info(f"Approved switch request executed: {switch_request_id}")
+                self.logger.info("Approved switch request executed: %s", switch_request_id)
 
-            self.logger.info(f"Request approved by {approved_by}: {request_id}")
+            self.logger.info("Request approved by %s: %s", approved_by, request_id)
 
         # Move to history
         self.approval_history.append(approval_request)
@@ -508,7 +508,7 @@ class EmergencyControls:
                 alert.resolved = True
                 alert.resolved_at = datetime.now(UTC)
 
-        self.logger.info(f"Emergency stop deactivated by {deactivated_by}: {reason}")
+        self.logger.info("Emergency stop deactivated by %s: %s", deactivated_by, reason)
 
         return True
 
@@ -524,7 +524,7 @@ class EmergencyControls:
 
         self.conservative_mode = ConservativeMode.ENABLED
 
-        self.logger.info(f"Conservative mode activated: {reason}")
+        self.logger.info("Conservative mode activated: %s", reason)
 
     def deactivate_conservative_mode(self, reason: str) -> None:
         """
@@ -538,7 +538,7 @@ class EmergencyControls:
 
         self.conservative_mode = ConservativeMode.DISABLED
 
-        self.logger.info(f"Conservative mode deactivated: {reason}")
+        self.logger.info("Conservative mode deactivated: %s", reason)
 
     def get_conservative_adjustments(self) -> dict[str, float]:
         """
@@ -575,7 +575,7 @@ class EmergencyControls:
         alert.acknowledged_by = acknowledged_by
         alert.acknowledged_at = datetime.now(UTC)
 
-        self.logger.info(f"Alert acknowledged by {acknowledged_by}: {alert_id}")
+        self.logger.info("Alert acknowledged by %s: %s", acknowledged_by, alert_id)
 
         return True
 
@@ -599,7 +599,7 @@ class EmergencyControls:
         # Remove from active alerts (already in history from when it was triggered)
         del self.active_alerts[alert_id]
 
-        self.logger.info(f"Alert resolved: {alert_id}")
+        self.logger.info("Alert resolved: %s", alert_id)
 
         return True
 
@@ -695,7 +695,7 @@ class EmergencyControls:
                 # third-party failures from disrupting alert processing
                 self.logger.exception("Alert callback #%d error", i)
 
-        self.logger.warning(f"Alert triggered: {alert.alert_type.value} - {message}")
+        self.logger.warning("Alert triggered: %s - %s", alert.alert_type.value, message)
 
         return alert.alert_id
 
@@ -805,7 +805,7 @@ class EmergencyControls:
         # Remove inactive strategy snapshots
         for strategy_id in inactive_strategies:
             del self.performance_snapshots[strategy_id]
-            self.logger.debug(f"Cleaned up snapshots for inactive strategy: {strategy_id}")
+            self.logger.debug("Cleaned up snapshots for inactive strategy: %s", strategy_id)
 
         # Clear active strategies set for next tracking period
         self.active_strategies.clear()
@@ -824,7 +824,7 @@ class EmergencyControls:
             request = self.pending_approvals[request_id]
             self.approval_history.append(request)
             del self.pending_approvals[request_id]
-            self.logger.info(f"Approval request expired: {request_id}")
+            self.logger.info("Approval request expired: %s", request_id)
 
     def update_monitoring(
         self,
