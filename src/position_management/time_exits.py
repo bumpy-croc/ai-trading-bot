@@ -95,7 +95,12 @@ class MarketSessionDef:
                     break
                 candidate_close = candidate_close + timedelta(days=1)
             else:
-                raise ValueError("No valid session day found within MAX_DAYS_TO_SCAN")
+                # Return None instead of raising - caller expects Optional[datetime]
+                logger.warning(
+                    f"No valid session day found within {MAX_DAYS_TO_SCAN} days for session '{self.name}' "
+                    f"with days_of_week={self.days_of_week}, starting from {dt_utc.isoformat()}"
+                )
+                return None
 
         # Align the time to the session close on the chosen day (in local tz)
         candidate_close = candidate_close.replace(

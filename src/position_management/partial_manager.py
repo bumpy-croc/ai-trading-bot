@@ -89,8 +89,8 @@ class PartialExitPolicy:
         # Determine next target index to consider based on partial_exits_taken
         next_idx = position.partial_exits_taken
         # Maximum iterations to prevent infinite loops from malformed configurations
-        # Typically 2-3 exits, limit to 100 for defense-in-depth
-        max_iterations = min(len(self.exit_targets), 100)
+        # Typically 2-3 exits, limit to 10 for defense-in-depth (allows up to 10 exit targets)
+        max_iterations = min(len(self.exit_targets), 10)
         iteration = 0
 
         while next_idx < len(self.exit_targets) and iteration < max_iterations:
@@ -136,6 +136,20 @@ class PartialExitPolicy:
         self, position: PositionState, executed_size_fraction_of_original: float, price: float
     ):
         """Apply a partial exit to the position state, validating inputs."""
+        # Validate fraction parameter to prevent NaN/Infinity/negative corruption
+        if not isinstance(executed_size_fraction_of_original, (int, float)):
+            logger.warning(f"Fraction must be numeric, got {type(executed_size_fraction_of_original)}")
+            return
+        if not math.isfinite(executed_size_fraction_of_original):
+            logger.warning(f"Fraction must be finite, got {executed_size_fraction_of_original}")
+            return
+        if executed_size_fraction_of_original < 0:
+            logger.warning(f"Fraction cannot be negative, got {executed_size_fraction_of_original}")
+            return
+        if executed_size_fraction_of_original > 1.0:
+            logger.warning(f"Fraction cannot exceed 1.0, got {executed_size_fraction_of_original}")
+            return
+
         if position.original_size <= 0:
             logger.warning(
                 f"Cannot apply partial exit to position with original_size={position.original_size}"
@@ -144,8 +158,8 @@ class PartialExitPolicy:
         if not math.isfinite(price) or price <= 0:
             logger.warning(f"Cannot apply partial exit with invalid price={price}")
             return
-        delta = executed_size_fraction_of_original * float(position.original_size)
-        position.current_size = max(0.0, float(position.current_size) - delta)
+        delta = executed_size_fraction_of_original * position.original_size
+        position.current_size = max(0.0, position.current_size - delta)
         position.partial_exits_taken = min(position.partial_exits_taken + 1, len(self.exit_targets))
         position.last_partial_exit_price = price
 
@@ -153,6 +167,20 @@ class PartialExitPolicy:
         self, position: PositionState, add_size_fraction_of_original: float, price: float
     ):
         """Apply a scale-in to the position state, validating inputs."""
+        # Validate fraction parameter to prevent NaN/Infinity/negative corruption
+        if not isinstance(add_size_fraction_of_original, (int, float)):
+            logger.warning(f"Fraction must be numeric, got {type(add_size_fraction_of_original)}")
+            return
+        if not math.isfinite(add_size_fraction_of_original):
+            logger.warning(f"Fraction must be finite, got {add_size_fraction_of_original}")
+            return
+        if add_size_fraction_of_original < 0:
+            logger.warning(f"Fraction cannot be negative, got {add_size_fraction_of_original}")
+            return
+        if add_size_fraction_of_original > 1.0:
+            logger.warning(f"Fraction cannot exceed 1.0, got {add_size_fraction_of_original}")
+            return
+
         if position.original_size <= 0:
             logger.warning(
                 f"Cannot apply scale-in to position with original_size={position.original_size}"
@@ -161,7 +189,7 @@ class PartialExitPolicy:
         if not math.isfinite(price) or price <= 0:
             logger.warning(f"Cannot apply scale-in with invalid price={price}")
             return
-        delta = add_size_fraction_of_original * float(position.original_size)
-        position.current_size = min(1.0, float(position.current_size) + delta)
+        delta = add_size_fraction_of_original * position.original_size
+        position.current_size = min(1.0, position.current_size + delta)
         position.scale_ins_taken = min(position.scale_ins_taken + 1, self.max_scale_ins)
         position.last_scale_in_price = price

@@ -59,6 +59,9 @@ class MFEMAETracker:
             return 0.0, 0.0
         if not math.isfinite(current_price) or current_price <= 0:
             return 0.0, 0.0
+        # Validate position_fraction to prevent NaN/negative corruption
+        if not math.isfinite(position_fraction) or position_fraction < 0:
+            return 0.0, 0.0
 
         side_enum = side if isinstance(side, Side) else Side(side)
 

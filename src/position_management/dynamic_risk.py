@@ -242,19 +242,31 @@ class DynamicRiskManager:
         Returns:
                 New RiskParameters with adjustments applied
         """
+        # Validate adjustment factors at boundary to prevent NaN/Infinity corruption
+        position_factor = adjustments.position_size_factor
+        if not math.isfinite(position_factor) or position_factor < 0:
+            logger.warning(f"Invalid position_size_factor: {position_factor}, using 1.0")
+            position_factor = 1.0
+
+        stop_factor = adjustments.stop_loss_tightening
+        if not math.isfinite(stop_factor) or stop_factor < 0:
+            logger.warning(f"Invalid stop_loss_tightening: {stop_factor}, using 1.0")
+            stop_factor = 1.0
+
+        daily_factor = adjustments.daily_risk_factor
+        if not math.isfinite(daily_factor) or daily_factor < 0:
+            logger.warning(f"Invalid daily_risk_factor: {daily_factor}, using 1.0")
+            daily_factor = 1.0
+
         # Create a copy to avoid modifying the original
         adjusted_params = RiskParameters(
-            base_risk_per_trade=risk_parameters.base_risk_per_trade
-            * adjustments.position_size_factor,
-            max_risk_per_trade=risk_parameters.max_risk_per_trade
-            * adjustments.position_size_factor,
-            max_position_size=risk_parameters.max_position_size * adjustments.position_size_factor,
-            max_daily_risk=risk_parameters.max_daily_risk * adjustments.daily_risk_factor,
-            max_correlated_risk=risk_parameters.max_correlated_risk
-            * adjustments.position_size_factor,
+            base_risk_per_trade=risk_parameters.base_risk_per_trade * position_factor,
+            max_risk_per_trade=risk_parameters.max_risk_per_trade * position_factor,
+            max_position_size=risk_parameters.max_position_size * position_factor,
+            max_daily_risk=risk_parameters.max_daily_risk * daily_factor,
+            max_correlated_risk=risk_parameters.max_correlated_risk * position_factor,
             max_drawdown=risk_parameters.max_drawdown,  # Don't adjust max drawdown threshold
-            position_size_atr_multiplier=risk_parameters.position_size_atr_multiplier
-            * adjustments.stop_loss_tightening,
+            position_size_atr_multiplier=risk_parameters.position_size_atr_multiplier * stop_factor,
             default_take_profit_pct=risk_parameters.default_take_profit_pct,
             atr_period=risk_parameters.atr_period,
         )
@@ -313,15 +325,20 @@ class DynamicRiskManager:
                             except (ValueError, TypeError, AttributeError):
                                 # Skip invalid equity values that cannot be converted to float
                                 continue
-                        if len(closes) >= 2:
+                        if len(closes) >= 3:  # Need at least 3 points for reliable std
                             series = pd.Series(closes)
                             # Volatility calculations require positive prices for log returns
                             # Non-positive values from data gaps would corrupt the volatility metric
                             series_positive = series[series > 0]
-                            if len(series_positive) >= 2:
+                            if len(series_positive) >= 3:
                                 log_returns = np.log(series_positive).diff().dropna()
-                                vol = float(log_returns.std())
-                                metrics["estimated_volatility"] = vol
+                                # Require at least 2 returns for reliable std calculation (ddof=1)
+                                if len(log_returns) >= 2:
+                                    vol = float(log_returns.std())
+                                    if math.isfinite(vol):
+                                        metrics["estimated_volatility"] = vol
+                                    else:
+                                        logger.debug("Volatility std() returned non-finite value")
                 except Exception as vol_err:
                     logger.warning(f"Volatility estimation failed, using fallback: {vol_err}")
 

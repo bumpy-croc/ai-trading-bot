@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
@@ -8,6 +9,8 @@ from src.config.constants import (
     DEFAULT_TRAILING_ACTIVATION_THRESHOLD,
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -99,10 +102,17 @@ class TrailingStopPolicy:
         """
         # Validate price inputs to prevent NaN/Infinity propagation in stop calculations
         if not math.isfinite(entry_price) or entry_price <= 0:
+            logger.debug(f"Invalid entry_price in trailing stop: {entry_price}")
             return existing_stop, trailing_activated, breakeven_triggered
         if not math.isfinite(current_price) or current_price <= 0:
+            logger.debug(f"Invalid current_price in trailing stop: {current_price}")
             return existing_stop, trailing_activated, breakeven_triggered
         if atr is not None and not math.isfinite(atr):
+            logger.debug(f"Invalid ATR in trailing stop: {atr}")
+            return existing_stop, trailing_activated, breakeven_triggered
+        # Validate position_fraction to prevent NaN propagation through max()
+        if not math.isfinite(position_fraction):
+            logger.debug(f"Invalid position_fraction in trailing stop: {position_fraction}")
             return existing_stop, trailing_activated, breakeven_triggered
 
         # Compute position-level PnL fraction (decimal, e.g., 0.015 for +1.5%)

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import math
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_position_size(
@@ -16,8 +19,12 @@ def normalize_position_size(
     """
     # Validate inputs are finite to prevent NaN/Infinity propagation
     if not math.isfinite(balance) or not math.isfinite(strategy_returned_size):
+        logger.warning(
+            f"Invalid input to normalize_position_size: balance={balance}, size={strategy_returned_size}"
+        )
         return 0.0
     if balance <= 0:
+        logger.debug(f"Invalid balance in normalize_position_size: {balance}")
         return 0.0
     if strategy_returned_size <= 0:
         return 0.0
