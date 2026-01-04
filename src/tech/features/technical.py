@@ -106,6 +106,13 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         self.bollinger_period = bollinger_period
         self.bollinger_std_dev = bollinger_std_dev
         self.ma_periods = ma_periods or DEFAULT_MA_PERIODS.copy()
+
+        # Ensure ma_20 and ma_50 are always included (required for derived features)
+        for required_period in [20, 50]:
+            if required_period not in self.ma_periods:
+                self.ma_periods.append(required_period)
+        self.ma_periods.sort()
+
         self.macd_fast = macd_fast
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
@@ -235,12 +242,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         df["atr_pct"] = df["atr"] / (df["close"] + EPSILON)
 
         # Calculate trend measures (from MlAdaptive) - protected against zero MA values
-        # Ensure required MA columns exist (needed for trend calculations)
-        if "ma_50" not in df.columns:
-            df["ma_50"] = df["close"].rolling(window=50).mean()
-        if "ma_20" not in df.columns:
-            df["ma_20"] = df["close"].rolling(window=20).mean()
-
+        # ma_20 and ma_50 are guaranteed to exist (enforced in __init__)
         df["trend_strength"] = (df["close"] - df["ma_50"]) / (df["ma_50"] + EPSILON)
         df["trend_direction"] = np.where(df["ma_20"] > df["ma_50"], 1, -1)
 
