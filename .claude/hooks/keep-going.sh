@@ -18,6 +18,11 @@ def main():
     try:
         input_data = json.loads(sys.stdin.read())
 
+        # Debug: Log input structure (temporary)
+        debug_file = os.path.join(os.path.dirname(__file__), "debug_hook_input.json")
+        with open(debug_file, "w") as f:
+            json.dump(input_data, f, indent=2)
+
         # Try to find Claude's message in various possible field names
         assistant_message = (
             input_data.get("assistant_message", "") or
