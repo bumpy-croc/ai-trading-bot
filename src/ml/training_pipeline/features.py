@@ -90,8 +90,8 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
 
     assessment["coverage_ratio"] = overlap_period / total_period
 
-    current_time = pd.Timestamp.now()
-    current_time, sentiment_end_normalized = normalize_timezone(current_time, sentiment_end)
+    current_time = pd.Timestamp.now(tz="UTC")
+    _, sentiment_end_normalized = normalize_timezone(current_time, sentiment_end)
     assessment["data_freshness_days"] = (current_time - sentiment_end_normalized).days
 
     sentiment_dates = pd.date_range(sentiment_start, sentiment_end, freq="D")

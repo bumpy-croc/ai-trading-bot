@@ -127,9 +127,9 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
     # Configure GPU early in the pipeline
     device_name = configure_gpu()
     if device_name:
-        logger.info(f"🚀 Training will use device: {device_name}")
+        logger.info("[GPU] Training will use device: %s", device_name)
     else:
-        logger.info("🚀 Training will use CPU")
+        logger.info("[CPU] Training will use CPU")
     try:
         price_df = download_price_data(ctx)
         sentiment_df = load_sentiment_data(ctx)
@@ -220,7 +220,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         metadata = {
             "symbol": ctx.config.symbol,
             "model_type": "sentiment" if has_sentiment else "price",
-            "training_date": pd.Timestamp.now().isoformat(),
+            "training_date": pd.Timestamp.now(tz="UTC").isoformat(),
             "feature_names": feature_names,
             "sequence_length": ctx.config.sequence_length,
             "has_sentiment": has_sentiment,

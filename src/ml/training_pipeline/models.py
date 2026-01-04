@@ -70,8 +70,22 @@ def create_model(input_shape, has_sentiment: bool = True) -> Any:
 
     Returns:
         Compiled Keras model
+
+    Raises:
+        ValueError: If input_shape is invalid for model architecture
     """
     _ensure_tensorflow_available()
+
+    # Validate input shape for model architecture requirements
+    # Two MaxPooling1D(pool_size=2) layers require sequence_length >= 4
+    sequence_length, num_features = input_shape
+    if sequence_length < 4:
+        raise ValueError(
+            f"sequence_length must be >= 4 for model architecture (two pooling layers), "
+            f"got {sequence_length}"
+        )
+    if num_features <= 0:
+        raise ValueError(f"num_features must be positive, got {num_features}")
 
     inputs = Input(shape=input_shape)
 

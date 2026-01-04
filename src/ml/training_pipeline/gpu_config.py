@@ -44,7 +44,7 @@ def configure_gpu() -> str | None:
     if platform.system() == "Darwin" and platform.machine() == "arm64":
         if not _TENSORFLOW_METAL_AVAILABLE:
             logger.warning(
-                "⚠️  tensorflow-metal plugin not installed. Install it for GPU acceleration:"
+                "[GPU] tensorflow-metal plugin not installed. Install it for GPU acceleration:"
             )
             logger.warning("   pip install tensorflow-metal")
             logger.info("   Training will continue with CPU (slower)")
@@ -53,15 +53,15 @@ def configure_gpu() -> str | None:
             # MPS devices appear as "GPU" in TensorFlow when tensorflow-metal is installed
             mps_devices = tf.config.list_physical_devices("GPU")
             if mps_devices:
-                logger.info("✅ Apple Silicon GPU detected (Metal Performance Shaders)")
-                logger.info(f"   Using device: {mps_devices[0].name}")
+                logger.info("[GPU] Apple Silicon GPU detected (Metal Performance Shaders)")
+                logger.info("   Using device: %s", mps_devices[0].name)
                 # TensorFlow automatically uses MPS when available, no explicit config needed
                 return mps_devices[0].name
             else:
-                logger.info("ℹ️  No Apple Silicon GPU detected, using CPU")
+                logger.info("[GPU] No Apple Silicon GPU detected, using CPU")
                 return None
         except (RuntimeError, ValueError, ImportError, AttributeError) as exc:
-            logger.warning(f"Failed to configure Apple Silicon GPU: {exc}")
+            logger.warning("Failed to configure Apple Silicon GPU: %s", exc)
             logger.info("Falling back to CPU")
             return None
 
@@ -69,20 +69,20 @@ def configure_gpu() -> str | None:
     try:
         gpus = tf.config.list_physical_devices("GPU")
         if gpus:
-            logger.info(f"✅ GPU detected: {len(gpus)} device(s)")
+            logger.info("[GPU] GPU detected: %d device(s)", len(gpus))
             for gpu in gpus:
-                logger.info(f"   Device: {gpu.name}")
+                logger.info("   Device: %s", gpu.name)
                 # Enable memory growth to avoid allocating all GPU memory at once
                 try:
                     tf.config.experimental.set_memory_growth(gpu, True)
                 except (RuntimeError, ValueError, AttributeError) as exc:
-                    logger.warning(f"Failed to set memory growth for {gpu.name}: {exc}")
+                    logger.warning("Failed to set memory growth for %s: %s", gpu.name, exc)
             return gpus[0].name
         else:
-            logger.info("ℹ️  No GPU detected, using CPU")
+            logger.info("[GPU] No GPU detected, using CPU")
             return None
     except (RuntimeError, ValueError, ImportError, AttributeError) as exc:
-        logger.warning(f"Failed to detect GPU devices: {exc}")
+        logger.warning("Failed to detect GPU devices: %s", exc)
         logger.info("Falling back to CPU")
         return None
 
