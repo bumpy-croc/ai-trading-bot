@@ -52,7 +52,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         macd_slow: int = DEFAULT_MACD_SLOW_PERIOD,
         macd_signal: int = DEFAULT_MACD_SIGNAL_PERIOD,
         nan_threshold: float = 0.5,
-    ):
+    ) -> None:
         """
         Initialize the technical feature extractor.
 
@@ -181,7 +181,19 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         return df
 
     def _extract_normalized_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Extract normalized price features using rolling min-max normalization."""
+        """
+        Extract normalized price features using rolling min-max normalization.
+
+        Applies min-max normalization over a rolling window to create bounded [0, 1] features.
+        When the rolling window has constant values (min == max) or contains NaN, the normalized
+        value defaults to 0.5 (neutral midpoint) to avoid division by zero and invalid values.
+
+        Args:
+            df: DataFrame with OHLCV data
+
+        Returns:
+            DataFrame with additional {feature}_normalized columns
+        """
         price_features = ["close", "volume", "high", "low", "open"]
 
         for feature in price_features:
@@ -243,15 +255,24 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         return [f"{feature}_normalized" for feature in ["close", "volume", "high", "low", "open"]]
 
     def get_technical_indicators(self) -> list[str]:
-        """Get list of technical indicator names."""
+        """
+        Get list of technical indicator names actually produced by this extractor.
+
+        Returns only features that are calculated by _extract_technical_indicators.
+        Note: Does not include intermediate columns like bb_middle, bb_std, macd_fast, macd_slow.
+        """
         indicators = ["rsi", "atr", "atr_pct"]
         if self.enable_bollinger:
-            indicators.extend(["bb_upper", "bb_lower", "bb_width", "bb_position"])
+            # Only bb_upper and bb_lower are used as final features
+            # bb_middle and bb_std are intermediate calculations
+            indicators.extend(["bb_upper", "bb_lower"])
         if self.enable_macd:
-            indicators.extend(["macd", "macd_signal", "macd_histogram"])
+            # Returns macd_hist not macd_histogram to match calculate_macd output
+            indicators.extend(["macd", "macd_signal", "macd_hist"])
         if self.enable_moving_averages:
             for period in self.ma_periods:
-                indicators.extend([f"ma_{period}", f"ma_{period}_pct"])
+                # Only ma_{period} is calculated, not ma_{period}_pct
+                indicators.append(f"ma_{period}")
         return indicators
 
     def get_derived_features(self) -> list[str]:
@@ -323,7 +344,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
             if feature.endswith("_normalized"):
                 weights[feature] = 1.0
             # Technical indicators get high weights
-            elif feature in ["rsi", "atr", "macd", "bb_position"]:
+            elif feature in ["rsi", "atr", "macd", "macd_hist"]:
                 weights[feature] = 0.8
             # Derived features get medium weights
             elif feature in ["returns", "volatility_20", "trend_strength"]:
