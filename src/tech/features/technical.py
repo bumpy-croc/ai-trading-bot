@@ -167,8 +167,12 @@ class TechnicalFeatureExtractor(FeatureExtractor):
 
             return df
 
-        except Exception as e:
+        except ValueError as e:
+            # Input validation errors from indicator functions
             raise RuntimeError(f"Technical feature extraction failed: {str(e)}") from e
+        except (KeyError, TypeError) as e:
+            # Data structure errors (missing columns, wrong types)
+            raise RuntimeError(f"Technical feature extraction failed due to data error: {str(e)}") from e
 
     def _extract_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Extract core technical indicators."""
@@ -255,7 +259,12 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         # Calculate trend measures (from MlAdaptive) - protected against zero MA values
         # ma_20 and ma_50 are guaranteed to exist (enforced in __init__)
         df["trend_strength"] = (df["close"] - df["ma_50"]) / (df["ma_50"] + EPSILON)
-        df["trend_direction"] = np.where(df["ma_20"] > df["ma_50"], 1, -1)
+        # Use neutral value (0) when MAs are equal (crossover moment)
+        df["trend_direction"] = np.select(
+            [df["ma_20"] > df["ma_50"], df["ma_20"] < df["ma_50"]],
+            [1, -1],
+            default=0
+        )
 
         return df
 
@@ -340,7 +349,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
                 "atr_period": self.atr_period,
                 "bollinger_period": self.bollinger_period,
                 "bollinger_std_dev": self.bollinger_std_dev,
-                "ma_periods": self.ma_periods,
+                "ma_periods": self.ma_periods.copy(),
                 "macd_fast": self.macd_fast,
                 "macd_slow": self.macd_slow,
                 "macd_signal": self.macd_signal,
