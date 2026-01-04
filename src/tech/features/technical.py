@@ -95,6 +95,10 @@ class TechnicalFeatureExtractor(FeatureExtractor):
             raise ValueError(f"macd_slow must be positive, got {macd_slow}")
         if macd_signal <= 0:
             raise ValueError(f"macd_signal must be positive, got {macd_signal}")
+        if macd_fast >= macd_slow:
+            raise ValueError(
+                f"macd_fast ({macd_fast}) must be less than macd_slow ({macd_slow})"
+            )
         if not 0 <= nan_threshold <= 1:
             raise ValueError(f"nan_threshold must be in [0, 1], got {nan_threshold}")
 
@@ -106,11 +110,14 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         self.bollinger_period = bollinger_period
         self.bollinger_std_dev = bollinger_std_dev
         # Use explicit None check to distinguish empty list from None
-        # Note: ma_20 and ma_50 are always required for derived features (trend_strength, trend_direction)
-        self.ma_periods = ma_periods if ma_periods is not None else DEFAULT_MA_PERIODS.copy()
+        # Note: ma_20, ma_50, and ma_200 are required (schema + derived features)
+        # Always copy to avoid mutating caller's list
+        self.ma_periods = list(ma_periods) if ma_periods is not None else DEFAULT_MA_PERIODS.copy()
 
-        # Ensure ma_20 and ma_50 are always included (required for derived features)
-        for required_period in [20, 50]:
+        # Ensure required periods are always included
+        # ma_20, ma_50: required for derived features (trend_strength, trend_direction)
+        # ma_200: required by TECHNICAL_FEATURES_SCHEMA
+        for required_period in [20, 50, 200]:
             if required_period not in self.ma_periods:
                 self.ma_periods.append(required_period)
         self.ma_periods.sort()
@@ -219,11 +226,12 @@ class TechnicalFeatureExtractor(FeatureExtractor):
                 valid_mask = (
                     (rolling_max != rolling_min) & rolling_max.notna() & rolling_min.notna()
                 )
-                # Add epsilon to denominator to prevent division warnings when min == max
+                # Add epsilon to prevent floating-point precision issues when max ≈ min
+                # Note: When max == min exactly, valid_mask is False and we use 0.5
                 df[f"{feature}_normalized"] = np.where(
                     valid_mask,
                     (df[feature] - rolling_min) / (rolling_max - rolling_min + EPSILON),
-                    0.5,  # Handle cases where min == max or NaN - use neutral value instead of minimum
+                    0.5,  # Handle cases where min == max or NaN - use neutral value
                 )
         return df
 

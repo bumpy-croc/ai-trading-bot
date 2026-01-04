@@ -239,6 +239,11 @@ def detect_market_regime(
     # Determine regime
     # Note: NaN values in early rows (from rolling windows) cause comparisons to return False,
     # defaulting to "ranging". This is intentional - we classify insufficient data as neutral/ranging.
+    #
+    # Precedence: First matching condition wins (np.select behavior)
+    # 1. Volatile: High volatility AND low trend strength
+    # 2. Trending: High trend strength (regardless of volatility)
+    # 3. Ranging: Default for everything else (low volatility, low trend, or NaN)
     conditions = [
         (vol_ratio > VOLATILITY_RATIO_THRESHOLD)
         & (abs(trend_strength) < regime_threshold),  # Volatile
