@@ -22,12 +22,14 @@ from src.config.constants import (
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_EXECUTION_FILL_POLICY,
     DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_FEE_RATE,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
+    DEFAULT_SLIPPAGE_RATE,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
@@ -172,8 +174,8 @@ class LiveTradingEngine:
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = False,
         # Execution realism parameters (parity with backtest engine)
-        fee_rate: float = 0.001,  # 0.1% per trade (entry + exit)
-        slippage_rate: float = 0.0005,  # 0.05% slippage per trade
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
         max_filled_price_deviation: float = 0.5,  # Filled-price deviation threshold
         # Handler injection (all optional - defaults created if not provided)
