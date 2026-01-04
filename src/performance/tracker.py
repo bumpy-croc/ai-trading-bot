@@ -311,7 +311,7 @@ class PerformanceTracker:
             else:
                 # Zero PnL trade (breakeven) - count but don't update P&L or streaks
                 self._zero_pnl_trades += 1
-                logger.warning(f"Recorded zero-PnL trade for {getattr(trade, 'symbol', 'unknown')}")
+                logger.debug(f"Recorded zero-PnL trade for {getattr(trade, 'symbol', 'unknown')}")
 
             # Update totals
             self._total_pnl += pnl
