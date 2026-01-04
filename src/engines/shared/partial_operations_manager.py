@@ -169,6 +169,13 @@ class PartialOperationsManager:
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
+            # Validate entry_price to prevent division errors
+            if entry_price <= 0 or not math.isfinite(entry_price):
+                logger.error(
+                    "Invalid entry_price %.8f for partial exit PnL calculation",
+                    entry_price,
+                )
+                return PartialExitDecision()
             # Validate current_price to prevent division errors
             if current_price <= 0 or not math.isfinite(current_price):
                 logger.error(
@@ -241,6 +248,13 @@ class PartialOperationsManager:
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
+            # Validate entry_price to prevent division errors
+            if entry_price <= 0 or not math.isfinite(entry_price):
+                logger.error(
+                    "Invalid entry_price %.8f for scale-in PnL calculation",
+                    entry_price,
+                )
+                return ScaleInDecision()
             # Validate current_price to prevent division errors
             if current_price <= 0 or not math.isfinite(current_price):
                 logger.error(

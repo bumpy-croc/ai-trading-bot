@@ -16,8 +16,15 @@ import pandas as pd
 Number = int | float
 
 # Module-level constants for financial calculations
-DAYS_PER_YEAR = 365.0  # Standard year for financial annualization
-MAX_FINITE_RATIO = 999.0  # Cap for ratios to avoid infinity in database/JSON storage
+# Days per year for annualization: using 365 calendar days (not 252 trading days)
+# to align with pandas daily resampling and 24/7 crypto markets. Trading-day
+# annualization would understate risk for continuous markets.
+DAYS_PER_YEAR = 365.0
+
+# Cap for ratios to avoid infinity in database/JSON storage. 999 is used as
+# a convention for "effectively infinite" that fits in DECIMAL columns
+# and can be serialized without special handling.
+MAX_FINITE_RATIO = 999.0
 
 
 class Side(str, Enum):
@@ -155,7 +162,8 @@ def cagr(initial_balance: Number, final_balance: Number, days: int) -> float:
     final_balance : Number
         Final balance (must be non-negative and finite).
     days : int
-        Number of days (must be positive).
+        Number of days. Returns 0.0 for days < 1 to avoid unrealistic
+        annualized returns from very short time periods.
 
     Returns
     -------
