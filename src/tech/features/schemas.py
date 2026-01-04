@@ -73,6 +73,39 @@ class FeatureSchema:
         """Get features of a specific type."""
         return [f for f in self.features if f.feature_type == feature_type]
 
+    def validate_dependencies(self, data) -> list[str]:
+        """
+        Validate that all base feature dependencies exist in the input data.
+
+        Only validates dependencies on base OHLCV columns, not on derived features
+        (since those will be calculated during extraction).
+
+        Args:
+            data: DataFrame to validate against
+
+        Returns:
+            List of validation error messages (empty if all dependencies are met)
+        """
+        import pandas as pd
+
+        missing_deps = []
+        if not isinstance(data, pd.DataFrame):
+            return ["Data must be a pandas DataFrame"]
+
+        # Get set of all feature names that will be calculated
+        calculated_features = {f.name for f in self.features}
+
+        for feature in self.features:
+            if feature.dependencies:
+                for dep in feature.dependencies:
+                    # Only validate base data dependencies, not feature-to-feature deps
+                    if dep not in calculated_features and dep not in data.columns:
+                        missing_deps.append(
+                            f"Feature '{feature.name}' requires base column '{dep}'"
+                        )
+
+        return missing_deps
+
 
 # Define standard technical features schema
 TECHNICAL_FEATURES_SCHEMA = FeatureSchema(

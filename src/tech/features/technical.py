@@ -127,11 +127,6 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         self.macd_signal = macd_signal
         self.nan_threshold = nan_threshold
 
-        # Enable flags for different feature groups
-        self.enable_bollinger = True
-        self.enable_macd = True
-        self.enable_moving_averages = True
-
         # Initialize feature names from schema
         self._feature_names = TECHNICAL_FEATURES_SCHEMA.get_feature_names()
 
@@ -282,19 +277,17 @@ class TechnicalFeatureExtractor(FeatureExtractor):
 
         Returns features calculated by _extract_technical_indicators and _extract_derived_features.
         Note: Does not include intermediate columns like bb_std, macd_fast, macd_slow.
+        All indicators are always calculated - this method returns the complete list.
         """
         indicators = ["rsi", "atr", "atr_pct"]
-        if self.enable_bollinger:
-            # bb_middle is used by strategies for distance calculations
-            # bb_std is an intermediate calculation not used directly
-            indicators.extend(["bb_upper", "bb_middle", "bb_lower"])
-        if self.enable_macd:
-            # Returns macd_hist not macd_histogram to match calculate_macd output
-            indicators.extend(["macd", "macd_signal", "macd_hist"])
-        if self.enable_moving_averages:
-            for period in self.ma_periods:
-                # Only ma_{period} is calculated, not ma_{period}_pct
-                indicators.append(f"ma_{period}")
+        # bb_middle is used by strategies for distance calculations
+        # bb_std is an intermediate calculation not used directly
+        indicators.extend(["bb_upper", "bb_middle", "bb_lower"])
+        # Returns macd_hist not macd_histogram to match calculate_macd output
+        indicators.extend(["macd", "macd_signal", "macd_hist"])
+        for period in self.ma_periods:
+            # Only ma_{period} is calculated, not ma_{period}_pct
+            indicators.append(f"ma_{period}")
         return indicators
 
     def get_derived_features(self) -> list[str]:
