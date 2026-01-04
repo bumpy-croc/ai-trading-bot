@@ -48,6 +48,8 @@ class EventLogger:
         self.db_manager = db_manager
         self.log_to_database = log_to_database
         self.session_id = session_id
+        # Track if we've already warned about logging failures to reduce log spam
+        self._logging_error_warned = False
 
     @property
     def enabled(self) -> bool:
@@ -116,7 +118,13 @@ class EventLogger:
                 session_id=self.session_id,
             )
         except Exception as e:
-            logger.debug("Failed to log entry decision: %s", e)
+            if not self._logging_error_warned:
+                logger.warning(
+                    "Database logging failed: %s (future failures logged at DEBUG)", e
+                )
+                self._logging_error_warned = True
+            else:
+                logger.debug("Failed to log entry decision: %s", e)
 
     def log_exit_decision(
         self,
@@ -172,7 +180,13 @@ class EventLogger:
                 session_id=self.session_id,
             )
         except Exception as e:
-            logger.debug("Failed to log exit decision: %s", e)
+            if not self._logging_error_warned:
+                logger.warning(
+                    "Database logging failed: %s (future failures logged at DEBUG)", e
+                )
+                self._logging_error_warned = True
+            else:
+                logger.debug("Failed to log exit decision: %s", e)
 
     def log_completed_trade(
         self,
@@ -216,7 +230,13 @@ class EventLogger:
                 mae_time=trade.mae_time,
             )
         except Exception as e:
-            logger.debug("Failed to log completed trade: %s", e)
+            if not self._logging_error_warned:
+                logger.warning(
+                    "Database logging failed: %s (future failures logged at DEBUG)", e
+                )
+                self._logging_error_warned = True
+            else:
+                logger.debug("Failed to log completed trade: %s", e)
 
     def log_risk_adjustment(
         self,
@@ -252,7 +272,13 @@ class EventLogger:
                 session_id=self.session_id,
             )
         except Exception as e:
-            logger.debug("Failed to log risk adjustment: %s", e)
+            if not self._logging_error_warned:
+                logger.warning(
+                    "Database logging failed: %s (future failures logged at DEBUG)", e
+                )
+                self._logging_error_warned = True
+            else:
+                logger.debug("Failed to log risk adjustment: %s", e)
 
     def create_trading_session(
         self,
