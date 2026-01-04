@@ -735,7 +735,11 @@ class RiskManager:
         return drawdown > self.params.max_drawdown
 
     def update_position(self, symbol: str, side: str, size: float, entry_price: float):
-        """Update position tracking.
+        """Update position tracking, creating new or updating existing position.
+
+        If the symbol already exists in positions, this method replaces the old position
+        with the new one and adjusts daily_risk_used accordingly (subtracts old size,
+        adds new size).
 
         Parameters
         ----------
@@ -751,9 +755,10 @@ class RiskManager:
 
         Notes
         -----
-        - Daily risk accounting increments `daily_risk_used` by `size` (full position size).
+        - Daily risk accounting: subtracts old size (if updating), adds new size.
         - This tracks EXPOSURE (capital allocation), not actual capital at risk.
         - Example: 10% position → daily_risk_used += 0.1, regardless of stop loss distance.
+        - Updating 10% position to 5% → daily_risk_used -= 0.1, then += 0.05 (net: -0.05).
         - The sum of all position fractions is capped by `params.max_daily_risk`.
         - This is a conservative approach; see class docstring for details.
         - Thread-safe: protected by internal lock.
@@ -772,9 +777,17 @@ class RiskManager:
             raise ValueError(f"side must be 'long' or 'short', got '{side}'")
 
         with self._state_lock:
+            # If updating existing position, first remove old size from daily risk
+            old_size = 0.0
+            if symbol in self.positions:
+                old_size = float(self.positions[symbol].get("size", 0.0))
+                self.daily_risk_used = max(0.0, self.daily_risk_used - old_size)
+
+            # Update position with new values
             self.positions[symbol] = {"side": side, "size": size, "entry_price": entry_price}
-            # Update daily risk used (approximate: count fraction of balance put at risk)
-            self.daily_risk_used += size  # size here is treated as fraction of balance allocated
+
+            # Add new size to daily risk used
+            self.daily_risk_used += size
 
     def close_position(self, symbol: str):
         """Close position tracking and free daily risk (thread-safe).
