@@ -350,7 +350,7 @@ def save_artifacts(
             except OSError:
                 # Ignores cleanup errors - primary error takes precedence
                 pass
-        logger.error(f"Failed to update 'latest' symlink: {e}")
+        logger.error("Failed to update 'latest' symlink: %s", e)
         raise RuntimeError(f"Failed to update 'latest' symlink at {latest_link}") from e
 
     return ArtifactPaths(
