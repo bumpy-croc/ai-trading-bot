@@ -50,7 +50,7 @@ class MarketSessionDef:
             except Exception as e:
                 raise ValueError(
                     f"Invalid timezone '{self.timezone}' for session '{self.name}': {e}"
-                )
+                ) from e
 
     def is_open_at(self, dt_utc: datetime) -> bool:
         if self.is_24h:
