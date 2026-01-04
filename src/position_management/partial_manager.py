@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,6 +23,22 @@ class PositionState:
     scale_ins_taken: int = 0
     last_partial_exit_price: float | None = None
     last_scale_in_price: float | None = None
+
+    def __post_init__(self):
+        """Validate position state to prevent financial calculation errors."""
+        if self.original_size <= 0:
+            raise ValueError(f"original_size must be positive, got {self.original_size}")
+        if self.current_size < 0:
+            raise ValueError(f"current_size cannot be negative, got {self.current_size}")
+        if self.entry_price <= 0 or not math.isfinite(self.entry_price):
+            raise ValueError(f"entry_price must be finite and positive, got {self.entry_price}")
+        if self.side not in ("long", "short"):
+            raise ValueError(f"side must be 'long' or 'short', got {self.side}")
+        # Validate counter fields to prevent index errors in check methods
+        if self.partial_exits_taken < 0:
+            raise ValueError(f"partial_exits_taken cannot be negative, got {self.partial_exits_taken}")
+        if self.scale_ins_taken < 0:
+            raise ValueError(f"scale_ins_taken cannot be negative, got {self.scale_ins_taken}")
 
 
 @dataclass
@@ -52,7 +72,10 @@ class PartialExitPolicy:
             raise ValueError("max_scale_ins must be >= 0")
 
     def _pnl_pct(self, position: PositionState, current_price: float) -> float:
-        if position.entry_price <= 0:
+        """Calculate PnL percentage for position, validating price inputs."""
+        if not math.isfinite(current_price) or current_price <= 0:
+            return 0.0
+        if position.entry_price <= 0 or not math.isfinite(position.entry_price):
             return 0.0
         if position.side == "long":
             return (current_price - position.entry_price) / position.entry_price
@@ -70,7 +93,12 @@ class PartialExitPolicy:
 
         # Determine next target index to consider based on partial_exits_taken
         next_idx = position.partial_exits_taken
-        while next_idx < len(self.exit_targets):
+        # Maximum iterations to prevent infinite loops from malformed configurations
+        # Typically 2-3 exits, limit to 10 for defense-in-depth (allows up to 10 exit targets)
+        max_iterations = min(len(self.exit_targets), 10)
+        iteration = 0
+
+        while next_idx < len(self.exit_targets) and iteration < max_iterations:
             target = self.exit_targets[next_idx]
             if pnl >= target:  # works for both long and short via pnl sign logic
                 actions.append(
@@ -83,6 +111,7 @@ class PartialExitPolicy:
                 next_idx += 1
             else:
                 break
+            iteration += 1
 
         return actions
 
@@ -111,15 +140,61 @@ class PartialExitPolicy:
     def apply_partial_exit(
         self, position: PositionState, executed_size_fraction_of_original: float, price: float
     ):
-        delta = executed_size_fraction_of_original * float(position.original_size)
-        position.current_size = max(0.0, float(position.current_size) - delta)
+        """Apply a partial exit to the position state, validating inputs."""
+        # Validate fraction parameter to prevent NaN/Infinity/negative corruption
+        if not isinstance(executed_size_fraction_of_original, (int, float)):
+            logger.warning(f"Fraction must be numeric, got {type(executed_size_fraction_of_original)}")
+            return
+        if not math.isfinite(executed_size_fraction_of_original):
+            logger.warning(f"Fraction must be finite, got {executed_size_fraction_of_original}")
+            return
+        if executed_size_fraction_of_original < 0:
+            logger.warning(f"Fraction cannot be negative, got {executed_size_fraction_of_original}")
+            return
+        if executed_size_fraction_of_original > 1.0:
+            logger.warning(f"Fraction cannot exceed 1.0, got {executed_size_fraction_of_original}")
+            return
+
+        if position.original_size <= 0:
+            logger.warning(
+                f"Cannot apply partial exit to position with original_size={position.original_size}"
+            )
+            return
+        if not math.isfinite(price) or price <= 0:
+            logger.warning(f"Cannot apply partial exit with invalid price={price}")
+            return
+        delta = executed_size_fraction_of_original * position.original_size
+        position.current_size = max(0.0, position.current_size - delta)
         position.partial_exits_taken = min(position.partial_exits_taken + 1, len(self.exit_targets))
         position.last_partial_exit_price = price
 
     def apply_scale_in(
         self, position: PositionState, add_size_fraction_of_original: float, price: float
     ):
-        delta = add_size_fraction_of_original * float(position.original_size)
-        position.current_size = min(1.0, float(position.current_size) + delta)
+        """Apply a scale-in to the position state, validating inputs."""
+        # Validate fraction parameter to prevent NaN/Infinity/negative corruption
+        if not isinstance(add_size_fraction_of_original, (int, float)):
+            logger.warning(f"Fraction must be numeric, got {type(add_size_fraction_of_original)}")
+            return
+        if not math.isfinite(add_size_fraction_of_original):
+            logger.warning(f"Fraction must be finite, got {add_size_fraction_of_original}")
+            return
+        if add_size_fraction_of_original < 0:
+            logger.warning(f"Fraction cannot be negative, got {add_size_fraction_of_original}")
+            return
+        if add_size_fraction_of_original > 1.0:
+            logger.warning(f"Fraction cannot exceed 1.0, got {add_size_fraction_of_original}")
+            return
+
+        if position.original_size <= 0:
+            logger.warning(
+                f"Cannot apply scale-in to position with original_size={position.original_size}"
+            )
+            return
+        if not math.isfinite(price) or price <= 0:
+            logger.warning(f"Cannot apply scale-in with invalid price={price}")
+            return
+        delta = add_size_fraction_of_original * position.original_size
+        position.current_size = min(1.0, position.current_size + delta)
         position.scale_ins_taken = min(position.scale_ins_taken + 1, self.max_scale_ins)
         position.last_scale_in_price = price
