@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.config.constants import (
+    DEFAULT_EPSILON,
     DEFAULT_FEE_RATE,
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # Epsilon for floating-point comparisons in financial calculations
 # Use this to handle accumulated rounding errors in partial operations
-EPSILON = 1e-9
+EPSILON = DEFAULT_EPSILON
 
 
 @dataclass
