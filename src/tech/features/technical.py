@@ -258,7 +258,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         """
         Get list of technical indicator names actually produced by this extractor.
 
-        Returns only features that are calculated by _extract_technical_indicators.
+        Returns features calculated by _extract_technical_indicators and _extract_derived_features.
         Note: Does not include intermediate columns like bb_middle, bb_std, macd_fast, macd_slow.
         """
         indicators = ["rsi", "atr", "atr_pct"]
