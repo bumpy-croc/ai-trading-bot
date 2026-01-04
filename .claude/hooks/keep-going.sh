@@ -14,31 +14,42 @@ def main():
     if os.environ.get("CLAUDE_CODE_REMOTE") != "true":
         sys.exit(0)
 
-    # Read input from stdin to check Claude's response
+    # Read input from stdin to get transcript path
     try:
         input_data = json.loads(sys.stdin.read())
+        transcript_path = input_data.get("transcript_path")
 
-        # Debug: Log input structure (temporary)
-        debug_file = os.path.join(os.path.dirname(__file__), "debug_hook_input.json")
-        with open(debug_file, "w") as f:
-            json.dump(input_data, f, indent=2)
+        if transcript_path and os.path.exists(transcript_path):
+            # Read the transcript file (JSONL format - one JSON object per line)
+            with open(transcript_path, "r") as f:
+                lines = f.readlines()
 
-        # Try to find Claude's message in various possible field names
-        assistant_message = (
-            input_data.get("assistant_message", "") or
-            input_data.get("response", "") or
-            input_data.get("last_message", "") or
-            input_data.get("content", "") or
-            ""
-        )
+            # Find the last assistant message
+            for line in reversed(lines):
+                try:
+                    message = json.loads(line)
+                    if message.get("role") == "assistant":
+                        # Check if the assistant's message contains "All done"
+                        content = message.get("content", "")
+                        if isinstance(content, list):
+                            # Content can be a list of blocks
+                            content_text = " ".join(
+                                block.get("text", "") if isinstance(block, dict) else str(block)
+                                for block in content
+                            )
+                        else:
+                            content_text = str(content)
 
-        # Skip hook if Claude's response contains "All done"
-        if "All done" in assistant_message:
-            output = {"decision": "continue"}
-            print(json.dumps(output))
-            sys.exit(0)
-    except (json.JSONDecodeError, KeyError, AttributeError):
-        # If we can't read the message, continue with normal behavior
+                        if "All done" in content_text:
+                            output = {"decision": "continue"}
+                            print(json.dumps(output))
+                            sys.exit(0)
+                        break  # Only check the last assistant message
+                except json.JSONDecodeError:
+                    continue
+
+    except (json.JSONDecodeError, KeyError, AttributeError, IOError):
+        # If we can't read the transcript, continue with normal behavior
         pass
 
     reason = (
