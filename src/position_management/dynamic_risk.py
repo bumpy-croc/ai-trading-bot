@@ -141,13 +141,13 @@ class DynamicRiskManager:
         Calculate dynamic risk adjustments based on current performance metrics.
 
         Args:
-                current_balance: Current account balance
-                peak_balance: Peak account balance (for drawdown calculation)
-                session_id: Trading session ID for database queries
-                previous_peak_balance: Previous peak balance for recovery calculation
+            current_balance: Current account balance
+            peak_balance: Peak account balance (for drawdown calculation)
+            session_id: Trading session ID for database queries
+            previous_peak_balance: Previous peak balance for recovery calculation
 
         Returns:
-                RiskAdjustments object with calculated adjustment factors
+            RiskAdjustments object with calculated adjustment factors
         """
         if not self.config.enabled:
             return RiskAdjustments(primary_reason="disabled")
