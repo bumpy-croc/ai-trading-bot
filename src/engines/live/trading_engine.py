@@ -26,10 +26,13 @@ from src.config.constants import (
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
@@ -177,7 +180,7 @@ class LiveTradingEngine:
         fee_rate: float = DEFAULT_FEE_RATE,
         slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
-        max_filled_price_deviation: float = 0.5,  # Filled-price deviation threshold
+        max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
         # Handler injection (all optional - defaults created if not provided)
         position_tracker: LivePositionTracker | None = None,
         execution_engine: LiveExecutionEngine | None = None,
@@ -1595,7 +1598,7 @@ class LiveTradingEngine:
                                     )
                                     if short_take_profit is None:
                                         short_take_profit = current_price * (
-                                            1 - getattr(self.strategy, "take_profit_pct", 0.04)
+                                            1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
                                         )
                                 else:
                                     # All strategies should be component-based
@@ -1603,10 +1606,10 @@ class LiveTradingEngine:
                                         f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                                     )
                                     short_stop_loss = (
-                                        current_price * 1.05
+                                        current_price * (1 + DEFAULT_STOP_LOSS_PCT)
                                     )  # Default 5% stop for short
                                     short_take_profit = current_price * (
-                                        1 - getattr(self.strategy, "take_profit_pct", 0.04)
+                                        1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
                                     )
                                 self._execute_entry(
                                     symbol=symbol,
@@ -2128,7 +2131,7 @@ class LiveTradingEngine:
             except Exception:
                 if stop_loss is None:
                     stop_loss = float(current_price) * (
-                        0.95 if entry_side == PositionSide.LONG else 1.05
+                        (1 - DEFAULT_STOP_LOSS_PCT) if entry_side == PositionSide.LONG else (1 + DEFAULT_STOP_LOSS_PCT)
                     )
             if take_profit is None:
                 tp_pct = self._resolve_take_profit_pct()
@@ -2157,7 +2160,7 @@ class LiveTradingEngine:
             except Exception as e:
                 self.logger.debug(f"Component stop loss calculation failed: {e}")
                 stop_loss = float(current_price) * (
-                    0.95 if entry_side == PositionSide.LONG else 1.05
+                    (1 - DEFAULT_STOP_LOSS_PCT) if entry_side == PositionSide.LONG else (1 + DEFAULT_STOP_LOSS_PCT)
                 )
             tp_pct = self._resolve_take_profit_pct()
             take_profit = (
@@ -2184,14 +2187,14 @@ class LiveTradingEngine:
                     strategy_overrides=overrides,
                 )
                 if take_profit is None:
-                    take_profit = current_price * (1 + overrides.get("take_profit_pct", 0.04))
+                    take_profit = current_price * (1 + overrides.get("take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             else:
                 # All strategies should be component-based
                 self.logger.error(
                     f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                 )
-                stop_loss = current_price * 0.95  # Default 5% stop for long
-                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
+                stop_loss = current_price * (1 - DEFAULT_STOP_LOSS_PCT)  # Default 5% stop for long
+                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             entry_side = PositionSide.LONG
 
         self._execute_entry(
@@ -2213,15 +2216,15 @@ class LiveTradingEngine:
                 try:
                     return float(params.default_take_profit_pct)
                 except (TypeError, ValueError):
-                    return 0.04
+                    return DEFAULT_TAKE_PROFIT_PCT
         except Exception:
-            return 0.04
+            return DEFAULT_TAKE_PROFIT_PCT
 
-        value = getattr(self.strategy, "take_profit_pct", 0.04)
+        value = getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
         try:
             return float(value)
         except (TypeError, ValueError):
-            return 0.04
+            return DEFAULT_TAKE_PROFIT_PCT
 
     def _resolve_execution_fill_policy(self) -> FillPolicy:
         """Resolve execution fill policy from configuration."""
