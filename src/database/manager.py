@@ -599,6 +599,10 @@ class DatabaseManager:
         Returns:
             Trading session ID
         """
+        # Validate initial_balance
+        if not math.isfinite(initial_balance) or initial_balance <= 0:
+            raise ValueError(f"initial_balance must be positive and finite, got {initial_balance}")
+
         with self.get_session() as session:
             # Convert string enum if necessary
             if isinstance(mode, str):
@@ -1134,6 +1138,12 @@ class DatabaseManager:
         pnl: float | None = None,
     ) -> bool:
         """Mark a position as closed with optional exit details."""
+        # Validate financial inputs if provided
+        if exit_price is not None and (not math.isfinite(exit_price) or exit_price <= 0):
+            raise ValueError(f"exit_price must be positive and finite, got {exit_price}")
+        if pnl is not None and not math.isfinite(pnl):
+            raise ValueError(f"pnl must be finite, got {pnl}")
+
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
@@ -1321,6 +1331,11 @@ class DatabaseManager:
         session_id: int | None = None,
     ):
         """Log a snapshot of account state."""
+        # Validate core financial fields
+        for name, val in [("balance", balance), ("equity", equity)]:
+            if not math.isfinite(val):
+                raise ValueError(f"{name} must be finite, got {val}")
+
         with self.get_session() as session:
             snapshot = AccountHistory(
                 timestamp=datetime.now(UTC),
@@ -2024,6 +2039,10 @@ class DatabaseManager:
         if not session_id:
             raise ValueError("No active trading session for balance update")
 
+        # Validate balance_change is finite (can be negative for withdrawals)
+        if not math.isfinite(balance_change):
+            raise ValueError(f"balance_change must be finite, got {balance_change}")
+
         # Use ExitStack to properly manage the session context manager lifecycle
         # across the yield boundary. This ensures session cleanup even if caller
         # doesn't fully consume the generator.
@@ -2185,6 +2204,12 @@ class DatabaseManager:
         session_id = session_id or self._current_session_id
         if not session_id:
             raise ValueError("No active trading session for position reconciliation")
+
+        # Validate financial inputs
+        if not math.isfinite(realized_pnl):
+            raise ValueError(f"realized_pnl must be finite, got {realized_pnl}")
+        if not math.isfinite(exit_price) or exit_price <= 0:
+            raise ValueError(f"exit_price must be positive and finite, got {exit_price}")
 
         # Use ExitStack to properly manage the session context manager lifecycle
         # across the yield boundary. This ensures session cleanup even if caller
@@ -3045,6 +3070,18 @@ class DatabaseManager:
         Returns:
             True if successful, False otherwise
         """
+        # Validate financial inputs if provided
+        if filled_quantity is not None and (
+            not math.isfinite(filled_quantity) or filled_quantity < 0
+        ):
+            raise ValueError(
+                f"filled_quantity must be non-negative and finite, got {filled_quantity}"
+            )
+        if filled_price is not None and (not math.isfinite(filled_price) or filled_price <= 0):
+            raise ValueError(f"filled_price must be positive and finite, got {filled_price}")
+        if commission is not None and (not math.isfinite(commission) or commission < 0):
+            raise ValueError(f"commission must be non-negative and finite, got {commission}")
+
         with self.get_session() as session:
             order = session.query(Order).filter_by(id=order_id).first()
             if not order:

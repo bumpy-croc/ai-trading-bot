@@ -3,6 +3,7 @@ Database models for trade logging and performance tracking
 """
 
 import enum
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -622,6 +623,12 @@ class AccountBalance(Base):
         cls, session_id: int, new_balance: float, update_reason: str, updated_by: str, db_session
     ) -> "AccountBalance":
         """Update the current balance for a session"""
+        # Validate new_balance
+        if not math.isfinite(new_balance):
+            raise ValueError(f"new_balance must be finite, got {new_balance}")
+        if new_balance < 0:
+            raise ValueError(f"new_balance cannot be negative, got {new_balance}")
+
         balance_record = cls(
             session_id=session_id,
             base_currency="USD",
