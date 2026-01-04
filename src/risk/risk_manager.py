@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -116,6 +117,10 @@ class RiskParameters:
             raise ValueError("partial_exit_targets must be positive percentages (decimals)")
         if any(s <= 0 or s > 1 for s in self.partial_exit_sizes):
             raise ValueError("partial_exit_sizes must be in (0, 1]")
+        if sum(self.partial_exit_sizes) > 1.0:
+            raise ValueError(
+                f"partial_exit_sizes must sum to <= 1.0, got {sum(self.partial_exit_sizes):.2f}"
+            )
         if any(t <= 0 for t in self.scale_in_thresholds):
             raise ValueError("scale_in_thresholds must be positive percentages (decimals)")
         if any(s <= 0 or s > 1 for s in self.scale_in_sizes):
@@ -157,8 +162,8 @@ class RiskManager:
         Calculate position size in units (quantity) based on ATR and risk.
         Kept for backward compatibility and direct usage in tests.
         """
-        # Validate inputs
-        if price <= 0 or balance <= 0:
+        # Validate inputs (prevent NaN/Infinity propagation)
+        if not (math.isfinite(price) and math.isfinite(balance) and price > 0 and balance > 0):
             return 0.0
 
         # Handle zero or very small ATR
@@ -235,7 +240,8 @@ class RiskManager:
             )
             # -> returns a fraction such as 0.03 meaning 3% of balance
         """
-        if balance <= 0 or index < 0 or index >= len(df):
+        # Validate balance is finite and positive (prevent NaN/Infinity propagation)
+        if not (math.isfinite(balance) and balance > 0) or index < 0 or index >= len(df):
             return 0.0
         strategy_overrides = strategy_overrides or {}
         indicators = indicators or {}
@@ -285,7 +291,13 @@ class RiskManager:
                 confidence = (
                     float(confidence) if confidence is not None and not pd.isna(confidence) else 0.0
                 )
-            except Exception:
+            except (TypeError, ValueError) as e:
+                # Log conversion failures for debugging data quality issues
+                logging.warning(
+                    "Failed to convert confidence value %r to float: %s, defaulting to 0.0",
+                    confidence,
+                    e,
+                )
                 confidence = 0.0
             fraction = base_fraction * max(0.0, min(1.0, confidence))
         elif sizer == "atr_risk":
