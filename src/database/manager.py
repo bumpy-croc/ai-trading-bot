@@ -63,6 +63,11 @@ class QueryTimeout:
 # This cap indicates "extremely profitable" while remaining storable in Numeric(18, 8).
 MAX_PROFIT_FACTOR = 999999.99
 
+# Connection pool configuration constants.
+# Used for QueuePool (PostgreSQL) - keep in sync with _get_engine_config().
+POOL_SIZE = 10  # Base pool size for concurrent operations
+MAX_OVERFLOW = 20  # Burst capacity above pool_size for peak load
+
 
 if TYPE_CHECKING:  # pragma: no cover
     # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
@@ -290,9 +295,9 @@ class DatabaseManager:
         return {
             "poolclass": QueuePool,
             # Increased from 5 to 10 for concurrent operations (main loop + OrderTracker + health checks)
-            "pool_size": 10,
+            "pool_size": POOL_SIZE,
             # Increased from 10 to 20 to handle burst load without exhaustion
-            "max_overflow": 20,
+            "max_overflow": MAX_OVERFLOW,
             # Add timeout to prevent indefinite blocking when pool is exhausted
             "pool_timeout": 30,  # Wait max 30s for available connection
             "pool_pre_ping": True,
@@ -430,17 +435,17 @@ class DatabaseManager:
             "size": pool.size(),
             "checked_out": pool.checkedout(),
             "overflow": pool.overflow(),
-            "total_available": pool.size() - pool.checkedout() + (20 - pool.overflow()),
+            "total_available": pool.size() - pool.checkedout() + (MAX_OVERFLOW - pool.overflow()),
         }
 
         # Warn if pool is >80% utilized (high contention risk)
-        utilization_pct = (stats["checked_out"] / (pool.size() + 20)) * 100
+        utilization_pct = (stats["checked_out"] / (pool.size() + MAX_OVERFLOW)) * 100
         if utilization_pct > 80:
             logger.warning(
                 "Database pool near exhaustion: %d/%d connections in use (%.1f%% utilization). "
                 "High contention risk - critical operations may block.",
                 stats["checked_out"],
-                pool.size() + 20,
+                pool.size() + MAX_OVERFLOW,
                 utilization_pct,
             )
 
@@ -1282,15 +1287,17 @@ class DatabaseManager:
         """Fix position status inconsistencies and return count of fixes applied."""
         with self.get_session() as session:
             # * Fix positions marked as OPEN but missing data (mark as CLOSED)
+            # Use parameterized timestamp for database portability (PostgreSQL and SQLite)
             result_orphaned = session.execute(
                 sa.text(
                     """
                     UPDATE positions
-                    SET status = 'CLOSED', last_update = NOW()
+                    SET status = 'CLOSED', last_update = :now
                     WHERE status = 'OPEN'
                     AND (entry_price IS NULL OR quantity IS NULL OR quantity <= 0)
                 """
-                )
+                ),
+                {"now": datetime.now(UTC)},
             )
 
             try:
@@ -1373,9 +1380,12 @@ class DatabaseManager:
             if not math.isfinite(val):
                 raise ValueError(f"{name} must be finite, got {val}")
 
-        # Validate margin_used doesn't exceed balance
-        if margin_used is not None and margin_used > balance:
-            raise ValueError(f"margin_used ({margin_used}) cannot exceed balance ({balance})")
+        # Validate margin_used is non-negative and doesn't exceed balance
+        if margin_used is not None:
+            if margin_used < 0:
+                raise ValueError(f"margin_used cannot be negative, got {margin_used}")
+            if margin_used > balance:
+                raise ValueError(f"margin_used ({margin_used}) cannot exceed balance ({balance})")
 
         with self.get_session() as session:
             snapshot = AccountHistory(
@@ -2013,8 +2023,16 @@ class DatabaseManager:
             total_pnl = sum(trade.pnl for trade in trades)
             current_balance = trading_session.initial_balance + total_pnl
 
-            # Update the balance tracking
-            self.update_balance(current_balance, "recovered_from_trades", "system", session_id)
+            # Update the balance tracking and warn if persistence fails
+            success = self.update_balance(
+                current_balance, "recovered_from_trades", "system", session_id
+            )
+            if not success:
+                logger.warning(
+                    "Failed to persist recovered balance for session %s (calculated: %.2f)",
+                    session_id,
+                    current_balance,
+                )
 
             return current_balance
 
@@ -2314,6 +2332,16 @@ class DatabaseManager:
                     if isinstance(side, str):
                         side = PositionSide[side.upper()]
 
+                    # Validate pnl_percent to prevent NaN/Inf from corrupting data
+                    pnl_percent = trade_data.get("pnl_percent", 0.0)
+                    if not math.isfinite(pnl_percent):
+                        logger.warning(
+                            "Invalid pnl_percent %.4f for %s, defaulting to 0.0",
+                            pnl_percent,
+                            trade_data.get("symbol", "unknown"),
+                        )
+                        pnl_percent = 0.0
+
                     trade = Trade(
                         symbol=trade_data["symbol"],
                         side=side,
@@ -2325,7 +2353,7 @@ class DatabaseManager:
                         entry_time=trade_data["entry_time"],
                         exit_time=datetime.now(UTC),
                         pnl=realized_pnl,
-                        pnl_percent=trade_data.get("pnl_percent", 0.0),
+                        pnl_percent=pnl_percent,
                         commission=trade_data.get("commission", 0.0),
                         exit_reason=exit_reason,
                         strategy_name=trade_data.get("strategy_name", "unknown"),
@@ -2347,7 +2375,7 @@ class DatabaseManager:
                         position.current_price = exit_price
                         position.last_update = datetime.now(UTC)
                         position.unrealized_pnl = realized_pnl
-                        position.unrealized_pnl_percent = trade_data.get("pnl_percent", 0.0)
+                        position.unrealized_pnl_percent = pnl_percent  # Use validated value
 
                     logger.info(
                         "Atomic reconciliation: Balance %.2f -> %.2f (PnL: %+.2f) | Trade ID: %s | Position: %s",
@@ -2802,24 +2830,6 @@ class DatabaseManager:
                         else:
                             break
                     # Skip break-even trades
-
-                # Calculate max drawdown
-                max_drawdown = 0.0
-                if trades:
-                    # Sort trades by exit time to calculate running balance
-                    sorted_trades = sorted(trades, key=lambda t: t.exit_time)
-                    running_balance = 0.0
-                    peak_balance = 0.0
-
-                    for trade in sorted_trades:
-                        running_balance += float(trade.pnl)
-                        if running_balance > peak_balance:
-                            peak_balance = running_balance
-
-                        # Calculate drawdown from peak
-                        if peak_balance > 0:
-                            drawdown = (peak_balance - running_balance) / peak_balance
-                            max_drawdown = max(max_drawdown, drawdown)
 
                 # Calculate Sharpe ratio (simplified)
                 if len(trades) > 1:
