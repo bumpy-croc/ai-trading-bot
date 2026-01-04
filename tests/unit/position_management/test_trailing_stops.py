@@ -556,19 +556,16 @@ class TestTrailingStopPolicyEdgeCases:
         """Test behavior with invalid side parameter."""
         policy = TrailingStopPolicy(activation_threshold=0.01, trailing_distance_pct=0.005)
 
-        # The current implementation doesn't validate side parameter
-        # It will default to long behavior for invalid sides
-        new_sl, activated, be = policy.update_trailing_stop(
-            side="invalid",  # Invalid side
-            entry_price=100.0,
-            current_price=102.0,
-            existing_stop=None,
-            position_fraction=1.0,
-        )
-
-        # Should behave like long side, but may not activate if PnL calculation fails
-        assert isinstance(activated, bool)
-        assert isinstance(be, bool)
+        # Side parameter is now validated in _pnl_fraction
+        # Should raise ValueError for invalid side
+        with pytest.raises(ValueError, match="Invalid side: invalid"):
+            policy.update_trailing_stop(
+                side="invalid",  # Invalid side
+                entry_price=100.0,
+                current_price=102.0,
+                existing_stop=None,
+                position_fraction=1.0,
+            )
 
     def test_float_precision_edge_cases(self):
         """Test behavior with floating point precision edge cases."""

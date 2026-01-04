@@ -296,10 +296,10 @@ class TestDynamicRiskManagerExtendedEdgeCases:
             current_balance=-1000, peak_balance=10000  # Negative balance
         )
 
-        # Should handle gracefully and apply maximum risk reduction
-        assert adjustments.position_size_factor <= 0.4
-        assert adjustments.stop_loss_tightening >= 1.4
-        assert "drawdown" in adjustments.primary_reason.lower()
+        # Should handle gracefully by validating input and returning neutral adjustments
+        assert adjustments.position_size_factor == 1.0
+        assert adjustments.stop_loss_tightening == 1.0
+        assert adjustments.primary_reason == "invalid_balance"
 
     def test_negative_peak_balance(self):
         """Test with negative peak balance."""
@@ -600,9 +600,14 @@ class TestDynamicRiskManagerExtendedEdgeCases:
             position_size_factor=-0.5, stop_loss_tightening=-2.0, daily_risk_factor=-0.3
         )
 
-        # Should raise ValueError due to negative results failing validation
-        with pytest.raises(ValueError, match="base_risk_per_trade must be positive"):
-            self.manager.apply_risk_adjustments(original_params, negative_adjustments)
+        # Should validate and clamp negative factors to 1.0, producing valid params
+        result_params = self.manager.apply_risk_adjustments(original_params, negative_adjustments)
+
+        # Negative factors clamped to 1.0, so values should be unchanged
+        assert result_params.base_risk_per_trade == original_params.base_risk_per_trade
+        assert result_params.max_risk_per_trade == original_params.max_risk_per_trade
+        assert result_params.max_position_size == original_params.max_position_size
+        assert result_params.max_daily_risk == original_params.max_daily_risk
 
     def test_config_with_empty_lists(self):
         """Test configuration with empty threshold lists."""

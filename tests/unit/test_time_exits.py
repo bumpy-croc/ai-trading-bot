@@ -299,9 +299,8 @@ class TestTimeExitPolicyEdgeCases:
         entry = datetime(2024, 1, 1, 0, 0)
         now = datetime(2024, 1, 1, 2, 0)  # 2 hours later (past max holding)
         nxt = policy.get_next_exit_time(entry, now)
-        assert nxt is not None
-        # Should return the past candidate (min of all candidates)
-        assert nxt == entry + timedelta(hours=1)
+        # Should return None when all candidates are in the past (no future exits)
+        assert nxt is None
 
 
 class TestMarketSessionDefEdgeCases:
