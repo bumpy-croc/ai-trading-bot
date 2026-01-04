@@ -261,16 +261,20 @@ class RiskManager:
 
         # Ensure we don't exceed maximum risk limits
         risk = min(risk, self.params.max_risk_per_trade)
+
+        # Check remaining daily risk (thread-safe)
+        # NOTE: This is a read-only check for the legacy quantity-based API
+        # The authoritative daily risk check happens in update_position()
         with self._state_lock:
             remaining_daily_risk = self.params.max_daily_risk - self.daily_risk_used
-        risk = min(risk, remaining_daily_risk)
+            effective_risk = min(risk, remaining_daily_risk)
 
         # If no remaining daily risk, return 0
-        if risk <= 0:
+        if effective_risk <= 0:
             return 0.0
 
         # Calculate position size based on ATR
-        risk_amount = balance * risk
+        risk_amount = balance * effective_risk
         atr_stop = atr * self.params.position_size_atr_multiplier
         position_size = risk_amount / atr_stop
 
@@ -773,9 +777,22 @@ class RiskManager:
             self.daily_risk_used += size  # size here is treated as fraction of balance allocated
 
     def close_position(self, symbol: str):
-        """Close position tracking (thread-safe)."""
+        """Close position tracking and free daily risk (thread-safe).
+
+        IMPORTANT: This method reduces daily_risk_used by the position's size,
+        freeing up risk budget for new positions.
+
+        Parameters
+        ----------
+        symbol : str
+            Symbol identifier of position to close.
+        """
         with self._state_lock:
             if symbol in self.positions:
+                pos = self.positions[symbol]
+                pos_size = float(pos.get("size", 0.0))
+                # Free up daily risk when closing position
+                self.daily_risk_used = max(0.0, self.daily_risk_used - pos_size)
                 del self.positions[symbol]
 
     def get_total_exposure(self) -> float:
