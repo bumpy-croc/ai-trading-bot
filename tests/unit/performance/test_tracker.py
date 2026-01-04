@@ -374,6 +374,30 @@ class TestPerformanceTracker:
         assert tracker.current_balance == 15000
         assert tracker.peak_balance == 15000
 
+    def test_reset_with_negative_balance_raises_error(self):
+        """Test reset() with negative balance raises ValueError."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        with pytest.raises(ValueError, match="initial_balance must be positive"):
+            tracker.reset(initial_balance=-5000)
+
+    def test_reset_with_zero_balance_raises_error(self):
+        """Test reset() with zero balance raises ValueError."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        with pytest.raises(ValueError, match="initial_balance must be positive"):
+            tracker.reset(initial_balance=0)
+
+    def test_reset_with_infinity_balance_raises_error(self):
+        """Test reset() with infinity balance raises ValueError."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        with pytest.raises(ValueError, match="initial_balance must be finite"):
+            tracker.reset(initial_balance=float("inf"))
+
+    def test_reset_with_nan_balance_raises_error(self):
+        """Test reset() with NaN balance raises ValueError."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        with pytest.raises(ValueError, match="initial_balance must be finite"):
+            tracker.reset(initial_balance=float("nan"))
+
     def test_zero_trades_returns_safe_metrics(self):
         """Test get_metrics() with zero trades doesn't raise errors."""
         tracker = PerformanceTracker(initial_balance=10000)

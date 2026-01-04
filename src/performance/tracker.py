@@ -384,6 +384,10 @@ class PerformanceTracker:
             ts = self._normalize_timestamp(timestamp)
             self._balance_history.append((ts, balance))
 
+            # Limit memory usage (same cap as trade history)
+            if len(self._balance_history) > self._max_trade_history:
+                self._balance_history = self._balance_history[-self._max_trade_history:]
+
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics.
 
@@ -406,6 +410,9 @@ class PerformanceTracker:
             profit_factor = 0.0
             if self._gross_loss > 0:
                 profit_factor = self._gross_profit / self._gross_loss
+            elif self._gross_profit > 0:
+                # All winning trades - cap at finite value like Sortino/Calmar
+                profit_factor = perf_metrics.MAX_FINITE_RATIO
 
             # Calculate averages
             avg_win = 0.0
@@ -599,9 +606,17 @@ class PerformanceTracker:
 
         Args:
             initial_balance: New initial balance, or use existing.
+
+        Raises:
+            ValueError: If initial_balance is not positive and finite.
         """
         with self._lock:
             if initial_balance is not None:
+                # Validate new initial balance like __init__
+                if initial_balance <= 0:
+                    raise ValueError(f"initial_balance must be positive, got {initial_balance}")
+                if not math.isfinite(initial_balance):
+                    raise ValueError(f"initial_balance must be finite, got {initial_balance}")
                 self.initial_balance = initial_balance
             self.current_balance = self.initial_balance
             self.peak_balance = self.initial_balance

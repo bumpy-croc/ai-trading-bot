@@ -15,6 +15,10 @@ import pandas as pd
 
 Number = int | float
 
+# Module-level constants for financial calculations
+DAYS_PER_YEAR = 365.0  # Standard year for financial annualization
+MAX_FINITE_RATIO = 999.0  # Cap for ratios to avoid infinity in database/JSON storage
+
 
 class Side(str, Enum):
     """Directional enum shared by trading components."""
@@ -172,10 +176,11 @@ def cagr(initial_balance: Number, final_balance: Number, days: int) -> float:
         raise ValueError(
             f"Balances must be finite: initial={initial_balance}, final={final_balance}"
         )
-    if days <= 0:
+    if days < 1:
+        # Less than 1 day - return 0 to avoid unrealistic annualized returns
         return 0.0
 
-    return ((float(final_balance) / float(initial_balance)) ** (365.0 / days) - 1.0) * 100.0
+    return ((float(final_balance) / float(initial_balance)) ** (DAYS_PER_YEAR / days) - 1.0) * 100.0
 
 
 def sharpe(daily_balance: pd.Series) -> float:
@@ -194,7 +199,7 @@ def sharpe(daily_balance: pd.Series) -> float:
     std = daily_returns.std()
     if std == 0 or np.isnan(std):
         return 0.0
-    return (daily_returns.mean() / std) * np.sqrt(365.0)
+    return (daily_returns.mean() / std) * np.sqrt(DAYS_PER_YEAR)
 
 
 def max_drawdown(balance_series: pd.Series) -> float:
@@ -310,22 +315,22 @@ def sortino_ratio(daily_balance: pd.Series, risk_free_rate: float = 0.0) -> floa
         return 0.0
 
     mean_return = daily_returns.mean()
-    daily_rf = risk_free_rate / 365.0
+    daily_rf = risk_free_rate / DAYS_PER_YEAR
 
     # Calculate downside returns (only negative returns)
     downside_returns = daily_returns[daily_returns < daily_rf]
 
     if downside_returns.empty or len(downside_returns) < 2:
         # No downside volatility - cap at large finite value
-        # Using 999.0 instead of infinity to avoid database/JSON issues
-        return 999.0 if mean_return > daily_rf else 0.0
+        # Using MAX_FINITE_RATIO instead of infinity to avoid database/JSON issues
+        return MAX_FINITE_RATIO if mean_return > daily_rf else 0.0
 
     downside_std = downside_returns.std()
     if downside_std == 0 or np.isnan(downside_std):
         return 0.0
 
     # Annualize
-    return (mean_return - daily_rf) / downside_std * np.sqrt(365.0)
+    return (mean_return - daily_rf) / downside_std * np.sqrt(DAYS_PER_YEAR)
 
 
 def calmar_ratio(annualized_return: float, max_drawdown_pct: float) -> float:
@@ -343,7 +348,7 @@ def calmar_ratio(annualized_return: float, max_drawdown_pct: float) -> float:
     Returns
     -------
     float
-        Calmar ratio. Returns large finite value (999.0) for zero drawdown
+        Calmar ratio. Returns large finite value (MAX_FINITE_RATIO) for zero drawdown
         with positive returns to avoid infinity/database issues.
 
     Raises
@@ -360,8 +365,8 @@ def calmar_ratio(annualized_return: float, max_drawdown_pct: float) -> float:
 
     if max_drawdown_pct <= 0:
         # No drawdown case - return large value if positive returns
-        # Using 999.0 instead of infinity to avoid database/JSON issues
-        return 999.0 if annualized_return > 0 else 0.0
+        # Using MAX_FINITE_RATIO instead of infinity to avoid database/JSON issues
+        return MAX_FINITE_RATIO if annualized_return > 0 else 0.0
     return annualized_return / max_drawdown_pct
 
 
