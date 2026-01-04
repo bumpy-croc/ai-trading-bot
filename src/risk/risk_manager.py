@@ -312,8 +312,13 @@ class RiskManager:
         Raises
         ------
         ValueError
-            If side is not "long" or "short".
+            If side is not "long" or "short", entry_price or atr are invalid.
         """
+        # Validate inputs
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError(f"entry_price must be positive and finite, got {entry_price}")
+        if not math.isfinite(atr) or atr < 0:
+            raise ValueError(f"atr must be non-negative and finite, got {atr}")
         if side not in VALID_SIDES:
             raise ValueError(f"side must be 'long' or 'short', got '{side}'")
 
