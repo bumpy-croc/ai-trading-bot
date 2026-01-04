@@ -7,12 +7,14 @@ scale-ins, and performance metric tracking for live trading.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.config.constants import (
+    DEFAULT_EPSILON,
     DEFAULT_FEE_RATE,
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
@@ -35,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # Epsilon for floating-point comparisons in financial calculations
 # Use this to handle accumulated rounding errors in partial operations
-EPSILON = 1e-9
+EPSILON = DEFAULT_EPSILON
 
 
 @dataclass
@@ -314,6 +316,14 @@ class LivePositionTracker:
             position.current_size if position.current_size is not None else position.size
         )
 
+        # Validate prices before calling pnl_percent to prevent ValueError
+        if position.entry_price <= 0 or not math.isfinite(position.entry_price):
+            logger.error("Invalid entry_price %.8f for position %s", position.entry_price, position.symbol)
+            return None
+        if exit_price <= 0 or not math.isfinite(exit_price):
+            logger.error("Invalid exit_price %.8f for position %s", exit_price, position.symbol)
+            return None
+
         # Calculate P&L
         if position.side == PositionSide.LONG:
             trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.LONG, fraction)
@@ -378,6 +388,18 @@ class LivePositionTracker:
                     if position.entry_balance is not None and position.entry_balance > 0
                     else float(fallback_balance)
                 )
+
+                # Validate prices before calling pnl_percent to prevent ValueError
+                if position.entry_price <= 0 or not math.isfinite(position.entry_price):
+                    logger.error("Invalid entry_price %.8f for position %s", position.entry_price, position.symbol)
+                    position.unrealized_pnl = 0.0
+                    position.unrealized_pnl_percent = 0.0
+                    continue
+                if current_price <= 0 or not math.isfinite(current_price):
+                    logger.error("Invalid current_price %.8f for position %s", current_price, position.symbol)
+                    position.unrealized_pnl = 0.0
+                    position.unrealized_pnl_percent = 0.0
+                    continue
 
                 if position.side == PositionSide.LONG:
                     pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 import pandas as pd
 
 from src.config.constants import (
@@ -44,6 +48,24 @@ class CorrelationEngine:
         # Lightweight memoization to avoid expensive recomputation on each call
         self._last_signature: tuple[tuple[str, ...], pd.Timestamp | None, int] | None = None
 
+    @staticmethod
+    def _safe_size_add(total: float, size: Any) -> float:
+        """Safely add size to total if size is valid, otherwise return total unchanged.
+
+        Validates that size is numeric, finite, and non-negative before adding to prevent
+        TypeError or NaN propagation from corrupted position data.
+
+        Args:
+            total: Current total exposure
+            size: Size value to add if valid
+
+        Returns:
+            total + size if size is valid, otherwise total unchanged
+        """
+        if isinstance(size, int | float) and math.isfinite(size) and size >= 0:
+            return total + float(size)
+        return total
+
     def should_update(self, now: datetime | None = None) -> bool:
         now = now or datetime.now(UTC)
         if self._last_update_at is None:
@@ -70,9 +92,7 @@ class CorrelationEngine:
         # Align and restrict to window
         end_time = None
         for s in price_series_by_symbol.values():
-            # Check both that series is not empty and index is not empty before calling .max()
-            # Empty index raises ValueError on .max() call
-            if not s.empty and len(s.index) > 0:
+            if not s.empty:
                 series_max = s.index.max()
                 end_time = max(end_time or series_max, series_max)
         if end_time is None:
@@ -146,11 +166,20 @@ class CorrelationEngine:
 
         thr = float(self.config.correlation_threshold)
         for i, a in enumerate(symbols):
+            # Skip if symbol was filtered out during correlation calculation
+            if a not in corr.columns:
+                continue
             for j in range(i + 1, len(symbols)):
                 b = symbols[j]
-                val = corr.at[a, b]
-                if pd.notna(val) and val >= thr:
-                    union(a, b)
+                if b not in corr.columns:
+                    continue
+                try:
+                    val = corr.at[a, b]
+                    if pd.notna(val) and val >= thr:
+                        union(a, b)
+                except (KeyError, IndexError):
+                    logger.debug(f"Correlation pair ({a}, {b}) not found in matrix")
+                    continue
 
         groups: dict[str, list[str]] = {}
         for s in symbols:
@@ -174,7 +203,8 @@ class CorrelationEngine:
             for sym in group:
                 info = positions.get(sym)
                 if info:
-                    total += float(info.get("size", 0.0))
+                    size = info.get("size", 0.0)
+                    total = self._safe_size_add(total, size)
             exposures[tuple(sorted(group))] = round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         return exposures
 
@@ -217,7 +247,8 @@ class CorrelationEngine:
         for g in affected_groups:
             current = 0.0
             for sym in g:
-                current += float(positions.get(sym, {}).get("size", 0.0))
+                size = positions.get(sym, {}).get("size", 0.0)
+                current = self._safe_size_add(current, size)
             projected = current + candidate_fraction
             if projected > max_allowed and projected > 0:
                 factor = min(factor, max(0.0, max_allowed / projected))
@@ -243,8 +274,10 @@ class CorrelationGroupManager:
             present: list[str] = []
             for s in symbols:
                 if s in positions:
-                    present.append(s)
-                    total += float(positions[s].get("size", 0.0))
+                    size = positions[s].get("size", 0.0)
+                    if isinstance(size, int | float) and math.isfinite(size) and size >= 0:
+                        present.append(s)
+                        total = CorrelationEngine._safe_size_add(total, size)
             out[name] = {
                 "total_exposure": round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS),
                 "position_count": len(present),

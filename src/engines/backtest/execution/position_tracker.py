@@ -20,7 +20,7 @@ from src.config.constants import (
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.engines.shared.side_utils import to_side_string
-from src.performance.metrics import cash_pnl
+from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
 
 if TYPE_CHECKING:
@@ -278,12 +278,16 @@ class PositionTracker:
         trade = self.current_trade
         fraction = float(getattr(trade, "current_size", trade.size))
 
-        # Calculate PnL
+        # Validate prices before calling pnl_percent to prevent ValueError
+        if trade.entry_price <= 0 or not math.isfinite(trade.entry_price):
+            raise ValueError(f"Invalid entry_price: {trade.entry_price}")
+        if exit_price <= 0 or not math.isfinite(exit_price):
+            raise ValueError(f"Invalid exit_price: {exit_price}")
+
+        # Calculate PnL using shared function for parity with live engine
         side_str = to_side_string(trade.side)
-        if side_str == "long":
-            trade_pnl_pct = ((exit_price - trade.entry_price) / trade.entry_price) * fraction
-        else:
-            trade_pnl_pct = ((trade.entry_price - exit_price) / trade.entry_price) * fraction
+        side_enum = Side.LONG if side_str == "long" else Side.SHORT
+        trade_pnl_pct = pnl_percent(trade.entry_price, exit_price, side_enum, fraction)
 
         entry_balance = getattr(trade, "entry_balance", None)
         if entry_balance is not None and entry_balance > 0:

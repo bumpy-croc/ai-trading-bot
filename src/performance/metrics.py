@@ -7,12 +7,24 @@ Any percentage outputs are marked in the docstrings.
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 
 import numpy as np
 import pandas as pd
 
 Number = int | float
+
+# Module-level constants for financial calculations
+# Days per year for annualization: using 365 calendar days (not 252 trading days)
+# to align with pandas daily resampling and 24/7 crypto markets. Trading-day
+# annualization would understate risk for continuous markets.
+DAYS_PER_YEAR = 365.0
+
+# Cap for ratios to avoid infinity in database/JSON storage. 999 is used as
+# a convention for "effectively infinite" that fits in DECIMAL columns
+# and can be serialized without special handling.
+MAX_FINITE_RATIO = 999.0
 
 
 class Side(str, Enum):
@@ -30,13 +42,41 @@ def pnl_percent(
 ) -> float:
     """Sized percentage return (decimal).
 
+    Parameters
+    ----------
+    entry_price : Number
+        Entry price (must be positive and finite).
+    exit_price : Number
+        Exit price (must be positive and finite).
+    side : Side
+        Trade direction (LONG or SHORT).
+    fraction : float
+        Position size as fraction of balance (must be in [0, 1]).
+
+    Returns
+    -------
+    float
+        Sized percentage return as decimal.
+
+    Raises
+    ------
+    ValueError
+        If inputs are invalid (non-positive prices, non-finite values,
+        or fraction outside [0, 1]).
+
     Example
     -------
     >>> pnl_percent(100, 105, Side.LONG, 0.5)
     0.025   # +2.5 % on *total* balance (5 % move × 50 % position size)
     """
-    if entry_price == 0:
-        return 0.0
+    if entry_price <= 0:
+        raise ValueError(f"entry_price must be positive, got {entry_price}")
+    if exit_price <= 0:
+        raise ValueError(f"exit_price must be positive, got {exit_price}")
+    if not math.isfinite(entry_price) or not math.isfinite(exit_price):
+        raise ValueError(f"Prices must be finite: entry={entry_price}, exit={exit_price}")
+    if not (0.0 <= fraction <= 1.0):
+        raise ValueError(f"fraction must be in [0, 1], got {fraction}")
 
     raw = (
         (exit_price - entry_price) / entry_price
@@ -47,7 +87,31 @@ def pnl_percent(
 
 
 def cash_pnl(pnl_pct: float, balance_before: Number) -> float:
-    """Convert a sized percentage PnL (decimal) into currency units."""
+    """Convert a sized percentage PnL (decimal) into currency units.
+
+    Parameters
+    ----------
+    pnl_pct : float
+        PnL as decimal (must be finite).
+    balance_before : Number
+        Balance before trade (must be non-negative and finite).
+
+    Returns
+    -------
+    float
+        PnL in currency units.
+
+    Raises
+    ------
+    ValueError
+        If pnl_pct or balance_before is not finite, or balance_before is negative.
+    """
+    if not math.isfinite(pnl_pct):
+        raise ValueError(f"pnl_pct must be finite, got {pnl_pct}")
+    if balance_before < 0:
+        raise ValueError(f"balance_before must be non-negative, got {balance_before}")
+    if not math.isfinite(balance_before):
+        raise ValueError(f"balance_before must be finite, got {balance_before}")
 
     return float(pnl_pct) * float(balance_before)
 
@@ -56,19 +120,75 @@ def cash_pnl(pnl_pct: float, balance_before: Number) -> float:
 
 
 def total_return(initial_balance: Number, final_balance: Number) -> float:
-    """Total *percentage* return over the whole period."""
+    """Total *percentage* return over the whole period.
 
-    if initial_balance == 0:
-        return 0.0
+    Parameters
+    ----------
+    initial_balance : Number
+        Initial balance (must be positive and finite).
+    final_balance : Number
+        Final balance (must be non-negative and finite).
+
+    Returns
+    -------
+    float
+        Total return as percentage.
+
+    Raises
+    ------
+    ValueError
+        If balances are not finite, initial_balance is not positive,
+        or final_balance is negative.
+    """
+    if initial_balance <= 0:
+        raise ValueError(f"initial_balance must be positive, got {initial_balance}")
+    if final_balance < 0:
+        raise ValueError(f"final_balance must be non-negative, got {final_balance}")
+    if not math.isfinite(initial_balance) or not math.isfinite(final_balance):
+        raise ValueError(
+            f"Balances must be finite: initial={initial_balance}, final={final_balance}"
+        )
+
     return (float(final_balance) / float(initial_balance) - 1.0) * 100.0
 
 
 def cagr(initial_balance: Number, final_balance: Number, days: int) -> float:
-    """Compound annual growth rate (percentage)."""
+    """Compound annual growth rate (percentage).
 
-    if initial_balance == 0 or days <= 0:
+    Parameters
+    ----------
+    initial_balance : Number
+        Initial balance (must be positive and finite).
+    final_balance : Number
+        Final balance (must be non-negative and finite).
+    days : int
+        Number of days. Returns 0.0 for days < 1 to avoid unrealistic
+        annualized returns from very short time periods.
+
+    Returns
+    -------
+    float
+        Annualized return as percentage.
+
+    Raises
+    ------
+    ValueError
+        If balances are not finite, initial_balance is not positive,
+        or final_balance is negative.
+    """
+    if initial_balance <= 0:
+        raise ValueError(f"initial_balance must be positive, got {initial_balance}")
+    if final_balance < 0:
+        raise ValueError(f"final_balance must be non-negative, got {final_balance}")
+    if not math.isfinite(initial_balance) or not math.isfinite(final_balance):
+        raise ValueError(
+            f"Balances must be finite: initial={initial_balance}, final={final_balance}"
+        )
+    if days < 1:
+        # Less than 1 day - return 0 to avoid unrealistic annualized returns
         return 0.0
-    return ((float(final_balance) / float(initial_balance)) ** (365.0 / days) - 1.0) * 100.0
+
+    return ((float(final_balance) / float(initial_balance)) ** (DAYS_PER_YEAR / days) - 1.0) * 100.0
 
 
 def sharpe(daily_balance: pd.Series) -> float:
@@ -87,7 +207,7 @@ def sharpe(daily_balance: pd.Series) -> float:
     std = daily_returns.std()
     if std == 0 or np.isnan(std):
         return 0.0
-    return (daily_returns.mean() / std) * np.sqrt(365.0)
+    return (daily_returns.mean() / std) * np.sqrt(DAYS_PER_YEAR)
 
 
 def max_drawdown(balance_series: pd.Series) -> float:
@@ -180,13 +300,21 @@ def sortino_ratio(daily_balance: pd.Series, risk_free_rate: float = 0.0) -> floa
     daily_balance : pd.Series
         Equity curve resampled at daily frequency (index monotonic).
     risk_free_rate : float
-        Annual risk-free rate as decimal (e.g., 0.02 for 2%).
+        Annual risk-free rate as decimal (must be finite, e.g., 0.02 for 2%).
 
     Returns
     -------
     float
         Annualized Sortino ratio.
+
+    Raises
+    ------
+    ValueError
+        If risk_free_rate is not finite.
     """
+    if not math.isfinite(risk_free_rate):
+        raise ValueError(f"risk_free_rate must be finite, got {risk_free_rate}")
+
     if daily_balance.empty or len(daily_balance) < 2:
         return 0.0
 
@@ -195,22 +323,22 @@ def sortino_ratio(daily_balance: pd.Series, risk_free_rate: float = 0.0) -> floa
         return 0.0
 
     mean_return = daily_returns.mean()
-    daily_rf = risk_free_rate / 365.0
+    daily_rf = risk_free_rate / DAYS_PER_YEAR
 
     # Calculate downside returns (only negative returns)
     downside_returns = daily_returns[daily_returns < daily_rf]
 
     if downside_returns.empty or len(downside_returns) < 2:
         # No downside volatility - cap at large finite value
-        # Using 999.0 instead of infinity to avoid database/JSON issues
-        return 999.0 if mean_return > daily_rf else 0.0
+        # Using MAX_FINITE_RATIO instead of infinity to avoid database/JSON issues
+        return MAX_FINITE_RATIO if mean_return > daily_rf else 0.0
 
     downside_std = downside_returns.std()
     if downside_std == 0 or np.isnan(downside_std):
         return 0.0
 
     # Annualize
-    return (mean_return - daily_rf) / downside_std * np.sqrt(365.0)
+    return (mean_return - daily_rf) / downside_std * np.sqrt(DAYS_PER_YEAR)
 
 
 def calmar_ratio(annualized_return: float, max_drawdown_pct: float) -> float:
@@ -221,20 +349,32 @@ def calmar_ratio(annualized_return: float, max_drawdown_pct: float) -> float:
     Parameters
     ----------
     annualized_return : float
-        Annualized return as percentage (e.g., 15.0 for 15%).
+        Annualized return as percentage (must be finite, e.g., 15.0 for 15%).
     max_drawdown_pct : float
-        Maximum drawdown as percentage (e.g., 20.0 for 20%).
+        Maximum drawdown as percentage (must be finite and non-negative, e.g., 20.0 for 20%).
 
     Returns
     -------
     float
-        Calmar ratio. Returns large finite value (999.0) for zero drawdown
+        Calmar ratio. Returns large finite value (MAX_FINITE_RATIO) for zero drawdown
         with positive returns to avoid infinity/database issues.
+
+    Raises
+    ------
+    ValueError
+        If inputs are not finite or max_drawdown_pct is negative.
     """
+    if not math.isfinite(annualized_return) or not math.isfinite(max_drawdown_pct):
+        raise ValueError(
+            f"Parameters must be finite: return={annualized_return}, drawdown={max_drawdown_pct}"
+        )
+    if max_drawdown_pct < 0:
+        raise ValueError(f"max_drawdown_pct must be non-negative, got {max_drawdown_pct}")
+
     if max_drawdown_pct <= 0:
         # No drawdown case - return large value if positive returns
-        # Using 999.0 instead of infinity to avoid database/JSON issues
-        return 999.0 if annualized_return > 0 else 0.0
+        # Using MAX_FINITE_RATIO instead of infinity to avoid database/JSON issues
+        return MAX_FINITE_RATIO if annualized_return > 0 else 0.0
     return annualized_return / max_drawdown_pct
 
 
@@ -248,13 +388,21 @@ def value_at_risk(returns: pd.Series, confidence: float = 0.95) -> float:
     returns : pd.Series
         Series of returns (as decimals).
     confidence : float
-        Confidence level (e.g., 0.95 for 95% VaR).
+        Confidence level (must be in (0, 1), e.g., 0.95 for 95% VaR).
 
     Returns
     -------
     float
         VaR as decimal (negative value indicates loss).
+
+    Raises
+    ------
+    ValueError
+        If confidence is not in (0, 1).
     """
+    if not (0.0 < confidence < 1.0):
+        raise ValueError(f"confidence must be in (0, 1), got {confidence}")
+
     if returns.empty:
         return 0.0
 
@@ -273,11 +421,11 @@ def expectancy(win_rate: float, avg_win: float, avg_loss: float) -> float:
     Parameters
     ----------
     win_rate : float
-        Win rate as decimal (e.g., 0.6 for 60%).
+        Win rate as decimal (must be in [0, 1], e.g., 0.6 for 60%).
     avg_win : float
-        Average winning trade PnL (must be non-negative).
+        Average winning trade PnL (must be non-negative and finite).
     avg_loss : float
-        Average losing trade PnL (must be negative or zero).
+        Average losing trade PnL (must be negative or zero and finite).
 
     Returns
     -------
@@ -287,8 +435,13 @@ def expectancy(win_rate: float, avg_win: float, avg_loss: float) -> float:
     Raises
     ------
     ValueError
-        If avg_loss is positive or avg_win is negative.
+        If win_rate is not in [0, 1], avg_loss is positive,
+        avg_win is negative, or values are not finite.
     """
+    if not (0.0 <= win_rate <= 1.0):
+        raise ValueError(f"win_rate must be in [0, 1], got {win_rate}")
+    if not math.isfinite(avg_win) or not math.isfinite(avg_loss):
+        raise ValueError(f"avg_win and avg_loss must be finite: win={avg_win}, loss={avg_loss}")
     if avg_loss > 0:
         raise ValueError(f"avg_loss must be negative or zero, got {avg_loss}")
     if avg_win < 0:

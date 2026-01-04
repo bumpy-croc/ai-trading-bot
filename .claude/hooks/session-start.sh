@@ -69,4 +69,12 @@ else
   echo "Warning: $REQUIREMENTS_FILE not found, skipping dependency installation"
 fi
 
+# Install the ATB package in editable mode
+echo "Installing ATB CLI package in editable mode..."
+if pip install -e . --quiet; then
+  echo "ATB CLI installed successfully"
+else
+  echo "Warning: Failed to install ATB CLI package"
+fi
+
 echo "Virtual environment setup complete"

@@ -8,16 +8,23 @@ market-session and timezone awareness.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
+
+logger = logging.getLogger(__name__)
 
 try:
     # Python 3.11+ standard library
     from zoneinfo import ZoneInfo
 except (ImportError, ModuleNotFoundError):  # pragma: no cover
     # Fallback for environments without zoneinfo; will behave as naive UTC
-    ZoneInfo = None  # type: ignore
+    logger.warning(
+        "zoneinfo unavailable, timezone-aware operations will fall back to naive UTC. "
+        "Install tzdata package or upgrade to Python 3.11+ for proper timezone support."
+    )
+    ZoneInfo = None  # type: ignore[misc,assignment]
 
 
 @dataclass
@@ -34,6 +41,16 @@ class MarketSessionDef:
     close_time: time | None = None
     days_of_week: Sequence[int] | None = None  # 1=Mon .. 7=Sun
     is_24h: bool = False
+
+    def __post_init__(self):
+        """Validate timezone string to prevent runtime errors."""
+        if ZoneInfo and self.timezone != "UTC":
+            try:
+                ZoneInfo(self.timezone)
+            except Exception as e:
+                raise ValueError(
+                    f"Invalid timezone '{self.timezone}' for session '{self.name}': {e}"
+                ) from e
 
     def is_open_at(self, dt_utc: datetime) -> bool:
         if self.is_24h:
@@ -57,7 +74,8 @@ class MarketSessionDef:
         if not self.open_time or not self.close_time:
             return None
 
-        # Bound the search to a reasonable number of days to avoid infinite loops
+        # Maximum days to scan for next session close - prevents infinite loops
+        # while accommodating weekly schedules with holidays (2 weeks = ~10 trading days)
         MAX_DAYS_TO_SCAN = 14
 
         tz = ZoneInfo(self.timezone) if ZoneInfo else None
@@ -87,7 +105,12 @@ class MarketSessionDef:
                     break
                 candidate_close = candidate_close + timedelta(days=1)
             else:
-                raise ValueError("No valid session day found within MAX_DAYS_TO_SCAN")
+                # Return None instead of raising - caller expects Optional[datetime]
+                logger.warning(
+                    f"No valid session day found within {MAX_DAYS_TO_SCAN} days for session '{self.name}' "
+                    f"with days_of_week={self.days_of_week}, starting from {dt_utc.isoformat()}"
+                )
+                return None
 
         # Align the time to the session close on the chosen day (in local tz)
         candidate_close = candidate_close.replace(
@@ -200,12 +223,15 @@ class TimeExitPolicy:
         if not candidates:
             return None
 
-        # Return soonest in the future
+        # Return soonest in the future (or None if all are in the past)
         future = [c for c in candidates if c > now_utc]
-        nxt = min(future) if future else min(candidates)
+        if not future:
+            return None  # No future exits scheduled
+        nxt = min(future)
         if preserve_naive:
             try:
                 return nxt.replace(tzinfo=None)
-            except Exception:
+            except (AttributeError, ValueError) as e:
+                logger.debug(f"Could not strip timezone from result: {e}")
                 return nxt
         return nxt

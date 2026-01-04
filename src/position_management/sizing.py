@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import logging
+import math
 from typing import Literal
+
+from src.config.constants import DEFAULT_EPSILON
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_position_size(
@@ -11,11 +17,22 @@ def normalize_position_size(
     """Normalize a strategy-returned size into a fraction of balance.
 
     - fraction: size is already fraction (0..1)
-    - notional: size is dollar notion; convert to fraction by dividing by balance
+    - notional: size is dollar notional; convert to fraction by dividing by balance
     """
-    if balance <= 0:
+    # Validate inputs are finite to prevent NaN/Infinity propagation
+    if not math.isfinite(balance) or not math.isfinite(strategy_returned_size):
+        logger.warning(
+            f"Invalid input to normalize_position_size: balance={balance}, size={strategy_returned_size}"
+        )
+        return 0.0
+    if balance <= DEFAULT_EPSILON:
+        logger.warning(f"Balance too small in normalize_position_size: {balance}")
         return 0.0
     if strategy_returned_size <= 0:
+        # Negative or zero sizes are valid no-position signals, log for consistency
+        logger.debug(
+            f"Strategy returned non-positive size, treating as no-position signal: {strategy_returned_size}"
+        )
         return 0.0
     if mode == "notional":
         return max(0.0, min(1.0, strategy_returned_size / balance))
