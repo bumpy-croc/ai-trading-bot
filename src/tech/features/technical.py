@@ -259,13 +259,13 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         Get list of technical indicator names actually produced by this extractor.
 
         Returns features calculated by _extract_technical_indicators and _extract_derived_features.
-        Note: Does not include intermediate columns like bb_middle, bb_std, macd_fast, macd_slow.
+        Note: Does not include intermediate columns like bb_std, macd_fast, macd_slow.
         """
         indicators = ["rsi", "atr", "atr_pct"]
         if self.enable_bollinger:
-            # Only bb_upper and bb_lower are used as final features
-            # bb_middle and bb_std are intermediate calculations
-            indicators.extend(["bb_upper", "bb_lower"])
+            # bb_middle is used by strategies for distance calculations
+            # bb_std is an intermediate calculation not used directly
+            indicators.extend(["bb_upper", "bb_middle", "bb_lower"])
         if self.enable_macd:
             # Returns macd_hist not macd_histogram to match calculate_macd output
             indicators.extend(["macd", "macd_signal", "macd_hist"])
@@ -291,6 +291,10 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         """
         validation_results = {}
         expected_features = self.get_feature_names()
+
+        # Handle empty DataFrame edge case to prevent division by zero
+        if len(data) == 0:
+            return {feature: False for feature in expected_features}
 
         for feature in expected_features:
             if feature not in data.columns:
