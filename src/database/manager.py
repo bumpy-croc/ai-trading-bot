@@ -2028,6 +2028,7 @@ class DatabaseManager:
         # across the yield boundary. This ensures session cleanup even if caller
         # doesn't fully consume the generator.
         with ExitStack() as stack:
+            session = None  # Initialize to avoid NameError in exception handlers
             try:
                 # Enter the session context - ExitStack handles cleanup
                 session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
@@ -2106,13 +2107,15 @@ class DatabaseManager:
 
             except ValueError as ve:
                 # Validation error - rollback and re-raise
-                session.rollback()
+                if session is not None:
+                    session.rollback()
                 logger.error("Balance update validation failed: %s", ve)
                 raise
 
             except SQLAlchemyError as se:
                 # Database error - rollback and re-raise
-                session.rollback()
+                if session is not None:
+                    session.rollback()
                 logger.error(
                     "Balance update failed for session %s: %s | Change: %+.2f | Reason: %s",
                     session_id,
@@ -2124,7 +2127,8 @@ class DatabaseManager:
 
             except Exception as e:
                 # Unexpected error - rollback and re-raise
-                session.rollback()
+                if session is not None:
+                    session.rollback()
                 logger.critical(
                     "Unexpected error during balance update for session %s: %s",
                     session_id,
@@ -2186,6 +2190,7 @@ class DatabaseManager:
         # across the yield boundary. This ensures session cleanup even if caller
         # doesn't fully consume the generator.
         with ExitStack() as stack:
+            db_session = None  # Initialize to avoid NameError in exception handlers
             try:
                 # Enter the session context - ExitStack handles cleanup
                 db_session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
@@ -2282,13 +2287,15 @@ class DatabaseManager:
 
             except ValueError as ve:
                 # Validation error - rollback and re-raise
-                db_session.rollback()
+                if db_session is not None:
+                    db_session.rollback()
                 logger.error("Position reconciliation validation failed: %s", ve)
                 raise
 
             except SQLAlchemyError as se:
                 # Database error - rollback and re-raise
-                db_session.rollback()
+                if db_session is not None:
+                    db_session.rollback()
                 logger.error(
                     "Position reconciliation failed for position %s: %s",
                     position_db_id,
@@ -2298,7 +2305,8 @@ class DatabaseManager:
 
             except Exception as e:
                 # Unexpected error - rollback and re-raise
-                db_session.rollback()
+                if db_session is not None:
+                    db_session.rollback()
                 logger.critical(
                     "Unexpected error during position reconciliation: %s",
                     e,
@@ -2529,6 +2537,16 @@ class DatabaseManager:
         Returns:
             ID of the created record
         """
+        # Validate required numeric inputs are finite
+        if not math.isfinite(original_value):
+            raise ValueError(f"original_value must be finite, got {original_value}")
+        if not math.isfinite(adjusted_value):
+            raise ValueError(f"adjusted_value must be finite, got {adjusted_value}")
+        if not math.isfinite(adjustment_factor) or adjustment_factor <= 0:
+            raise ValueError(
+                f"adjustment_factor must be positive and finite, got {adjustment_factor}"
+            )
+
         try:
             with self.get_session() as session:
                 adjustment = RiskAdjustment(
@@ -2627,13 +2645,11 @@ class DatabaseManager:
                 gross_profit = sum(float(t.pnl) for t in winning_trades)
                 gross_loss = abs(sum(float(t.pnl) for t in losing_trades))
 
-                profit_factor = (
-                    gross_profit / gross_loss
-                    if gross_loss > 0
-                    else float("inf") if gross_profit > 0 else 1.0
-                )
-                if profit_factor == float("inf"):
-                    profit_factor = 10.0  # Cap at reasonable value
+                # Calculate profit factor consistently with get_performance_metrics
+                if gross_loss > 0:
+                    profit_factor = min(gross_profit / gross_loss, MAX_PROFIT_FACTOR)
+                else:
+                    profit_factor = MAX_PROFIT_FACTOR if gross_profit > 0 else 1.0
 
                 # Calculate expectancy
                 total_pnl = sum(float(t.pnl) for t in trades)
