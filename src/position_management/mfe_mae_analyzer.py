@@ -45,12 +45,14 @@ class MFEMAEAnalyzer:
         """Convert to float, replacing NaN/Infinity with default.
 
         Handles None, NaN, Infinity, and type conversion errors gracefully.
+        Explicitly checks for None to avoid unexpected behavior with boolean values.
         """
         try:
-            result = float(value or default)
+            result = float(default if value is None else value)
             return result if math.isfinite(result) else default
         except (TypeError, ValueError):
             return default
+
     def calculate_avg_mfe_mae_by_strategy(
         self, trades: Iterable[dict], strategy_name: str | None = None
     ) -> dict:
