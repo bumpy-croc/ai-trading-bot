@@ -252,6 +252,11 @@ def calculate_support_resistance(
     """
     Calculate dynamic support and resistance levels.
 
+    WARNING: This function uses center=True in rolling windows, which looks at both past
+    AND future data. DO NOT use this for generating trading signals in backtests or live
+    trading as it introduces look-ahead bias. This function is intended for historical
+    analysis and visualization only.
+
     Args:
         df: DataFrame with OHLCV data containing 'high' and 'low' columns
         period: Period for rolling window to find local extrema (must be positive, default: 20)
