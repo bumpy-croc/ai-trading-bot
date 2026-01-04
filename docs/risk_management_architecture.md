@@ -184,7 +184,7 @@ Most users don't need to use `CoreRiskAdapter` directly - the engines handle thi
 **Scope**: Multi-symbol, portfolio-wide strategic constraints.
 
 **Key Characteristics**:
-- Concrete class: `RiskManager` (global portfolio manager)
+- Concrete class: `PortfolioRiskManager` (global portfolio manager)
 - Singleton instance shared across all positions
 - Thread-safe with locks for concurrent access
 - Tracks state:
@@ -545,7 +545,7 @@ strategy = Strategy(
 )
 
 # LAYER 2: Portfolio-level risk manager
-portfolio_risk = RiskManager(
+portfolio_risk = PortfolioRiskManager(
     parameters=RiskParameters(
         max_daily_risk=0.06,
         max_position_size=0.10,

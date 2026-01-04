@@ -270,9 +270,9 @@ class CoreRiskAdapter(RiskManager):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _require_core_manager(self) -> CoreRiskManager:
+    def _require_core_manager(self) -> PortfolioRiskManager:
         if self._core_manager is None:
-            raise RuntimeError("CoreRiskAdapter is not bound to an engine RiskManager")
+            raise RuntimeError("CoreRiskAdapter is not bound to an engine PortfolioRiskManager")
         return self._core_manager
 
     def _resolve_overrides(self, context: dict[str, Any]) -> dict[str, Any]:
