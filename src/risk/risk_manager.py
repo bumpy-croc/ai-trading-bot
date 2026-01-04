@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -33,6 +34,14 @@ from src.config.constants import (
 )
 from src.tech.indicators.core import calculate_atr
 from src.utils.price_targets import PriceTargetCalculator
+
+# Risk calculation constants
+MIN_ATR_THRESHOLD = 0.001  # Minimum ATR as fraction of price (0.1%)
+MIN_ATR_FALLBACK = 0.01  # Fallback ATR when too small (1% of price)
+TRENDING_RISK_MULTIPLIER = 1.5  # Increase risk in trending markets
+VOLATILE_RISK_MULTIPLIER = 0.6  # Decrease risk in volatile markets
+VALID_REGIMES = frozenset({"normal", "trending", "volatile"})
+VALID_SIDES = frozenset({"long", "short"})
 
 
 @dataclass
@@ -116,10 +125,18 @@ class RiskParameters:
             raise ValueError("partial_exit_targets must be positive percentages (decimals)")
         if any(s <= 0 or s > 1 for s in self.partial_exit_sizes):
             raise ValueError("partial_exit_sizes must be in (0, 1]")
+        if sum(self.partial_exit_sizes) > 1.0:
+            raise ValueError(
+                f"partial_exit_sizes cannot sum to more than 1.0, got {sum(self.partial_exit_sizes)}"
+            )
         if any(t <= 0 for t in self.scale_in_thresholds):
             raise ValueError("scale_in_thresholds must be positive percentages (decimals)")
         if any(s <= 0 or s > 1 for s in self.scale_in_sizes):
             raise ValueError("scale_in_sizes must be in (0, 1]")
+        if self.atr_period <= 0:
+            raise ValueError("atr_period must be positive")
+        if self.correlation_update_frequency_hours <= 0:
+            raise ValueError("correlation_update_frequency_hours must be positive")
 
 
 class RiskManager:
@@ -140,11 +157,27 @@ class RiskManager:
         self._state_lock = threading.RLock()  # Protects positions and daily_risk_used
 
     def reset_daily_risk(self):
-        """Reset daily risk counter"""
+        """Reset daily risk counter to zero.
+
+        This should be called at the start of each trading day to reset
+        the cumulative daily risk exposure tracking. Thread-safe.
+        """
         with self._state_lock:
             self.daily_risk_used = 0.0
 
     def _ensure_atr(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Ensure DataFrame has ATR column, calculating if missing.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            DataFrame with OHLCV data.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with 'atr' column added if it was missing.
+        """
         if "atr" not in df.columns:
             df = calculate_atr(df, period=self.params.atr_period)
         return df
@@ -156,21 +189,52 @@ class RiskManager:
         """
         Calculate position size in units (quantity) based on ATR and risk.
         Kept for backward compatibility and direct usage in tests.
+
+        Parameters
+        ----------
+        price : float
+            Current asset price (must be positive and finite).
+        atr : float
+            Average True Range value (must be finite).
+        balance : float
+            Account balance (must be positive and finite).
+        regime : str, default="normal"
+            Market regime: "normal", "trending", or "volatile".
+
+        Returns
+        -------
+        float
+            Position size in units (quantity), or 0.0 if inputs are invalid.
         """
-        # Validate inputs
+        # Validate inputs for NaN/Infinity
+        if not math.isfinite(price) or not math.isfinite(atr) or not math.isfinite(balance):
+            logging.error(
+                "Non-finite input to calculate_position_size: price=%s, atr=%s, balance=%s",
+                price,
+                atr,
+                balance,
+            )
+            return 0.0
+
+        # Validate positive values
         if price <= 0 or balance <= 0:
             return 0.0
 
+        # Validate regime parameter
+        if regime not in VALID_REGIMES:
+            logging.warning("Unknown regime '%s', treating as 'normal'", regime)
+            regime = "normal"
+
         # Handle zero or very small ATR
-        if atr <= 0 or atr < price * 0.001:  # Less than 0.1% of price
-            atr = price * 0.01  # Use 1% of price as minimum ATR
+        if atr <= 0 or atr < price * MIN_ATR_THRESHOLD:
+            atr = price * MIN_ATR_FALLBACK
 
         # Adjust risk based on market regime
         base_risk = self.params.base_risk_per_trade
         if regime == "trending":
-            risk = base_risk * 1.5
+            risk = base_risk * TRENDING_RISK_MULTIPLIER
         elif regime == "volatile":
-            risk = base_risk * 0.6
+            risk = base_risk * VOLATILE_RISK_MULTIPLIER
         else:
             risk = base_risk
 
@@ -197,7 +261,30 @@ class RiskManager:
         return max(0.0, position_size)
 
     def calculate_stop_loss(self, entry_price: float, atr: float, side: str = "long") -> float:
-        """Calculate adaptive stop loss level (ATR-based)"""
+        """Calculate adaptive stop loss level (ATR-based).
+
+        Parameters
+        ----------
+        entry_price : float
+            Entry price of the position.
+        atr : float
+            Average True Range value.
+        side : str, default="long"
+            Position side: "long" or "short".
+
+        Returns
+        -------
+        float
+            Stop loss price level.
+
+        Raises
+        ------
+        ValueError
+            If side is not "long" or "short".
+        """
+        if side not in VALID_SIDES:
+            raise ValueError(f"side must be 'long' or 'short', got '{side}'")
+
         return PriceTargetCalculator.stop_loss_atr(
             entry_price=entry_price,
             atr=atr,
@@ -285,7 +372,8 @@ class RiskManager:
                 confidence = (
                     float(confidence) if confidence is not None and not pd.isna(confidence) else 0.0
                 )
-            except Exception:
+            except (TypeError, ValueError) as e:
+                logging.debug("Could not convert confidence to float: %s, defaulting to 0.0", e)
                 confidence = 0.0
             fraction = base_fraction * max(0.0, min(1.0, confidence))
         elif sizer == "atr_risk":
@@ -337,33 +425,34 @@ class RiskManager:
                         factor = 1.0
                     if factor < 1.0:
                         fraction = max(0.0, fraction * factor)
-        except Exception:
+        except (TypeError, ValueError, KeyError, AttributeError) as e:
             # Fail-safe: never raise from correlation logic
-            logging.exception("Exception in correlation-based size reduction logic")
+            logging.warning("Error in correlation-based size reduction logic: %s", e)
 
-        # Final clamping and validation
-        final_fraction = max(0.0, min(self.params.max_position_size, fraction))
-
-        # Runtime validation: ensure result respects risk limits
+        # Final clamping and validation (thread-safe)
+        # Perform all risk limit checks atomically to prevent TOCTOU race conditions
         with self._state_lock:
             remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+            final_fraction = max(0.0, min(self.params.max_position_size, fraction))
 
-        if final_fraction > remaining_daily_risk:
-            logging.warning(
-                "Calculated fraction %.4f exceeds remaining daily risk %.4f, clamping to limit",
-                final_fraction,
-                remaining_daily_risk,
-            )
-            final_fraction = remaining_daily_risk
+            # Clamp to remaining daily risk
+            if final_fraction > remaining_daily_risk:
+                logging.warning(
+                    "Calculated fraction %.4f exceeds remaining daily risk %.4f, clamping to limit",
+                    final_fraction,
+                    remaining_daily_risk,
+                )
+                final_fraction = remaining_daily_risk
 
-        if final_fraction > self.params.max_position_size:
-            logging.error(
-                "CRITICAL: Calculated fraction %.4f exceeds max_position_size %.4f. "
-                "This indicates a logic error in position sizing.",
-                final_fraction,
-                self.params.max_position_size,
-            )
-            final_fraction = self.params.max_position_size
+            # Double-check max position size (defensive)
+            if final_fraction > self.params.max_position_size:
+                logging.error(
+                    "CRITICAL: Calculated fraction %.4f exceeds max_position_size %.4f. "
+                    "This indicates a logic error in position sizing.",
+                    final_fraction,
+                    self.params.max_position_size,
+                )
+                final_fraction = self.params.max_position_size
 
         return final_fraction
 
@@ -381,7 +470,36 @@ class RiskManager:
           1) Explicit overrides: stop_loss_pct / take_profit_pct
           2) ATR-based SL via parameters; TP via params.default_take_profit_pct if set
           3) Fallback: (None, None) and engine/strategy may decide
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Market data with OHLCV and optional indicators.
+        index : int
+            Current candle index.
+        entry_price : float
+            Entry price of the position (must be positive and finite).
+        side : str, default="long"
+            Position side: "long" or "short".
+        strategy_overrides : dict, optional
+            Strategy-specific overrides for stop loss and take profit.
+
+        Returns
+        -------
+        tuple[float | None, float | None]
+            (stop_loss_price, take_profit_price) or (None, None) if not set.
+
+        Raises
+        ------
+        ValueError
+            If entry_price is invalid or side is not "long" or "short".
         """
+        # Validate inputs
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError(f"entry_price must be positive and finite, got {entry_price}")
+        if side not in VALID_SIDES:
+            raise ValueError(f"side must be 'long' or 'short', got '{side}'")
+
         strategy_overrides = strategy_overrides or {}
         stop_loss_pct = strategy_overrides.get("stop_loss_pct")
         take_profit_pct = strategy_overrides.get(
@@ -442,7 +560,20 @@ class RiskManager:
         return sl_price, tp_price
 
     def check_drawdown(self, current_balance: float, peak_balance: float) -> bool:
-        """Check if maximum drawdown has been exceeded"""
+        """Check if maximum drawdown has been exceeded.
+
+        Parameters
+        ----------
+        current_balance : float
+            Current account balance.
+        peak_balance : float
+            Peak account balance reached.
+
+        Returns
+        -------
+        bool
+            True if drawdown exceeds configured maximum, False otherwise.
+        """
         if peak_balance == 0:
             return False
 
@@ -462,7 +593,7 @@ class RiskManager:
             Fraction of account balance allocated to this position (0..1).
             This function treats `size` as a fraction for daily risk accounting.
         entry_price : float
-            Entry price of the position.
+            Entry price of the position (must be positive and finite).
 
         Notes
         -----
@@ -470,7 +601,20 @@ class RiskManager:
           the sum of concurrently open position fractions respects
           `params.max_daily_risk` across multiple positions.
         - Thread-safe: protected by internal lock.
+
+        Raises
+        ------
+        ValueError
+            If size, entry_price, or side parameters are invalid.
         """
+        # Validate inputs
+        if not math.isfinite(size) or size <= 0 or size > 1:
+            raise ValueError(f"size must be in (0, 1], got {size}")
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError(f"entry_price must be positive and finite, got {entry_price}")
+        if side not in VALID_SIDES:
+            raise ValueError(f"side must be 'long' or 'short', got '{side}'")
+
         with self._state_lock:
             self.positions[symbol] = {"side": side, "size": size, "entry_price": entry_price}
             # Update daily risk used (approximate: count fraction of balance put at risk)
@@ -483,7 +627,15 @@ class RiskManager:
                 del self.positions[symbol]
 
     def get_total_exposure(self) -> float:
-        """Calculate total position exposure (sum of fractions, thread-safe)."""
+        """Calculate total position exposure (sum of fractions, thread-safe).
+
+        Returns
+        -------
+        float
+            Total exposure as sum of all position size fractions.
+            For example, if positions allocate 0.1 and 0.15 of balance,
+            returns 0.25 (25% total exposure).
+        """
         with self._state_lock:
             return float(sum(pos["size"] for pos in self.positions.values()))
 
@@ -518,6 +670,7 @@ class RiskManager:
                     for s, pos in positions_snapshot.items()
                     if s in sym_set
                 )
+                # Round to prevent floating-point precision issues in comparisons
                 return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
             thr = float(self.params.correlation_threshold if threshold is None else threshold)
@@ -547,7 +700,7 @@ class RiskManager:
                         if (a in corr_matrix.index and b in corr_matrix.columns)
                         else None
                     )
-                    if pd.notna(val) and float(val) >= thr:
+                    if val is not None and pd.notna(val) and float(val) >= thr:
                         union(a, b)
 
             groups: dict[str, list[str]] = {}
@@ -569,12 +722,17 @@ class RiskManager:
                 max_exposure = sum(
                     float(positions_snapshot.get(s, {}).get("size", 0.0)) for s in cols
                 )
+            # Round to prevent floating-point precision issues in comparisons
             return round(max_exposure, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
-        except Exception:
-            # Fail-safe
+        except (TypeError, ValueError, KeyError) as e:
+            # Fail-safe: fall back to simple sum if correlation calculation fails
+            logging.warning(
+                "Error calculating correlated exposure: %s, using simple sum fallback", e
+            )
             exposure = sum(
                 float(pos.get("size", 0.0)) for s, pos in positions_snapshot.items() if s in symbols
             )
+            # Round to prevent floating-point precision issues in comparisons
             return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
     def get_max_concurrent_positions(self) -> int:
@@ -593,6 +751,9 @@ class RiskManager:
         with self._state_lock:
             pos = self.positions.get(symbol)
             if not pos:
+                logging.debug(
+                    "Cannot adjust non-existent position for partial exit: symbol=%s", symbol
+                )
                 return
             current = float(pos.get("size", 0.0))
             new_size = max(0.0, current - float(executed_fraction_of_original))
@@ -612,6 +773,7 @@ class RiskManager:
         with self._state_lock:
             pos = self.positions.get(symbol)
             if not pos:
+                logging.debug("Cannot adjust non-existent position for scale-in: symbol=%s", symbol)
                 return
             current = float(pos.get("size", 0.0))
             # Enforce per-position cap and remaining daily risk
