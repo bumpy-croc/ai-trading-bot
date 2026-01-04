@@ -7,6 +7,7 @@ backtesting and live trading engines.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -183,11 +184,13 @@ class PerformanceTracker:
         if timestamp is None:
             return datetime.now(UTC)
         if isinstance(timestamp, pd.Timestamp):
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.tz_localize(UTC)
+            # Convert pandas Timestamp to datetime
+            ts_converted: pd.Timestamp = timestamp
+            if ts_converted.tzinfo is None:
+                ts_converted = ts_converted.tz_localize(UTC)
             else:
-                timestamp = timestamp.tz_convert(UTC)
-            return timestamp.to_pydatetime()
+                ts_converted = ts_converted.tz_convert(UTC)
+            return ts_converted.to_pydatetime()
         if timestamp.tzinfo is None:
             return timestamp.replace(tzinfo=UTC)
         return timestamp.astimezone(UTC)
@@ -196,8 +199,16 @@ class PerformanceTracker:
         """Initialize the performance tracker.
 
         Args:
-            initial_balance: Starting account balance.
+            initial_balance: Starting account balance (must be positive and finite).
+
+        Raises:
+            ValueError: If initial_balance is not positive and finite.
         """
+        if initial_balance <= 0:
+            raise ValueError(f"initial_balance must be positive, got {initial_balance}")
+        if not math.isfinite(initial_balance):
+            raise ValueError(f"initial_balance must be finite, got {initial_balance}")
+
         self.initial_balance = initial_balance
         self.current_balance = initial_balance
         self.peak_balance = initial_balance
@@ -214,7 +225,12 @@ class PerformanceTracker:
         self._losing_trades = 0
         self._zero_pnl_trades = 0
         self._total_duration_seconds = 0.0
-        self._max_trade_history = 10000  # Limit memory usage
+
+        # Maximum trade history retained for metrics calculation. Limited to prevent
+        # unbounded memory growth in long-running live trading sessions. 10k trades
+        # provides sufficient sample size for statistical metrics while keeping memory
+        # usage under ~1MB (assuming ~100 bytes per trade dict).
+        self._max_trade_history = 10000
 
         # Streak tracking
         self._current_streak_type: str | None = None  # 'win' or 'loss'
@@ -241,15 +257,27 @@ class PerformanceTracker:
 
         Args:
             trade: Completed trade object.
-            fee: Total fee for the trade.
-            slippage: Total slippage cost for the trade.
+            fee: Total fee for the trade (must be non-negative and finite).
+            slippage: Total slippage cost for the trade (must be non-negative and finite).
+
+        Raises:
+            ValueError: If fee or slippage is negative or not finite.
         """
+        if fee < 0 or not math.isfinite(fee):
+            raise ValueError(f"fee must be non-negative and finite, got {fee}")
+        if slippage < 0 or not math.isfinite(slippage):
+            raise ValueError(f"slippage must be non-negative and finite, got {slippage}")
+
         # Extract trade attributes with explicit None handling
         pnl_attr = getattr(trade, "pnl", None)
-        pnl = float(pnl_attr) if pnl_attr is not None else 0.0
+        if pnl_attr is None:
+            symbol = getattr(trade, "symbol", "unknown")
+            raise ValueError(f"Cannot record trade with None PnL for {symbol}")
 
-        if pnl == 0.0 and pnl_attr is None:
-            logger.warning(f"Trade {getattr(trade, 'symbol', 'unknown')} has None PnL")
+        pnl = float(pnl_attr)
+        if not math.isfinite(pnl):
+            symbol = getattr(trade, "symbol", "unknown")
+            raise ValueError(f"Trade {symbol} has non-finite PnL: {pnl}")
 
         entry_time_raw = getattr(trade, "entry_time", None)
         exit_time_raw = getattr(trade, "exit_time", None)
@@ -295,6 +323,12 @@ class PerformanceTracker:
             # Calculate duration
             if entry_time and exit_time:
                 duration = (exit_time - entry_time).total_seconds()
+                if duration < 0:
+                    logger.warning(
+                        f"Trade {getattr(trade, 'symbol', 'unknown')} has negative duration: "
+                        f"entry={entry_time}, exit={exit_time}"
+                    )
+                    duration = 0.0
                 self._total_duration_seconds += duration
 
             # Store trade record
@@ -322,9 +356,17 @@ class PerformanceTracker:
         """Update current balance and recalculate drawdown.
 
         Args:
-            balance: New account balance.
+            balance: New account balance (must be non-negative and finite).
             timestamp: Optional timestamp for the update.
+
+        Raises:
+            ValueError: If balance is not finite or negative.
         """
+        if not math.isfinite(balance):
+            raise ValueError(f"balance must be finite, got {balance}")
+        if balance < 0:
+            raise ValueError(f"balance must be non-negative, got {balance}")
+
         with self._lock:
             self.current_balance = balance
 
@@ -342,6 +384,10 @@ class PerformanceTracker:
             ts = self._normalize_timestamp(timestamp)
             self._balance_history.append((ts, balance))
 
+            # Limit memory usage (same cap as trade history)
+            if len(self._balance_history) > self._max_trade_history:
+                self._balance_history = self._balance_history[-self._max_trade_history:]
+
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics.
 
@@ -352,7 +398,8 @@ class PerformanceTracker:
             PerformanceMetrics with calculated values.
         """
         with self._lock:
-            total_trades = self._winning_trades + self._losing_trades
+            # Include zero-PnL trades in total count for consistency
+            total_trades = self._winning_trades + self._losing_trades + self._zero_pnl_trades
 
             # Calculate win rate
             win_rate = 0.0
@@ -363,6 +410,9 @@ class PerformanceTracker:
             profit_factor = 0.0
             if self._gross_loss > 0:
                 profit_factor = self._gross_profit / self._gross_loss
+            elif self._gross_profit > 0:
+                # All winning trades - cap at finite value like Sortino/Calmar
+                profit_factor = perf_metrics.MAX_FINITE_RATIO
 
             # Calculate averages
             avg_win = 0.0
@@ -395,14 +445,20 @@ class PerformanceTracker:
             total_return_pct = perf_metrics.total_return(self.initial_balance, self.current_balance)
 
             # Calculate annualized return (CAGR)
+            # Require at least 1 day for meaningful annualization
             annualized_return = 0.0
             if len(self._balance_history) >= 2:
                 start_time = self._balance_history[0][0]
                 end_time = self._balance_history[-1][0]
-                days = (end_time - start_time).days or 1
-                annualized_return = perf_metrics.cagr(
-                    self.initial_balance, self.current_balance, days
-                )
+                days = (end_time - start_time).days
+
+                if days < 1:
+                    logger.debug("Insufficient time range for CAGR calculation (< 1 day)")
+                    annualized_return = 0.0
+                else:
+                    annualized_return = perf_metrics.cagr(
+                        self.initial_balance, self.current_balance, days
+                    )
 
             # Calculate current drawdown
             current_drawdown = 0.0
@@ -426,11 +482,16 @@ class PerformanceTracker:
             max_dd_pct = self.max_drawdown * 100.0
             calmar_ratio = perf_metrics.calmar_ratio(annualized_return, max_dd_pct)
 
-            # Calculate VaR (95%) - requires minimum sample size for statistical validity
+            # Value at Risk (95%) - requires minimum sample size for statistical validity
+            # 30 daily balance points = ~1 month of data for meaningful volatility estimates
+            # 20 returns after pct_change = sufficient for percentile calculation stability
+            MIN_VAR_BALANCE_POINTS = 30
+            MIN_VAR_RETURNS = 20
+
             var_95 = 0.0
-            if len(balance_series) >= 30:
+            if len(balance_series) >= MIN_VAR_BALANCE_POINTS:
                 returns = balance_series.pct_change().dropna()
-                if len(returns) >= 20:
+                if len(returns) >= MIN_VAR_RETURNS:
                     var_95 = perf_metrics.value_at_risk(returns, confidence=0.95)
 
             return PerformanceMetrics(
@@ -501,21 +562,25 @@ class PerformanceTracker:
             risk-adjusted metrics, which is acceptable for most trading strategies
             that hold positions for days or longer.
         """
+        # Copy data under lock, then release before expensive operations
+        # to reduce lock contention during pandas resampling
         with self._lock:
             if not self._balance_history:
                 return pd.Series(dtype=float)
+            balance_history_copy = self._balance_history.copy()
 
-            timestamps = [ts for ts, _ in self._balance_history]
-            balances = [bal for _, bal in self._balance_history]
+        # Process without holding lock to avoid blocking other operations
+        timestamps = [ts for ts, _ in balance_history_copy]
+        balances = [bal for _, bal in balance_history_copy]
 
-            series = pd.Series(balances, index=pd.DatetimeIndex(timestamps))
+        series = pd.Series(balances, index=pd.DatetimeIndex(timestamps))
 
-            # Resample to daily frequency for Sharpe/Sortino calculations
-            # Note: Uses end-of-day values only. Intraday volatility is not captured.
-            if len(series) > 1:
-                series = series.resample("1D").last().ffill()
+        # Resample to daily frequency for Sharpe/Sortino calculations
+        # Note: Uses end-of-day values only. Intraday volatility is not captured.
+        if len(series) > 1:
+            series = series.resample("1D").last().ffill()
 
-            return series
+        return series
 
     def get_total_return(self) -> float:
         """Get total return as a decimal.
@@ -541,9 +606,17 @@ class PerformanceTracker:
 
         Args:
             initial_balance: New initial balance, or use existing.
+
+        Raises:
+            ValueError: If initial_balance is not positive and finite.
         """
         with self._lock:
             if initial_balance is not None:
+                # Validate new initial balance like __init__
+                if initial_balance <= 0:
+                    raise ValueError(f"initial_balance must be positive, got {initial_balance}")
+                if not math.isfinite(initial_balance):
+                    raise ValueError(f"initial_balance must be finite, got {initial_balance}")
                 self.initial_balance = initial_balance
             self.current_balance = self.initial_balance
             self.peak_balance = self.initial_balance
