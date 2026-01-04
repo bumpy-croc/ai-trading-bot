@@ -249,6 +249,10 @@ class TestMACD:
         with pytest.raises(ValueError, match="Signal period must be positive"):
             calculate_macd(data, signal_period=-1)
 
+        # Test fast period >= slow period (invalid MACD configuration)
+        with pytest.raises(ValueError, match="Fast period.*must be less than slow period"):
+            calculate_macd(data, fast_period=26, slow_period=12)
+
 
 class TestMarketRegime:
     def test_market_regime_detection(self):

@@ -177,6 +177,10 @@ def calculate_macd(
         raise ValueError(f"Slow period must be positive, got {slow_period}")
     if signal_period <= 0:
         raise ValueError(f"Signal period must be positive, got {signal_period}")
+    if fast_period >= slow_period:
+        raise ValueError(
+            f"Fast period ({fast_period}) must be less than slow period ({slow_period})"
+        )
 
     df = df.copy()
     df["macd_fast"] = df["close"].ewm(span=fast_period, adjust=False).mean()

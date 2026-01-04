@@ -105,7 +105,9 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         self.atr_period = atr_period
         self.bollinger_period = bollinger_period
         self.bollinger_std_dev = bollinger_std_dev
-        self.ma_periods = ma_periods or DEFAULT_MA_PERIODS.copy()
+        # Use explicit None check to distinguish empty list from None
+        # Note: ma_20 and ma_50 are always required for derived features (trend_strength, trend_direction)
+        self.ma_periods = ma_periods if ma_periods is not None else DEFAULT_MA_PERIODS.copy()
 
         # Ensure ma_20 and ma_50 are always included (required for derived features)
         for required_period in [20, 50]:
@@ -217,9 +219,10 @@ class TechnicalFeatureExtractor(FeatureExtractor):
                 valid_mask = (
                     (rolling_max != rolling_min) & rolling_max.notna() & rolling_min.notna()
                 )
+                # Add epsilon to denominator to prevent division warnings when min == max
                 df[f"{feature}_normalized"] = np.where(
                     valid_mask,
-                    (df[feature] - rolling_min) / (rolling_max - rolling_min),
+                    (df[feature] - rolling_min) / (rolling_max - rolling_min + EPSILON),
                     0.5,  # Handle cases where min == max or NaN - use neutral value instead of minimum
                 )
         return df
