@@ -198,7 +198,14 @@ class PredictionModelRegistry:
         # Create runner lazily; for unit tests without real ONNX, provide a stub
         try:
             runner = OnnxRunner(model_path, self.config, self.cache_manager)
-        except Exception:
+        except Exception as e:
+            # Log the actual error before creating stub for graceful degradation
+            logger.error(
+                "Failed to load OnnxRunner for %s: %s. Creating stub runner.",
+                model_path,
+                e,
+                exc_info=True,
+            )
 
             class _StubRunner:
                 def __init__(self, path: str):
