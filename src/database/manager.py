@@ -539,7 +539,15 @@ class DatabaseManager:
                 session_id=session_id,
             )
             session.add(oc)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to record optimization cycle for {strategy_name}/{symbol}: {e}",
+                    exc_info=True,
+                )
+                raise
             return int(oc.id)
 
     def fetch_optimization_cycles(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
@@ -1270,7 +1278,15 @@ class DatabaseManager:
                 )
             )
 
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to fix position status inconsistencies: {e}",
+                    exc_info=True,
+                )
+                raise
 
             fixes_applied = {
                 "orphaned_to_closed": result_orphaned.rowcount,
@@ -1838,7 +1854,15 @@ class DatabaseManager:
                 # SQLAlchemy will cascade delete related records
                 session.delete(old_session)
 
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to cleanup old data: {e}",
+                    exc_info=True,
+                )
+                raise
 
             logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
 
