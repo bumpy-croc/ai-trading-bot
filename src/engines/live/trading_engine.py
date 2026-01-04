@@ -28,6 +28,7 @@ from src.config.constants import (
     DEFAULT_MAX_CHECK_INTERVAL,
     DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
@@ -158,7 +159,7 @@ class LiveTradingEngine:
         risk_parameters: RiskParameters | None = None,
         check_interval: int = DEFAULT_CHECK_INTERVAL,  # seconds
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
-        max_position_size: float = 0.1,  # 10% of balance per position
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         enable_live_trading: bool = False,  # Safety flag - must be explicitly enabled
         log_trades: bool = True,
         alert_webhook_url: str | None = None,
