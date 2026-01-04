@@ -599,6 +599,8 @@ class RiskManager:
             # -> returns a fraction such as 0.03 meaning 3% of balance
         """
         # Early validation
+        if df is None or df.empty:
+            return 0.0
         if balance <= 0 or index < 0 or index >= len(df):
             return 0.0
 
@@ -806,9 +808,11 @@ class RiskManager:
         Raises
         ------
         ValueError
-            If size, entry_price, or side parameters are invalid.
+            If symbol is None/empty, or size, entry_price, or side parameters are invalid.
         """
         # Validate inputs
+        if not symbol:
+            raise ValueError("symbol cannot be None or empty")
         if not math.isfinite(size) or size <= 0 or size > 1:
             raise ValueError(f"size must be in (0, 1], got {size}")
         if not math.isfinite(entry_price) or entry_price <= 0:
@@ -839,7 +843,15 @@ class RiskManager:
         ----------
         symbol : str
             Symbol identifier of position to close.
+
+        Raises
+        ------
+        ValueError
+            If symbol is None or empty string.
         """
+        if not symbol:
+            raise ValueError("symbol cannot be None or empty")
+
         with self._state_lock:
             if symbol in self.positions:
                 pos = self.positions[symbol]
@@ -990,6 +1002,8 @@ class RiskManager:
             Fraction of the original position size that was exited (must be positive).
         """
         # Validate input
+        if not symbol:
+            raise ValueError("symbol cannot be None or empty")
         if not math.isfinite(executed_fraction_of_original) or executed_fraction_of_original <= 0:
             logging.warning(
                 "Invalid executed_fraction for partial exit: %s, ignoring adjustment",
@@ -1034,6 +1048,8 @@ class RiskManager:
             Fraction of the original position size to add (must be positive).
         """
         # Validate input
+        if not symbol:
+            raise ValueError("symbol cannot be None or empty")
         if not math.isfinite(added_fraction_of_original) or added_fraction_of_original <= 0:
             logging.warning(
                 "Invalid added_fraction for scale-in: %s, ignoring adjustment",
