@@ -22,12 +22,18 @@ from src.config.constants import (
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_EXECUTION_FILL_POLICY,
     DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_FEE_RATE,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
@@ -59,6 +65,7 @@ from src.engines.shared.models import (
     BaseTrade,
     PositionSide,
 )
+from src.performance.metrics import Side, pnl_percent
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
@@ -152,7 +159,7 @@ class LiveTradingEngine:
         risk_parameters: RiskParameters | None = None,
         check_interval: int = DEFAULT_CHECK_INTERVAL,  # seconds
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
-        max_position_size: float = 0.1,  # 10% of balance per position
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         enable_live_trading: bool = False,  # Safety flag - must be explicitly enabled
         log_trades: bool = True,
         alert_webhook_url: str | None = None,
@@ -171,10 +178,10 @@ class LiveTradingEngine:
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = False,
         # Execution realism parameters (parity with backtest engine)
-        fee_rate: float = 0.001,  # 0.1% per trade (entry + exit)
-        slippage_rate: float = 0.0005,  # 0.05% slippage per trade
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
-        max_filled_price_deviation: float = 0.5,  # Filled-price deviation threshold
+        max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
         # Handler injection (all optional - defaults created if not provided)
         position_tracker: LivePositionTracker | None = None,
         execution_engine: LiveExecutionEngine | None = None,
@@ -1592,7 +1599,7 @@ class LiveTradingEngine:
                                     )
                                     if short_take_profit is None:
                                         short_take_profit = current_price * (
-                                            1 - getattr(self.strategy, "take_profit_pct", 0.04)
+                                            1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
                                         )
                                 else:
                                     # All strategies should be component-based
@@ -1600,10 +1607,10 @@ class LiveTradingEngine:
                                         f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                                     )
                                     short_stop_loss = (
-                                        current_price * 1.05
+                                        current_price * (1 + DEFAULT_STOP_LOSS_PCT)
                                     )  # Default 5% stop for short
                                     short_take_profit = current_price * (
-                                        1 - getattr(self.strategy, "take_profit_pct", 0.04)
+                                        1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
                                     )
                                 self._execute_entry(
                                     symbol=symbol,
@@ -1871,21 +1878,18 @@ class LiveTradingEngine:
 
             # Log exit decision for each position
             if self.db_manager:
-                # Calculate current P&L for context
-                # Validate entry_price to prevent division by zero from corrupted position data
+                # Calculate current P&L for context using shared function for consistency
+                # Note: Using fraction=1.0 to get raw P&L percentage for logging (unsized)
                 if position.entry_price <= 0:
                     logger.error(
                         f"Invalid entry_price {position.entry_price} for position {position.symbol} - "
                         "skipping P&L calculation for logging"
                     )
                     current_pnl = 0.0  # Fallback value for logging
-                elif position.side == PositionSide.LONG:
-                    current_pnl = (float(current_price) - float(position.entry_price)) / float(
-                        position.entry_price
-                    )
                 else:
-                    current_pnl = (float(position.entry_price) - float(current_price)) / float(
-                        position.entry_price
+                    side_enum = Side.LONG if position.side == PositionSide.LONG else Side.SHORT
+                    current_pnl = pnl_percent(
+                        position.entry_price, float(current_price), side_enum, 1.0
                     )
 
                 # Prepare logging reasons with TradingDecision data if available
@@ -2128,7 +2132,7 @@ class LiveTradingEngine:
             except Exception:
                 if stop_loss is None:
                     stop_loss = float(current_price) * (
-                        0.95 if entry_side == PositionSide.LONG else 1.05
+                        (1 - DEFAULT_STOP_LOSS_PCT) if entry_side == PositionSide.LONG else (1 + DEFAULT_STOP_LOSS_PCT)
                     )
             if take_profit is None:
                 tp_pct = self._resolve_take_profit_pct()
@@ -2157,7 +2161,7 @@ class LiveTradingEngine:
             except Exception as e:
                 self.logger.debug(f"Component stop loss calculation failed: {e}")
                 stop_loss = float(current_price) * (
-                    0.95 if entry_side == PositionSide.LONG else 1.05
+                    (1 - DEFAULT_STOP_LOSS_PCT) if entry_side == PositionSide.LONG else (1 + DEFAULT_STOP_LOSS_PCT)
                 )
             tp_pct = self._resolve_take_profit_pct()
             take_profit = (
@@ -2184,14 +2188,14 @@ class LiveTradingEngine:
                     strategy_overrides=overrides,
                 )
                 if take_profit is None:
-                    take_profit = current_price * (1 + overrides.get("take_profit_pct", 0.04))
+                    take_profit = current_price * (1 + overrides.get("take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             else:
                 # All strategies should be component-based
                 self.logger.error(
                     f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                 )
-                stop_loss = current_price * 0.95  # Default 5% stop for long
-                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
+                stop_loss = current_price * (1 - DEFAULT_STOP_LOSS_PCT)  # Default 5% stop for long
+                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             entry_side = PositionSide.LONG
 
         self._execute_entry(
@@ -2213,15 +2217,15 @@ class LiveTradingEngine:
                 try:
                     return float(params.default_take_profit_pct)
                 except (TypeError, ValueError):
-                    return 0.04
+                    return DEFAULT_TAKE_PROFIT_PCT
         except Exception:
-            return 0.04
+            return DEFAULT_TAKE_PROFIT_PCT
 
-        value = getattr(self.strategy, "take_profit_pct", 0.04)
+        value = getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
         try:
             return float(value)
         except (TypeError, ValueError):
-            return 0.04
+            return DEFAULT_TAKE_PROFIT_PCT
 
     def _resolve_execution_fill_policy(self) -> FillPolicy:
         """Resolve execution fill policy from configuration."""
@@ -2333,12 +2337,11 @@ class LiveTradingEngine:
                                     f"{position.entry_price} for {symbol}"
                                 )
                             else:
+                                # Use quantity from position - LiveEntryResult.position.quantity
                                 self.exchange_interface.place_market_order(
                                     symbol=symbol,
                                     side=close_side,
-                                    quantity=position.size
-                                    * result.position_value
-                                    / position.entry_price,
+                                    quantity=result.position.quantity,
                                 )
                             logger.warning(
                                 "Emergency close placed for %s due to balance update failure",
@@ -2381,21 +2384,20 @@ class LiveTradingEngine:
                     try:
                         close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
 
-                        # Validate entry_price before division to prevent crashes
-                        if position.entry_price <= 0:
+                        # Use quantity from position - LiveEntryResult.position.quantity
+                        # No need to recalculate from entry_price which could introduce errors
+                        if result.position.quantity <= 0:
                             logger.critical(
-                                "CRITICAL: Cannot calculate emergency close quantity for %s - "
-                                "invalid entry_price %.8f. MANUAL INTERVENTION REQUIRED.",
+                                "CRITICAL: Cannot place emergency close for %s - "
+                                "invalid quantity %.8f. MANUAL INTERVENTION REQUIRED.",
                                 symbol,
-                                position.entry_price,
+                                result.position.quantity,
                             )
                         else:
                             self.exchange_interface.place_market_order(
                                 symbol=symbol,
                                 side=close_side,
-                                quantity=position.size
-                                * self.current_balance
-                                / position.entry_price,
+                                quantity=result.position.quantity,
                             )
                             logger.info(
                                 "Emergency close order placed for orphaned position %s", symbol
@@ -2814,7 +2816,11 @@ class LiveTradingEngine:
             entry_slippage_cost = float(position.metadata.get("entry_slippage_cost", 0.0))
             total_fee = entry_fee + exit_fee
             total_slippage = entry_slippage_cost + exit_slippage_cost
-            net_trade_pnl = realized_pnl - entry_fee
+
+            # Store GROSS P&L in Trade.pnl for parity with backtest engine
+            # Fees are tracked separately via performance_tracker.record_trade()
+            # This matches backtest behavior where Trade.pnl is price movement only
+            gross_pnl = exit_result.realized_pnl
 
             trade = Trade(
                 symbol=position.symbol,
@@ -2826,7 +2832,7 @@ class LiveTradingEngine:
                 exit_price=exit_price,
                 entry_time=position.entry_time,
                 exit_time=datetime.now(UTC),
-                pnl=net_trade_pnl,
+                pnl=gross_pnl,
                 pnl_percent=pnl_percent,
                 exit_reason=reason,
             )
@@ -2850,7 +2856,7 @@ class LiveTradingEngine:
                         if position.current_size is not None
                         else position.size
                     ),
-                    pnl=net_trade_pnl,
+                    pnl=gross_pnl,
                     strategy_name=self._strategy_name(),
                     exit_reason=reason,
                     entry_time=position.entry_time,
@@ -2890,7 +2896,7 @@ class LiveTradingEngine:
                 "📈 Closed %s position for %s: PnL=$%.2f, Reason=%s, Balance=$%.2f",
                 position.side.value,
                 position.symbol,
-                net_trade_pnl,
+                gross_pnl,
                 reason,
                 self.current_balance,
             )
@@ -2900,7 +2906,7 @@ class LiveTradingEngine:
                 symbol=position.symbol,
                 side=position.side.value,
                 exit_price=exit_price,
-                pnl=net_trade_pnl,
+                pnl=gross_pnl,
                 pnl_percent=trade.pnl_percent,
                 reason=reason,
             )
@@ -3482,17 +3488,19 @@ class LiveTradingEngine:
                         if position.current_size is not None
                         else position.size
                     )
-                    # Guard against division by zero
+                    # Guard against division by zero (pnl_percent handles this but we log)
                     if position.entry_price <= 0:
                         logger.error(
                             f"Invalid entry_price {position.entry_price} for position "
                             f"{position.symbol} - skipping reconciliation"
                         )
                         continue
-                    if position.side == PositionSide.LONG:
-                        pnl_pct = (exit_price - position.entry_price) / position.entry_price
-                    else:
-                        pnl_pct = (position.entry_price - exit_price) / position.entry_price
+
+                    # Use shared pnl_percent for parity with backtest engine
+                    side_enum = Side.LONG if position.side == PositionSide.LONG else Side.SHORT
+                    pnl_pct_sized = pnl_percent(
+                        position.entry_price, exit_price, side_enum, fraction
+                    )
 
                     # Use entry_balance for PnL calculation to maintain backtest-live parity
                     basis_balance = (
@@ -3500,15 +3508,18 @@ class LiveTradingEngine:
                         if position.entry_balance is not None and position.entry_balance > 0
                         else self.current_balance
                     )
-                    # Calculate exit fee and slippage (matching normal exit flow)
+                    # Calculate exit fee for filled offline stop-loss
+                    # Slippage is zero for filled orders - slippage already occurred on exchange
+                    # and is reflected in the fill price. Matches execute_filled_exit behavior.
                     exit_position_notional = (
                         basis_balance * fraction * (exit_price / position.entry_price)
                     )
                     exit_fee = self.live_execution_engine.calculate_exit_fee(exit_position_notional)
-                    exit_slippage_cost = self.live_execution_engine.calculate_slippage_cost(
-                        exit_position_notional
-                    )
-                    realized_pnl = pnl_pct * fraction * basis_balance - exit_fee
+                    exit_slippage_cost = 0.0  # Slippage already in fill price
+                    # Calculate GROSS P&L for Trade.pnl (parity with backtest engine)
+                    # and NET P&L for balance updates
+                    gross_pnl = pnl_pct_sized * basis_balance
+                    realized_pnl = gross_pnl - exit_fee  # Net P&L for balance update
 
                     # Atomic balance update for offline stop-loss reconciliation
                     if self.trading_session_id is not None:
@@ -3538,6 +3549,8 @@ class LiveTradingEngine:
                             f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
                             f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
                         )
+                    # Store GROSS P&L in Trade.pnl for parity with backtest engine
+                    # Fees are tracked separately via performance_tracker.record_trade()
                     trade = Trade(
                         symbol=position.symbol,
                         side=position.side,
@@ -3546,8 +3559,8 @@ class LiveTradingEngine:
                         exit_price=exit_price,
                         entry_time=position.entry_time,
                         exit_time=datetime.now(UTC),
-                        pnl=realized_pnl,
-                        pnl_percent=pnl_pct,
+                        pnl=gross_pnl,
+                        pnl_percent=pnl_pct_sized,
                         exit_reason="stop_loss_offline",
                     )
                     self.performance_tracker.record_trade(

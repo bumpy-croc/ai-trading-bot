@@ -190,13 +190,13 @@ class PerformanceTracker:
         if timestamp is None:
             return datetime.now(UTC)
         if isinstance(timestamp, pd.Timestamp):
-            # Normalize pandas Timestamp to UTC, then convert to native datetime
-            ts_utc: pd.Timestamp = timestamp
-            if ts_utc.tzinfo is None:
-                ts_utc = ts_utc.tz_localize(UTC)
+            # Convert pandas Timestamp to datetime
+            ts_converted: pd.Timestamp = timestamp
+            if ts_converted.tzinfo is None:
+                ts_converted = ts_converted.tz_localize(UTC)
             else:
-                ts_utc = ts_utc.tz_convert(UTC)
-            return ts_utc.to_pydatetime()
+                ts_converted = ts_converted.tz_convert(UTC)
+            return ts_converted.to_pydatetime()
         if timestamp.tzinfo is None:
             return timestamp.replace(tzinfo=UTC)
         return timestamp.astimezone(UTC)
@@ -392,7 +392,7 @@ class PerformanceTracker:
 
             # Limit memory usage (same cap as trade history)
             if len(self._balance_history) > self._max_trade_history:
-                self._balance_history = self._balance_history[-self._max_trade_history :]
+                self._balance_history = self._balance_history[-self._max_trade_history:]
 
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics.

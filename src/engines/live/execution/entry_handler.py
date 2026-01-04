@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MAX_STOP_LOSS_PCT,
     DEFAULT_MIN_STOP_LOSS_PCT,
@@ -47,8 +48,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_VOLUME = 0.0
-# Maximum acceptable filled-price deviation from signal price before logging a critical warning.
-MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -97,7 +96,7 @@ class LiveEntryHandler:
         correlation_handler: CorrelationHandler | None = None,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         default_take_profit_pct: float | None = None,
-        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
+        max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize entry handler.
 

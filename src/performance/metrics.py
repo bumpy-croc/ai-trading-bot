@@ -69,13 +69,12 @@ def pnl_percent(
     >>> pnl_percent(100, 105, Side.LONG, 0.5)
     0.025   # +2.5 % on *total* balance (5 % move × 50 % position size)
     """
-    # Check finiteness before positivity to provide accurate error messages for infinity
-    if not math.isfinite(entry_price) or not math.isfinite(exit_price):
-        raise ValueError(f"Prices must be finite: entry={entry_price}, exit={exit_price}")
     if entry_price <= 0:
         raise ValueError(f"entry_price must be positive, got {entry_price}")
     if exit_price <= 0:
         raise ValueError(f"exit_price must be positive, got {exit_price}")
+    if not math.isfinite(entry_price) or not math.isfinite(exit_price):
+        raise ValueError(f"Prices must be finite: entry={entry_price}, exit={exit_price}")
     if not (0.0 <= fraction <= 1.0):
         raise ValueError(f"fraction must be in [0, 1], got {fraction}")
 
@@ -375,9 +374,6 @@ def calmar_ratio(annualized_return: float, max_drawdown_pct: float) -> float:
     if max_drawdown_pct <= 0:
         # No drawdown case - return large value if positive returns
         # Using MAX_FINITE_RATIO instead of infinity to avoid database/JSON issues
-        # Note: When both annualized_return=0 and max_drawdown_pct=0, this returns 0.0
-        # This scenario is logically improbable (zero return with zero volatility)
-        # and may indicate data corruption, but we handle it gracefully
         return MAX_FINITE_RATIO if annualized_return > 0 else 0.0
     return annualized_return / max_drawdown_pct
 

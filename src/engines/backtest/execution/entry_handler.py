@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
@@ -49,8 +50,6 @@ DEFAULT_VOLUME = 0.0
 # Maximum age (in seconds) before a pending entry is considered stale and discarded.
 # Default of 1 hour prevents very old signals from executing in changed conditions.
 MAX_PENDING_ENTRY_AGE_SECONDS = 3600
-# Maximum acceptable filled-price deviation from signal price before logging a critical warning.
-MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -100,7 +99,7 @@ class EntryHandler:
         correlation_handler: Any | None = None,
         default_take_profit_pct: float | None = None,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
-        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
+        max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize entry handler.
 
