@@ -187,6 +187,7 @@ class MLSignalGenerator(SignalGenerator):
                     "reason": "invalid_prediction_or_price",
                     "prediction": prediction,
                     "current_price": current_price,
+                    "predicted_return": 0,  # Set to 0 when price is invalid
                     "index": index,
                 },
             )
@@ -569,6 +570,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                     "reason": "invalid_prediction_or_price",
                     "prediction": prediction,
                     "current_price": current_price,
+                    "predicted_return": 0,  # Set to 0 when price is invalid
                     "index": index,
                 },
             )

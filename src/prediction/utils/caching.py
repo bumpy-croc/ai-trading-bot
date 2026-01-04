@@ -71,7 +71,9 @@ class FeatureCache:
             "quick_hash_matches": 0,  # Track quick hash performance
             "full_hash_verifications": 0,  # Track full hash usage
         }
-        self._lock = threading.RLock()  # Reentrant lock to protect cache and stats from concurrent access
+        self._lock = (
+            threading.RLock()
+        )  # Reentrant lock to protect cache and stats from concurrent access
 
     def _generate_quick_hash(self, data: pd.DataFrame) -> str:
         """
@@ -277,13 +279,15 @@ class FeatureCache:
             True if valid cached result exists, False otherwise
 
         Note:
-            This method does NOT update cache statistics to avoid side effects
+            This method increments the misses counter when entry is not found
+            or has expired, but does NOT increment hits to avoid side effects
             from what is semantically a query operation.
         """
         with self._lock:
             # Use _find_by_quick_hash directly without updating stats
             result = self._find_by_quick_hash(data, extractor_name, config)
             if result is None:
+                self._stats["misses"] += 1
                 return False
 
             cache_key, entry = result
@@ -292,6 +296,7 @@ class FeatureCache:
             if not entry.is_valid():
                 del self._cache[cache_key]
                 self._stats["evictions"] += 1
+                self._stats["misses"] += 1
                 return False
 
             return True
