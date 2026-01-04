@@ -94,15 +94,12 @@ def with_network_retry(
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
-            last_exception: Exception | None = None
-
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
 
                 except retryable_exceptions as e:
                     # Network-level errors - always retryable
-                    last_exception = e
                     if attempt < max_retries:
                         delay = _calculate_delay(
                             attempt, base_delay, max_delay, exponential_base, jitter
@@ -132,7 +129,6 @@ def with_network_retry(
                     # HTTP-level errors - check if retryable by status code
                     # Safely access status_code with validation to prevent AttributeError
                     status_code = getattr(e.response, "status_code", None) if e.response else None
-                    last_exception = e
 
                     if status_code is not None and status_code in retryable_status_codes:
                         if attempt < max_retries:
@@ -174,11 +170,6 @@ def with_network_retry(
                 except Exception:
                     # Non-network exceptions - don't retry
                     raise
-
-            # All retries exhausted
-            if last_exception:
-                raise last_exception
-            raise RuntimeError(f"{func.__name__} failed after {max_retries} retries")
 
         return wrapper
 
