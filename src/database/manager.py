@@ -2197,8 +2197,10 @@ class DatabaseManager:
 
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with db_session.begin_nested():
-                    # 1. Atomic balance update
-                    current_balance = AccountBalance.get_current_balance(session_id, db_session)
+                    # 1. Atomic balance update with row-level lock to prevent race conditions
+                    current_balance = AccountBalance.get_current_balance(
+                        session_id, db_session, for_update=True
+                    )
                     new_balance = current_balance + realized_pnl
 
                     # Validate balance won't go negative
@@ -2783,6 +2785,12 @@ class DatabaseManager:
         target_level: int | None = None,
     ) -> int:
         """Log a partial exit or scale-in operation for a position."""
+        # Validate financial inputs
+        if not math.isfinite(size) or size <= 0:
+            raise ValueError(f"size must be positive and finite, got {size}")
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"price must be positive and finite, got {price}")
+
         with self.get_session() as session:
             try:
                 op_type = (
@@ -2815,6 +2823,14 @@ class DatabaseManager:
         target_level: int,
     ) -> None:
         """Convenience method: append partial trade, decrement current size, increment counters."""
+        # Validate financial inputs
+        if not math.isfinite(executed_fraction_of_original) or executed_fraction_of_original <= 0:
+            raise ValueError(
+                f"executed_fraction_of_original must be positive and finite, got {executed_fraction_of_original}"
+            )
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"price must be positive and finite, got {price}")
+
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
@@ -2855,6 +2871,14 @@ class DatabaseManager:
         threshold_level: int,
     ) -> None:
         """Convenience method: append scale-in trade, increment current size and counters."""
+        # Validate financial inputs
+        if not math.isfinite(added_fraction_of_original) or added_fraction_of_original <= 0:
+            raise ValueError(
+                f"added_fraction_of_original must be positive and finite, got {added_fraction_of_original}"
+            )
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"price must be positive and finite, got {price}")
+
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
@@ -2925,6 +2949,12 @@ class DatabaseManager:
         Returns:
             Order ID
         """
+        # Validate financial inputs
+        if not math.isfinite(quantity) or quantity <= 0:
+            raise ValueError(f"quantity must be positive and finite, got {quantity}")
+        if price is not None and (not math.isfinite(price) or price <= 0):
+            raise ValueError(f"price must be positive and finite, got {price}")
+
         with self.get_session() as session:
             # * Convert string enums if necessary
             if isinstance(order_type, str):
