@@ -360,14 +360,12 @@ class DynamicRiskManager:
         if recovery_return > 0:
             for threshold in sorted(self.config.recovery_thresholds, reverse=True):
                 if recovery_return >= threshold:
-                    # Gradual recovery - reduce risk reduction
-                    recovery_factor = min(
-                        1.0,
-                        1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR,
-                    )
+                    # Gradual recovery - scale toward full risk (1.0) proportionally
+                    # Remove outer min() to allow gradual scaling; clamp at return instead
+                    recovery_factor = 1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR
                     return RiskAdjustments(
                         position_size_factor=min(1.0, recovery_factor),
-                        stop_loss_tightening=max(1.0, 1.0 / recovery_factor),
+                        stop_loss_tightening=max(1.0, 1.0 / min(recovery_factor, 1.0)),
                         daily_risk_factor=min(1.0, recovery_factor),
                         primary_reason=f"recovery_{recovery_return:.1%}",
                     )

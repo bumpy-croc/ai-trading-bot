@@ -34,6 +34,11 @@ class PositionState:
             raise ValueError(f"entry_price must be finite and positive, got {self.entry_price}")
         if self.side not in ("long", "short"):
             raise ValueError(f"side must be 'long' or 'short', got {self.side}")
+        # Validate counter fields to prevent index errors in check methods
+        if self.partial_exits_taken < 0:
+            raise ValueError(f"partial_exits_taken cannot be negative, got {self.partial_exits_taken}")
+        if self.scale_ins_taken < 0:
+            raise ValueError(f"scale_ins_taken cannot be negative, got {self.scale_ins_taken}")
 
 
 @dataclass

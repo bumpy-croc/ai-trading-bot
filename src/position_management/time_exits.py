@@ -42,6 +42,16 @@ class MarketSessionDef:
     days_of_week: Sequence[int] | None = None  # 1=Mon .. 7=Sun
     is_24h: bool = False
 
+    def __post_init__(self):
+        """Validate timezone string to prevent runtime errors."""
+        if ZoneInfo and self.timezone != "UTC":
+            try:
+                ZoneInfo(self.timezone)
+            except Exception as e:
+                raise ValueError(
+                    f"Invalid timezone '{self.timezone}' for session '{self.name}': {e}"
+                )
+
     def is_open_at(self, dt_utc: datetime) -> bool:
         if self.is_24h:
             return True
@@ -213,9 +223,11 @@ class TimeExitPolicy:
         if not candidates:
             return None
 
-        # Return soonest in the future
+        # Return soonest in the future (or None if all are in the past)
         future = [c for c in candidates if c > now_utc]
-        nxt = min(future) if future else min(candidates)
+        if not future:
+            return None  # No future exits scheduled
+        nxt = min(future)
         if preserve_naive:
             try:
                 return nxt.replace(tzinfo=None)

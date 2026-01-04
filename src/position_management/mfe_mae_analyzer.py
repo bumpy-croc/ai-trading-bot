@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -38,6 +39,18 @@ class MFEMAEAnalyzer:
     - Risk tolerance adequacy (MAE vs stop-loss settings)
     - Optimal profit-taking levels (common MFE patterns)
     """
+
+    @staticmethod
+    def _safe_float(value, default=0.0):
+        """Convert to float, replacing NaN/Infinity with default.
+
+        Handles None, NaN, Infinity, and type conversion errors gracefully.
+        """
+        try:
+            result = float(value or default)
+            return result if math.isfinite(result) else default
+        except (TypeError, ValueError):
+            return default
     def calculate_avg_mfe_mae_by_strategy(
         self, trades: Iterable[dict], strategy_name: str | None = None
     ) -> dict:
@@ -55,8 +68,9 @@ class MFEMAEAnalyzer:
         ]
         if not records:
             return {"avg_mfe": 0.0, "avg_mae": 0.0}
-        mfe_vals = [float(t.get("mfe", 0.0) or 0.0) for t in records]
-        mae_vals = [float(t.get("mae", 0.0) or 0.0) for t in records]
+        # Use _safe_float to filter out NaN/Infinity values from corrupted data
+        mfe_vals = [self._safe_float(t.get("mfe", 0.0)) for t in records]
+        mae_vals = [self._safe_float(t.get("mae", 0.0)) for t in records]
         return {
             "avg_mfe": sum(mfe_vals) / len(mfe_vals) if mfe_vals else 0.0,
             "avg_mae": sum(mae_vals) / len(mae_vals) if mae_vals else 0.0,
@@ -76,8 +90,9 @@ class MFEMAEAnalyzer:
         """
         ratios = []
         for t in trades:
-            mae = abs(float(t.get("mae", 0.0) or 0.0))
-            mfe = float(t.get("mfe", 0.0) or 0.0)
+            # Use _safe_float to filter out NaN/Infinity values from corrupted data
+            mae = abs(self._safe_float(t.get("mae", 0.0)))
+            mfe = self._safe_float(t.get("mfe", 0.0))
             if mae > 0:
                 ratios.append(mfe / mae)
         return {"avg_ratio": (sum(ratios) / len(ratios)) if ratios else 0.0}
@@ -99,8 +114,9 @@ class MFEMAEAnalyzer:
         """
         efficiencies = []
         for t in trades:
-            pnl = float(t.get("pnl_percent", 0.0) or 0.0) / 100.0
-            mfe = float(t.get("mfe", 0.0) or 0.0)
+            # Use _safe_float to filter out NaN/Infinity values from corrupted data
+            pnl = self._safe_float(t.get("pnl_percent", 0.0)) / 100.0
+            mfe = self._safe_float(t.get("mfe", 0.0))
             if mfe > 0:
                 eff = max(0.0, min(1.0, pnl / mfe))
                 efficiencies.append(eff)

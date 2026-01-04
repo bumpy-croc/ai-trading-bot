@@ -114,6 +114,12 @@ class TrailingStopPolicy:
         if not math.isfinite(position_fraction):
             logger.debug(f"Invalid position_fraction in trailing stop: {position_fraction}")
             return existing_stop, trailing_activated, breakeven_triggered
+        # Validate existing_stop to prevent NaN propagation through max/min operations
+        if existing_stop is not None and (not math.isfinite(existing_stop) or existing_stop <= 0):
+            logger.warning(
+                f"Invalid existing_stop in trailing stop: {existing_stop}, resetting to None"
+            )
+            existing_stop = None
 
         # Compute position-level PnL fraction (decimal, e.g., 0.015 for +1.5%)
         pnl_frac = self._pnl_fraction(entry_price, current_price, side, max(0.0, position_fraction))
