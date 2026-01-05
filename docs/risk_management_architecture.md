@@ -497,7 +497,7 @@ strategy_b = Strategy(
 # Initialize engine with global risk manager
 engine = BacktestEngine(
     strategy=strategy,
-    risk_manager=RiskManager(
+    risk_manager=PortfolioRiskManager(
         parameters=RiskParameters(max_daily_risk=0.06),
         max_concurrent_positions=3,
     ),
@@ -623,7 +623,7 @@ engine = BacktestEngine(
 from src.strategies.components.risk_manager import RiskManager as StrategyRiskComponent
 
 # Portfolio manager (concrete)
-from src.risk.risk_manager import PortfolioRiskManager as PortfolioRiskManager
+from src.risk.risk_manager import PortfolioRiskManager
 ```
 
 ### Pitfall 2: Not Understanding daily_risk_used

@@ -248,6 +248,17 @@ class PortfolioRiskManager:
     position size by stop loss distance percentage. This would allow larger
     positions with tight stops while maintaining true risk limits.
 
+    Example:
+        # Scenario: You have max_daily_risk=0.10 (10%)
+        # You open 3 positions of 3% each
+        position1 = 0.03  # daily_risk_used = 0.03
+        position2 = 0.03  # daily_risk_used = 0.06
+        position3 = 0.03  # daily_risk_used = 0.09
+        # Remaining: 0.10 - 0.09 = 0.01 (1% left)
+
+        # You CANNOT open a 5% position even if stop loss is tight
+        # because exposure tracking is conservative
+
     Thread Safety
     -------------
     All operations on shared state (positions dict and daily_risk_used counter)
