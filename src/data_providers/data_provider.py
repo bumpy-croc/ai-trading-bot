@@ -49,17 +49,32 @@ class DataProvider(ABC):
 
         # Validate that critical price columns contain valid finite values
         # NaN/Infinity in price data would corrupt position sizing and P&L calculations
+        # For production resilience, we drop invalid rows and log a warning instead of failing
+        original_length = len(df)
         for col in ["open", "high", "low", "close"]:
-            if df[col].isna().any():
-                raise ValueError(
-                    f"Invalid data in {col}: contains NaN values. "
-                    "This indicates malformed data from the exchange or processing error."
+            # Check for invalid values
+            invalid_mask = df[col].isna() | np.isinf(df[col])
+            invalid_count = invalid_mask.sum()
+
+            if invalid_count > 0:
+                logger.warning(
+                    "Dropping %d rows with invalid %s values (NaN/Infinity) "
+                    "from exchange data. This may indicate temporary exchange issues "
+                    "or network problems. Remaining rows: %d/%d",
+                    invalid_count,
+                    col,
+                    original_length - invalid_count,
+                    original_length,
                 )
-            if np.isinf(df[col]).any():
-                raise ValueError(
-                    f"Invalid data in {col}: contains Infinity values. "
-                    "This indicates malformed data from the exchange or processing error."
-                )
+                df = df[~invalid_mask].copy()
+
+        # If all rows were invalid, return empty DataFrame to allow retry on next cycle
+        if len(df) == 0:
+            logger.warning(
+                "All rows contained invalid price data (NaN/Infinity). "
+                "Returning empty DataFrame. System will retry on next cycle."
+            )
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
         return df.set_index("timestamp")
 
