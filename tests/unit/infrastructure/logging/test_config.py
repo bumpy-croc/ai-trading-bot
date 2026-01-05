@@ -446,23 +446,23 @@ class TestBuildLoggingConfig:
             assert "filters" in config
 
     def test_json_formatter_when_enabled(self):
-        """Test that JSON formatter is used when json=True."""
+        """Test that JSON formatter is used when use_json=True."""
         with patch("src.infrastructure.logging.config.get_config") as mock_config:
             mock_config.return_value = MagicMock()
             mock_config.return_value.get.return_value = "INFO"
 
-            config = build_logging_config(json=True)
+            config = build_logging_config(use_json=True)
 
             assert "()" in config["formatters"]["default"]
             assert "SimpleJsonFormatter" in config["formatters"]["default"]["()"]
 
     def test_text_formatter_when_json_disabled(self):
-        """Test that text formatter is used when json=False."""
+        """Test that text formatter is used when use_json=False."""
         with patch("src.infrastructure.logging.config.get_config") as mock_config:
             mock_config.return_value = MagicMock()
             mock_config.return_value.get.return_value = "INFO"
 
-            config = build_logging_config(json=False)
+            config = build_logging_config(use_json=False)
 
             assert "format" in config["formatters"]["default"]
 
@@ -520,7 +520,7 @@ class TestLoggingConfigIntegration:
             mock_config.return_value.get.return_value = "INFO"
 
             # Build config
-            config = build_logging_config(level_name="INFO", json=True)
+            config = build_logging_config(level_name="INFO", use_json=True)
 
             # Verify all filters are configured
             assert "redact" in config["filters"]

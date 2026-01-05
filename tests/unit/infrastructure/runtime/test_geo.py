@@ -2,10 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.infrastructure.runtime.geo import (
-    _geo_cache,
     clear_geo_cache,
     get_binance_api_endpoint,
     get_country_code,
@@ -144,23 +141,17 @@ class TestIsUsLocation:
 
     def test_us_location_detected(self):
         """Test True returned for US location."""
-        with patch(
-            "src.infrastructure.runtime.geo.get_country_code", return_value="US"
-        ):
+        with patch("src.infrastructure.runtime.geo.get_country_code", return_value="US"):
             assert is_us_location() is True
 
     def test_non_us_location(self):
         """Test False returned for non-US location."""
-        with patch(
-            "src.infrastructure.runtime.geo.get_country_code", return_value="GB"
-        ):
+        with patch("src.infrastructure.runtime.geo.get_country_code", return_value="GB"):
             assert is_us_location() is False
 
     def test_unknown_location(self):
         """Test False returned when location detection fails."""
-        with patch(
-            "src.infrastructure.runtime.geo.get_country_code", return_value=None
-        ):
+        with patch("src.infrastructure.runtime.geo.get_country_code", return_value=None):
             assert is_us_location() is False
 
 

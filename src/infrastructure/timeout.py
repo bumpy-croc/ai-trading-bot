@@ -4,7 +4,9 @@ Provides timeout decorators and context managers for operations that may
 block indefinitely (file I/O, model loading, network calls).
 """
 
+import builtins
 import logging
+import math
 import signal
 import threading
 import time
@@ -18,33 +20,45 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-class TimeoutError(Exception):
-    """Raised when an operation exceeds its timeout."""
+class OperationTimeoutError(builtins.TimeoutError):
+    """Raised when an operation exceeds its timeout.
+
+    Inherits from the built-in TimeoutError to maintain compatibility
+    with code that catches the built-in exception.
+    """
 
     pass
 
 
-def _timeout_handler(signum: int, frame: Any) -> None:
+# Backwards compatibility alias
+TimeoutError = OperationTimeoutError  # noqa: A001
+
+
+def _timeout_handler(signum: int, _frame: Any) -> None:
     """Signal handler for SIGALRM timeout."""
-    raise TimeoutError("Operation timed out")
+    raise OperationTimeoutError("Operation timed out")
 
 
 @contextmanager
 def timeout_context(seconds: float, operation_name: str = "operation"):
-    """Context manager that raises TimeoutError if block exceeds timeout.
+    """Context manager that raises OperationTimeoutError if block exceeds timeout.
 
     Args:
-        seconds: Timeout in seconds.
+        seconds: Timeout in seconds (must be positive).
         operation_name: Name of operation for error messages.
 
     Raises:
-        TimeoutError: If the block exceeds the timeout.
+        OperationTimeoutError: If the block exceeds the timeout.
+        ValueError: If seconds is not positive.
         NotImplementedError: On Windows (signal.SIGALRM not supported).
 
     Example:
         with timeout_context(30.0, "model loading"):
             model = load_heavy_model()
     """
+    if seconds <= 0 or not math.isfinite(seconds):
+        raise ValueError(f"timeout seconds must be a positive finite number, got {seconds}")
+
     # Check if signal.SIGALRM is available (Unix-like systems)
     if not hasattr(signal, "SIGALRM"):
         logger.warning("timeout_context not supported on this platform (no SIGALRM)")
@@ -57,7 +71,7 @@ def timeout_context(seconds: float, operation_name: str = "operation"):
 
     try:
         yield
-    except TimeoutError:
+    except OperationTimeoutError:
         logger.error("%s exceeded timeout of %.1fs", operation_name, seconds)
         raise
     finally:
@@ -73,20 +87,23 @@ def with_timeout(
     """Decorator that adds timeout protection to a function.
 
     Args:
-        seconds: Timeout in seconds.
+        seconds: Timeout in seconds (must be positive).
         operation_name: Optional name for logging (defaults to function name).
 
     Returns:
         Decorated function with timeout protection.
 
     Raises:
-        TimeoutError: If the function exceeds the timeout.
+        OperationTimeoutError: If the function exceeds the timeout.
+        ValueError: If seconds is not positive.
 
     Example:
         @with_timeout(30.0, "model loading")
         def load_model(path: str):
             return onnx.load(path)
     """
+    if seconds <= 0 or not math.isfinite(seconds):
+        raise ValueError(f"timeout seconds must be a positive finite number, got {seconds}")
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         op_name = operation_name or func.__name__
@@ -124,14 +141,15 @@ def run_with_timeout(
         func: Function to run.
         args: Positional arguments for func.
         kwargs: Keyword arguments for func.
-        timeout_seconds: Timeout in seconds.
+        timeout_seconds: Timeout in seconds (must be positive).
         operation_name: Optional name for logging.
 
     Returns:
         Result of func.
 
     Raises:
-        TimeoutError: If func exceeds timeout.
+        OperationTimeoutError: If func exceeds timeout.
+        ValueError: If timeout_seconds is not positive.
         Exception: Any exception raised by func.
 
     Example:
@@ -142,6 +160,8 @@ def run_with_timeout(
             operation_name="ONNX model loading"
         )
     """
+    if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
+        raise ValueError(f"timeout_seconds must be a positive finite number, got {timeout_seconds}")
     if kwargs is None:
         kwargs = {}
     op_name = operation_name or func.__name__
@@ -175,7 +195,7 @@ def run_with_timeout(
         # Clear references to prevent holding onto large objects
         result.clear()
         exception.clear()
-        raise TimeoutError(f"{op_name} exceeded timeout of {timeout_seconds}s")
+        raise OperationTimeoutError(f"{op_name} exceeded timeout of {timeout_seconds}s")
 
     if exception:
         exc = exception[0]

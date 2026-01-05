@@ -10,6 +10,7 @@ Circuit States:
 """
 
 import logging
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -74,8 +75,10 @@ class CircuitBreaker:
         """
         if failure_threshold < 1:
             raise ValueError(f"failure_threshold must be >= 1, got {failure_threshold}")
-        if recovery_timeout <= 0:
-            raise ValueError(f"recovery_timeout must be positive, got {recovery_timeout}")
+        if recovery_timeout <= 0 or not math.isfinite(recovery_timeout):
+            raise ValueError(
+                f"recovery_timeout must be a positive finite number, got {recovery_timeout}"
+            )
 
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout

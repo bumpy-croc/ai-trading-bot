@@ -10,6 +10,7 @@ from .context import (
 from .decision_logger import log_strategy_execution
 from .events import (
     log_data_event,
+    log_db_event,
     log_decision_event,
     log_engine_error,
     log_engine_event,
@@ -28,6 +29,7 @@ __all__ = [
     "use_context",
     "log_strategy_execution",
     "log_data_event",
+    "log_db_event",
     "log_decision_event",
     "log_engine_error",
     "log_engine_event",

@@ -1,6 +1,5 @@
 """Tests for infrastructure.logging.context module."""
 
-import uuid
 
 import pytest
 
@@ -161,7 +160,7 @@ class TestUseContext:
             assert get_context()["key"] == "temporary"
 
         # Original should be restored
-        ctx = get_context()
+        get_context()
         # Note: The implementation replaces with prev context entirely
         # so the original value might not be preserved if prev was captured
         # before set_context. Let's check actual behavior.
