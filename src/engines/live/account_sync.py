@@ -96,7 +96,7 @@ class AccountSynchronizer:
 
             if not exchange_data.get("sync_successful", False):
                 error_msg = exchange_data.get("error", "Unknown error")
-                logger.error(f"Exchange sync failed: {error_msg}")
+                logger.error("Exchange sync failed: %s", error_msg)
                 return SyncResult(
                     success=False,
                     message=f"Exchange sync failed: {error_msg}",
@@ -134,7 +134,7 @@ class AccountSynchronizer:
             )
 
         except Exception as e:
-            logger.error(f"Account synchronization failed: {e}")
+            logger.error("Account synchronization failed: %s", e)
             return SyncResult(
                 success=False,
                 message=f"Sync failed: {str(e)}",
@@ -145,7 +145,7 @@ class AccountSynchronizer:
     def _sync_balances(self, exchange_balances: list[AccountBalance]) -> dict[str, Any]:
         """Synchronize account balances"""
         try:
-            logger.info(f"Syncing {len(exchange_balances)} balances from exchange")
+            logger.info("Syncing %d balances from exchange", len(exchange_balances))
 
             # Get current balance from database
             current_db_balance = self.db_manager.get_current_balance(self.session_id)
@@ -212,13 +212,13 @@ class AccountSynchronizer:
                 return {"synced": False, "error": "No USDT balance found"}
 
         except Exception as e:
-            logger.error(f"Balance sync failed: {e}")
+            logger.error("Balance sync failed: %s", e)
             return {"synced": False, "error": str(e)}
 
     def _sync_positions(self, exchange_positions: list[Position]) -> dict[str, Any]:
         """Synchronize open positions"""
         try:
-            logger.info(f"Syncing {len(exchange_positions)} positions from exchange")
+            logger.info("Syncing %d positions from exchange", len(exchange_positions))
 
             # Get current positions from database
             db_positions = self.db_manager.get_active_positions(self.session_id)
@@ -337,13 +337,13 @@ class AccountSynchronizer:
             }
 
         except Exception as e:
-            logger.error(f"Position sync failed: {e}")
+            logger.error("Position sync failed: %s", e)
             return {"synced": False, "error": str(e)}
 
     def _sync_orders(self, exchange_orders: list[Order]) -> dict[str, Any]:
         """Synchronize open orders"""
         try:
-            logger.info(f"Syncing {len(exchange_orders)} orders from exchange")
+            logger.info("Syncing %d orders from exchange", len(exchange_orders))
 
             # Get current open orders from database (using new Order table)
             db_orders = self.db_manager.get_pending_orders_new(self.session_id)
@@ -428,7 +428,7 @@ class AccountSynchronizer:
 
                 if not exchange_order:
                     # Order exists in database but not on exchange
-                    logger.warning(f"Order cancelled on exchange: {order_id}")
+                    logger.warning("Order cancelled on exchange: %s", order_id)
 
                     # Mark as cancelled using new methods
                     self.db_manager.update_order_status_new(
@@ -452,7 +452,7 @@ class AccountSynchronizer:
             }
 
         except Exception as e:
-            logger.error(f"Order sync failed: {e}")
+            logger.error("Order sync failed: %s", e)
             return {"synced": False, "error": str(e)}
 
     def recover_missing_trades(self, symbol: str, days_back: int = 7) -> dict[str, Any]:
@@ -467,7 +467,7 @@ class AccountSynchronizer:
             Dictionary with recovery results
         """
         try:
-            logger.info(f"Recovering missing trades for {symbol} (last {days_back} days)")
+            logger.info("Recovering missing trades for %s (last %d days)", symbol, days_back)
 
             # Get recent trades from exchange
             exchange_trades = self.exchange.get_recent_trades(symbol, limit=1000)
@@ -492,7 +492,7 @@ class AccountSynchronizer:
                     missing_trades.append(trade)
 
             if missing_trades:
-                logger.warning(f"Found {len(missing_trades)} missing trades")
+                logger.warning("Found %d missing trades", len(missing_trades))
 
                 # Add missing trades to database
                 recovered_trades = []
@@ -530,7 +530,7 @@ class AccountSynchronizer:
                         )
 
                     except Exception as e:
-                        logger.error(f"Failed to recover trade {trade.trade_id}: {e}")
+                        logger.error("Failed to recover trade %s: %s", trade.trade_id, e)
 
                 return {
                     "recovered": True,
@@ -551,7 +551,7 @@ class AccountSynchronizer:
                 }
 
         except Exception as e:
-            logger.error(f"Trade recovery failed: {e}")
+            logger.error("Trade recovery failed: %s", e)
             return {"recovered": False, "error": str(e)}
 
     def emergency_sync(self) -> SyncResult:
@@ -576,7 +576,7 @@ class AccountSynchronizer:
                 result = self.recover_missing_trades(symbol, days_back=30)  # Look back 30 days
                 trade_recovery_results[symbol] = result
             except Exception as e:
-                logger.error(f"Failed to recover trades for {symbol}: {e}")
+                logger.error("Failed to recover trades for %s: %s", symbol, e)
                 trade_recovery_results[symbol] = {"error": str(e)}
 
         # Add trade recovery results to sync data

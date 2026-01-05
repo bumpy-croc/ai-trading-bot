@@ -300,6 +300,11 @@ class EntryHandler:
                 reasons=signal.reasons,
             )
 
+        # Validate balance before entry execution
+        if balance <= 0:
+            logger.error("Cannot execute entry with balance <= 0: %.2f", balance)
+            return EntryExecutionResult(executed=False, reasons=["invalid_balance"])
+
         # Calculate SL/TP percentages for pending order
         if signal.side == "long":
             sl_pct = (

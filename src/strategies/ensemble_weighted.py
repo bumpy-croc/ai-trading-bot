@@ -59,6 +59,13 @@ def create_ensemble_weighted_strategy(
     Returns:
         Configured Strategy instance
     """
+    # Validate at least one signal generator is enabled
+    if not any([use_ml_basic, use_ml_adaptive, use_ml_sentiment]):
+        raise ValueError(
+            "At least one signal generator must be enabled. "
+            "Set one of use_ml_basic, use_ml_adaptive, or use_ml_sentiment to True."
+        )
+
     # Create individual signal generators with weights
     generators = {}
 

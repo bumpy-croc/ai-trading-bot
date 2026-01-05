@@ -156,6 +156,13 @@ class PositionTracker:
         if self.current_trade is None:
             return 0.0
 
+        # Validate inputs before delegating (defense-in-depth)
+        if exit_fraction <= 0 or exit_fraction > 1.0:
+            logger.warning("Invalid exit_fraction: %.4f - must be in (0, 1]", exit_fraction)
+            return 0.0
+        if basis_balance <= 0 or not math.isfinite(basis_balance):
+            raise ValueError(f"basis_balance must be positive and finite, got {basis_balance}")
+
         # Use shared executor for consistent financial calculations
         result = self._partial_exit_executor.execute_partial_exit(
             entry_price=float(self.current_trade.entry_price),

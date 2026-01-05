@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import os
 from collections import Counter
 from datetime import datetime
@@ -291,8 +292,12 @@ class Backtester:
                 correlation_update_frequency_hours=self.risk_manager.params.correlation_update_frequency_hours,
             )
             self.correlation_engine = CorrelationEngine(config=corr_cfg)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Failed to initialize correlation engine: %s. "
+                "Backtests will run without correlation controls.",
+                e,
+            )
 
         self.correlation_handler: CorrelationHandler | None = None
         if self.correlation_engine is not None:
@@ -1051,7 +1056,14 @@ class Backtester:
             index=index,
             indicators=indicators,
         )
-        self.balance += partial_result.realized_pnl
+        # Validate realized P&L before updating balance to prevent corruption
+        if not math.isfinite(partial_result.realized_pnl):
+            logger.critical(
+                "Invalid realized_pnl from partial exit: %s - skipping balance update",
+                partial_result.realized_pnl,
+            )
+        else:
+            self.balance += partial_result.realized_pnl
 
         # Update MFE/MAE
         self.position_tracker.update_metrics(current_price, current_time)

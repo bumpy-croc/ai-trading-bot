@@ -467,8 +467,8 @@ class ExitHandler:
                     trade.entry_time, current_time
                 )
                 hit_time_limit = should_time_exit
-            except Exception:
-                pass
+            except (TypeError, ValueError, AttributeError) as e:
+                logger.warning("Time exit check failed: %s", e)
 
         # Determine final exit decision
         should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_limit

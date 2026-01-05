@@ -7,6 +7,7 @@ engineering, and model inference.
 """
 
 import hashlib
+import logging
 import math
 import time
 from dataclasses import dataclass, field
@@ -15,6 +16,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# Constants
+ENSEMBLE_MODEL_PREFIX = "ensemble:"
 
 from src.config.constants import DEFAULT_INFERENCE_TIMEOUT
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
@@ -90,12 +96,10 @@ class PredictionEngine:
 
         # Optional helpers
         self._ensemble_aggregator = None
-        if getattr(self.config, "enable_ensemble", False):
-            self._ensemble_aggregator = SimpleEnsembleAggregator(
-                getattr(self.config, "ensemble_method", "mean")
-            )
+        if self.config.enable_ensemble:
+            self._ensemble_aggregator = SimpleEnsembleAggregator(self.config.ensemble_method)
         self._regime_detector = None
-        if getattr(self.config, "enable_regime_aware_confidence", False):
+        if self.config.enable_regime_aware_confidence:
             self._regime_detector = RegimeDetector(RegimeConfig())
 
         # Performance tracking
@@ -249,11 +253,18 @@ class PredictionEngine:
                             inference_time=raw_prediction.inference_time,
                         )
                     )
+
+                # Check for empty predictions (all ensemble members timed out)
+                if not preds:
+                    raise ModelInferenceError(
+                        "All ensemble members timed out - no predictions available"
+                    )
+
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence
                 final_dir = ens.direction
-                final_model_name = f"ensemble:{self.config.ensemble_method}"
+                final_model_name = f"{ENSEMBLE_MODEL_PREFIX}{self.config.ensemble_method}"
                 member_preds = ens.member_predictions
                 if not features_used:
                     features_used = self._count_features_used(features)
@@ -432,6 +443,13 @@ class PredictionEngine:
                 "preds": np.array([], dtype=np.float32),
                 "normalized": not return_denormalized,
             }
+
+        # Validate model session exists (prevents AttributeError with stub runners)
+        if model.session is None:
+            raise ModelInferenceError(
+                f"Model {bundle.key} has no valid session (stub runner). "
+                "Model loading may have failed - check logs for errors."
+            )
 
         session = model.session
         input_name = session.get_inputs()[0].name
@@ -848,6 +866,10 @@ class PredictionEngine:
         if (data[required_columns] <= 0).any().any():
             raise InvalidInputError("Input data contains non-positive values")
 
+        # Check for infinite values (defense-in-depth before feature extraction)
+        if np.isinf(data[required_columns].select_dtypes(include=[np.number])).any().any():
+            raise InvalidInputError("Input data contains infinite values")
+
     def _extract_features(self, data: pd.DataFrame) -> np.ndarray:
         """Extract features using feature pipeline"""
         try:
@@ -930,9 +952,15 @@ class PredictionEngine:
                 if window.ndim == 2:
                     return window[None, :, :]
                 return window
-            except Exception:
-                # Fall back to raw features if selection fails
-                pass
+            except Exception as exc:
+                # Feature schema alignment failed - log warning and fall back to raw features
+                # This could indicate train/inference mismatch (model expects different features)
+                logger.warning(
+                    "Feature schema alignment failed for model %s: %s. Using raw features. "
+                    "This may indicate train/inference mismatch.",
+                    bundle.key,
+                    exc,
+                )
 
         if isinstance(raw_features, np.ndarray):
             return raw_features.astype(np.float32, copy=False)

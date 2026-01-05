@@ -274,7 +274,7 @@ class LivePositionTracker:
                     stop_loss_order_id=stop_loss_order_id,
                 )
             except Exception as e:
-                logger.debug("Failed to persist stop-loss order ID: %s", e)
+                logger.warning("Failed to persist stop-loss order ID: %s", e)
 
     def remove_position(self, order_id: str) -> None:
         """Remove a position without closing it (e.g., canceled entry)."""
@@ -654,7 +654,7 @@ class LivePositionTracker:
                     threshold_level=int(threshold_level),
                 )
             except Exception as e:
-                logger.debug("DB scale-in update failed: %s", e)
+                logger.warning("DB scale-in update failed: %s", e)
 
         return ScaleInResult(
             new_size=new_size,
@@ -684,44 +684,46 @@ class LivePositionTracker:
             position = self._positions.get(order_id)
             if position is None:
                 return False
-            db_id = self._position_db_ids.get(order_id)
 
-        changed = False
+            # All position mutations inside lock to prevent race conditions
+            changed = False
 
-        if new_stop_loss is not None:
-            current_sl = position.stop_loss
-            # Only update if new stop is better
-            if position.side == PositionSide.LONG:
-                should_update = current_sl is None or new_stop_loss > float(current_sl)
-            else:
-                should_update = current_sl is None or new_stop_loss < float(current_sl)
+            if new_stop_loss is not None:
+                current_sl = position.stop_loss
+                # Only update if new stop is better
+                if position.side == PositionSide.LONG:
+                    should_update = current_sl is None or new_stop_loss > float(current_sl)
+                else:
+                    should_update = current_sl is None or new_stop_loss < float(current_sl)
 
-            if should_update:
-                position.stop_loss = new_stop_loss
-                position.trailing_stop_price = new_stop_loss
+                if should_update:
+                    position.stop_loss = new_stop_loss
+                    position.trailing_stop_price = new_stop_loss
+                    changed = True
+
+            if activated != position.trailing_stop_activated:
+                position.trailing_stop_activated = activated
                 changed = True
 
-        if activated != position.trailing_stop_activated:
-            position.trailing_stop_activated = activated
-            changed = True
+            if breakeven_triggered != position.breakeven_triggered:
+                position.breakeven_triggered = breakeven_triggered
+                changed = True
 
-        if breakeven_triggered != position.breakeven_triggered:
-            position.breakeven_triggered = breakeven_triggered
-            changed = True
+            # Capture db_id and state snapshot for DB update outside lock
+            db_id = self._position_db_ids.get(order_id)
+            db_update_params = {
+                "trailing_stop_activated": position.trailing_stop_activated,
+                "trailing_stop_price": position.trailing_stop_price,
+                "breakeven_triggered": position.breakeven_triggered,
+                "stop_loss": position.stop_loss,
+            }
 
-        # Persist trailing stop state to DB (db_id was captured under lock above)
-        if changed:
-            if self.db_manager is not None and db_id is not None:
-                try:
-                    self.db_manager.update_position(
-                        position_id=db_id,
-                        trailing_stop_activated=position.trailing_stop_activated,
-                        trailing_stop_price=position.trailing_stop_price,
-                        breakeven_triggered=position.breakeven_triggered,
-                        stop_loss=position.stop_loss,
-                    )
-                except Exception as e:
-                    logger.debug("Failed to persist trailing stop update: %s", e)
+        # Persist trailing stop state to DB outside lock to avoid holding lock during I/O
+        if changed and self.db_manager is not None and db_id is not None:
+            try:
+                self.db_manager.update_position(position_id=db_id, **db_update_params)
+            except Exception as e:
+                logger.warning("Failed to persist trailing stop update: %s", e)
 
         return changed
 

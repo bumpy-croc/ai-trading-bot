@@ -205,7 +205,11 @@ class RegimeHandler:
             return new_strategy, True, switch_info
 
         except Exception as e:
-            logger.debug("Regime analysis error at candle %d: %s", candle_index, e)
+            logger.warning(
+                "Regime analysis failed at candle %d: %s - continuing without switch",
+                candle_index,
+                e,
+            )
             return None, False, None
 
     def _build_price_data(

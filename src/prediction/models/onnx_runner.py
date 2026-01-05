@@ -18,15 +18,13 @@ from src.config.config_manager import get_config
 from src.config.constants import (
     DEFAULT_INFERENCE_TIMEOUT,
     DEFAULT_MODEL_LOAD_TIMEOUT,
+    DEFAULT_NORMALIZATION_EPSILON,
 )
 from src.infrastructure.timeout import TimeoutError, run_with_timeout
 
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
 from .execution_providers import get_preferred_providers
-
-# Constants for numerical stability
-EPSILON = 1e-8  # Small value to prevent division by zero
 
 # Metadata load timeout (fixed, not configurable - metadata files are small)
 METADATA_LOAD_TIMEOUT = 10.0
@@ -130,8 +128,9 @@ class OnnxRunner:
             try:
                 del self.session
                 self.session = None
-            except Exception:
-                pass  # Best effort cleanup
+            except Exception as e:
+                # Log cleanup exceptions for troubleshooting resource leaks
+                logging.debug("Exception during ONNX session cleanup: %s", e)
 
     def __del__(self):
         """Ensure ONNX session cleanup on garbage collection.
@@ -351,16 +350,38 @@ class OnnxRunner:
         if len(features.shape) != 3:
             raise ValueError(f"Features must be 3D for normalization, got shape {features.shape}")
 
-        for i, feature_name in enumerate(norm_params.keys()):
-            if i < features.shape[2]:  # Check feature index bounds
-                mean = norm_params[feature_name].get("mean", 0.0)
-                std = norm_params[feature_name].get("std", 1.0)
+        # Use explicit feature_order from metadata if available, otherwise fall back to dict keys
+        # Feature ordering is critical for correct normalization - dict keys are fragile
+        feature_order = self.model_metadata.get("feature_order")
+        if feature_order is None:
+            # Fallback to dict keys for backward compatibility with older metadata
+            feature_order = list(norm_params.keys())
+            logging.warning(
+                "Model metadata missing 'feature_order' - falling back to dict key order. "
+                "Consider regenerating metadata with explicit feature_order for reliability."
+            )
 
-                # Prevent ZeroDivisionError by using a minimum std value
-                if std == 0.0:
-                    std = EPSILON  # Small epsilon to prevent division by zero
+        # Validate feature count matches expected dimension
+        if len(feature_order) != features.shape[2]:
+            raise ValueError(
+                f"Feature order length ({len(feature_order)}) does not match "
+                f"features array dimension ({features.shape[2]})"
+            )
 
-                features[:, :, i] = (features[:, :, i] - mean) / std
+        for i, feature_name in enumerate(feature_order):
+            if feature_name not in norm_params:
+                raise ValueError(
+                    f"Feature '{feature_name}' in feature_order missing from normalization_params"
+                )
+
+            mean = norm_params[feature_name].get("mean", 0.0)
+            std = norm_params[feature_name].get("std", 1.0)
+
+            # Prevent ZeroDivisionError by using a minimum std value
+            if std == 0.0:
+                std = DEFAULT_NORMALIZATION_EPSILON  # Small epsilon to prevent division by zero
+
+            features[:, :, i] = (features[:, :, i] - mean) / std
 
         return features
 

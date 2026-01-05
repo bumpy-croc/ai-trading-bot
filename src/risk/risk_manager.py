@@ -127,7 +127,7 @@ class RiskParameters:
             raise ValueError("partial_exit_sizes must be in (0, 1]")
         if sum(self.partial_exit_sizes) > 1.0:
             raise ValueError(
-                f"partial_exit_sizes cannot sum to more than 1.0, got {sum(self.partial_exit_sizes)}"
+                f"partial_exit_sizes must sum to <= 1.0, got {sum(self.partial_exit_sizes):.2f}"
             )
         if any(t <= 0 for t in self.scale_in_thresholds):
             raise ValueError("scale_in_thresholds must be positive percentages (decimals)")

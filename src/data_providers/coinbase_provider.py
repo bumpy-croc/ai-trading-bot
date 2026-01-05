@@ -378,9 +378,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 status=self._convert_order_status(od.get("status"), od.get("done_reason")),
                 filled_quantity=float(od.get("filled_size", 0)),
                 average_price=(
-                    (float(od.get("executed_value", 0)) / float(od.get("filled_size", 0)))
-                    if float(od.get("filled_size", 0)) > 0
-                    else None
+                    self._safe_calculate_average_price(
+                        od.get("executed_value", 0), od.get("filled_size", 0)
+                    )
                 ),
                 commission=0.0,
                 commission_asset="",

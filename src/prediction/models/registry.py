@@ -1,6 +1,7 @@
 """Model registry for managing ML model bundles with metadata and selection."""
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,8 @@ class PredictionModelRegistry:
         self._bundles: dict[tuple[str, str, str], StrategyModel] = {}
         # Optional production selections: (symbol, timeframe, model_type) -> version_id
         self._production_index: dict[tuple[str, str, str], str] = {}
+        # Lock to protect registry state from concurrent access during reload
+        self._lock = threading.RLock()
         # Load structured models
         self._load()
 
@@ -198,7 +201,14 @@ class PredictionModelRegistry:
         # Create runner lazily; for unit tests without real ONNX, provide a stub
         try:
             runner = OnnxRunner(model_path, self.config, self.cache_manager)
-        except Exception:
+        except Exception as e:
+            # Log the actual error before creating stub for graceful degradation
+            logger.error(
+                "Failed to load OnnxRunner for %s: %s. Creating stub runner.",
+                model_path,
+                e,
+                exc_info=True,
+            )
 
             class _StubRunner:
                 def __init__(self, path: str):
@@ -223,7 +233,8 @@ class PredictionModelRegistry:
 
     # ---- Introspection helpers ----
     def list_bundles(self) -> list[StrategyModel]:
-        return list(self._bundles.values())
+        with self._lock:
+            return list(self._bundles.values())
 
     # ---- Structured selection API ----
     def select_bundle(
@@ -239,12 +250,13 @@ class PredictionModelRegistry:
         If stage is provided and a production index exists, use it. Otherwise, use the
         most recently loaded bundle for that key (latest symlink is preferred by _load()).
         """
-        key = (symbol, timeframe, model_type)
-        bundle = self._bundles.get(key)
-        if bundle is None:
-            raise ModelNotAvailableError(f"No model bundle for {symbol} {timeframe} {model_type}.")
-        # Stage currently informational; production_index ensures latest symlink dominance
-        return bundle
+        with self._lock:
+            key = (symbol, timeframe, model_type)
+            bundle = self._bundles.get(key)
+            if bundle is None:
+                raise ModelNotAvailableError(f"No model bundle for {symbol} {timeframe} {model_type}.")
+            # Stage currently informational; production_index ensures latest symlink dominance
+            return bundle
 
     def select_many(
         self,
@@ -282,10 +294,65 @@ class PredictionModelRegistry:
         return [b.runner for b in self.list_bundles()]
 
     def reload_models(self) -> None:
-        """Reload all bundles from disk."""
-        self._bundles.clear()
-        self._production_index.clear()
-        self._load()
+        """Reload all bundles from disk with thread-safe atomic swap using copy-on-write pattern.
+
+        This method uses a copy-on-write pattern to avoid race conditions:
+        1. Load new bundles in background (outside lock)
+        2. Acquire lock and atomically swap the bundles dict
+        3. Release lock
+        4. Close old runners outside lock (no blocking of other threads)
+        """
+        # Load new bundles in background (outside lock to avoid blocking)
+        base = Path(self.config.model_registry_path)
+        new_bundles: dict[tuple[str, str, str], StrategyModel] = {}
+        new_production_index: dict[tuple[str, str, str], str] = {}
+
+        if base.exists():
+            # Expect structure: base/{symbol}/{model_type}/{version_id}/model.onnx
+            for symbol_dir in base.iterdir():
+                if not symbol_dir.is_dir():
+                    continue
+                symbol = symbol_dir.name
+                for mtype_dir in symbol_dir.iterdir():
+                    if not mtype_dir.is_dir():
+                        continue
+                    model_type = mtype_dir.name
+                    # Load concrete versions first so the latest symlink assignment wins
+                    latest = mtype_dir / "latest"
+                    version_dirs = [p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"]
+                    # Deterministic order keeps logging/tests stable; latest applied afterwards
+                    version_dirs.sort()
+                    for vdir in version_dirs:
+                        try:
+                            bundle = self._load_bundle(symbol, model_type, vdir)
+                            key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+                            new_bundles[key] = bundle
+                        except Exception as e:  # pragma: no cover - aggregated logging
+                            logger.error("Failed to load bundle at %s: %s", vdir, e)
+                    if latest.exists():
+                        try:
+                            bundle = self._load_bundle(symbol, model_type, latest)
+                            key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+                            new_bundles[key] = bundle
+                            new_production_index[key] = bundle.version_id
+                        except Exception as e:  # pragma: no cover - aggregated logging
+                            logger.error("Failed to load bundle at %s: %s", latest, e)
+
+        # Acquire lock briefly for atomic swap
+        with self._lock:
+            # Capture old bundles for cleanup after lock release
+            old_bundles = self._bundles.copy()
+            # Atomic swap - other threads will see new bundles immediately
+            self._bundles = new_bundles
+            self._production_index = new_production_index
+
+        # Close old runners outside lock (no blocking of other threads)
+        for bundle in old_bundles.values():
+            if hasattr(bundle.runner, "close"):
+                try:
+                    bundle.runner.close()
+                except Exception as e:
+                    logger.warning("Failed to close runner for %s: %s", bundle.key, e)
 
     def invalidate_cache(self, model_name: str | None = None) -> int:
         """

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -22,7 +25,17 @@ class BalanceTracker:
         )
 
     def apply_pnl(self, pnl_dollars: float) -> None:
-        self.current_balance += pnl_dollars
+        new_balance = self.current_balance + pnl_dollars
+        # Protect against negative balance (prevents division errors in position sizing)
+        if new_balance < 0:
+            logger.critical(
+                "CRITICAL: Balance would go negative (%.2f + %.2f = %.2f) - clamping to 0",
+                self.current_balance,
+                pnl_dollars,
+                new_balance,
+            )
+            new_balance = 0.0
+        self.current_balance = new_balance
         self.total_pnl += pnl_dollars
         if self.current_balance > self.peak_balance:
             self.peak_balance = self.current_balance

@@ -363,6 +363,100 @@ class TestOnnxRunner:
             with pytest.raises(ValueError, match="Features must be 3D for normalization"):
                 runner._normalize_features(features_1d)
 
+    @patch("onnxruntime.InferenceSession")
+    def test_normalize_features_feature_order_fallback(self, mock_session):
+        """Test feature order fallback for backward compatibility with older models"""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+
+        # Mock metadata WITHOUT feature_order (simulating older model)
+        metadata = {
+            "normalization_params": {
+                "close": {"mean": 100.0, "std": 10.0},
+                "volume": {"mean": 1000.0, "std": 100.0},
+                "rsi": {"mean": 50.0, "std": 15.0},
+            }
+        }
+
+        with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
+
+            # Create 3D features matching the normalization params order
+            # Note: The dict key order in Python 3.7+ is insertion order
+            features = np.array(
+                [
+                    [
+                        [100.0, 1000.0, 50.0],  # Close=100, Volume=1000, RSI=50
+                        [110.0, 1100.0, 60.0],  # Close=110, Volume=1100, RSI=60
+                    ]
+                ],
+                dtype=np.float32,
+            )
+
+            # Normalize with fallback to dict key order
+            normalized = runner._normalize_features(features)
+
+            # Verify normalization applied correctly
+            assert normalized.shape == features.shape
+            # First feature (close): (100 - 100) / 10 = 0, (110 - 100) / 10 = 1
+            assert np.isclose(normalized[0, 0, 0], 0.0, atol=1e-5)
+            assert np.isclose(normalized[0, 1, 0], 1.0, atol=1e-5)
+            # Second feature (volume): (1000 - 1000) / 100 = 0, (1100 - 1000) / 100 = 1
+            assert np.isclose(normalized[0, 0, 1], 0.0, atol=1e-5)
+            assert np.isclose(normalized[0, 1, 1], 1.0, atol=1e-5)
+            # Third feature (rsi): (50 - 50) / 15 = 0, (60 - 50) / 15 ≈ 0.667
+            assert np.isclose(normalized[0, 0, 2], 0.0, atol=1e-5)
+            assert np.isclose(normalized[0, 1, 2], 10.0 / 15.0, atol=1e-5)
+
+    @patch("onnxruntime.InferenceSession")
+    def test_normalize_features_with_explicit_feature_order(self, mock_session):
+        """Test that explicit feature_order from metadata is used correctly"""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+
+        # Mock metadata WITH explicit feature_order
+        metadata = {
+            "feature_order": ["rsi", "close", "volume"],  # Different order than dict
+            "normalization_params": {
+                "close": {"mean": 100.0, "std": 10.0},
+                "volume": {"mean": 1000.0, "std": 100.0},
+                "rsi": {"mean": 50.0, "std": 15.0},
+            },
+        }
+
+        with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
+
+            # Create features in feature_order: [RSI, Close, Volume]
+            features = np.array(
+                [
+                    [
+                        [50.0, 100.0, 1000.0],  # RSI=50, Close=100, Volume=1000
+                        [60.0, 110.0, 1100.0],  # RSI=60, Close=110, Volume=1100
+                    ]
+                ],
+                dtype=np.float32,
+            )
+
+            # Normalize using explicit feature_order
+            normalized = runner._normalize_features(features)
+
+            # Verify normalization applied using feature_order
+            assert normalized.shape == features.shape
+            # First feature (rsi per feature_order): (50 - 50) / 15 = 0, (60 - 50) / 15 ≈ 0.667
+            assert np.isclose(normalized[0, 0, 0], 0.0, atol=1e-5)
+            assert np.isclose(normalized[0, 1, 0], 10.0 / 15.0, atol=1e-5)
+            # Second feature (close per feature_order): (100 - 100) / 10 = 0, (110 - 100) / 10 = 1
+            assert np.isclose(normalized[0, 0, 1], 0.0, atol=1e-5)
+            assert np.isclose(normalized[0, 1, 1], 1.0, atol=1e-5)
+            # Third feature (volume per feature_order): (1000 - 1000) / 100 = 0, (1100 - 1000) / 100 = 1
+            assert np.isclose(normalized[0, 0, 2], 0.0, atol=1e-5)
+            assert np.isclose(normalized[0, 1, 2], 1.0, atol=1e-5)
+
 
 class TestPredictionModelRegistry:
     """Structured-only PredictionModelRegistry tests"""

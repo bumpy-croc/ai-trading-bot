@@ -92,6 +92,11 @@ def create_training_plots(
     if not enable_plots:
         return None
     try:
+        # Validate training history exists before generating plots
+        if not history.history.get("loss"):
+            logger.warning("No training history available for plots")
+            return None
+
         plt.figure(figsize=(15, 10))
         plt.subplot(2, 2, 1)
         plt.plot(history.history["loss"], label="Train Loss")
@@ -129,10 +134,12 @@ def create_training_plots(
         plt.savefig(plot_path, dpi=300, bbox_inches="tight")
         plt.close()
         return plot_path
-    except Exception:  # noqa: BLE001 - Catch all matplotlib/display errors
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
         # Plot generation is diagnostic only - training should continue if plotting fails
-        # (e.g., missing display, matplotlib backend issues, file write errors)
-        logger.warning("Failed to generate training plots", exc_info=True)
+        # ValueError/TypeError: Invalid plot data or configuration
+        # OSError: File write errors, permission issues
+        # RuntimeError: Matplotlib backend issues, display errors
+        logger.warning("Failed to generate training plots: %s", exc, exc_info=True)
         return None
 
 
@@ -170,10 +177,12 @@ def validate_model_robustness(
             X_no_sentiment[:, :, sentiment_indices] = 0
             no_sentiment_pred = model.predict(X_no_sentiment)
             no_sentiment_mse = np.mean((no_sentiment_pred.flatten() - y_test) ** 2)
+            # Prevent division by zero when base_mse is zero (perfect predictions)
+            base_mse_safe = max(base_mse, MIN_MAPE_DENOMINATOR)
             results["no_sentiment_performance"] = {
                 "mse": float(no_sentiment_mse),
                 "rmse": float(np.sqrt(no_sentiment_mse)),
-                "degradation_pct": float(((no_sentiment_mse - base_mse) / base_mse) * 100),
+                "degradation_pct": float(((no_sentiment_mse - base_mse) / base_mse_safe) * 100),
             }
     return results
 
@@ -341,7 +350,7 @@ def save_artifacts(
             except OSError:
                 # Ignores cleanup errors - primary error takes precedence
                 pass
-        logger.error(f"Failed to update 'latest' symlink: {e}")
+        logger.error("Failed to update 'latest' symlink: %s", e)
         raise RuntimeError(f"Failed to update 'latest' symlink at {latest_link}") from e
 
     return ArtifactPaths(

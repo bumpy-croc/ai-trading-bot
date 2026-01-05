@@ -90,8 +90,8 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
 
     assessment["coverage_ratio"] = overlap_period / total_period
 
-    current_time = pd.Timestamp.now()
-    current_time, sentiment_end_normalized = normalize_timezone(current_time, sentiment_end)
+    current_time = pd.Timestamp.now(tz="UTC")
+    _, sentiment_end_normalized = normalize_timezone(current_time, sentiment_end)
     assessment["data_freshness_days"] = (current_time - sentiment_end_normalized).days
 
     sentiment_dates = pd.date_range(sentiment_start, sentiment_end, freq="D")
@@ -150,7 +150,13 @@ def merge_price_sentiment_data(
 
 
 def _calculate_rsi_fast(close_prices: np.ndarray, window: int = 14) -> np.ndarray:
-    """Calculate RSI using optimized numpy operations.
+    """
+    Calculate RSI using optimized numpy operations with Wilder's smoothing.
+
+    TODO: Unify RSI implementations - this uses Wilder's smoothing (EMA-style) while
+    src/tech/indicators/core.py uses simple rolling mean. Different algorithms produce
+    different RSI values, risking train/inference mismatch. Consolidate to single
+    implementation with smoothing_method parameter.
 
     Args:
         close_prices: 1D array of close prices
