@@ -141,7 +141,6 @@ class StrategyValidationError(Exception):
     """Exception raised when strategy validation fails"""
 
 
-
 class StrategyRegistry:
     """
     Strategy registry with version control and metadata management

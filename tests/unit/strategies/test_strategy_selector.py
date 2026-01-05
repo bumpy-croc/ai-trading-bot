@@ -170,9 +170,7 @@ class TestStrategySelector:
             "ml_adaptive": self.create_mock_tracker(sharpe_ratio=1.5),
         }
 
-        result = self.selector.select_best_strategy(
-            strategies, exclude_strategies=["ml_basic"]
-        )
+        result = self.selector.select_best_strategy(strategies, exclude_strategies=["ml_basic"])
 
         assert result == "ml_adaptive"
 
@@ -214,9 +212,7 @@ class TestStrategySelector:
             "ml_adaptive": self.create_mock_tracker(sharpe_ratio=2.0),
         }
 
-        comparison = self.selector.compare_strategies(
-            ["ml_basic", "ml_adaptive"], strategies
-        )
+        comparison = self.selector.compare_strategies(["ml_basic", "ml_adaptive"], strategies)
 
         assert "strategies" in comparison
         assert "correlation_matrix" in comparison
@@ -290,15 +286,11 @@ class TestStrategySelector:
         mock_regime_perf.max_drawdown = 0.10
         mock_regime_perf.avg_return = 0.02
 
-        mock_tracker.get_regime_performance.return_value = {
-            "trend_up_low_vol": mock_regime_perf
-        }
+        mock_tracker.get_regime_performance.return_value = {"trend_up_low_vol": mock_regime_perf}
 
         strategies = {"ml_basic": mock_tracker}
 
-        rankings = self.selector.get_regime_specific_ranking(
-            strategies, "trend_up_low_vol"
-        )
+        rankings = self.selector.get_regime_specific_ranking(strategies, "trend_up_low_vol")
 
         assert len(rankings) == 1
         assert rankings[0][0] == "ml_basic"
@@ -384,9 +376,7 @@ class TestStrategySelectorIntegration:
         assert rankings[0].strategy_id in strategies
 
         # Compare two
-        comparison = selector.compare_strategies(
-            ["conservative", "aggressive"], strategies
-        )
+        comparison = selector.compare_strategies(["conservative", "aggressive"], strategies)
         assert "best_strategy" in comparison
 
     def test_handles_all_ineligible_strategies(self):

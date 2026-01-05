@@ -26,9 +26,7 @@ def test_pending_entry_no_fill_does_not_execute_trade() -> None:
     position_tracker = Mock()
     risk_manager = Mock()
     execution_model = Mock()
-    execution_model.decide_fill.return_value = ExecutionDecision.no_fill(
-        "market price unavailable"
-    )
+    execution_model.decide_fill.return_value = ExecutionDecision.no_fill("market price unavailable")
 
     handler = EntryHandler(
         execution_engine=execution_engine,

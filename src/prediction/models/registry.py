@@ -254,7 +254,9 @@ class PredictionModelRegistry:
             key = (symbol, timeframe, model_type)
             bundle = self._bundles.get(key)
             if bundle is None:
-                raise ModelNotAvailableError(f"No model bundle for {symbol} {timeframe} {model_type}.")
+                raise ModelNotAvailableError(
+                    f"No model bundle for {symbol} {timeframe} {model_type}."
+                )
             # Stage currently informational; production_index ensures latest symlink dominance
             return bundle
 
@@ -319,7 +321,9 @@ class PredictionModelRegistry:
                     model_type = mtype_dir.name
                     # Load concrete versions first so the latest symlink assignment wins
                     latest = mtype_dir / "latest"
-                    version_dirs = [p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"]
+                    version_dirs = [
+                        p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"
+                    ]
                     # Deterministic order keeps logging/tests stable; latest applied afterwards
                     version_dirs.sort()
                     for vdir in version_dirs:

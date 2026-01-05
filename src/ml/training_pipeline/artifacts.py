@@ -31,9 +31,15 @@ else:
 logger = logging.getLogger(__name__)
 
 # Plotting and performance metric constants
-PLOT_SAMPLE_SIZE = 100  # Number of predictions to show in training plot (balances detail vs readability)
-MIN_MAPE_DENOMINATOR = 1e-8  # Minimum denominator for MAPE calculation (prevents division by near-zero values)
-MAX_PERCENTAGE_ERROR_CAP = 1000.0  # Cap MAPE errors at 1000% to prevent outliers from dominating metrics
+PLOT_SAMPLE_SIZE = (
+    100  # Number of predictions to show in training plot (balances detail vs readability)
+)
+MIN_MAPE_DENOMINATOR = (
+    1e-8  # Minimum denominator for MAPE calculation (prevents division by near-zero values)
+)
+MAX_PERCENTAGE_ERROR_CAP = (
+    1000.0  # Cap MAPE errors at 1000% to prevent outliers from dominating metrics
+)
 
 
 class PerformanceMetrics(TypedDict):
@@ -158,7 +164,9 @@ def validate_model_robustness(
         )
     # Validate input tensor shape
     if len(X_test.shape) != 3:
-        raise ValueError(f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}")
+        raise ValueError(
+            f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}"
+        )
 
     results = {"base_performance": {}}
     base_pred = model.predict(X_test)

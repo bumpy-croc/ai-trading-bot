@@ -6,7 +6,6 @@ ComponentPerformanceTester, RegimeTester, PerformanceAttributionAnalyzer,
 and TestDatasetGenerator.
 """
 
-
 import numpy as np
 import pandas as pd
 import pytest

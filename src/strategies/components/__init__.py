@@ -13,7 +13,6 @@ Components:
 - Technical Signal Generators: Technical indicator-based signal generation components
 """
 
-
 from src.database.models import StrategyExecution
 
 from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator

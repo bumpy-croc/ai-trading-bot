@@ -33,9 +33,7 @@ class TestConfigureGpu:
 
         with patch("platform.system", return_value="Darwin"):
             with patch("platform.machine", return_value="arm64"):
-                with patch(
-                    "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-                ):
+                with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
                     with patch(
                         "src.ml.training_pipeline.gpu_config._TENSORFLOW_METAL_AVAILABLE",
                         False,
@@ -55,16 +53,12 @@ class TestConfigureGpu:
 
         with patch("platform.system", return_value="Darwin"):
             with patch("platform.machine", return_value="arm64"):
-                with patch(
-                    "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-                ):
+                with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
                     with patch(
                         "src.ml.training_pipeline.gpu_config._TENSORFLOW_METAL_AVAILABLE",
                         True,
                     ):
-                        with patch(
-                            "src.ml.training_pipeline.gpu_config.tf", mock_tf
-                        ):
+                        with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                             result = configure_gpu()
                             assert result == "GPU:0"
 
@@ -77,16 +71,12 @@ class TestConfigureGpu:
 
         with patch("platform.system", return_value="Darwin"):
             with patch("platform.machine", return_value="arm64"):
-                with patch(
-                    "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-                ):
+                with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
                     with patch(
                         "src.ml.training_pipeline.gpu_config._TENSORFLOW_METAL_AVAILABLE",
                         True,
                     ):
-                        with patch(
-                            "src.ml.training_pipeline.gpu_config.tf", mock_tf
-                        ):
+                        with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                             result = configure_gpu()
                             assert result is None
 
@@ -102,12 +92,8 @@ class TestConfigureGpu:
 
         with patch("platform.system", return_value="Linux"):
             with patch("platform.machine", return_value="x86_64"):
-                with patch(
-                    "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-                ):
-                    with patch(
-                        "src.ml.training_pipeline.gpu_config.tf", mock_tf
-                    ):
+                with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
+                    with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                         result = configure_gpu()
                         assert result == "/physical_device:GPU:0"
                         mock_tf.config.experimental.set_memory_growth.assert_called()
@@ -126,12 +112,8 @@ class TestConfigureGpu:
 
         with patch("platform.system", return_value="Linux"):
             with patch("platform.machine", return_value="x86_64"):
-                with patch(
-                    "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-                ):
-                    with patch(
-                        "src.ml.training_pipeline.gpu_config.tf", mock_tf
-                    ):
+                with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
+                    with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                         # Should not raise, just log warning
                         result = configure_gpu()
                         assert result == "/physical_device:GPU:0"
@@ -145,12 +127,8 @@ class TestConfigureGpu:
 
         with patch("platform.system", return_value="Linux"):
             with patch("platform.machine", return_value="x86_64"):
-                with patch(
-                    "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-                ):
-                    with patch(
-                        "src.ml.training_pipeline.gpu_config.tf", mock_tf
-                    ):
+                with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
+                    with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                         result = configure_gpu()
                         assert result is None
 
@@ -163,12 +141,8 @@ class TestConfigureGpu:
 
         with patch("platform.system", return_value="Linux"):
             with patch("platform.machine", return_value="x86_64"):
-                with patch(
-                    "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-                ):
-                    with patch(
-                        "src.ml.training_pipeline.gpu_config.tf", mock_tf
-                    ):
+                with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
+                    with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                         result = configure_gpu()
                         assert result is None
 
@@ -200,9 +174,7 @@ class TestGetComputeDevice:
         mock_device.name = "GPU:0"
         mock_tf.config.list_physical_devices.return_value = [mock_device]
 
-        with patch(
-            "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-        ):
+        with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
             with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                 result = get_compute_device()
                 assert result == "GPU:0"
@@ -214,9 +186,7 @@ class TestGetComputeDevice:
         mock_tf = MagicMock()
         mock_tf.config.list_physical_devices.return_value = []
 
-        with patch(
-            "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-        ):
+        with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
             with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                 result = get_compute_device()
                 assert result == "CPU"
@@ -228,9 +198,7 @@ class TestGetComputeDevice:
         mock_tf = MagicMock()
         mock_tf.config.list_physical_devices.side_effect = RuntimeError("Error")
 
-        with patch(
-            "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-        ):
+        with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
             with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                 result = get_compute_device()
                 assert result == "CPU"
@@ -266,12 +234,8 @@ class TestGpuConfigIntegration:
 
         with patch("platform.system", return_value="Linux"):
             with patch("platform.machine", return_value="x86_64"):
-                with patch(
-                    "src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True
-                ):
-                    with patch(
-                        "src.ml.training_pipeline.gpu_config.tf", mock_tf
-                    ):
+                with patch("src.ml.training_pipeline.gpu_config._TENSORFLOW_AVAILABLE", True):
+                    with patch("src.ml.training_pipeline.gpu_config.tf", mock_tf):
                         configured = configure_gpu()
                         current = get_compute_device()
                         # Both should report the same GPU

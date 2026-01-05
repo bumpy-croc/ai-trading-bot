@@ -34,15 +34,15 @@ class TestSafeFloat:
 
     def test_nan_returns_default(self, analyzer):
         """NaN values should return default, not propagate."""
-        assert analyzer._safe_float(float('nan')) == 0.0
-        assert analyzer._safe_float(float('nan'), default=1.0) == 1.0
-        assert analyzer._safe_float('NaN') == 0.0
+        assert analyzer._safe_float(float("nan")) == 0.0
+        assert analyzer._safe_float(float("nan"), default=1.0) == 1.0
+        assert analyzer._safe_float("NaN") == 0.0
 
     def test_infinity_returns_default(self, analyzer):
         """Infinity values should return default, not propagate."""
-        assert analyzer._safe_float(float('inf')) == 0.0
-        assert analyzer._safe_float(float('-inf')) == 0.0
-        assert analyzer._safe_float(float('inf'), default=99.0) == 99.0
+        assert analyzer._safe_float(float("inf")) == 0.0
+        assert analyzer._safe_float(float("-inf")) == 0.0
+        assert analyzer._safe_float(float("inf"), default=99.0) == 99.0
 
     def test_boolean_true_converts_to_one(self, analyzer):
         """Boolean True should convert to 1.0 (not treated as falsy).
@@ -100,7 +100,7 @@ class TestSafeFloat:
     def test_custom_default_preserved(self, analyzer):
         """Custom default values should be used correctly."""
         assert analyzer._safe_float(None, default=-1.0) == -1.0
-        assert analyzer._safe_float(float('nan'), default=42.0) == 42.0
+        assert analyzer._safe_float(float("nan"), default=42.0) == 42.0
 
 
 class TestSafeSizeAdd:
@@ -124,14 +124,14 @@ class TestSafeSizeAdd:
 
     def test_nan_size_rejected(self):
         """NaN sizes should be rejected, total unchanged."""
-        result = CorrelationEngine._safe_size_add(10.0, float('nan'))
+        result = CorrelationEngine._safe_size_add(10.0, float("nan"))
         assert result == 10.0  # Unchanged
 
     def test_infinity_size_rejected(self):
         """Infinity sizes should be rejected, total unchanged."""
-        result = CorrelationEngine._safe_size_add(10.0, float('inf'))
+        result = CorrelationEngine._safe_size_add(10.0, float("inf"))
         assert result == 10.0  # Unchanged
-        result = CorrelationEngine._safe_size_add(10.0, float('-inf'))
+        result = CorrelationEngine._safe_size_add(10.0, float("-inf"))
         assert result == 10.0  # Unchanged
 
     def test_zero_size_accepted(self):
@@ -200,12 +200,12 @@ class TestValidateFraction:
 
     def test_nan_fraction_rejected(self, policy):
         """NaN fractions should be rejected."""
-        assert policy._validate_fraction(float('nan')) is False
+        assert policy._validate_fraction(float("nan")) is False
 
     def test_infinity_fraction_rejected(self, policy):
         """Infinity fractions should be rejected."""
-        assert policy._validate_fraction(float('inf')) is False
-        assert policy._validate_fraction(float('-inf')) is False
+        assert policy._validate_fraction(float("inf")) is False
+        assert policy._validate_fraction(float("-inf")) is False
 
     def test_invalid_types_rejected(self, policy):
         """Non-numeric types should be rejected."""
@@ -255,6 +255,7 @@ class TestValidateFraction:
     def test_custom_param_name_in_logs(self, policy, caplog):
         """Custom parameter names should appear in log messages."""
         import logging
+
         caplog.set_level(logging.WARNING)
 
         policy._validate_fraction(-1.0, param_name="test_fraction")
@@ -284,7 +285,7 @@ class TestValidationHelpersIntegration:
         """PositionState should reject invalid entry prices."""
         with pytest.raises(ValueError, match="entry_price must be finite"):
             PositionState(
-                entry_price=float('nan'),
+                entry_price=float("nan"),
                 side="long",
                 original_size=0.5,
                 current_size=0.5,
@@ -292,7 +293,7 @@ class TestValidationHelpersIntegration:
 
         with pytest.raises(ValueError, match="entry_price must be finite"):
             PositionState(
-                entry_price=float('inf'),
+                entry_price=float("inf"),
                 side="long",
                 original_size=0.5,
                 current_size=0.5,

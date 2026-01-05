@@ -13,9 +13,7 @@ from src.engines.shared.execution.order_intent import OrderIntent
 BASE_TIME = datetime(2025, 1, 1)
 
 
-def _snapshot(
-    high: float, low: float, last: float = 100.0, close: float = 100.0
-) -> MarketSnapshot:
+def _snapshot(high: float, low: float, last: float = 100.0, close: float = 100.0) -> MarketSnapshot:
     """Build a MarketSnapshot for execution model tests."""
     return MarketSnapshot(
         symbol="BTCUSDT",

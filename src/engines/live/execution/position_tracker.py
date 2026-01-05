@@ -318,7 +318,9 @@ class LivePositionTracker:
 
         # Validate prices before calling pnl_percent to prevent ValueError
         if position.entry_price <= 0 or not math.isfinite(position.entry_price):
-            logger.error("Invalid entry_price %.8f for position %s", position.entry_price, position.symbol)
+            logger.error(
+                "Invalid entry_price %.8f for position %s", position.entry_price, position.symbol
+            )
             return None
         if exit_price <= 0 or not math.isfinite(exit_price):
             logger.error("Invalid exit_price %.8f for position %s", exit_price, position.symbol)
@@ -391,12 +393,18 @@ class LivePositionTracker:
 
                 # Validate prices before calling pnl_percent to prevent ValueError
                 if position.entry_price <= 0 or not math.isfinite(position.entry_price):
-                    logger.error("Invalid entry_price %.8f for position %s", position.entry_price, position.symbol)
+                    logger.error(
+                        "Invalid entry_price %.8f for position %s",
+                        position.entry_price,
+                        position.symbol,
+                    )
                     position.unrealized_pnl = 0.0
                     position.unrealized_pnl_percent = 0.0
                     continue
                 if current_price <= 0 or not math.isfinite(current_price):
-                    logger.error("Invalid current_price %.8f for position %s", current_price, position.symbol)
+                    logger.error(
+                        "Invalid current_price %.8f for position %s", current_price, position.symbol
+                    )
                     position.unrealized_pnl = 0.0
                     position.unrealized_pnl_percent = 0.0
                     continue

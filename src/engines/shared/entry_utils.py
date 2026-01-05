@@ -83,9 +83,7 @@ def extract_entry_plan(
         return None
 
     metadata = getattr(decision, "metadata", None) or {}
-    if decision.signal.direction == SignalDirection.SELL and not bool(
-        metadata.get("enter_short")
-    ):
+    if decision.signal.direction == SignalDirection.SELL and not bool(metadata.get("enter_short")):
         return None
 
     side = (
@@ -142,9 +140,7 @@ def resolve_stop_loss_take_profit_pct(
         try:
             signal = runtime_decision.signal if runtime_decision else None
             regime = runtime_decision.regime if runtime_decision else None
-            stop_loss_price = component_strategy.get_stop_loss_price(
-                current_price, signal, regime
-            )
+            stop_loss_price = component_strategy.get_stop_loss_price(current_price, signal, regime)
             sl_pct = _calculate_stop_loss_pct(current_price, stop_loss_price, entry_side)
             sl_pct = clamp_stop_loss_pct(
                 sl_pct,

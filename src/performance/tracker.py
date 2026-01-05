@@ -392,7 +392,7 @@ class PerformanceTracker:
 
             # Limit memory usage (same cap as trade history)
             if len(self._balance_history) > self._max_trade_history:
-                self._balance_history = self._balance_history[-self._max_trade_history:]
+                self._balance_history = self._balance_history[-self._max_trade_history :]
 
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics.

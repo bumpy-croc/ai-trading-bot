@@ -685,8 +685,9 @@ class PerformanceAttributionAnalyzer:
 
                 # Check if signal was accurate
                 if (
-                    (signal.direction == SignalDirection.BUY and corresponding_trade["return"] > 0)
-                    or (signal.direction == SignalDirection.SELL and corresponding_trade["return"] < 0)
+                    signal.direction == SignalDirection.BUY and corresponding_trade["return"] > 0
+                ) or (
+                    signal.direction == SignalDirection.SELL and corresponding_trade["return"] < 0
                 ):
                     accurate_signals += 1
                 elif signal.direction == SignalDirection.HOLD:

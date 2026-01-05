@@ -467,9 +467,8 @@ class ComponentPerformanceTester:
                         future_return = scenario_data.iloc[i + 1]["returns"]
 
                         # Determine if signal was accurate
-                        if (
-                            (signal.direction == SignalDirection.BUY and future_return > 0)
-                            or (signal.direction == SignalDirection.SELL and future_return < 0)
+                        if (signal.direction == SignalDirection.BUY and future_return > 0) or (
+                            signal.direction == SignalDirection.SELL and future_return < 0
                         ):
                             accurate = True
                         elif signal.direction == SignalDirection.HOLD:

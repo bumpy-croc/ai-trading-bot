@@ -32,7 +32,6 @@ class ExecutionTimeoutError(Exception):
     """
 
 
-
 def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
     """
     Execute a function with timeout using thread-safe mechanism

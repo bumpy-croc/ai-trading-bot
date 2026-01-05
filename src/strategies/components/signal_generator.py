@@ -55,9 +55,7 @@ class Signal:
     def _validate_signal(self):
         """Validate signal parameters are within acceptable bounds"""
         if not isinstance(self.direction, SignalDirection):
-            raise TypeError(
-                f"direction must be a SignalDirection enum, got {type(self.direction)}"
-            )
+            raise TypeError(f"direction must be a SignalDirection enum, got {type(self.direction)}")
 
         if not 0.0 <= self.strength <= 1.0:
             raise ValueError(f"strength must be between 0.0 and 1.0, got {self.strength}")

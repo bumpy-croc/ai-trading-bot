@@ -1577,7 +1577,8 @@ class LiveTradingEngine:
                             else:
                                 # All strategies should be component-based
                                 self.logger.error(
-                                    "Strategy %s does not support component-based position sizing", self.strategy.name
+                                    "Strategy %s does not support component-based position sizing",
+                                    self.strategy.name,
                                 )
                                 short_position_size = 0.0
 
@@ -1602,18 +1603,28 @@ class LiveTradingEngine:
                                     )
                                     if short_take_profit is None:
                                         short_take_profit = current_price * (
-                                            1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
+                                            1
+                                            - getattr(
+                                                self.strategy,
+                                                "take_profit_pct",
+                                                DEFAULT_TAKE_PROFIT_PCT,
+                                            )
                                         )
                                 else:
                                     # All strategies should be component-based
                                     self.logger.error(
                                         f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                                     )
-                                    short_stop_loss = (
-                                        current_price * (1 + DEFAULT_STOP_LOSS_PCT)
+                                    short_stop_loss = current_price * (
+                                        1 + DEFAULT_STOP_LOSS_PCT
                                     )  # Default 5% stop for short
                                     short_take_profit = current_price * (
-                                        1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
+                                        1
+                                        - getattr(
+                                            self.strategy,
+                                            "take_profit_pct",
+                                            DEFAULT_TAKE_PROFIT_PCT,
+                                        )
                                     )
                                 self._execute_entry(
                                     symbol=symbol,
@@ -2142,7 +2153,9 @@ class LiveTradingEngine:
             except Exception:
                 if stop_loss is None:
                     stop_loss = float(current_price) * (
-                        (1 - DEFAULT_STOP_LOSS_PCT) if entry_side == PositionSide.LONG else (1 + DEFAULT_STOP_LOSS_PCT)
+                        (1 - DEFAULT_STOP_LOSS_PCT)
+                        if entry_side == PositionSide.LONG
+                        else (1 + DEFAULT_STOP_LOSS_PCT)
                     )
             if take_profit is None:
                 tp_pct = self._resolve_take_profit_pct()
@@ -2171,7 +2184,9 @@ class LiveTradingEngine:
             except Exception as e:
                 self.logger.debug("Component stop loss calculation failed: %s", e)
                 stop_loss = float(current_price) * (
-                    (1 - DEFAULT_STOP_LOSS_PCT) if entry_side == PositionSide.LONG else (1 + DEFAULT_STOP_LOSS_PCT)
+                    (1 - DEFAULT_STOP_LOSS_PCT)
+                    if entry_side == PositionSide.LONG
+                    else (1 + DEFAULT_STOP_LOSS_PCT)
                 )
             tp_pct = self._resolve_take_profit_pct()
             take_profit = (
@@ -2198,7 +2213,9 @@ class LiveTradingEngine:
                     strategy_overrides=overrides,
                 )
                 if take_profit is None:
-                    take_profit = current_price * (1 + overrides.get("take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
+                    take_profit = current_price * (
+                        1 + overrides.get("take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
+                    )
             else:
                 # All strategies should be component-based
                 self.logger.error(
@@ -2206,7 +2223,9 @@ class LiveTradingEngine:
                     self.strategy.name,
                 )
                 stop_loss = current_price * (1 - DEFAULT_STOP_LOSS_PCT)  # Default 5% stop for long
-                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
+                take_profit = current_price * (
+                    1 + getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
+                )
             entry_side = PositionSide.LONG
 
         self._execute_entry(

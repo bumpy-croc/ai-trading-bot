@@ -280,4 +280,6 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
     except Exception as exc:
         # Unexpected errors - log with full traceback for debugging
         logger.exception("Training pipeline failed with unexpected error: %s", exc)
-        return TrainingResult(False, {"error": f"Unexpected error: {exc}"}, None, perf_counter() - start_time)
+        return TrainingResult(
+            False, {"error": f"Unexpected error: {exc}"}, None, perf_counter() - start_time
+        )

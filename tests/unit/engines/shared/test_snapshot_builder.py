@@ -121,13 +121,15 @@ class TestBuildSnapshotFromCandle:
 
     def test_extracts_ohlcv_from_series(self) -> None:
         """Snapshot should extract OHLCV from pandas Series."""
-        candle = pd.Series({
-            "open": 100.0,
-            "high": 110.0,
-            "low": 95.0,
-            "close": 105.0,
-            "volume": 1000.0,
-        })
+        candle = pd.Series(
+            {
+                "open": 100.0,
+                "high": 110.0,
+                "low": 95.0,
+                "close": 105.0,
+                "volume": 1000.0,
+            }
+        )
 
         snapshot = build_snapshot_from_candle(
             symbol="BTCUSDT",
@@ -143,13 +145,15 @@ class TestBuildSnapshotFromCandle:
 
     def test_nan_in_candle_uses_fallback(self) -> None:
         """NaN values in candle should use current_price as fallback."""
-        candle = pd.Series({
-            "open": 100.0,
-            "high": math.nan,  # NaN should be replaced
-            "low": 95.0,
-            "close": 105.0,
-            "volume": 1000.0,
-        })
+        candle = pd.Series(
+            {
+                "open": 100.0,
+                "high": math.nan,  # NaN should be replaced
+                "low": 95.0,
+                "close": 105.0,
+                "volume": 1000.0,
+            }
+        )
 
         snapshot = build_snapshot_from_candle(
             symbol="BTCUSDT",

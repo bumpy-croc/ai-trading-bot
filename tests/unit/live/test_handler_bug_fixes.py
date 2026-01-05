@@ -129,8 +129,6 @@ class TestExitFeeCalculation:
         assert position_notional == pytest.approx(expected_exit_notional, rel=0.01)
 
 
-
-
 class TestTakeProfitLimitPricing:
     """Test take profit exits use limit price instead of favorable candle extremes."""
 
@@ -148,7 +146,6 @@ class TestTakeProfitLimitPricing:
         exit_handler = LiveExitHandler(
             position_tracker=position_tracker,
             execution_engine=execution_engine,
-
             execution_model=ExecutionModel(default_fill_policy()),
         )
 
@@ -192,7 +189,6 @@ class TestTakeProfitLimitPricing:
         exit_handler = LiveExitHandler(
             position_tracker=position_tracker,
             execution_engine=execution_engine,
-
             execution_model=ExecutionModel(default_fill_policy()),
         )
 
@@ -561,8 +557,6 @@ class TestDailyPnLTracking:
         assert call_kwargs["daily_pnl"] == pytest.approx(50.0, rel=0.01)
 
 
-
-
 class TestEntryBalanceBasis:
     """Test entry balance basis uses post-fee balance for parity with backtest."""
 
@@ -603,8 +597,6 @@ class TestEntryBalanceBasis:
         assert result.executed is True
         assert result.position is not None
         assert result.position.entry_balance == balance - entry_fee
-
-
 
     def test_daily_pnl_resets_on_date_change(self) -> None:
         """Daily P&L should reset when the trading date changes."""

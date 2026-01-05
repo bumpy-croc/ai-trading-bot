@@ -84,9 +84,7 @@ def validate_notional(notional: float, name: str = "notional") -> None:
         raise ValueError(f"{name} must be finite, got {notional}")
 
 
-def validate_fraction(
-    fraction: float, name: str = "fraction", allow_zero: bool = True
-) -> None:
+def validate_fraction(fraction: float, name: str = "fraction", allow_zero: bool = True) -> None:
     """Validate that a fraction is in valid range [0, 1] and finite.
 
     Args:
@@ -165,9 +163,7 @@ def is_valid_fraction(fraction: float, allow_zero: bool = True) -> bool:
         return False
 
 
-def safe_divide(
-    numerator: float, denominator: float, fallback: float = 0.0
-) -> float:
+def safe_divide(numerator: float, denominator: float, fallback: float = 0.0) -> float:
     """Safely divide two numbers, returning fallback if division is invalid.
 
     Handles division by zero, near-zero denominators, and NaN/Infinity results.
@@ -342,6 +338,5 @@ def validate_parallel_lists(
     """
     if len(list1) != len(list2):
         raise ValueError(
-            f"{name1} length ({len(list1)}) must match "
-            f"{name2} length ({len(list2)})"
+            f"{name1} length ({len(list1)}) must match " f"{name2} length ({len(list2)})"
         )

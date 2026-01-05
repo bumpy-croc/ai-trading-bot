@@ -119,9 +119,7 @@ class EventLogger:
             )
         except Exception as e:
             if not self._logging_error_warned:
-                logger.warning(
-                    "Database logging failed: %s (future failures logged at DEBUG)", e
-                )
+                logger.warning("Database logging failed: %s (future failures logged at DEBUG)", e)
                 self._logging_error_warned = True
             else:
                 logger.debug("Failed to log entry decision: %s", e)
@@ -181,9 +179,7 @@ class EventLogger:
             )
         except Exception as e:
             if not self._logging_error_warned:
-                logger.warning(
-                    "Database logging failed: %s (future failures logged at DEBUG)", e
-                )
+                logger.warning("Database logging failed: %s (future failures logged at DEBUG)", e)
                 self._logging_error_warned = True
             else:
                 logger.debug("Failed to log exit decision: %s", e)
@@ -231,9 +227,7 @@ class EventLogger:
             )
         except Exception as e:
             if not self._logging_error_warned:
-                logger.warning(
-                    "Database logging failed: %s (future failures logged at DEBUG)", e
-                )
+                logger.warning("Database logging failed: %s (future failures logged at DEBUG)", e)
                 self._logging_error_warned = True
             else:
                 logger.debug("Failed to log completed trade: %s", e)
@@ -273,9 +267,7 @@ class EventLogger:
             )
         except Exception as e:
             if not self._logging_error_warned:
-                logger.warning(
-                    "Database logging failed: %s (future failures logged at DEBUG)", e
-                )
+                logger.warning("Database logging failed: %s (future failures logged at DEBUG)", e)
                 self._logging_error_warned = True
             else:
                 logger.debug("Failed to log risk adjustment: %s", e)

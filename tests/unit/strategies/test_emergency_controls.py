@@ -427,9 +427,7 @@ class TestEmergencyControls:
             requested_by="user1",
         )
 
-        result = self.controls.approve_request(
-            request_id, "admin", rejection_reason="Not approved"
-        )
+        result = self.controls.approve_request(request_id, "admin", rejection_reason="Not approved")
 
         assert result is True
         assert len(self.controls.pending_approvals) == 0

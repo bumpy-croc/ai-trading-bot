@@ -86,9 +86,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         if bollinger_period <= 0:
             raise ValueError(f"bollinger_period must be positive, got {bollinger_period}")
         if bollinger_std_dev <= 0:
-            raise ValueError(
-                f"bollinger_std_dev must be positive, got {bollinger_std_dev}"
-            )
+            raise ValueError(f"bollinger_std_dev must be positive, got {bollinger_std_dev}")
         if macd_fast <= 0:
             raise ValueError(f"macd_fast must be positive, got {macd_fast}")
         if macd_slow <= 0:
@@ -96,9 +94,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         if macd_signal <= 0:
             raise ValueError(f"macd_signal must be positive, got {macd_signal}")
         if macd_fast >= macd_slow:
-            raise ValueError(
-                f"macd_fast ({macd_fast}) must be less than macd_slow ({macd_slow})"
-            )
+            raise ValueError(f"macd_fast ({macd_fast}) must be less than macd_slow ({macd_slow})")
         if not 0 <= nan_threshold <= 1:
             raise ValueError(f"nan_threshold must be in [0, 1], got {nan_threshold}")
 
@@ -167,7 +163,9 @@ class TechnicalFeatureExtractor(FeatureExtractor):
             raise RuntimeError(f"Technical feature extraction failed: {str(e)}") from e
         except (KeyError, TypeError) as e:
             # Data structure errors (missing columns, wrong types)
-            raise RuntimeError(f"Technical feature extraction failed due to data error: {str(e)}") from e
+            raise RuntimeError(
+                f"Technical feature extraction failed due to data error: {str(e)}"
+            ) from e
 
     def _extract_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Extract core technical indicators."""
@@ -256,9 +254,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         df["trend_strength"] = (df["close"] - df["ma_50"]) / (df["ma_50"] + EPSILON)
         # Use neutral value (0) when MAs are equal (crossover moment)
         df["trend_direction"] = np.select(
-            [df["ma_20"] > df["ma_50"], df["ma_20"] < df["ma_50"]],
-            [1, -1],
-            default=0
+            [df["ma_20"] > df["ma_50"], df["ma_20"] < df["ma_50"]], [1, -1], default=0
         )
 
         return df

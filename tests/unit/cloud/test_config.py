@@ -136,7 +136,9 @@ class TestCloudTrainingConfig:
     @patch.dict("os.environ", {}, clear=True)
     def test_from_env_requires_s3_bucket(self, training_config: TrainingConfig) -> None:
         """Verify from_env raises ValueError when SAGEMAKER_S3_BUCKET is not set."""
-        with pytest.raises(ValueError, match="SAGEMAKER_S3_BUCKET environment variable is required"):
+        with pytest.raises(
+            ValueError, match="SAGEMAKER_S3_BUCKET environment variable is required"
+        ):
             CloudTrainingConfig.from_env(training_config)
 
     @patch.dict(

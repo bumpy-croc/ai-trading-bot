@@ -502,7 +502,9 @@ class LiveExecutionEngine:
                         else:
                             # Preserves liquidity-aware fee rate when commissions are unavailable.
                             fee_rate = (
-                                cost_result.fee / original_notional if original_notional > 0 else 0.0
+                                cost_result.fee / original_notional
+                                if original_notional > 0
+                                else 0.0
                             )
                             exit_fee = position_notional * fee_rate
                             slippage_cost = self._calculate_slippage_from_fill(

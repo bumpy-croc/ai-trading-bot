@@ -25,10 +25,7 @@ class OhlcFillModel:
     ) -> ExecutionDecision:
         """Decide whether an order fills using OHLC data."""
         # Validate quantity is positive and finite to prevent NaN propagation
-        if (
-            order_intent.quantity <= ZERO_QUANTITY
-            or not math.isfinite(order_intent.quantity)
-        ):
+        if order_intent.quantity <= ZERO_QUANTITY or not math.isfinite(order_intent.quantity):
             return ExecutionDecision.no_fill("quantity must be positive and finite")
 
         if order_intent.is_market_order():

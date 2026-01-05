@@ -5,7 +5,6 @@ Tests how the component system handles various error conditions
 and recovers gracefully during trading operations.
 """
 
-
 import pandas as pd
 import pytest
 
