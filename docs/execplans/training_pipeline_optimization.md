@@ -6,7 +6,7 @@ Researchers use the `atb train` CLI command to produce updated price and sentime
 
 ## Scope and Non-Goals
 
-The scope is limited to the training pipeline implemented in `cli/commands/train_commands.py` and any helper modules created to support it. The ONNX conversion step must remain available because every strategy currently references `.onnx` files and the live inference layer uses `onnxruntime`. Engines under `src/live`, `src/backtesting`, and `src/prediction` are out of scope for code modifications. The plan does not remove TensorFlow; it restructures how the trainer feeds it. To guarantee data freshness we will download both OHLCV candles and sentiment every time the trainer runs; only downstream processing can be optimized. Any optional shortcuts introduced here must default to the current behavior so that unattended jobs keep producing identical artifacts.
+The scope is limited to the training pipeline implemented in `cli/commands/train_commands.py` and any helper modules created to support it. The ONNX conversion step must remain available because every strategy currently references `.onnx` files and the live inference layer uses `onnxruntime`. Engine runtime code under `src/engines/` (live/backtest) and inference code under `src/prediction/` are out of scope for code modifications. The plan does not remove TensorFlow; it restructures how the trainer feeds it. To guarantee data freshness we will download both OHLCV candles and sentiment every time the trainer runs; only downstream processing can be optimized. Any optional shortcuts introduced here must default to the current behavior so that unattended jobs keep producing identical artifacts.
 
 ## Context and Definitions
 

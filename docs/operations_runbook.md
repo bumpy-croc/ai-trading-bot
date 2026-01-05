@@ -26,12 +26,12 @@ This runbook provides operational procedures, troubleshooting guides, and recove
 
 ### Core Components
 
-1. **Live Trading Engine** (`src/live/trading_engine.py`)
+1. **Live Trading Engine** (`src/engines/live/trading_engine.py`)
    - Executes trades in real-time
    - Manages positions and risk
    - Critical: 95%+ uptime required
 
-2. **Backtesting Engine** (`src/backtesting/engine.py`)
+2. **Backtesting Engine** (`src/engines/backtest/engine.py`)
    - Validates strategies historically
    - Generates performance metrics
    - Non-critical: Can run asynchronously

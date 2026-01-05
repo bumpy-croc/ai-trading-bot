@@ -144,13 +144,15 @@ bandit -c pyproject.toml -r src
 
 ```text
 src/
-  backtesting/          # Vectorised simulation engine and utilities
   config/               # Typed configuration loader, constants, feature flags
   dashboards/           # Monitoring, backtesting, and prediction dashboards
   data_providers/       # Market, sentiment, and cache-aware data sources
   database/             # SQLAlchemy models, DatabaseManager, admin UI
+  engines/              # Trading engines (backtest + live) + shared logic
+    backtest/           # Vectorised historical simulation engine
+    live/               # Live trading engine and runners
+    shared/             # Shared engine logic (fees, policies, parity helpers)
   infrastructure/       # Logging config, runtime helpers, cache/secret tooling
-  live/                 # Live trading engine, runners, sync utilities
   ml/                   # Training pipeline plus versioned model registry artifacts
   optimizer/            # Parameter optimization and analyzer tooling
   performance/          # Shared performance and diagnostics helpers
@@ -162,20 +164,19 @@ src/
   strategies/           # Component-based strategies and factories
   tech/                 # Indicator math, feature builders, adapters
   trading/              # Trading interfaces plus symbol utilities
-  indicators/           # Legacy shim that re-exports `src.tech` (kept for compatibility)
 ```
 
 ---
 
 ## Key components
 
-- Data providers: `data_providers.BinanceProvider`, `CoinbaseProvider`, `CachedDataProvider`
-- ML prediction: `prediction.models.registry.PredictionModelRegistry` (ONNX), caching in `prediction.utils.caching`
-- Strategies: `strategies.ml_basic`
-- Backtesting: `backtesting.engine.Backtester` (CLI: `atb backtest`)
-- Live engine: `live.trading_engine.LiveTradingEngine` (CLI: `atb live`, `atb live-health`)
-- Risk: `risk.risk_manager.RiskManager`
-- Database: `database.manager.DatabaseManager` (PostgreSQL)
+- Data providers: `src.data_providers.binance_provider.BinanceProvider`, `src.data_providers.coinbase_provider.CoinbaseProvider`, `src.data_providers.cached_data_provider.CachedDataProvider`
+- ML prediction: `src.prediction.models.registry.PredictionModelRegistry` (ONNX), caching in `src.prediction.utils.caching`
+- Strategies: `src.strategies.ml_basic`
+- Backtesting: `src.engines.backtest.engine.Backtester` (CLI: `atb backtest`)
+- Live engine: `src.engines.live.trading_engine.LiveTradingEngine` (CLI: `atb live`, `atb live-health`)
+- Risk: `src.risk.risk_manager.RiskManager`
+- Database: `src.database.manager.DatabaseManager` (PostgreSQL)
 - Monitoring dashboard: `src.dashboards.monitoring.dashboard.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
 - Admin UI: `src.database.admin_ui.app:create_app` (Flask-Admin), run `python src/database/admin_ui/app.py`
 

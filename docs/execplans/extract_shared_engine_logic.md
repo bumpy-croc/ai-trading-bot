@@ -7,7 +7,7 @@
 
 ## Purpose
 
-Extract duplicated logic between the backtesting engine (`src/backtesting/`) and live trading engine (`src/live/`) into a shared module to ensure consistency and maintainability. Reorganize directories to group related engine components under `src/engines/`.
+Extract duplicated logic between the backtesting engine (formerly `src/backtesting/`, now `src/engines/backtest/`) and live trading engine (formerly `src/live/`, now `src/engines/live/`) into a shared module to ensure consistency and maintainability. Reorganize directories to group related engine components under `src/engines/`.
 
 ## Target Directory Structure
 
@@ -86,6 +86,8 @@ cp -r src/backtesting/* src/engines/backtest/
 cp -r src/live/* src/engines/live/
 ```
 
+> Note: This step is historical. The old `src/backtesting/` and `src/live/` directories are removed in the current repo layout. Use this section as a migration reference rather than a runnable script.
+
 #### Step 1.3: Update Import Statements
 
 **Files to update** (use find/replace):
@@ -93,10 +95,7 @@ cp -r src/live/* src/engines/live/
 1. **All Python files** - Update imports:
    ```bash
    # Find all files that import from old paths
-   grep -r "from src.backtesting" --include="*.py" .
-   grep -r "import src.backtesting" --include="*.py" .
-   grep -r "from src.live" --include="*.py" .
-   grep -r "import src.live" --include="*.py" .
+   rg -n "from src\\.backtesting|import src\\.backtesting|from src\\.live|import src\\.live" .
    ```
 
 2. **Replace patterns**:

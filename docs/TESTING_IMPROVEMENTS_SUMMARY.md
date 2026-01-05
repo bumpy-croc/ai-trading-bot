@@ -427,7 +427,7 @@ pytest tests/unit/data_providers/test_provider_edge_cases.py -v
 ```bash
 # Generate coverage report
 pytest tests/unit/backtesting/test_backtesting_comprehensive_edge_cases.py \
-    --cov=src/backtesting \
+    --cov=src/engines/backtest \
     --cov-report=html \
     --cov-report=term
 
