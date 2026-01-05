@@ -82,3 +82,65 @@ def test_close_position_invalid_price_retains_position() -> None:
     assert result is None
     assert tracker.has_position(order_id), "Position should remain in tracker after validation failure"
     assert tracker.get_position(order_id) is not None
+
+
+@pytest.mark.fast
+def test_close_position_invalid_basis_balance_retains_position() -> None:
+    """Close with invalid basis_balance (NaN) returns None but keeps position in tracker."""
+    # Arrange
+    tracker = LivePositionTracker()
+    order_id = "invalid-basis-1"
+    position = LivePosition(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        entry_price=100.0,
+        entry_time=datetime.now(UTC),
+        entry_balance=None,  # No entry balance, will use basis_balance
+        order_id=order_id,
+    )
+    tracker.open_position(position)
+
+    # Act - try to close with invalid basis_balance (NaN)
+    result = tracker.close_position(
+        order_id=order_id,
+        exit_price=105.0,
+        exit_reason="test",
+        basis_balance=float("nan"),
+    )
+
+    # Assert - close failed but position is still tracked
+    assert result is None
+    assert tracker.has_position(order_id), "Position should remain in tracker after invalid basis"
+    assert tracker.get_position(order_id) is not None
+
+
+@pytest.mark.fast
+def test_close_position_negative_basis_balance_retains_position() -> None:
+    """Close with negative basis_balance returns None but keeps position in tracker."""
+    # Arrange
+    tracker = LivePositionTracker()
+    order_id = "negative-basis-1"
+    position = LivePosition(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        entry_price=100.0,
+        entry_time=datetime.now(UTC),
+        entry_balance=None,  # No entry balance, will use basis_balance
+        order_id=order_id,
+    )
+    tracker.open_position(position)
+
+    # Act - try to close with negative basis_balance
+    result = tracker.close_position(
+        order_id=order_id,
+        exit_price=105.0,
+        exit_reason="test",
+        basis_balance=-100.0,
+    )
+
+    # Assert - close failed but position is still tracked
+    assert result is None
+    assert tracker.has_position(order_id), "Position should remain in tracker after negative basis"
+    assert tracker.get_position(order_id) is not None

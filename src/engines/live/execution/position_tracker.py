@@ -305,7 +305,7 @@ class LivePositionTracker:
         Returns:
             PositionCloseResult with realized P&L and metrics, or None if not found.
         """
-        # Capture position data atomically - keeps in dict until validation passes
+        # Capture position data atomically - keeps in dict until all validation passes
         with self._positions_lock:
             position = self._positions.get(order_id)
             if position is None:
@@ -328,7 +328,34 @@ class LivePositionTracker:
             )
             return None
 
-        # Validation passed - atomically remove from tracker to prevent double-close
+        # Pre-validate inputs for P&L calculation BEFORE popping position
+        exit_time = datetime.now(UTC)
+        fraction = float(
+            position.current_size if position.current_size is not None else position.size
+        )
+        if not math.isfinite(fraction) or fraction <= 0:
+            logger.error(
+                "Invalid fraction %.8f for position %s - close aborted, position retained",
+                fraction,
+                position.symbol,
+            )
+            return None
+
+        # Determine and validate balance basis BEFORE popping
+        entry_balance = position.entry_balance
+        if entry_balance is not None and entry_balance > 0:
+            actual_basis = float(entry_balance)
+        else:
+            actual_basis = float(basis_balance)
+        if not math.isfinite(actual_basis) or actual_basis < 0:
+            logger.error(
+                "Invalid basis_balance %.8f for position %s - close aborted, position retained",
+                actual_basis,
+                position.symbol,
+            )
+            return None
+
+        # All validations passed - atomically remove from tracker to prevent double-close
         with self._positions_lock:
             position = self._positions.pop(order_id, None)
             self._position_db_ids.pop(order_id, None)
@@ -342,25 +369,30 @@ class LivePositionTracker:
         # Clear MFE/MAE tracker outside position lock to avoid nested locks
         self.mfe_mae_tracker.clear(order_id)
 
-        exit_time = datetime.now(UTC)
-        fraction = float(
-            position.current_size if position.current_size is not None else position.size
-        )
+        # Calculate P&L (all inputs pre-validated, but wrap to catch unexpected errors)
+        try:
+            if position.side == PositionSide.LONG:
+                trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.LONG, fraction)
+            else:
+                trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.SHORT, fraction)
 
-        # Calculate P&L
-        if position.side == PositionSide.LONG:
-            trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.LONG, fraction)
-        else:
-            trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.SHORT, fraction)
-
-        # Determine balance basis
-        entry_balance = position.entry_balance
-        if entry_balance is not None and entry_balance > 0:
-            actual_basis = float(entry_balance)
-        else:
-            actual_basis = basis_balance
-
-        realized_pnl = cash_pnl(trade_pnl_pct, actual_basis)
+            realized_pnl = cash_pnl(trade_pnl_pct, actual_basis)
+        except (ValueError, ArithmeticError) as e:
+            # P&L calculation failed despite validation - log critical and re-raise
+            # Position is already removed; caller must reconcile from exchange
+            logger.critical(
+                "P&L calculation failed for position %s after pop: %s. Position lost from tracking, "
+                "requires exchange reconciliation to recover. entry_price=%.8f exit_price=%.8f "
+                "fraction=%.8f basis=%.8f",
+                order_id,
+                e,
+                position.entry_price,
+                exit_price,
+                fraction,
+                actual_basis,
+                exc_info=True,
+            )
+            raise
 
         logger.info(
             "Closed %s at %.2f, PnL=%.2f (%.2f%%), reason=%s",
