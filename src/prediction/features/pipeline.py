@@ -319,8 +319,9 @@ class FeaturePipeline:
         """
         results = {}
         for name, extractor in self.extractors.items():
-            # Use getattr for safety - not all extractors have 'enabled' attribute
-            if getattr(extractor, "enabled", True):
+            # Check if extractor has enabled attribute, otherwise assume it's enabled
+            is_enabled = extractor.enabled if hasattr(extractor, "enabled") else True
+            if is_enabled:
                 try:
                     extractor.validate_features(data)
                     results[name] = {"valid": True, "error": None}

@@ -18,13 +18,15 @@ from src.config.config_manager import get_config
 from src.config.constants import (
     DEFAULT_INFERENCE_TIMEOUT,
     DEFAULT_MODEL_LOAD_TIMEOUT,
-    DEFAULT_NORMALIZATION_EPSILON,
 )
 from src.infrastructure.timeout import TimeoutError, run_with_timeout
 
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
 from .execution_providers import get_preferred_providers
+
+# Constants for numerical stability
+EPSILON = 1e-8  # Small value to prevent division by zero
 
 # Metadata load timeout (fixed, not configurable - metadata files are small)
 METADATA_LOAD_TIMEOUT = 10.0
@@ -129,8 +131,21 @@ class OnnxRunner:
                 del self.session
                 self.session = None
             except Exception as e:
-                # Log cleanup exceptions for troubleshooting resource leaks
-                logging.debug("Exception during ONNX session cleanup: %s", e)
+                # Log cleanup failures to help diagnose resource leaks
+                logging.warning(
+                    "Failed to cleanup ONNX session for %s: %s",
+                    getattr(self, "model_path", "unknown"),
+                    e,
+                )
+
+    def __enter__(self) -> "OnnxRunner":
+        """Enter context manager - return self for use in with statements."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit context manager - ensure resources are cleaned up."""
+        self.close()
+        return False  # Do not suppress exceptions
 
     def __del__(self):
         """Ensure ONNX session cleanup on garbage collection.
@@ -208,6 +223,13 @@ class OnnxRunner:
             # Prepare input
             input_data = self._prepare_input(features)
 
+            # Validate no NaN/Inf values before inference to prevent undefined model behavior
+            if np.isnan(input_data).any() or np.isinf(input_data).any():
+                raise ValueError(
+                    "Input features contain NaN or infinite values after preparation. "
+                    "Check feature extraction pipeline for data quality issues."
+                )
+
             # Get input name dynamically from ONNX session
             # Validate model has at least one input to prevent IndexError
             inputs = self.session.get_inputs()
@@ -278,8 +300,8 @@ class OnnxRunner:
 
             return self.cache_manager.get(features, model_name, config)
         except Exception as e:
-            # Log cache errors at debug level to aid in troubleshooting while maintaining fallback behavior
-            logging.debug(
+            # Log cache errors at warning level to ensure visibility in production logs
+            logging.warning(
                 "Cache lookup failed for model %s: %s: %s. Falling back to model inference.",
                 model_name,
                 type(e).__name__,
@@ -313,8 +335,8 @@ class OnnxRunner:
                 prediction["direction"],
             )
         except Exception as e:
-            # Log cache errors at debug level to aid in troubleshooting while not affecting prediction
-            logging.debug(
+            # Log cache errors at warning level to ensure visibility in production logs
+            logging.warning(
                 "Failed to cache prediction result for model %s: %s: %s. Continuing with prediction.",
                 model_name,
                 type(e).__name__,
@@ -350,38 +372,29 @@ class OnnxRunner:
         if len(features.shape) != 3:
             raise ValueError(f"Features must be 3D for normalization, got shape {features.shape}")
 
-        # Use explicit feature_order from metadata if available, otherwise fall back to dict keys
-        # Feature ordering is critical for correct normalization - dict keys are fragile
-        feature_order = self.model_metadata.get("feature_order")
-        if feature_order is None:
-            # Fallback to dict keys for backward compatibility with older metadata
-            feature_order = list(norm_params.keys())
-            logging.warning(
-                "Model metadata missing 'feature_order' - falling back to dict key order. "
-                "Consider regenerating metadata with explicit feature_order for reliability."
-            )
+        for i, feature_name in enumerate(norm_params.keys()):
+            if i < features.shape[2]:  # Check feature index bounds
+                mean = norm_params[feature_name].get("mean", 0.0)
+                std = norm_params[feature_name].get("std", 1.0)
 
-        # Validate feature count matches expected dimension
-        if len(feature_order) != features.shape[2]:
-            raise ValueError(
-                f"Feature order length ({len(feature_order)}) does not match "
-                f"features array dimension ({features.shape[2]})"
-            )
+                # Validate and sanitize normalization parameters
+                # Handle zero, NaN, or infinity in std to prevent invalid calculations
+                if std == 0.0 or not np.isfinite(std):
+                    logging.warning(
+                        "Invalid std value for feature '%s': %s - using epsilon",
+                        feature_name,
+                        std,
+                    )
+                    std = EPSILON
+                if not np.isfinite(mean):
+                    logging.warning(
+                        "Invalid mean value for feature '%s': %s - using 0.0",
+                        feature_name,
+                        mean,
+                    )
+                    mean = 0.0
 
-        for i, feature_name in enumerate(feature_order):
-            if feature_name not in norm_params:
-                raise ValueError(
-                    f"Feature '{feature_name}' in feature_order missing from normalization_params"
-                )
-
-            mean = norm_params[feature_name].get("mean", 0.0)
-            std = norm_params[feature_name].get("std", 1.0)
-
-            # Prevent ZeroDivisionError by using a minimum std value
-            if std == 0.0:
-                std = DEFAULT_NORMALIZATION_EPSILON  # Small epsilon to prevent division by zero
-
-            features[:, :, i] = (features[:, :, i] - mean) / std
+                features[:, :, i] = (features[:, :, i] - mean) / std
 
         return features
 
@@ -421,16 +434,42 @@ class OnnxRunner:
                 "Price normalization params missing 'std' or 'mean' - returning raw prediction"
             )
             return pred
-        return pred * price_params["std"] + price_params["mean"]
+        mean = price_params["mean"]
+        std = price_params["std"]
+        # Validate parameters are finite
+        if not np.isfinite(mean) or not np.isfinite(std):
+            logging.warning(
+                "Invalid normalization params (mean=%s, std=%s) - returning raw prediction",
+                mean,
+                std,
+            )
+            return pred
+        # Validate std is non-zero to prevent division issues in inverse operations
+        if std == 0.0:
+            logging.warning("Zero std in normalization params - returning raw prediction")
+            return pred
+        return pred * std + mean
 
     def _calculate_confidence(self, pred: float) -> float:
         """Calculate prediction confidence"""
+        # Validate prediction is finite before calculation
+        if not np.isfinite(pred):
+            logging.warning(
+                "Invalid prediction value (NaN or Inf): %s - returning 0 confidence", pred
+            )
+            return 0.0
         # Simple confidence based on prediction magnitude
         # Can be enhanced with model uncertainty estimation
         return min(1.0, abs(pred) * self.config.confidence_scale_factor)
 
     def _calculate_direction(self, pred: float) -> int:
         """Calculate prediction direction"""
+        # Validate prediction is finite before calculation
+        if not np.isfinite(pred):
+            logging.warning(
+                "Invalid prediction value (NaN or Inf): %s - returning neutral direction", pred
+            )
+            return 0
         if pred > self.config.direction_threshold:
             return 1
         elif pred < -self.config.direction_threshold:

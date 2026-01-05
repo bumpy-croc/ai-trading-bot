@@ -10,6 +10,7 @@ import hashlib
 import logging
 import math
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -19,8 +20,14 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Constants
-ENSEMBLE_MODEL_PREFIX = "ensemble:"
+# Minimum sequence length for LSTM models. This value represents the minimum
+# number of timesteps required for the model to have sufficient context for
+# meaningful predictions.
+MIN_SEQUENCE_LENGTH = 120
+
+# Maximum number of inference time samples to retain per model. Limits memory
+# growth while maintaining enough samples for reliable average calculations.
+MAX_INFERENCE_SAMPLES = 1000
 
 from src.config.constants import DEFAULT_INFERENCE_TIMEOUT
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
@@ -59,7 +66,21 @@ class PredictionResult:
 
 
 class PredictionEngine:
-    """Main prediction engine facade that orchestrates all components"""
+    """Main prediction engine facade that orchestrates all components.
+
+    Thread Safety:
+        This class is NOT thread-safe. The following attributes are mutable and
+        accessed without locks:
+        - _model_inference_times: dict of deques tracking inference performance
+        - _last_cache_hit: boolean tracking last cache lookup result
+
+        For concurrent usage, callers should either:
+        1. Create separate PredictionEngine instances per thread
+        2. Wrap method calls with external synchronization (e.g., threading.Lock)
+
+        The underlying model registry and cache manager may have their own
+        thread-safety guarantees - consult their documentation separately.
+    """
 
     def __init__(self, config: PredictionConfig | None = None, database_manager=None):
         """
@@ -96,10 +117,12 @@ class PredictionEngine:
 
         # Optional helpers
         self._ensemble_aggregator = None
-        if self.config.enable_ensemble:
-            self._ensemble_aggregator = SimpleEnsembleAggregator(self.config.ensemble_method)
+        if getattr(self.config, "enable_ensemble", False):
+            self._ensemble_aggregator = SimpleEnsembleAggregator(
+                getattr(self.config, "ensemble_method", "mean")
+            )
         self._regime_detector = None
-        if self.config.enable_regime_aware_confidence:
+        if getattr(self.config, "enable_regime_aware_confidence", False):
             self._regime_detector = RegimeDetector(RegimeConfig())
 
         # Performance tracking
@@ -108,8 +131,8 @@ class PredictionEngine:
         self._cache_hits = 0
         self._cache_misses = 0
         self._feature_extraction_time = 0.0
-        # Track per-model inference times
-        self._model_inference_times: dict[str, list[float]] = {}
+        # Track per-model inference times with bounded size to prevent memory leaks
+        self._model_inference_times: dict[str, deque[float]] = {}
         # Track feature extraction times for averaging
         self._total_feature_extraction_time = 0.0
         self._feature_extraction_count = 0
@@ -238,7 +261,12 @@ class PredictionEngine:
                             operation_name=f"Ensemble model {ensemble_bundle.model_name} inference",
                         )
                     except InfraTimeoutError:
-                        # Skip this ensemble member if it times out
+                        # Log timeout and skip this ensemble member
+                        logger.warning(
+                            "Ensemble model %s timed out after %ss, skipping",
+                            ensemble_bundle.key,
+                            timeout_seconds,
+                        )
                         continue
 
                     denormalized_price = self._apply_rolling_denormalization(
@@ -253,18 +281,11 @@ class PredictionEngine:
                             inference_time=raw_prediction.inference_time,
                         )
                     )
-
-                # Check for empty predictions (all ensemble members timed out)
-                if not preds:
-                    raise ModelInferenceError(
-                        "All ensemble members timed out - no predictions available"
-                    )
-
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence
                 final_dir = ens.direction
-                final_model_name = f"{ENSEMBLE_MODEL_PREFIX}{self.config.ensemble_method}"
+                final_model_name = f"ensemble:{self.config.ensemble_method}"
                 member_preds = ens.member_predictions
                 if not features_used:
                     features_used = self._count_features_used(features)
@@ -419,7 +440,13 @@ class PredictionEngine:
                     bundle, features_df
                 )
                 feat = aligned_matrix.astype(np.float32, copy=False)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "Schema feature selection failed in predict_series for %s, "
+                    "using raw features: %s",
+                    bundle.key,
+                    e,
+                )
                 feat = base_features.astype(np.float32, copy=False)
         else:
             feat = base_features.astype(np.float32, copy=False)
@@ -431,28 +458,37 @@ class PredictionEngine:
             or (
                 self.config.prediction_horizons[0]
                 if hasattr(self.config, "prediction_horizons")
-                else 120
+                else MIN_SEQUENCE_LENGTH
             )
         )
-        # Fallback to 120 if missing
+        # Fallback to MIN_SEQUENCE_LENGTH if missing
         if not isinstance(seq, int) or seq <= 0:
-            seq = 120
+            seq = MIN_SEQUENCE_LENGTH
         if total <= seq:
+            logger.warning(
+                "Insufficient data for series prediction: %d rows available, %d required",
+                total,
+                seq,
+            )
             return {
                 "indices": np.array([], dtype=int),
                 "preds": np.array([], dtype=np.float32),
                 "normalized": not return_denormalized,
             }
 
-        # Validate model session exists (prevents AttributeError with stub runners)
-        if model.session is None:
-            raise ModelInferenceError(
-                f"Model {bundle.key} has no valid session (stub runner). "
-                "Model loading may have failed - check logs for errors."
-            )
-
         session = model.session
-        input_name = session.get_inputs()[0].name
+        # Validate session is initialized (stub runner has session=None)
+        if session is None:
+            raise ModelInferenceError(
+                f"Model session not initialized for {bundle.key}. " "Model may have failed to load."
+            )
+        # Validate model has inputs defined
+        inputs = session.get_inputs()
+        if not inputs:
+            raise ModelInferenceError(
+                f"Model {bundle.key} has no inputs defined. Cannot run inference."
+            )
+        input_name = inputs[0].name
 
         # Build windows (N, seq, features)
         try:
@@ -460,7 +496,9 @@ class PredictionEngine:
 
             windows = sliding_window_view(feat, (seq, feat.shape[1]))
             windows = windows[:, 0, :, :]
-        except Exception:
+        except Exception as e:
+            # Log when falling back to manual window construction (performance degradation)
+            logger.debug("sliding_window_view unavailable or failed (%s), using manual loop", e)
             num_windows = total - seq
             windows = np.empty((num_windows, seq, feat.shape[1]), dtype=np.float32)
             for idx in range(num_windows):
@@ -494,7 +532,16 @@ class PredictionEngine:
                     f"Series prediction batch timeout after {timeout_seconds}s"
                 ) from timeout_err
 
+            # Validate output before accessing
+            if not output or len(output) == 0:
+                raise ModelInferenceError(
+                    f"Model {bundle.key} returned empty output for batch {start}-{end}."
+                )
             out = output[0]
+            if out.size == 0:
+                raise ModelInferenceError(
+                    f"Model {bundle.key} returned empty tensor for batch {start}-{end}."
+                )
             preds_norm[start:end] = out.reshape(out.shape[0], -1)[:, 0].astype(np.float32)
 
         indices = np.arange(seq, total, dtype=int)
@@ -728,8 +775,8 @@ class PredictionEngine:
 
     def clear_caches(self) -> None:
         """Clear all caches (feature and prediction)"""
-        # Clear feature cache
-        self.feature_pipeline.cache.clear()
+        # Clear feature cache (uses null-safe method)
+        self.feature_pipeline.clear_cache()
 
         # Clear prediction cache
         if self.cache_manager:
@@ -856,8 +903,10 @@ class PredictionEngine:
         if missing_columns:
             raise InvalidInputError(f"Missing required columns: {missing_columns}")
 
-        if len(data) < 120:  # Minimum for LSTM sequence
-            raise InvalidInputError(f"Insufficient data: {len(data)} rows, minimum 120 required")
+        if len(data) < MIN_SEQUENCE_LENGTH:  # Minimum for LSTM sequence
+            raise InvalidInputError(
+                f"Insufficient data: {len(data)} rows, minimum {MIN_SEQUENCE_LENGTH} required"
+            )
 
         # Check for invalid values
         if data[required_columns].isnull().any().any():
@@ -866,8 +915,9 @@ class PredictionEngine:
         if (data[required_columns] <= 0).any().any():
             raise InvalidInputError("Input data contains non-positive values")
 
-        # Check for infinite values (defense-in-depth before feature extraction)
-        if np.isinf(data[required_columns].select_dtypes(include=[np.number])).any().any():
+        # Check for infinite values
+        numeric_data = data[required_columns].select_dtypes(include=[np.number])
+        if np.isinf(numeric_data.values).any():
             raise InvalidInputError("Input data contains infinite values")
 
     def _extract_features(self, data: pd.DataFrame) -> np.ndarray:
@@ -929,10 +979,21 @@ class PredictionEngine:
         for idx, norm in enumerate(normalizers):
             if not norm:
                 continue
-            mean = float(norm.get("mean", 0.0))
-            std = float(norm.get("std", 1.0))
-            if std == 0.0:
+            # Handle None values from JSON null and convert to float
+            mean_val = norm.get("mean")
+            std_val = norm.get("std")
+            mean = float(mean_val) if mean_val is not None else 0.0
+            std = float(std_val) if std_val is not None else 1.0
+            # Handle edge cases: zero, NaN, or infinity in std
+            if std == 0.0 or not math.isfinite(std):
                 std = 1e-8
+            if not math.isfinite(mean):
+                logger.warning(
+                    "Invalid mean value (%.8f) in normalization for feature index %d, using 0.0",
+                    mean,
+                    idx,
+                )
+                mean = 0.0
             matrix[:, idx] = (matrix[:, idx] - mean) / std
 
         return matrix, selector.sequence_length
@@ -952,14 +1013,12 @@ class PredictionEngine:
                 if window.ndim == 2:
                     return window[None, :, :]
                 return window
-            except Exception as exc:
-                # Feature schema alignment failed - log warning and fall back to raw features
-                # This could indicate train/inference mismatch (model expects different features)
+            except Exception as e:
+                # Log the exception before falling back to raw features
                 logger.warning(
-                    "Feature schema alignment failed for model %s: %s. Using raw features. "
-                    "This may indicate train/inference mismatch.",
+                    "Schema-based feature selection failed for %s, using raw features: %s",
                     bundle.key,
-                    exc,
+                    e,
                 )
 
         if isinstance(raw_features, np.ndarray):
@@ -988,8 +1047,12 @@ class PredictionEngine:
         if bundles:
             try:
                 return self.model_registry.get_default_bundle()
-            except Exception:
+            except ModelNotFoundError:
+                # Expected when no default is set, fall through to bundles[0]
                 pass
+            except Exception as e:
+                # Log unexpected errors when getting default bundle
+                logger.warning("Unexpected error getting default bundle: %s", e)
             return bundles[0]
 
         raise ModelNotFoundError("No prediction models available")
@@ -1015,10 +1078,10 @@ class PredictionEngine:
         self._prediction_count += 1
         self._total_inference_time += result.inference_time
 
-        # Track per-model inference times
+        # Track per-model inference times with bounded deque to prevent memory leaks
         model_name = result.model_name
         if model_name not in self._model_inference_times:
-            self._model_inference_times[model_name] = []
+            self._model_inference_times[model_name] = deque(maxlen=MAX_INFERENCE_SAMPLES)
         self._model_inference_times[model_name].append(result.inference_time)
 
         if result.cache_hit:
@@ -1055,7 +1118,18 @@ class PredictionEngine:
 
         Returns:
             Denormalized price prediction
+
+        Raises:
+            ModelInferenceError: If normalized_price is NaN or Inf
         """
+        # Validate input normalized_price is finite - raise error instead of returning 0.0
+        # to prevent spurious SELL signals in downstream signal generators
+        if not math.isfinite(normalized_price):
+            raise ModelInferenceError(
+                f"Model produced non-finite prediction (NaN/Inf): {normalized_price}. "
+                "This typically indicates bad input features or a model error."
+            )
+
         # Check if model uses rolling minmax normalization
         metadata = bundle.metadata
         if not metadata:
@@ -1081,14 +1155,12 @@ class PredictionEngine:
         window_max = float(window_data.max())
 
         # Validate min/max are finite to prevent NaN propagation
+        # Raise error instead of returning normalized price to avoid nonsensical predictions
         if not math.isfinite(window_min) or not math.isfinite(window_max):
-            logger.error(
-                "Invalid window min/max (min=%.8f, max=%.8f) for denormalization - "
-                "input data contains NaN/inf. Returning raw normalized prediction.",
-                window_min,
-                window_max,
+            raise ModelInferenceError(
+                f"Input data contains non-finite values in window (min={window_min:.8f}, max={window_max:.8f}). "
+                "Cannot denormalize prediction. This indicates corrupt or invalid market data."
             )
-            return normalized_price
 
         # Denormalize: real_price = normalized * (max - min) + min
         if window_max == window_min:
