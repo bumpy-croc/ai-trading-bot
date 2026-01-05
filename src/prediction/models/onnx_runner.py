@@ -365,36 +365,94 @@ class OnnxRunner:
         return features.astype(np.float32)
 
     def _normalize_features(self, features: np.ndarray) -> np.ndarray:
-        """Normalize features using model metadata"""
+        """Normalize features using model metadata with explicit feature ordering.
+
+        Uses feature_names from metadata to ensure normalization is applied to
+        the correct columns, preventing silent mis-normalization when feature
+        order differs between training and inference.
+
+        Args:
+            features: 3D array of shape (batch, sequence, features)
+
+        Returns:
+            Normalized features with same shape
+
+        Raises:
+            ValueError: If features shape doesn't match metadata
+        """
         norm_params = self.model_metadata["normalization_params"]
 
         # Ensure features is 3D
         if len(features.shape) != 3:
             raise ValueError(f"Features must be 3D for normalization, got shape {features.shape}")
 
-        for i, feature_name in enumerate(norm_params.keys()):
-            if i < features.shape[2]:  # Check feature index bounds
-                mean = norm_params[feature_name].get("mean", 0.0)
-                std = norm_params[feature_name].get("std", 1.0)
+        # Get explicit feature ordering from metadata (if available)
+        feature_names = self.model_metadata.get("feature_names", [])
 
-                # Validate and sanitize normalization parameters
-                # Handle zero, NaN, or infinity in std to prevent invalid calculations
-                if std == 0.0 or not np.isfinite(std):
-                    logging.warning(
-                        "Invalid std value for feature '%s': %s - using epsilon",
-                        feature_name,
-                        std,
-                    )
-                    std = EPSILON
-                if not np.isfinite(mean):
-                    logging.warning(
-                        "Invalid mean value for feature '%s': %s - using 0.0",
-                        feature_name,
-                        mean,
-                    )
-                    mean = 0.0
+        # Validate feature count matches if feature_names is provided
+        if feature_names:
+            expected_count = len(feature_names)
+            actual_count = features.shape[2]
+            if expected_count != actual_count:
+                raise ValueError(
+                    f"Feature count mismatch: metadata expects {expected_count} features "
+                    f"({feature_names}), but input has {actual_count} features. "
+                    f"This indicates a mismatch between model training and inference pipelines."
+                )
 
-                features[:, :, i] = (features[:, :, i] - mean) / std
+            # Use explicit feature ordering from metadata
+            for i, feature_name in enumerate(feature_names):
+                if feature_name in norm_params:
+                    mean = norm_params[feature_name].get("mean", 0.0)
+                    std = norm_params[feature_name].get("std", 1.0)
+
+                    # Validate and sanitize normalization parameters
+                    # Handle zero, NaN, or infinity in std to prevent invalid calculations
+                    if std == 0.0 or not np.isfinite(std):
+                        logging.warning(
+                            "Invalid std value for feature '%s': %s - using epsilon",
+                            feature_name,
+                            std,
+                        )
+                        std = EPSILON
+                    if not np.isfinite(mean):
+                        logging.warning(
+                            "Invalid mean value for feature '%s': %s - using 0.0",
+                            feature_name,
+                            mean,
+                        )
+                        mean = 0.0
+
+                    features[:, :, i] = (features[:, :, i] - mean) / std
+        else:
+            # Fallback: iterate over normalization_params keys (legacy behavior)
+            # This path is less safe but maintains backward compatibility with old models
+            logging.warning(
+                "No feature_names in metadata - using normalization_params key order. "
+                "This may cause silent mis-normalization if feature order differs."
+            )
+            for i, feature_name in enumerate(norm_params.keys()):
+                if i < features.shape[2]:  # Check feature index bounds
+                    mean = norm_params[feature_name].get("mean", 0.0)
+                    std = norm_params[feature_name].get("std", 1.0)
+
+                    # Validate and sanitize normalization parameters
+                    if std == 0.0 or not np.isfinite(std):
+                        logging.warning(
+                            "Invalid std value for feature '%s': %s - using epsilon",
+                            feature_name,
+                            std,
+                        )
+                        std = EPSILON
+                    if not np.isfinite(mean):
+                        logging.warning(
+                            "Invalid mean value for feature '%s': %s - using 0.0",
+                            feature_name,
+                            mean,
+                        )
+                        mean = 0.0
+
+                    features[:, :, i] = (features[:, :, i] - mean) / std
 
         return features
 
