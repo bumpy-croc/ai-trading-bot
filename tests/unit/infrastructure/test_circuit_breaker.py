@@ -47,7 +47,7 @@ class TestCircuitBreakerInit:
 
         assert breaker.failure_threshold == 3
         assert breaker.recovery_timeout == 30.0
-        assert breaker.expected_exception == ValueError
+        assert breaker.expected_exception is ValueError
         assert breaker.name == "test_breaker"
 
     def test_invalid_failure_threshold_raises(self):
@@ -60,10 +60,10 @@ class TestCircuitBreakerInit:
 
     def test_invalid_recovery_timeout_raises(self):
         """Test that recovery_timeout <= 0 raises ValueError."""
-        with pytest.raises(ValueError, match="recovery_timeout must be positive"):
+        with pytest.raises(ValueError, match="recovery_timeout must be a positive finite number"):
             CircuitBreaker(recovery_timeout=0)
 
-        with pytest.raises(ValueError, match="recovery_timeout must be positive"):
+        with pytest.raises(ValueError, match="recovery_timeout must be a positive finite number"):
             CircuitBreaker(recovery_timeout=-1.0)
 
 
@@ -94,7 +94,7 @@ class TestCircuitBreakerStateTransitions:
             raise ValueError("test error")
 
         # First 3 failures should trip the breaker
-        for i in range(3):
+        for _i in range(3):
             with pytest.raises(ValueError):
                 breaker.call(failing_func)
 

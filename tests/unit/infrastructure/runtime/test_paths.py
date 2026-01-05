@@ -7,7 +7,6 @@ from unittest.mock import patch
 import pytest
 
 from src.infrastructure.runtime.paths import (
-    _PROJECT_ROOT,
     find_project_root,
     get_project_root,
 )
@@ -97,30 +96,33 @@ class TestGetProjectRoot:
 
     def test_caching_behavior(self):
         """Test that project root is cached after first call."""
-        import src.infrastructure.runtime.paths as paths_module
-
         # Clear cache
-        paths_module._PROJECT_ROOT = None
+        get_project_root.cache_clear()
 
         first_call = get_project_root()
         second_call = get_project_root()
 
         assert first_call == second_call
-        assert paths_module._PROJECT_ROOT is not None
+        # Verify caching by checking cache_info
+        cache_info = get_project_root.cache_info()
+        assert cache_info.hits > 0
 
     def test_cached_value_used(self):
         """Test that cached value is returned without recomputation."""
-        import src.infrastructure.runtime.paths as paths_module
+        # Clear cache first
+        get_project_root.cache_clear()
 
-        # Set a known cached value
-        test_path = Path("/test/cached/path")
-        paths_module._PROJECT_ROOT = test_path
+        # First call should compute
+        first_result = get_project_root()
+        cache_info_after_first = get_project_root.cache_info()
+        assert cache_info_after_first.misses == 1
+        assert cache_info_after_first.hits == 0
 
-        result = get_project_root()
-        assert result == test_path
-
-        # Reset for other tests
-        paths_module._PROJECT_ROOT = None
+        # Second call should use cache
+        second_result = get_project_root()
+        cache_info_after_second = get_project_root.cache_info()
+        assert cache_info_after_second.hits == 1
+        assert first_result == second_result
 
 
 @pytest.mark.fast

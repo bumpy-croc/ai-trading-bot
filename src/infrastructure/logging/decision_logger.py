@@ -31,7 +31,7 @@ def log_strategy_execution(
 ) -> None:
     """Log a strategy execution event to the database.
 
-    Performs best-effort logging - failures are logged at DEBUG level
+    Performs best-effort logging - failures are logged at WARNING level
     to prevent logging issues from affecting trading operations.
 
     Args:
@@ -78,4 +78,3 @@ def log_strategy_execution(
         # Best-effort logging - log at WARNING to provide visibility into
         # database issues without failing the trade operation
         logger.warning("Failed to log strategy execution: %s", e)
-        return

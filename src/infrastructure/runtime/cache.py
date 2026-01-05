@@ -41,11 +41,17 @@ def get_cache_ttl_for_provider(provider: DataProviderProtocol, default_ttl_hours
 
     Args:
         provider: Data provider instance (e.g., BinanceProvider).
-        default_ttl_hours: Default TTL to use for online environments.
+        default_ttl_hours: Default TTL to use for online environments (must be positive).
 
     Returns:
         Appropriate cache TTL in hours.
+
+    Raises:
+        ValueError: If default_ttl_hours is not positive.
     """
+    if default_ttl_hours <= 0:
+        raise ValueError(f"default_ttl_hours must be positive, got {default_ttl_hours}")
+
     # Check if we're in offline mode (provider using offline stub)
     if hasattr(provider, "_client") and provider._client is not None:
         if _is_client_offline(provider._client):

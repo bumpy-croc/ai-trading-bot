@@ -28,6 +28,7 @@ class TestGetCacheTTLForProvider:
         provider = MagicMock()
         provider._client = MagicMock()
         provider._client.__class__.__name__ = "BinanceClient"
+        provider._client.is_offline = False  # Explicitly mark as online
 
         result = get_cache_ttl_for_provider(provider, default_ttl_hours=24)
         assert result == 24
@@ -37,6 +38,7 @@ class TestGetCacheTTLForProvider:
         provider = MagicMock()
         provider._client = MagicMock()
         provider._client.__class__.__name__ = "_OfflineClient"
+        provider._client.is_offline = True  # Explicitly mark as offline
 
         result = get_cache_ttl_for_provider(provider, default_ttl_hours=24)
         assert result == OFFLINE_CACHE_TTL_HOURS
@@ -61,6 +63,7 @@ class TestGetCacheTTLForProvider:
         provider = MagicMock()
         provider._client = MagicMock()
         provider._client.__class__.__name__ = "OnlineClient"
+        provider._client.is_offline = False  # Explicitly mark as online
 
         result = get_cache_ttl_for_provider(provider, default_ttl_hours=100)
         assert result == 100
@@ -70,6 +73,7 @@ class TestGetCacheTTLForProvider:
         provider = MagicMock()
         provider._client = MagicMock()
         provider._client.__class__.__name__ = "OnlineClient"
+        provider._client.is_offline = False  # Explicitly mark as online
 
         result = get_cache_ttl_for_provider(provider)
         assert result == 24
@@ -83,6 +87,7 @@ class TestIsProviderOffline:
         provider = MagicMock()
         provider._client = MagicMock()
         provider._client.__class__.__name__ = "_OfflineClient"
+        provider._client.is_offline = True  # Explicitly mark as offline
 
         assert is_provider_offline(provider) is True
 
@@ -91,6 +96,7 @@ class TestIsProviderOffline:
         provider = MagicMock()
         provider._client = MagicMock()
         provider._client.__class__.__name__ = "BinanceClient"
+        provider._client.is_offline = False  # Explicitly mark as online
 
         assert is_provider_offline(provider) is False
 
@@ -112,6 +118,7 @@ class TestIsProviderOffline:
         provider = MagicMock()
         provider._client = MagicMock()
         provider._client.__class__.__name__ = "_offlineclient"  # lowercase
+        provider._client.is_offline = False  # Not offline due to wrong name
 
         assert is_provider_offline(provider) is False
 
@@ -120,6 +127,7 @@ class TestIsProviderOffline:
         provider = MagicMock()
         provider._client = MagicMock()
         provider._client.__class__.__name__ = "_OfflineClientWrapper"
+        provider._client.is_offline = False  # Not offline due to wrong name
 
         assert is_provider_offline(provider) is False
 
@@ -133,10 +141,12 @@ class TestCacheIntegration:
         online_provider = MagicMock()
         online_provider._client = MagicMock()
         online_provider._client.__class__.__name__ = "BinanceClient"
+        online_provider._client.is_offline = False  # Explicitly mark as online
 
         offline_provider = MagicMock()
         offline_provider._client = MagicMock()
         offline_provider._client.__class__.__name__ = "_OfflineClient"
+        offline_provider._client.is_offline = True  # Explicitly mark as offline
 
         online_ttl = get_cache_ttl_for_provider(online_provider)
         offline_ttl = get_cache_ttl_for_provider(offline_provider)

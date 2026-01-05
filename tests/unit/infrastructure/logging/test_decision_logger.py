@@ -1,6 +1,6 @@
 """Tests for infrastructure.logging.decision_logger module."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

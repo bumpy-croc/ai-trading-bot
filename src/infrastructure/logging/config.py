@@ -86,7 +86,7 @@ class SensitiveDataFilter(logging.Filter):
             # Best-effort redaction of mapping/tuple args
             if isinstance(record.args, dict):
                 record.args = self._redact_mapping(record.args)
-            elif isinstance(record.args, (list, tuple)):
+            elif isinstance(record.args, list | tuple):
                 sanitized = []
                 for a in record.args:  # type: ignore[assignment]
                     if isinstance(a, str):
@@ -270,8 +270,9 @@ class SimpleJsonFormatter(logging.Formatter):
 
         try:
             return json.dumps(log_entry, default=str)
-        except (TypeError, ValueError):
-            # Fallback if serialization still fails
+        except Exception:
+            # Fallback if serialization still fails (e.g., str() raises exception)
+            # Catches all exceptions to prevent logging system crashes
             return json.dumps(
                 {"level": record.levelname, "message": message, "error": "serialization_failed"}
             )

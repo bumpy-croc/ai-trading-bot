@@ -255,9 +255,9 @@ class TestRunWithTimeoutEdgeCases:
     """Edge case tests for run_with_timeout."""
 
     def test_zero_timeout_raises_immediately(self):
-        """Test zero timeout raises immediately."""
-        # With zero timeout, the join returns immediately
-        with pytest.raises(TimeoutError):
+        """Test zero timeout raises ValueError due to input validation."""
+        # Zero timeout is now rejected during input validation
+        with pytest.raises(ValueError, match="timeout_seconds must be a positive finite number"):
             run_with_timeout(
                 lambda: time.sleep(0.1),
                 timeout_seconds=0.0,
