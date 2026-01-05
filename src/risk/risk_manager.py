@@ -1174,3 +1174,7 @@ class PortfolioRiskManager:
             self.daily_risk_used = min(
                 self.params.max_daily_risk, self.daily_risk_used + effective_add
             )
+
+
+# Backward compatibility alias
+RiskManager = PortfolioRiskManager
