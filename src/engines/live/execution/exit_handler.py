@@ -466,16 +466,6 @@ class LiveExitHandler:
                 error="Position has no order_id",
             )
 
-        if not self.position_tracker.has_position(position.order_id):
-            logger.warning(
-                "Filled exit received for already closed position %s",
-                position.order_id,
-            )
-            return LiveExitResult(
-                success=False,
-                error="Position already closed",
-            )
-
         if filled_price <= 0 or not math.isfinite(filled_price):
             return LiveExitResult(
                 success=False,
@@ -519,9 +509,13 @@ class LiveExitHandler:
             basis_balance=current_balance,
         )
         if close_result is None:
+            logger.warning(
+                "Filled exit failed - position %s was already closed or not found",
+                position.order_id,
+            )
             return LiveExitResult(
                 success=False,
-                error="Failed to close position in tracker",
+                error="Position already closed or not found",
             )
 
         if self.risk_manager is not None:
@@ -857,7 +851,15 @@ class LiveExitHandler:
                     logger.debug("Risk manager partial-exit accounting failed: %s", e)
 
             # If fully closed by partials, close position
+            # Check position still exists to avoid race condition where
+            # another thread already closed it
             if result.new_current_size <= EPSILON:
+                order_id = position.order_id if position.order_id else ""
+                if not self.position_tracker.has_position(order_id):
+                    logger.debug(
+                        "Position %s already closed after partial exits complete", order_id
+                    )
+                    return
                 self.execute_exit(
                     position=position,
                     exit_reason=f"Partial exits complete @ level {target_level}",

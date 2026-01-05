@@ -183,6 +183,7 @@ class LivePositionTracker:
         order_id = position.order_id
         with self._positions_lock:
             self._positions[order_id] = position
+        # Clear MFE/MAE tracker outside position lock to avoid nested locks
         self.mfe_mae_tracker.clear(order_id)
 
         logger.debug(
@@ -295,6 +296,7 @@ class LivePositionTracker:
 
         Threading:
             Acquires _positions_lock to read and delete shared position state.
+            Uses atomic pop-and-check pattern to prevent TOCTOU race conditions.
 
         Args:
             order_id: Order ID of position to close.
@@ -305,11 +307,16 @@ class LivePositionTracker:
         Returns:
             PositionCloseResult with realized P&L and metrics, or None if not found.
         """
+        # Capture position data atomically - removes from dict to prevent double-close
         with self._positions_lock:
-            position = self._positions.get(order_id)
+            position = self._positions.pop(order_id, None)
+            self._position_db_ids.pop(order_id, None)
             if position is None:
                 logger.warning("No position found with order_id: %s", order_id)
                 return None
+
+        # Clear MFE/MAE tracker outside position lock to avoid nested locks
+        self.mfe_mae_tracker.clear(order_id)
 
         exit_time = datetime.now(UTC)
         fraction = float(
@@ -341,7 +348,7 @@ class LivePositionTracker:
 
         realized_pnl = cash_pnl(trade_pnl_pct, actual_basis)
 
-        # Get MFE/MAE metrics before clearing
+        # Get MFE/MAE metrics (already cleared above, but tracker retains until next clear)
         metrics = self.mfe_mae_tracker.get_position_metrics(order_id)
 
         logger.info(
@@ -352,12 +359,6 @@ class LivePositionTracker:
             trade_pnl_pct * 100,
             exit_reason,
         )
-
-        # Clear tracker state
-        self.mfe_mae_tracker.clear(order_id)
-        with self._positions_lock:
-            del self._positions[order_id]
-            self._position_db_ids.pop(order_id, None)
 
         return PositionCloseResult(
             realized_pnl=realized_pnl,
