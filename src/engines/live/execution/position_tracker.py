@@ -183,7 +183,6 @@ class LivePositionTracker:
         order_id = position.order_id
         with self._positions_lock:
             self._positions[order_id] = position
-        self.mfe_mae_tracker.clear(order_id)
 
         logger.debug(
             "Opened %s position at %.2f, size=%.4f, order_id=%s",
@@ -295,6 +294,7 @@ class LivePositionTracker:
 
         Threading:
             Acquires _positions_lock to read and delete shared position state.
+            Uses atomic pop-and-check pattern to prevent TOCTOU race conditions.
 
         Args:
             order_id: Order ID of position to close.
@@ -305,44 +305,96 @@ class LivePositionTracker:
         Returns:
             PositionCloseResult with realized P&L and metrics, or None if not found.
         """
+        # Capture position data atomically - keeps in dict until all validation passes
         with self._positions_lock:
             position = self._positions.get(order_id)
             if position is None:
                 logger.warning("No position found with order_id: %s", order_id)
                 return None
 
+        # Validate prices BEFORE removing from tracker to preserve recoverability
+        if position.entry_price <= 0 or not math.isfinite(position.entry_price):
+            logger.error(
+                "Invalid entry_price %.8f for position %s - close aborted, position retained",
+                position.entry_price,
+                position.symbol,
+            )
+            return None
+        if exit_price <= 0 or not math.isfinite(exit_price):
+            logger.error(
+                "Invalid exit_price %.8f for position %s - close aborted, position retained",
+                exit_price,
+                position.symbol,
+            )
+            return None
+
+        # Pre-validate inputs for P&L calculation BEFORE popping position
         exit_time = datetime.now(UTC)
         fraction = float(
             position.current_size if position.current_size is not None else position.size
         )
-
-        # Validate prices before calling pnl_percent to prevent ValueError
-        if position.entry_price <= 0 or not math.isfinite(position.entry_price):
+        # Allow fraction == 0 for fully-exited positions (after partial exits complete)
+        # Reject only non-finite or negative values
+        if not math.isfinite(fraction) or fraction < 0:
             logger.error(
-                "Invalid entry_price %.8f for position %s", position.entry_price, position.symbol
+                "Invalid fraction %.8f for position %s - close aborted, position retained",
+                fraction,
+                position.symbol,
             )
             return None
-        if exit_price <= 0 or not math.isfinite(exit_price):
-            logger.error("Invalid exit_price %.8f for position %s", exit_price, position.symbol)
-            return None
 
-        # Calculate P&L
-        if position.side == PositionSide.LONG:
-            trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.LONG, fraction)
-        else:
-            trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.SHORT, fraction)
-
-        # Determine balance basis
+        # Determine and validate balance basis BEFORE popping
         entry_balance = position.entry_balance
         if entry_balance is not None and entry_balance > 0:
             actual_basis = float(entry_balance)
         else:
-            actual_basis = basis_balance
+            actual_basis = float(basis_balance)
+        if not math.isfinite(actual_basis) or actual_basis < 0:
+            logger.error(
+                "Invalid basis_balance %.8f for position %s - close aborted, position retained",
+                actual_basis,
+                position.symbol,
+            )
+            return None
 
-        realized_pnl = cash_pnl(trade_pnl_pct, actual_basis)
+        # All validations passed - atomically remove from tracker to prevent double-close
+        with self._positions_lock:
+            position = self._positions.pop(order_id, None)
+            self._position_db_ids.pop(order_id, None)
+            if position is None:
+                # Another thread closed it between validation and pop
+                logger.warning("Position %s already closed by another thread", order_id)
+                return None
 
-        # Get MFE/MAE metrics before clearing
+        # Get MFE/MAE metrics before clearing so close results include excursion stats
         metrics = self.mfe_mae_tracker.get_position_metrics(order_id)
+        # Clear MFE/MAE tracker outside position lock to avoid nested locks
+        self.mfe_mae_tracker.clear(order_id)
+
+        # Calculate P&L (all inputs pre-validated, but wrap to catch unexpected errors)
+        try:
+            if position.side == PositionSide.LONG:
+                trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.LONG, fraction)
+            else:
+                trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.SHORT, fraction)
+
+            realized_pnl = cash_pnl(trade_pnl_pct, actual_basis)
+        except (ValueError, ArithmeticError) as e:
+            # P&L calculation failed despite validation - log critical and re-raise
+            # Position is already removed; caller must reconcile from exchange
+            logger.critical(
+                "P&L calculation failed for position %s after pop: %s. Position lost from tracking, "
+                "requires exchange reconciliation to recover. entry_price=%.8f exit_price=%.8f "
+                "fraction=%.8f basis=%.8f",
+                order_id,
+                e,
+                position.entry_price,
+                exit_price,
+                fraction,
+                actual_basis,
+                exc_info=True,
+            )
+            raise
 
         logger.info(
             "Closed %s at %.2f, PnL=%.2f (%.2f%%), reason=%s",
@@ -352,12 +404,6 @@ class LivePositionTracker:
             trade_pnl_pct * 100,
             exit_reason,
         )
-
-        # Clear tracker state
-        self.mfe_mae_tracker.clear(order_id)
-        with self._positions_lock:
-            del self._positions[order_id]
-            self._position_db_ids.pop(order_id, None)
 
         return PositionCloseResult(
             realized_pnl=realized_pnl,
