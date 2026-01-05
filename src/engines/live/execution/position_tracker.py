@@ -183,8 +183,6 @@ class LivePositionTracker:
         order_id = position.order_id
         with self._positions_lock:
             self._positions[order_id] = position
-        # Clear MFE/MAE tracker outside position lock to avoid nested locks
-        self.mfe_mae_tracker.clear(order_id)
 
         logger.debug(
             "Opened %s position at %.2f, size=%.4f, order_id=%s",
@@ -315,6 +313,8 @@ class LivePositionTracker:
                 logger.warning("No position found with order_id: %s", order_id)
                 return None
 
+        # Get MFE/MAE metrics before clearing so close results include excursion stats
+        metrics = self.mfe_mae_tracker.get_position_metrics(order_id)
         # Clear MFE/MAE tracker outside position lock to avoid nested locks
         self.mfe_mae_tracker.clear(order_id)
 
@@ -347,9 +347,6 @@ class LivePositionTracker:
             actual_basis = basis_balance
 
         realized_pnl = cash_pnl(trade_pnl_pct, actual_basis)
-
-        # Get MFE/MAE metrics (already cleared above, but tracker retains until next clear)
-        metrics = self.mfe_mae_tracker.get_position_metrics(order_id)
 
         logger.info(
             "Closed %s at %.2f, PnL=%.2f (%.2f%%), reason=%s",

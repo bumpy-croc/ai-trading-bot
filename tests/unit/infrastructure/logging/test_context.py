@@ -1,6 +1,5 @@
 """Tests for infrastructure.logging.context module."""
 
-
 import pytest
 
 from src.infrastructure.logging.context import (
