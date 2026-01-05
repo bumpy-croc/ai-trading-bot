@@ -51,3 +51,34 @@ def test_close_position_preserves_mfe_mae_metrics() -> None:
     assert result.mfe_mae_metrics.mfe > 0.0
     assert result.mfe_mae_metrics.mfe_price == 110.0
     assert tracker.mfe_mae_tracker.get_position_metrics(order_id) is None
+
+
+@pytest.mark.fast
+def test_close_position_invalid_price_retains_position() -> None:
+    """Close with invalid price returns None but keeps position in tracker for retry."""
+    # Arrange
+    tracker = LivePositionTracker()
+    order_id = "invalid-price-1"
+    position = LivePosition(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        entry_price=100.0,
+        entry_time=datetime.now(UTC),
+        entry_balance=1000.0,
+        order_id=order_id,
+    )
+    tracker.open_position(position)
+
+    # Act - try to close with invalid price (NaN)
+    result = tracker.close_position(
+        order_id=order_id,
+        exit_price=float("nan"),
+        exit_reason="test",
+        basis_balance=1000.0,
+    )
+
+    # Assert - close failed but position is still tracked
+    assert result is None
+    assert tracker.has_position(order_id), "Position should remain in tracker after validation failure"
+    assert tracker.get_position(order_id) is not None

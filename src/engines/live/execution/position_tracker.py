@@ -305,12 +305,36 @@ class LivePositionTracker:
         Returns:
             PositionCloseResult with realized P&L and metrics, or None if not found.
         """
-        # Capture position data atomically - removes from dict to prevent double-close
+        # Capture position data atomically - keeps in dict until validation passes
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                logger.warning("No position found with order_id: %s", order_id)
+                return None
+
+        # Validate prices BEFORE removing from tracker to preserve recoverability
+        if position.entry_price <= 0 or not math.isfinite(position.entry_price):
+            logger.error(
+                "Invalid entry_price %.8f for position %s - close aborted, position retained",
+                position.entry_price,
+                position.symbol,
+            )
+            return None
+        if exit_price <= 0 or not math.isfinite(exit_price):
+            logger.error(
+                "Invalid exit_price %.8f for position %s - close aborted, position retained",
+                exit_price,
+                position.symbol,
+            )
+            return None
+
+        # Validation passed - atomically remove from tracker to prevent double-close
         with self._positions_lock:
             position = self._positions.pop(order_id, None)
             self._position_db_ids.pop(order_id, None)
             if position is None:
-                logger.warning("No position found with order_id: %s", order_id)
+                # Another thread closed it between validation and pop
+                logger.warning("Position %s already closed by another thread", order_id)
                 return None
 
         # Get MFE/MAE metrics before clearing so close results include excursion stats
@@ -322,16 +346,6 @@ class LivePositionTracker:
         fraction = float(
             position.current_size if position.current_size is not None else position.size
         )
-
-        # Validate prices before calling pnl_percent to prevent ValueError
-        if position.entry_price <= 0 or not math.isfinite(position.entry_price):
-            logger.error(
-                "Invalid entry_price %.8f for position %s", position.entry_price, position.symbol
-            )
-            return None
-        if exit_price <= 0 or not math.isfinite(exit_price):
-            logger.error("Invalid exit_price %.8f for position %s", exit_price, position.symbol)
-            return None
 
         # Calculate P&L
         if position.side == PositionSide.LONG:
