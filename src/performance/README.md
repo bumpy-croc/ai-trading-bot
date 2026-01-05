@@ -28,7 +28,7 @@ inputs, which keeps them easy to test and reason about.
 ## Usage
 
 ```python
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -59,7 +59,7 @@ print(f"Max drawdown: {max_drawdown(equity_curve):.2f}%")
 
 ## Integration points
 
-- **Backtesting** – `src/backtesting/utils.compute_performance_metrics` consumes
+- **Backtesting** – `src/engines/backtest/utils.compute_performance_metrics` consumes
   these helpers before emitting CLI summaries or persisting results.
 - **Live trading** – Live PnL, drawdown, and Sharpe readouts in
   `src/dashboards/monitoring` rely on the same functions so offline and live

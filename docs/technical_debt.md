@@ -52,7 +52,7 @@ This document tracks code quality issues, technical debt, and improvement opport
 
 ### God Objects and Single Responsibility Violations
 
-#### LiveTradingEngine (src/live/trading_engine.py)
+#### LiveTradingEngine (`src/engines/live/trading_engine.py`)
 - **Lines**: 3,373
 - **Methods**: 68
 - **Issue**: Massive class doing too much
@@ -97,7 +97,7 @@ LiveTradingEngine/
 - Extract performance metrics to `src/performance/analytics.py`
 - Use repository pattern for cleaner separation
 
-#### BacktestingEngine (src/backtesting/engine.py)
+#### BacktestingEngine (`src/engines/backtest/engine.py`)
 - **Lines**: 2,280
 - **Issue**: Similar to LiveTradingEngine
 - **Top offender**: `run`: 1,248 lines (!!!)
@@ -145,10 +145,10 @@ LiveTradingEngine/
 **Status**: 28 files with `except Exception:`
 
 These should use more specific exception types where possible:
-- `src/live/trading_engine.py`
+- `src/engines/live/trading_engine.py`
 - `src/database/manager.py`
 - `src/prediction/engine.py`
-- `src/backtesting/engine.py`
+- `src/engines/backtest/engine.py`
 - And 24 others...
 
 **Action**: Audit each and replace with specific exceptions (ValueError, KeyError, etc.)
@@ -163,7 +163,7 @@ These should use more specific exception types where possible:
 
 **Top Offenders by File**:
 
-#### src/live/trading_engine.py
+#### `src/engines/live/trading_engine.py`
 - `__init__`: 329 lines → Split configuration loading
 - `_trading_loop`: 285 lines → Extract order execution, monitoring
 - `_check_entry_conditions`: 240 lines → Split signal validation, regime checks
@@ -178,7 +178,7 @@ These should use more specific exception types where possible:
 - `update_position`: 101 lines → Split update types
 - 6+ more over 50 lines
 
-#### src/backtesting/engine.py
+#### `src/engines/backtest/engine.py`
 - `run`: 1,248 lines → **CRITICAL**: Break into ~20 smaller functions
 - `__init__`: 190 lines → Extract configuration steps
 - `_apply_correlation_control`: 142 lines → Split risk calculations
@@ -290,7 +290,7 @@ def calculate_position_size(balance: float, risk: float) -> float:
 
 ### Comment Quality
 
-To locate current TODO/FIXME comments in the repository, run:
+To locate current task-marker comments in the repository (for example, TODO/FIXME), run:
 
 ```bash
 rg -n "\\b(TODO|FIXME)\\b" src/ cli/

@@ -22,7 +22,7 @@ This note summarises recommended architectural adjustments for aligning `positio
 
 - **Data classes**: Create serialisable descriptors in `src/strategies/components/policies.py` that mirror engine policies (`PartialExitPolicy`, `TrailingStopPolicy`, dynamic risk scalers in `src/position_management`).
 - **Strategy integration**: Extend `TradingDecision` (or its equivalent DTO) with an optional `policies` field containing the descriptors. Teach component strategies to request the policies from the adapter and attach them to emitted decisions.
-- **Engine consumption**: Update `src/live/trading_engine.py` and the backtester to recognise the descriptors. When present, the engine should hydrate full policy objects from the descriptors instead of recalculating them, guaranteeing consistency between environments.
+- **Engine consumption**: Update `src/engines/live/trading_engine.py` and the backtester (`src/engines/backtest/engine.py`) to recognise the descriptors. When present, the engine should hydrate full policy objects from the descriptors instead of recalculating them, guaranteeing consistency between environments.
 
 ### 3. Share Portfolio State Across Contexts
 
@@ -36,7 +36,7 @@ This note summarises recommended architectural adjustments for aligning `positio
 
 1. Keep `src/strategies/components/strategy_manager.py:ComponentStrategyManager` clearly documented so developers can distinguish it from the live-engine `StrategyManager`. Update any lingering imports or comments that still reference the legacy class name.
 2. Extract shared versioning helpers (e.g., semantic version comparison, component registry caching) into `src/strategies/management/versioning.py`.
-3. Update `src/live/strategy_manager.py` to import the helpers instead of re-implementing them. Where behaviour differs (such as hot-swap orchestration), document the divergence in module-level docstrings to avoid future confusion.
+3. Update `src/engines/live/strategy_manager.py` to import the helpers instead of re-implementing them. Where behaviour differs (such as hot-swap orchestration), document the divergence in module-level docstrings to avoid future confusion.
 
 ### Provide a Consistent Adapter Wiring Path
 
@@ -46,7 +46,7 @@ This note summarises recommended architectural adjustments for aligning `positio
 ### Documentation and Migration Notes
 
 - Add module docstrings describing the division of responsibilities and the shared helpers.
-- Update any developer onboarding docs to call out that `ComponentStrategyManager` handles component-level orchestration while `src/live/strategy_manager.py` owns hot-swapping.
+- Update any developer onboarding docs to call out that `ComponentStrategyManager` handles component-level orchestration while `src/engines/live/strategy_manager.py` owns hot-swapping.
 - Consider documenting the migration path (recommended location: `docs/architecture/strategy_management.md`) so teams know which imports to update and how to plug the new helpers into custom strategies.
 
 ## Testing Implications

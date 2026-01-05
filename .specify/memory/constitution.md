@@ -25,7 +25,7 @@ Follow-up TODOs:
 
 ### Code Quality Is a Shipping Criterion
 **Non-negotiable rules**
-- Every change MUST keep `make code-quality` (Black, Ruff, MyPy, Bandit) green before review.
+- Every change MUST keep `atb dev quality` (Black, Ruff, MyPy, Bandit) green before review.
 - All Python modules MUST be fully type hinted and document complex flows at module or function level.
 - Domain boundaries in `src/` MUST remain acyclic; cross-domain imports require an architecture note in
   the relevant spec or plan justifying the dependency.
@@ -34,7 +34,7 @@ quality gates preserve maintainability and reviewer trust.
 
 ### Testing Proves Every Change
 **Non-negotiable rules**
-- `make test` (parallel pytest) MUST pass locally or in CI before merge; skipped tests require
+- `atb test all` (unit + integration) MUST pass locally or in CI before merge; skipped tests require
   issue-linked justification.
 - New behaviour MUST land with automated tests that fail without the change; choose unit, integration,
   and performance suites matching the impacted layer.
@@ -57,11 +57,11 @@ across automation, dashboards, and manuals.
 ### Performance Safeguards Decisions
 **Non-negotiable rules**
 - Trading loops and backtests MUST maintain published baselines: p95 loop latency ≤500ms for
-  single-symbol live trading and completion of `make backtest STRATEGY=ml_basic DAYS=30` within 5 minutes
+  single-symbol live trading and completion of `atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30` within 5 minutes
   on reference hardware (8 vCPU / 16GB RAM). Deviations >10% require a documented mitigation timeline.
 - Performance-sensitive code MUST emit metrics (structured logs or stats) that tie latency to strategy,
   exchange, and workload so regressions can be triaged.
-- Any change touching `src/backtesting`, `src/live`, `src/performance`, or `tests/performance` MUST rerun
+- Any change touching `src/engines/backtest`, `src/engines/live`, `src/performance`, or `tests/performance` MUST rerun
   the performance suite (`pytest tests/performance -q`) and attach results to the PR.
 **Rationale**: Latency and throughput govern execution quality; explicit SLOs and instrumentation keep
 strategies profitable and alerts actionable.
@@ -71,7 +71,7 @@ Teams MUST satisfy these checks before implementation work begins and again befo
 
 - Align plan.md Constitution Check with all four principles, explicitly noting how code quality, testing,
   UX, and performance obligations are met or mitigated.
-- Run `make code-quality`, `make test`, and relevant `pytest tests/performance` slices locally; CI logs
+- Run `atb dev quality`, `atb test all`, and relevant `pytest tests/performance` slices locally; CI logs
   MUST be linked in the PR.
 - Update specs/tasks to include mandatory testing tasks, UX artefacts (docs, screenshots, CLI help), and
   performance validation steps; missing artefacts block merge.

@@ -13,14 +13,11 @@ This ExecPlan is a living document. Maintain Progress, Surprises & Discoveries, 
 - [x] (2025-10-26 19:40Z) Relocated sentiment adapters, position sizing, and `SymbolFactory` into `src/sentiment`, `src/position_management/sizing.py`, and `src/trading/symbols/factory.py` with updated imports/tests.
 - [x] (2025-10-26 19:45Z) Removed `src/trading/shared` after confirming no remaining imports.
 - [x] (2025-10-26 19:50Z) Removed the legacy `src/utils` directory, added READMEs for new packages, and refreshed `AGENTS.md`/`docs/development.md` to describe the updated structure.
-- [ ] Re-run automated checks (`python3.11 -m pytest -n 4`, `make backtest STRATEGY=ml_basic DAYS=5`, `PORT=8090 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading`) and update docs to describe the new structure. (Blocked: python3.11 interpreter segfaults because wheel dependencies are only built for Python 3.9, and `make` currently assumes a `python` binary that does not exist in the sandbox.)
+- [ ] Re-run automated checks (`python -m pytest -n 4`, `atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 5`, `PORT=8090 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading`) and capture the outputs in this plan.
 
 ## Surprises & Discoveries
 
-- Observation: `python3.11 -m pytest -n 4` segfaults immediately (Signal 11) because the shared environment only has pandas/numpy wheels compiled for macOS Python 3.9; importing them under 3.11 causes interpreter crashes before tests run.
-  Evidence: Running `python3.11 -m pytest tests/unit/trading/test_shared_indicators.py -q` exits with `Sandbox(Signal(11))` on 2025-10-26.
-- Observation: `make backtest`/`make live-health` (legacy wrappers around the `atb` commands) fail early because the sandbox lacks a `python` binary, and the Makefile's `install` target hardcodes `python -m pip ...`.
-  Evidence: Commands exit with `python -m pip install --upgrade pip` followed by `make: python: No such file or directory` on 2025-10-26.
+- Observation: The legacy `make` wrappers can fail if the environment does not provide a `python` shim. Prefer running the CLI directly (`atb backtest ...`, `atb live-health ...`) to avoid Makefile assumptions.
 
 ## Decision Log
 
@@ -41,7 +38,7 @@ To be filled in after completion: summarize what shipped, note any regressions a
 - `src/trading/shared/decision_logger.py` writes trade decisions to the DB via `db_manager.log_strategy_execution`. Strategies/backtesting/live engines import it through `trading.shared`.
 - `src/trading/shared/sentiment.py` merges historical or live sentiment fields into OHLCV frames using provider interfaces.
 - `src/trading/shared/sizing.py` normalizes strategy position sizes to fractions of balance.
-- `src/trading/shared/indicators.py` now forwards to `src.tech.adapters.row_extractors` and can be removed once imports are updated.
+- `src/trading/shared/indicators.py` previously forwarded to `src.tech.adapters.row_extractors` and was removed once imports were updated.
 - `src/utils` contains heterogeneous helpers: logging config/context/events, cache TTL utilities, geo-detection for Binance routing, secret lookup, symbol formatting, and project path helpers.
 - There is no dedicated `src/infrastructure` package; infrastructure code is scattered. The new structure must include READMEs explaining responsibilities per `.agents/PLANS.md` guidance.
 
@@ -50,7 +47,7 @@ To be filled in after completion: summarize what shipped, note any regressions a
 1. **Create `src/infrastructure` skeleton** with subpackages:
    - `src/infrastructure/logging/` for `logging_config.py`, `logging_context.py`, `logging_events.py`, and a moved `decision_logger.py` (rename to `decision_logger.py` and importable as `src.infrastructure.logging.decision_logger`).
    - `src/infrastructure/runtime/` for `project_paths.py` (rename to `paths.py`), `secrets.py`, `geo_detection.py` (rename to `geo.py`), and `cache_utils.py` (rename to `cache.py`). Include README files for the root and each subpackage, documenting scope and extension points.
-   Update all imports (`src/utils/...`, `src/backtesting/engine.py`, `src/live/trading_engine.py`, etc.) to the new paths.
+   Update all imports (`src/utils/...`, `src/engines/backtest/engine.py`, `src/engines/live/trading_engine.py`, etc.) to the new paths.
 
 2. **Relocate trading-specific helpers**:
    - Move `src/trading/shared/sentiment.py` to `src/sentiment/adapters.py`; adjust references in backtester, live engine, dashboards, and tests.

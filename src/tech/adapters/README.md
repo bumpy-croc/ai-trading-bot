@@ -15,4 +15,5 @@ Guidelines:
 
 The `row_extractors.py` module exposes `extract_indicators`,
 `extract_sentiment_data`, and `extract_ml_predictions`, which replace duplicated
-helpers in `src/trading/shared/indicators.py` and `src/backtesting/utils.py`.
+helpers that previously lived in engine-specific modules (for example,
+`src/engines/backtest/utils.py`).
