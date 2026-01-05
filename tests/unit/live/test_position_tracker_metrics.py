@@ -144,3 +144,37 @@ def test_close_position_negative_basis_balance_retains_position() -> None:
     assert result is None
     assert tracker.has_position(order_id), "Position should remain in tracker after negative basis"
     assert tracker.get_position(order_id) is not None
+
+
+@pytest.mark.fast
+def test_close_position_with_zero_size_succeeds() -> None:
+    """Close with zero current_size (after partial exits) succeeds and removes position."""
+    # Arrange
+    tracker = LivePositionTracker()
+    order_id = "zero-size-1"
+    position = LivePosition(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        entry_price=100.0,
+        entry_time=datetime.now(UTC),
+        entry_balance=1000.0,
+        order_id=order_id,
+    )
+    # Simulate position reduced to zero by partial exits
+    position.current_size = 0.0
+    tracker.open_position(position)
+
+    # Act - close position with zero current_size
+    result = tracker.close_position(
+        order_id=order_id,
+        exit_price=105.0,
+        exit_reason="partial_exits_complete",
+        basis_balance=1000.0,
+    )
+
+    # Assert - close succeeded, position removed from tracker
+    assert result is not None, "Close should succeed even with zero current_size"
+    assert result.realized_pnl == 0.0, "P&L should be zero for zero-sized position"
+    assert not tracker.has_position(order_id), "Position should be removed from tracker"
+    assert tracker.get_position(order_id) is None

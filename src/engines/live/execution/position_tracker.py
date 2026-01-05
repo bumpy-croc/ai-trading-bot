@@ -333,7 +333,9 @@ class LivePositionTracker:
         fraction = float(
             position.current_size if position.current_size is not None else position.size
         )
-        if not math.isfinite(fraction) or fraction <= 0:
+        # Allow fraction == 0 for fully-exited positions (after partial exits complete)
+        # Reject only non-finite or negative values
+        if not math.isfinite(fraction) or fraction < 0:
             logger.error(
                 "Invalid fraction %.8f for position %s - close aborted, position retained",
                 fraction,
