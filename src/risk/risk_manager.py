@@ -1,3 +1,90 @@
+"""
+Portfolio-Level Risk Manager (Layer 2 of 3-Layer Risk Architecture)
+
+This module provides the global risk management system that enforces portfolio-wide
+constraints across all positions and symbols.
+
+ARCHITECTURE ROLE:
+    This is LAYER 2 (Portfolio Level) of the three-layer risk management architecture.
+    It enforces global constraints and tracks positions across the entire portfolio.
+
+SCOPE:
+    - Multi-symbol, portfolio-wide strategic constraints
+    - Daily risk limit enforcement (max_daily_risk)
+    - Position tracking across all symbols
+    - Correlation-based position sizing
+    - Drawdown checking
+    - Thread-safe concurrent access for live trading
+
+KEY DIFFERENCES FROM STRATEGY RISK MANAGER:
+    - Strategy risk (Layer 1): "What size makes sense for THIS signal?"
+    - Portfolio risk (This file): "What size is ALLOWED given global constraints?"
+
+RELATIONSHIP TO OTHER RISK LAYERS:
+    Layer 1 (src/strategies/components/risk_manager.py): Strategy component - signal-based decisions
+    Layer 2 (This file): Portfolio manager - global constraint enforcement
+    Layer 3 (src/engines/shared/dynamic_risk_handler.py): Dynamic adjustments based on performance
+
+KEY RESPONSIBILITIES:
+    1. Position Sizing: Calculate allowed position fractions with multiple policies
+    2. Position Tracking: Thread-safe tracking of all open positions
+    3. Daily Risk Limits: Enforce max_daily_risk across all trades
+    4. Correlation Control: Limit exposure to correlated assets
+    5. Drawdown Protection: Check against max_drawdown threshold
+    6. Partial Operations: Track partial exits and scale-ins
+
+IMPORTANT NOTE ON DAILY RISK ACCOUNTING:
+    The `daily_risk_used` attribute tracks EXPOSURE (capital allocation), NOT actual
+    capital at risk. When a 10% position is opened, daily_risk_used increases by 0.1
+    (10%), regardless of the stop loss distance.
+
+    Example:
+        - Open 10% position with 1% stop loss
+        - Actual capital at risk: 0.10 × 0.01 = 0.001 (0.1%)
+        - daily_risk_used: 0.10 (10% exposure tracked)
+
+    This conservative approach prevents over-leveraging but means you can't open as
+    many positions as theoretical risk would allow. See class docstring for details.
+
+USAGE:
+    >>> from src.risk.risk_manager import PortfolioRiskManager, RiskParameters
+    >>>
+    >>> # Initialize with parameters
+    >>> params = RiskParameters(
+    ...     base_risk_per_trade=0.02,
+    ...     max_daily_risk=0.06,
+    ...     max_position_size=0.10,
+    ... )
+    >>> risk_manager = PortfolioRiskManager(parameters=params, max_concurrent_positions=3)
+    >>>
+    >>> # Calculate allowed position fraction
+    >>> fraction = risk_manager.calculate_position_fraction(
+    ...     df=df,
+    ...     index=i,
+    ...     balance=10000,
+    ...     strategy_overrides={'position_sizer': 'atr_risk'},
+    ... )
+    >>>
+    >>> # Track position (thread-safe)
+    >>> risk_manager.update_position('BTCUSDT', 'long', 0.05, 50000)
+    >>>
+    >>> # Check drawdown
+    >>> if risk_manager.check_drawdown(current_balance, peak_balance):
+    ...     # Drawdown limit exceeded
+    ...     pass
+
+THREAD SAFETY:
+    All operations on shared state (positions dict, daily_risk_used) are protected
+    by a reentrant lock (_state_lock) for safe concurrent access from multiple threads
+    (e.g., live trading engine + monitoring threads).
+
+See also:
+    - docs/risk_management_architecture.md: Complete architecture documentation
+    - src/strategies/components/risk_manager.py: Strategy-level risk component (Layer 1)
+    - src/engines/shared/dynamic_risk_handler.py: Dynamic risk adjustments (Layer 3)
+    - src/position_management/README.md: Position management policies
+"""
+
 from __future__ import annotations
 
 import logging
@@ -139,8 +226,8 @@ class RiskParameters:
             raise ValueError("correlation_update_frequency_hours must be positive")
 
 
-class RiskManager:
-    """Handles position sizing and risk management.
+class PortfolioRiskManager:
+    """Handles position sizing and risk management across the entire portfolio.
 
     Daily Risk Accounting
     ---------------------
@@ -160,6 +247,17 @@ class RiskManager:
     Future Enhancement: Consider tracking actual capital at risk by multiplying
     position size by stop loss distance percentage. This would allow larger
     positions with tight stops while maintaining true risk limits.
+
+    Example:
+        # Scenario: You have max_daily_risk=0.10 (10%)
+        # You open 3 positions of 3% each
+        position1 = 0.03  # daily_risk_used = 0.03
+        position2 = 0.03  # daily_risk_used = 0.06
+        position3 = 0.03  # daily_risk_used = 0.09
+        # Remaining: 0.10 - 0.09 = 0.01 (1% left)
+
+        # You CANNOT open a 5% position even if stop loss is tight
+        # because exposure tracking is conservative
 
     Thread Safety
     -------------
@@ -1076,3 +1174,7 @@ class RiskManager:
             self.daily_risk_used = min(
                 self.params.max_daily_risk, self.daily_risk_used + effective_add
             )
+
+
+# Backward compatibility alias
+RiskManager = PortfolioRiskManager

@@ -1,3 +1,6 @@
-from .risk_manager import RiskManager, RiskParameters
+from .risk_manager import PortfolioRiskManager, RiskParameters
 
-__all__ = ["RiskManager", "RiskParameters"]
+# Backward compatibility alias
+RiskManager = PortfolioRiskManager
+
+__all__ = ["PortfolioRiskManager", "RiskManager", "RiskParameters"]

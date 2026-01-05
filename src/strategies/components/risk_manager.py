@@ -1,9 +1,49 @@
 """
-Risk Manager Components
+Strategy-Level Risk Manager Components (Layer 1 of 3-Layer Risk Architecture)
 
 This module defines the abstract RiskManager interface and related data models
 for managing position sizing, stop losses, and risk controls in the component-based
 strategy architecture.
+
+ARCHITECTURE ROLE:
+    This is LAYER 1 (Strategy Level) of the three-layer risk management architecture.
+    It provides the abstract interface for strategy-specific, signal-based risk decisions.
+
+SCOPE:
+    - Per-signal, per-strategy tactical decisions
+    - Signal-specific position sizing
+    - Regime-aware adjustments
+    - Stop loss and take profit calculation for individual signals
+
+RELATIONSHIP TO OTHER RISK LAYERS:
+    Layer 1 (This file): Strategy component - "What size makes sense for THIS signal?"
+    Layer 2 (src/risk/risk_manager.py): Portfolio manager - "What size is ALLOWED globally?"
+    Layer 3 (src/engines/shared/dynamic_risk_handler.py): Dynamic adjustments - "Reduce size due to performance?"
+
+CONCRETE IMPLEMENTATIONS:
+    - FixedRiskManager: Simple percentage-based risk
+    - VolatilityRiskManager: ATR-based volatility-adjusted risk
+    - RegimeAdaptiveRiskManager: Regime-aware risk adjustments
+
+USAGE:
+    >>> from src.strategies.components import Strategy
+    >>> from src.strategies.components.risk_manager import VolatilityRiskManager
+    >>>
+    >>> # Compose into strategy
+    >>> strategy = Strategy(
+    ...     name="my_strategy",
+    ...     signal_generator=my_signal_gen,
+    ...     risk_manager=VolatilityRiskManager(atr_multiplier=2.0),
+    ...     position_sizer=my_sizer,
+    ... )
+    >>>
+    >>> # Strategy uses risk manager for signal-based decisions
+    >>> decision = strategy.process_candle(df, index, balance, positions)
+
+See also:
+    - docs/risk_management_architecture.md: Complete architecture documentation
+    - src/risk/risk_manager.py: Portfolio-level global risk manager (Layer 2)
+    - src/engines/shared/dynamic_risk_handler.py: Dynamic risk adjustments (Layer 3)
 """
 
 from abc import ABC, abstractmethod
