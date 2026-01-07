@@ -334,6 +334,17 @@ def save_artifacts(
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, default=str)
 
+    # Save feature schema for validation and inference alignment
+    feature_names = metadata.get("feature_names", [])
+    sequence_length = metadata.get("sequence_length", 120)
+    feature_schema = {
+        "sequence_length": sequence_length,
+        "features": [{"name": name, "required": True} for name in feature_names],
+    }
+    feature_schema_path = version_dir / "feature_schema.json"
+    with open(feature_schema_path, "w", encoding="utf-8") as f:
+        json.dump(feature_schema, f, indent=2)
+
     # Atomic symlink update to avoid race conditions (TOCTOU vulnerability)
     # Create temporary symlink, then atomically replace the existing symlink
     latest_link = type_dir / "latest"
