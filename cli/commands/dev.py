@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure project root and src are in sys.path for absolute imports
 from src.infrastructure.runtime.paths import get_project_root
@@ -65,7 +66,7 @@ def _check_requirements() -> bool:
     """Check if required tools are available."""
     print("🔍 Checking System Requirements...")
 
-    requirements = {
+    requirements: dict[str, dict[str, Any]] = {
         "python3": {
             "description": "Python 3.11+ required",
             "required": True,
@@ -80,8 +81,8 @@ def _check_requirements() -> bool:
         },
     }
 
-    missing_required = []
-    missing_optional = []
+    missing_required: list[tuple[str, str]] = []
+    missing_optional: list[tuple[str, str]] = []
 
     for tool, meta in requirements.items():
         description = meta["description"]
@@ -519,36 +520,169 @@ def _dashboard(ns: argparse.Namespace) -> int:
         return 1
 
 
+def _get_changed_files(branch: str | None = None) -> list[Path]:
+    """Get list of changed Python files relative to git base or working directory.
+
+    Args:
+        branch: Compare against this branch (e.g., 'origin/develop').
+                If None, returns all modified files in working directory.
+
+    Returns:
+        List of Paths for changed Python files.
+    """
+    import subprocess
+
+    try:
+        if branch:
+            # Get files changed compared to branch
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=d", branch],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        else:
+            # Get modified files in working directory (staged + unstaged)
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=d", "HEAD"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        if result.returncode != 0:
+            return []
+
+        changed_files = []
+        for line in result.stdout.splitlines():
+            path = PROJECT_ROOT / line
+            if path.suffix == ".py":
+                changed_files.append(path)
+
+        return changed_files
+
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return []
+
+
 def _quality(ns: argparse.Namespace) -> int:
     """Run code quality checks (black, ruff, mypy, bandit)."""
-    print("🔍 Running Code Quality Checks")
-    print("=" * 60)
-    print()
+    changed_only = getattr(ns, "changed", False)
+    branch = getattr(ns, "branch", None)
 
-    tools = [
-        {
-            "name": "Black (code formatter)",
-            "cmd": ["black", "."],
-            "description": "Checking code formatting",
-        },
-        {
-            "name": "Ruff (linter)",
-            "cmd": ["ruff", "check", "."],
-            "description": "Running linter checks",
-        },
-        {
-            "name": "MyPy (type checker)",
-            "cmd": [sys.executable, "bin/run_mypy.py"],
-            "description": "Running type checks",
-        },
-        {
-            "name": "Bandit (security scanner)",
-            "cmd": ["bandit", "-c", "pyproject.toml", "-r", "src"],
-            "description": "Running security checks",
-        },
-    ]
+    if changed_only:
+        changed_files = _get_changed_files(branch)
+        if not changed_files:
+            print("ℹ️ No Python files changed - skipping quality checks")
+            return 0
+        print(f"🔍 Running Code Quality Checks on {len(changed_files)} changed file(s)")
+        print("=" * 60)
+        for f in changed_files:
+            print(f"  {f.relative_to(PROJECT_ROOT)}")
+        print()
+    else:
+        print("🔍 Running Code Quality Checks")
+        print("=" * 60)
+        print()
 
-    results = {}
+    # Build target list based on mode
+    if changed_only:
+        file_strs = [str(f.relative_to(PROJECT_ROOT)) for f in changed_files]
+        # Group files by directory for more efficient tool runs
+        src_files = [f for f in file_strs if f.startswith("src/")]
+        cli_files = [f for f in file_strs if f.startswith("cli/")]
+        test_files = [f for f in file_strs if f.startswith("tests/")]
+        # Files outside main dirs get checked individually
+        other_files = [f for f in file_strs if not f.startswith(("src/", "cli/", "tests/"))]
+    else:
+        src_files = ["src"]
+        cli_files = ["cli"]
+        test_files = ["tests"]
+        other_files = []
+
+    # Pre-compute file groups for changed mode (used by multiple tools)
+    all_targets: list[str] = (
+        [t for group in [src_files, cli_files, test_files, other_files] for t in group]
+        if changed_only
+        else []
+    )
+    src_cli_targets: list[str] = (
+        [t for group in [src_files, cli_files] for t in group] if changed_only else []
+    )
+
+    tools: list[dict[str, Any]] = []
+
+    # Black - formatter
+    if changed_only:
+        if all_targets:
+            tools.append(
+                {
+                    "name": "Black (code formatter)",
+                    "cmd": ["black", "--check"] + all_targets,
+                    "description": "Checking code formatting",
+                }
+            )
+    else:
+        tools.append(
+            {
+                "name": "Black (code formatter)",
+                "cmd": ["black", "."],
+                "description": "Checking code formatting",
+            }
+        )
+
+    # Ruff - linter
+    if changed_only:
+        if all_targets:
+            tools.append(
+                {
+                    "name": "Ruff (linter)",
+                    "cmd": ["ruff", "check"] + all_targets,
+                    "description": "Running linter checks",
+                }
+            )
+    else:
+        tools.append(
+            {
+                "name": "Ruff (linter)",
+                "cmd": ["ruff", "check", "."],
+                "description": "Running linter checks",
+            }
+        )
+
+    # MyPy - type checker
+    if changed_only:
+        # Only run mypy on changed src/cli files (tests use different config)
+        if src_cli_targets:
+            tools.append(
+                {
+                    "name": "MyPy (type checker)",
+                    "cmd": [sys.executable, "bin/run_mypy.py", "--targets"] + src_cli_targets,
+                    "description": "Running type checks",
+                }
+            )
+    else:
+        tools.append(
+            {
+                "name": "MyPy (type checker)",
+                "cmd": [sys.executable, "bin/run_mypy.py"],
+                "description": "Running type checks",
+            }
+        )
+
+    # Bandit - security (always runs on full src dir, as partial runs miss context)
+    if not changed_only:
+        tools.append(
+            {
+                "name": "Bandit (security scanner)",
+                "cmd": ["bandit", "-c", "pyproject.toml", "-r", "src"],
+                "description": "Running security checks",
+            }
+        )
+
+    results: dict[str, bool | None] = {}
 
     for tool in tools:
         print(f"\n{tool['description']}...")
@@ -668,6 +802,19 @@ def register(parser: argparse._SubParsersAction) -> None:
 
     # Quality command
     quality_parser = dev_subparsers.add_parser("quality", help="Run code quality checks")
+    quality_parser.add_argument(
+        "--changed",
+        "-c",
+        action="store_true",
+        help="Only check files changed relative to HEAD (or branch with --branch)",
+    )
+    quality_parser.add_argument(
+        "--branch",
+        "-b",
+        type=str,
+        default=None,
+        help="Compare against this branch (e.g., 'origin/develop') for --changed",
+    )
     quality_parser.set_defaults(func=_quality)
 
     # Clean command

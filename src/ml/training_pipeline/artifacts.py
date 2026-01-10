@@ -21,7 +21,7 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None  # type: ignore
+    tf = None
 
 if TYPE_CHECKING:
     from tensorflow.keras.models import Model as ModelType
@@ -168,10 +168,11 @@ def validate_model_robustness(
             f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}"
         )
 
-    results = {"base_performance": {}}
     base_pred = model.predict(X_test)
     base_mse = np.mean((base_pred.flatten() - y_test) ** 2)
-    results["base_performance"] = {"mse": float(base_mse), "rmse": float(np.sqrt(base_mse))}
+    results: RobustnessValidationResult = {
+        "base_performance": {"mse": float(base_mse), "rmse": float(np.sqrt(base_mse))}
+    }
 
     if has_sentiment:
         sentiment_indices = [i for i, name in enumerate(feature_names) if "sentiment" in name]
@@ -333,6 +334,17 @@ def save_artifacts(
     metadata_path = version_dir / "metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, default=str)
+
+    # Save feature schema for validation and inference alignment
+    feature_names = metadata.get("feature_names", [])
+    sequence_length = metadata.get("sequence_length", 120)
+    feature_schema = {
+        "sequence_length": sequence_length,
+        "features": [{"name": name, "required": True} for name in feature_names],
+    }
+    feature_schema_path = version_dir / "feature_schema.json"
+    with open(feature_schema_path, "w", encoding="utf-8") as f:
+        json.dump(feature_schema, f, indent=2)
 
     # Atomic symlink update to avoid race conditions (TOCTOU vulnerability)
     # Create temporary symlink, then atomically replace the existing symlink
