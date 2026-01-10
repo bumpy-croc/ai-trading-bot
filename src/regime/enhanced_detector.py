@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -198,7 +198,7 @@ class EnhancedRegimeDetector:
             confidence=enhanced_confidence,
             duration=duration,
             strength=strength,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
             metadata={
                 "trend_score": float(current_row.get("trend_score", 0.0)),
                 "atr_percentile": float(current_row.get("atr_percentile", 0.5)),
@@ -301,7 +301,7 @@ class EnhancedRegimeDetector:
                 transition = RegimeTransition(
                     from_regime=prev_regime,
                     to_regime=current_regime,
-                    transition_time=current_regime.timestamp or datetime.now(),
+                    transition_time=current_regime.timestamp or datetime.now(UTC),
                     confidence=min(prev_regime.confidence, current_regime.confidence),
                 )
                 transitions.append(transition)
@@ -343,9 +343,7 @@ class EnhancedRegimeDetector:
             stats[f"{label}_pct"] = (count / total_periods) * 100
 
         transitions = self.detect_regime_transitions(df, lookback_periods)
-        stats["transition_frequency"] = (
-            len(transitions) / total_periods if total_periods > 0 else 0
-        )
+        stats["transition_frequency"] = len(transitions) / total_periods if total_periods > 0 else 0
 
         return stats
 
@@ -382,9 +380,7 @@ class EnhancedRegimeDetector:
                 break
         return duration
 
-    def _calculate_regime_strength(
-        self, df: pd.DataFrame, index: int, window: int = 20
-    ) -> float:
+    def _calculate_regime_strength(self, df: pd.DataFrame, index: int, window: int = 20) -> float:
         if index < window:
             return 0.5
 
@@ -431,7 +427,7 @@ class EnhancedRegimeDetector:
                 transition = RegimeTransition(
                     from_regime=self.current_regime,
                     to_regime=regime_context,
-                    transition_time=regime_context.timestamp or datetime.now(),
+                    transition_time=regime_context.timestamp or datetime.now(UTC),
                     confidence=min(self.current_regime.confidence, regime_context.confidence),
                 )
                 self.transition_history.append(transition)
@@ -470,19 +466,25 @@ def evaluate_regime_accuracy(
     evaluation["target_trend"] = annotated_df[target_trend_col]
     evaluation["target_volatility"] = annotated_df[target_vol_col]
 
-    mask = evaluation[["predicted_trend", "predicted_volatility", "target_trend", "target_volatility"]].notna().all(axis=1)
+    mask = (
+        evaluation[["predicted_trend", "predicted_volatility", "target_trend", "target_volatility"]]
+        .notna()
+        .all(axis=1)
+    )
 
-    evaluation["trend_correct"] = (evaluation["predicted_trend"] == evaluation["target_trend"]).where(mask)
+    evaluation["trend_correct"] = (
+        evaluation["predicted_trend"] == evaluation["target_trend"]
+    ).where(mask)
     evaluation["volatility_correct"] = (
         evaluation["predicted_volatility"] == evaluation["target_volatility"]
     ).where(mask)
-    evaluation["regime_correct"] = (
-        evaluation["trend_correct"] & evaluation["volatility_correct"]
-    )
+    evaluation["regime_correct"] = evaluation["trend_correct"] & evaluation["volatility_correct"]
 
     support = int(mask.sum())
     if support == 0:
-        metrics = RegimeEvaluationMetrics(accuracy=np.nan, trend_accuracy=np.nan, volatility_accuracy=np.nan, support=0)
+        metrics = RegimeEvaluationMetrics(
+            accuracy=np.nan, trend_accuracy=np.nan, volatility_accuracy=np.nan, support=0
+        )
         return metrics, evaluation
 
     trend_accuracy = float(evaluation.loc[mask, "trend_correct"].mean())

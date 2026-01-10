@@ -6,8 +6,17 @@ pre-configured strategies and custom strategy compositions.
 """
 
 from copy import deepcopy
-from typing import Any, Optional
+from typing import Any
 
+from src.config.constants import (
+    DEFAULT_STRATEGY_BASE_FRACTION,
+    DEFAULT_STRATEGY_BASE_FRACTION_SMALL,
+    DEFAULT_STRATEGY_MIN_CONFIDENCE,
+    DEFAULT_STRATEGY_MIN_CONFIDENCE_CONSERVATIVE,
+)
+
+from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
+from .momentum_signal_generator import MomentumSignalGenerator
 from .position_sizer import (
     ConfidenceWeightedSizer,
     FixedFractionSizer,
@@ -30,8 +39,6 @@ from .signal_generator import (
     SignalGenerator,
     WeightedVotingSignalGenerator,
 )
-from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
-from .momentum_signal_generator import MomentumSignalGenerator
 from .strategy import Strategy
 
 
@@ -79,7 +86,10 @@ class StrategyFactory:
         """
         signal_generator = RandomSignalGenerator(buy_prob=0.3, sell_prob=0.3, seed=42)
         risk_manager = VolatilityRiskManager(base_risk=0.02, atr_multiplier=2.0)
-        position_sizer = ConfidenceWeightedSizer(base_fraction=0.04, min_confidence=0.4)
+        position_sizer = ConfidenceWeightedSizer(
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION_SMALL,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE_CONSERVATIVE,
+        )
 
         return Strategy(
             name=name,
@@ -173,7 +183,9 @@ class StrategyFactory:
         # Combine with weighted voting
         generators = {gen1: 0.4, gen2: 0.4, gen3: 0.2}
         signal_generator = WeightedVotingSignalGenerator(
-            generators=generators, min_confidence=0.3, consensus_threshold=0.6
+            generators=generators,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
+            consensus_threshold=0.6,
         )
 
         risk_manager = VolatilityRiskManager(base_risk=0.02, atr_multiplier=1.8)
@@ -223,7 +235,7 @@ class StrategyFactory:
     def create_ml_basic_strategy(
         name: str = "MLBasic",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         model_type: str = "basic",
         timeframe: str = "1h",
     ) -> Strategy:
@@ -254,8 +266,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.20,
-            min_confidence=0.3,
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -270,7 +282,7 @@ class StrategyFactory:
     def create_ml_adaptive_strategy(
         name: str = "MLAdaptive",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
     ) -> Strategy:
         """
         Create ML Adaptive strategy with component-based architecture
@@ -294,8 +306,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.20,
-            min_confidence=0.3,
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -310,7 +322,7 @@ class StrategyFactory:
     def create_ml_sentiment_strategy(
         name: str = "MLSentiment",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         model_type: str = "sentiment",
         timeframe: str = "1h",
     ) -> Strategy:
@@ -321,8 +333,8 @@ class StrategyFactory:
             name: Strategy name
             sequence_length: Sequence length for LSTM
             model_name: Model name for registry
-            model_type: Model type
-            timeframe: Model timeframe
+            model_type: Model type for future sentiment-specific model selection
+            timeframe: Model timeframe for future sentiment-specific model selection
 
         Returns:
             Configured ML Sentiment strategy
@@ -332,6 +344,9 @@ class StrategyFactory:
             sequence_length=sequence_length,
             model_name=model_name,
         )
+        # Store model_type/timeframe for potential future use in sentiment model selection
+        signal_generator.model_type = model_type
+        signal_generator.model_timeframe = timeframe
 
         risk_manager = FixedRiskManager(
             risk_per_trade=0.02,
@@ -339,8 +354,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.20,
-            min_confidence=0.3,
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -378,8 +393,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.50,
-            min_confidence=0.3,
+            base_fraction=0.50,  # Aggressive strategy - intentionally higher
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -420,7 +435,7 @@ class StrategyFactory:
 
         signal_generator = WeightedVotingSignalGenerator(
             generators=generators,
-            min_confidence=0.3,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
             consensus_threshold=0.6,
         )
 
@@ -432,8 +447,8 @@ class StrategyFactory:
         )
 
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.50,
-            min_confidence=0.3,
+            base_fraction=0.50,  # Aggressive strategy - intentionally higher
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
 
         return Strategy(
@@ -461,10 +476,10 @@ class StrategyBuilder:
             name: Strategy name
         """
         self.name = name
-        self._signal_generator: Optional[SignalGenerator] = None
-        self._risk_manager: Optional[RiskManager] = None
-        self._position_sizer: Optional[PositionSizer] = None
-        self._regime_detector: Optional[EnhancedRegimeDetector] = None
+        self._signal_generator: SignalGenerator | None = None
+        self._risk_manager: RiskManager | None = None
+        self._position_sizer: PositionSizer | None = None
+        self._regime_detector: EnhancedRegimeDetector | None = None
         self._enable_logging: bool = True
         self._max_history: int = 1000
 

@@ -110,9 +110,11 @@ temp/
 *.tar
 *.rar
 
-# ML models - shipped ONNX runtime models only
-src/ml/*
-!src/ml/*.onnx
+# ML models - for Railway we ship ONNX only, but for SageMaker we need the training code
+# When building SageMaker image, we INCLUDE src/ml/
+# When building Railway image, add this exclusion to Railway Dockerfile
+# src/ml/models/ is excluded below
+!src/ml/
 
 # Exclude test suite
 tests/
@@ -121,3 +123,8 @@ tests/
 src/data/*.csv
 src/data/*.db
 src/data/cache/
+
+# Exclude trained model artifacts (we generate these in SageMaker)
+src/ml/models/*/
+*.keras
+*.h5

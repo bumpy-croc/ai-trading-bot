@@ -1,6 +1,6 @@
 """Trade and position logging tests for DatabaseManager."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -27,8 +27,8 @@ class TestTradeLogging:
                 entry_price=45000.0,
                 exit_price=46000.0,
                 size=0.1,
-                entry_time=datetime.utcnow(),
-                exit_time=datetime.utcnow(),
+                entry_time=datetime.now(UTC),
+                exit_time=datetime.now(UTC),
                 pnl=100.0,
                 exit_reason="Take profit",
                 strategy_name="TestStrategy",

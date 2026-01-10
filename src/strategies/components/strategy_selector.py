@@ -12,9 +12,9 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -110,7 +110,7 @@ class StrategySelector:
     and correlation analysis.
     """
 
-    def __init__(self, config: Optional[SelectionConfig] = None):
+    def __init__(self, config: SelectionConfig | None = None):
         """
         Initialize strategy selector
 
@@ -127,8 +127,8 @@ class StrategySelector:
 
         # Correlation matrix cache
         self.correlation_matrix: dict[tuple[str, str], float] = {}
-        self.correlation_cache_expiry = datetime.min
-        self.correlation_strategy_set: Optional[frozenset[str]] = (
+        self.correlation_cache_expiry = datetime.min.replace(tzinfo=UTC)
+        self.correlation_strategy_set: frozenset[str] | None = (
             None  # Track which strategies are cached
         )
 
@@ -141,9 +141,9 @@ class StrategySelector:
     def select_best_strategy(
         self,
         available_strategies: dict[str, PerformanceTracker],
-        current_regime: Optional[RegimeContext] = None,
-        exclude_strategies: Optional[list[str]] = None,
-    ) -> Optional[str]:
+        current_regime: RegimeContext | None = None,
+        exclude_strategies: list[str] | None = None,
+    ) -> str | None:
         """
         Select the best strategy based on multi-criteria analysis
 
@@ -193,8 +193,8 @@ class StrategySelector:
     def rank_strategies(
         self,
         available_strategies: dict[str, PerformanceTracker],
-        current_regime: Optional[RegimeContext] = None,
-        exclude_strategies: Optional[list[str]] = None,
+        current_regime: RegimeContext | None = None,
+        exclude_strategies: list[str] | None = None,
     ) -> list[StrategyScore]:
         """
         Rank all strategies by their selection scores
@@ -227,7 +227,7 @@ class StrategySelector:
         self,
         strategy_ids: list[str],
         performance_trackers: dict[str, PerformanceTracker],
-        current_regime: Optional[RegimeContext] = None,
+        current_regime: RegimeContext | None = None,
     ) -> dict[str, Any]:
         """
         Compare specific strategies with detailed analysis
@@ -267,7 +267,7 @@ class StrategySelector:
                 "confidence": current_regime.confidence if current_regime else None,
             },
             "best_strategy": max(strategy_scores, key=lambda s: s.total_score).strategy_id,
-            "comparison_timestamp": datetime.now().isoformat(),
+            "comparison_timestamp": datetime.now(UTC).isoformat(),
         }
 
         return comparison
@@ -322,7 +322,7 @@ class StrategySelector:
             # Check minimum active days
             if tracker.trades:
                 oldest_trade = min(tracker.trades, key=lambda t: t.timestamp)
-                days_active = (datetime.now() - oldest_trade.timestamp).days
+                days_active = (datetime.now(UTC) - oldest_trade.timestamp).days
 
                 if days_active < self.config.min_days_active:
                     self.logger.debug(
@@ -336,7 +336,7 @@ class StrategySelector:
         return eligible
 
     def _calculate_strategy_scores(
-        self, strategies: dict[str, PerformanceTracker], current_regime: Optional[RegimeContext]
+        self, strategies: dict[str, PerformanceTracker], current_regime: RegimeContext | None
     ) -> list[StrategyScore]:
         """Calculate comprehensive scores for all strategies"""
         strategy_scores = []
@@ -430,7 +430,7 @@ class StrategySelector:
         return scores
 
     def _calculate_regime_scores(
-        self, tracker: PerformanceTracker, current_regime: Optional[RegimeContext]
+        self, tracker: PerformanceTracker, current_regime: RegimeContext | None
     ) -> dict[str, float]:
         """Calculate regime-specific performance scores"""
         regime_scores = {}
@@ -453,6 +453,16 @@ class StrategySelector:
 
     def _calculate_regime_score(self, regime_perf) -> float:
         """Calculate score for regime-specific performance"""
+        import math
+
+        # Validate inputs are finite to prevent NaN/inf propagation
+        # Return 0.0 for invalid metrics rather than propagating corrupt values
+        if not all(
+            math.isfinite(getattr(regime_perf, attr, 0.0))
+            for attr in ["sharpe_ratio", "win_rate", "max_drawdown", "avg_return"]
+        ):
+            return 0.0
+
         # Weighted combination of regime performance metrics
         sharpe_score = min(1.0, max(0.0, regime_perf.sharpe_ratio / 2.0))
         win_rate_score = min(1.0, max(0.0, (regime_perf.win_rate - 0.3) / 0.4))
@@ -493,14 +503,14 @@ class StrategySelector:
         processed_pairs = set()  # Track which pairs we've already processed
 
         for (sid1, sid2), correlation in correlation_matrix.items():
-            if sid1 == strategy_id or sid2 == strategy_id:
-                if sid1 != sid2:  # Don't include self-correlation
-                    # Create a canonical pair representation to avoid double-counting
-                    # Use lexicographic ordering to ensure consistent pair representation
-                    pair = tuple(sorted([sid1, sid2]))
-                    if pair not in processed_pairs:
-                        correlations.append(abs(correlation))
-                        processed_pairs.add(pair)
+            # Check strategy is in pair and not self-correlation
+            if strategy_id in (sid1, sid2) and sid1 != sid2:
+                # Create a canonical pair representation to avoid double-counting
+                # Use lexicographic ordering to ensure consistent pair representation
+                pair = tuple(sorted([sid1, sid2]))
+                if pair not in processed_pairs:
+                    correlations.append(abs(correlation))
+                    processed_pairs.add(pair)
 
         if not correlations:
             return 0.0
@@ -529,7 +539,7 @@ class StrategySelector:
         regime_scores: dict[str, float],
         risk_adjusted_score: float,
         correlation_penalty: float,
-        current_regime: Optional[RegimeContext],
+        current_regime: RegimeContext | None,
     ) -> float:
         """Calculate total weighted score for strategy"""
         # Base score from criteria
@@ -574,7 +584,7 @@ class StrategySelector:
         with self._correlation_lock:
             # Check if cache is still valid AND strategy set hasn't changed AND cache version matches
             if (
-                datetime.now() < self.correlation_cache_expiry
+                datetime.now(UTC) < self.correlation_cache_expiry
                 and self.correlation_strategy_set == current_strategy_set
                 and hasattr(self, "correlation_cache_version")
                 and self.correlation_cache_version == cache_version
@@ -586,28 +596,46 @@ class StrategySelector:
                 hasattr(self, "_computing_strategy_set")
                 and self._computing_strategy_set == current_strategy_set
             ):
-                # Another thread is computing, wait for it to complete
-                while (
-                    hasattr(self, "_computing_strategy_set")
-                    and self._computing_strategy_set == current_strategy_set
-                ):
-                    self._correlation_lock.release()
-                    time.sleep(0.01)  # Small delay to prevent busy waiting
-                    self._correlation_lock.acquire()
+                # Another thread is computing, exit lock and wait for it to complete
+                # Do NOT release/acquire inside with block - that causes deadlock risk
+                # if an exception is raised during sleep
+                pass
 
-                # Re-check cache after waiting
-                if (
-                    datetime.now() < self.correlation_cache_expiry
-                    and self.correlation_strategy_set == current_strategy_set
-                ):
-                    return self.correlation_matrix
+        # Wait outside the lock for other thread to complete
+        # This avoids holding the lock during sleep and prevents deadlock
+        max_wait_iterations = 100  # Prevent infinite loop (1 second max)
+        wait_iterations = 0
+        while (
+            hasattr(self, "_computing_strategy_set")
+            and self._computing_strategy_set == current_strategy_set
+            and wait_iterations < max_wait_iterations
+        ):
+            time.sleep(0.01)  # Small delay to prevent busy waiting
+            wait_iterations += 1
+
+        # Re-check cache with lock after waiting
+        with self._correlation_lock:
+            if (
+                datetime.now(UTC) < self.correlation_cache_expiry
+                and self.correlation_strategy_set == current_strategy_set
+            ):
+                return self.correlation_matrix
+
+            # Check if another thread started computing while we waited
+            if (
+                hasattr(self, "_computing_strategy_set")
+                and self._computing_strategy_set == current_strategy_set
+            ):
+                # Another thread is computing, return cached value or wait
+                # Since we already waited once, just return the cached value
+                return self.correlation_matrix
 
             # Mark that we're computing to prevent other threads from computing
             self._computing_strategy_set = current_strategy_set
 
         # Calculate correlation matrix outside lock to avoid holding it during computation
         # Pre-compute all daily returns for vectorized correlation calculation
-        cutoff_date = datetime.now() - timedelta(days=90)
+        cutoff_date = datetime.now(UTC) - timedelta(days=90)
         strategy_returns: dict[str, dict] = {}
 
         for sid in strategy_ids:
@@ -638,7 +666,7 @@ class StrategySelector:
         with self._correlation_lock:
             # Double-check: another thread might have computed while we were calculating
             if (
-                datetime.now() < self.correlation_cache_expiry
+                datetime.now(UTC) < self.correlation_cache_expiry
                 and self.correlation_strategy_set == current_strategy_set
             ):
                 # Another thread already updated the cache, use that
@@ -647,7 +675,7 @@ class StrategySelector:
 
             # Update cache with strategy set tracking and version
             self.correlation_matrix = correlation_matrix
-            self.correlation_cache_expiry = datetime.now() + timedelta(hours=1)
+            self.correlation_cache_expiry = datetime.now(UTC) + timedelta(hours=1)
             self.correlation_strategy_set = current_strategy_set
             self.correlation_cache_version = cache_version
 
@@ -693,8 +721,8 @@ class StrategySelector:
         try:
             correlation = np.corrcoef(returns1, returns2)[0, 1]
             return correlation if not np.isnan(correlation) else 0.0
-        except Exception as e:
-            self.logger.warning(f"Correlation calculation failed: {e}")
+        except (ValueError, FloatingPointError, TypeError) as e:
+            self.logger.warning("Correlation calculation failed: %s", e)
             return 0.0
 
     def _normalize_score(
@@ -730,13 +758,12 @@ class StrategySelector:
 
         if target_min <= volatility <= target_max:
             return 1.0
-        elif volatility < target_min:
+        if volatility < target_min:
             # Penalize too low volatility (might indicate insufficient opportunities)
             return max(0.0, volatility / target_min)
-        else:
-            # Penalize too high volatility
-            penalty = (volatility - target_max) / target_max
-            return max(0.0, 1.0 - penalty)
+        # Penalize too high volatility
+        penalty = (volatility - target_max) / target_max
+        return max(0.0, 1.0 - penalty)
 
     def _get_cached_performance_metrics(
         self, strategy_id: str, tracker: PerformanceTracker
@@ -747,7 +774,7 @@ class StrategySelector:
             if (
                 strategy_id in self.performance_cache
                 and strategy_id in self.cache_expiry
-                and datetime.now() < self.cache_expiry[strategy_id]
+                and datetime.now(UTC) < self.cache_expiry[strategy_id]
             ):
                 return self.performance_cache[strategy_id]
 
@@ -758,7 +785,7 @@ class StrategySelector:
         with self._cache_lock:
             # Update cache
             self.performance_cache[strategy_id] = metrics
-            self.cache_expiry[strategy_id] = datetime.now() + self.cache_duration
+            self.cache_expiry[strategy_id] = datetime.now(UTC) + self.cache_duration
 
         return metrics
 
@@ -767,6 +794,6 @@ class StrategySelector:
         self.performance_cache.clear()
         self.cache_expiry.clear()
         self.correlation_matrix.clear()
-        self.correlation_cache_expiry = datetime.min
+        self.correlation_cache_expiry = datetime.min.replace(tzinfo=UTC)
 
         self.logger.info("Strategy selector cache cleared")

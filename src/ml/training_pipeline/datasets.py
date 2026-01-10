@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -28,7 +28,7 @@ DEFAULT_SHUFFLE_BUFFER_SIZE = (
 
 def create_sequences(
     feature_data: np.ndarray, target_data: np.ndarray, sequence_length: int
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Create sequences from feature and target data using sliding windows.
 
     Args:
@@ -83,8 +83,38 @@ def split_sequences(
     sequences: np.ndarray,
     targets: np.ndarray,
     split_ratio: float = 0.8,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    split_index = max(int(len(sequences) * split_ratio), 1)
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Split sequences into training and validation sets.
+
+    Args:
+        sequences: 3D array of sequences (samples, timesteps, features)
+        targets: 1D array of target values
+        split_ratio: Ratio of data to use for training (default 0.8, range: 0 < ratio < 1)
+
+    Returns:
+        Tuple of (X_train, y_train, X_val, y_val)
+
+    Raises:
+        ValueError: If arrays are empty or split_ratio is out of range
+    """
+    # Validate inputs
+    if len(sequences) == 0 or len(targets) == 0:
+        raise ValueError("Cannot split empty sequences or targets")
+
+    if not 0 < split_ratio < 1:
+        raise ValueError(f"split_ratio must be between 0 and 1, got {split_ratio}")
+
+    if len(sequences) != len(targets):
+        raise ValueError(
+            f"sequences and targets must have same length, got {len(sequences)} and {len(targets)}"
+        )
+
+    # Ensure at least 1 sample in training set (if possible)
+    if len(sequences) == 1:
+        split_index = 1  # Put the single sample in training
+    else:
+        split_index = max(int(len(sequences) * split_ratio), 1)
+        split_index = min(split_index, len(sequences) - 1)
     X_train = sequences[:split_index]
     y_train = targets[:split_index]
     X_val = sequences[split_index:]
@@ -98,13 +128,32 @@ def build_tf_datasets(
     X_val: np.ndarray,
     y_val: np.ndarray,
     batch_size: int,
-) -> Tuple[Any, Any]:
-    """Build TensorFlow datasets for training and validation."""
+) -> tuple[Any, Any]:
+    """Build TensorFlow datasets for training and validation.
+
+    Args:
+        X_train: Training features
+        y_train: Training targets
+        X_val: Validation features
+        y_val: Validation targets
+        batch_size: Batch size for training (must be positive)
+
+    Returns:
+        Tuple of (train_dataset, validation_dataset)
+
+    Raises:
+        ImportError: If TensorFlow is not installed
+        ValueError: If batch_size is invalid
+    """
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(
             "tensorflow is required for dataset building but is not installed. "
             "Install it with: pip install tensorflow"
         )
+
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+
     train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train))
     train_ds = (
         train_ds.cache()

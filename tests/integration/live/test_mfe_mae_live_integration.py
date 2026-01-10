@@ -1,11 +1,11 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
 
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.database.models import TradeSource
-from src.live.trading_engine import LiveTradingEngine, PositionSide
+from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 from src.strategies.components import FixedFractionSizer, FixedRiskManager, Strategy
 from src.strategies.components.regime_context import RegimeContext, TrendLabel, VolLabel
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
@@ -47,7 +47,7 @@ class StaticRegimeDetector:
             confidence=0.8,
             duration=index + 1,
             strength=1.0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
 
     def get_feature_generators(self):
@@ -102,36 +102,48 @@ def test_live_engine_records_mfe_mae():
     engine.db_manager.update_balance(engine.current_balance, "session_start", "system", session_id)
 
     # Open a paper position
-    engine._open_position(
+    engine._execute_entry(
         symbol="BTCUSDT",
         side=PositionSide.LONG,
         size=0.05,
         price=provider.get_current_price("BTCUSDT"),
+        stop_loss=None,
+        take_profit=None,
+        signal_strength=0.0,
+        signal_confidence=0.0,
     )
 
-    order_id, position = next(iter(engine.positions.items()))
+    order_id, position = next(iter(engine.live_position_tracker._positions.items()))
 
     # Simulate price moves to record MFE/MAE metrics
     entry_price = float(position.entry_price)
-    engine.mfe_mae_tracker.update_position_metrics(
+    engine.live_position_tracker.mfe_mae_tracker.update_position_metrics(
         position_key=order_id,
         entry_price=entry_price,
         current_price=entry_price * 1.03,  # +3% move
         side=position.side.value,
         position_fraction=float(position.size),
-        current_time=datetime.utcnow(),
+        current_time=datetime.now(UTC),
     )
-    engine.mfe_mae_tracker.update_position_metrics(
+    engine.live_position_tracker.mfe_mae_tracker.update_position_metrics(
         position_key=order_id,
         entry_price=entry_price,
         current_price=entry_price * 0.97,  # -3% move
         side=position.side.value,
         position_fraction=float(position.size),
-        current_time=datetime.utcnow(),
+        current_time=datetime.now(UTC),
     )
 
     # Close the position to trigger trade logging with MFE/MAE
-    engine._close_position(position, "test_exit")
+    engine._execute_exit(
+        position=position,
+        reason="test_exit",
+        limit_price=None,
+        current_price=provider.get_current_price(position.symbol),
+        candle_high=None,
+        candle_low=None,
+        candle=None,
+    )
 
     trades = engine.db_manager.get_recent_trades(limit=5, session_id=session_id)
     assert isinstance(trades, list)

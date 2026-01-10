@@ -7,7 +7,7 @@ from src.strategies.ml_basic import create_ml_basic_strategy
 pytestmark = pytest.mark.integration
 
 try:
-    from src.live.trading_engine import LiveTradingEngine, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     LIVE_TRADING_AVAILABLE = True
 except ImportError:
@@ -25,7 +25,7 @@ except ImportError:
 
             self.risk_manager = DummyRisk()
 
-        def _open_position(self, **kwargs):
+        def _execute_entry(self, **kwargs):
             if len(self.positions) < self.risk_manager.get_max_concurrent_positions():
                 self.positions[str(len(self.positions))] = Mock(size=kwargs.get("size", 0))
 
@@ -45,8 +45,31 @@ class TestRiskIntegration:
             risk_parameters=risk_parameters,
             max_position_size=0.05,
         )
-        engine._open_position(symbol="BTCUSDT", side=PositionSide.LONG, size=0.5, price=50000)
-        position = list(engine.positions.values())[0]
+
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="ml_basic",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
+        engine._execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            price=50000,
+            stop_loss=None,
+            take_profit=None,
+            signal_strength=0.0,
+            signal_confidence=0.0,
+        )
+        position = list(engine.live_position_tracker._positions.values())[0]
         assert position.size <= 0.05
 
     @pytest.mark.live_trading
@@ -58,7 +81,7 @@ class TestRiskIntegration:
             strategy=mock_strategy, data_provider=mock_data_provider, initial_balance=10000
         )
         engine.current_balance = 7000
-        engine.peak_balance = 10000
+        engine.performance_tracker.peak_balance = 10000
         if hasattr(engine, "_update_performance_metrics") and hasattr(
             engine, "get_performance_summary"
         ):
@@ -71,9 +94,30 @@ class TestRiskIntegration:
         if not LIVE_TRADING_AVAILABLE:
             pytest.skip("Live trading components not available")
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
+
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         max_positions = engine.risk_manager.get_max_concurrent_positions()
         for i in range(max_positions + 2):
-            engine._open_position(
-                symbol=f"COIN{i}USDT", side=PositionSide.LONG, size=0.01, price=1000
+            engine._execute_entry(
+                symbol=f"COIN{i}USDT",
+                side=PositionSide.LONG,
+                size=0.01,
+                price=1000,
+                stop_loss=None,
+                take_profit=None,
+                signal_strength=0.0,
+                signal_confidence=0.0,
             )
-        assert len(engine.positions) <= max_positions
+        assert len(engine.live_position_tracker._positions) <= max_positions

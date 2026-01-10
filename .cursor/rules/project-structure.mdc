@@ -104,10 +104,12 @@ provider = CachedDataProvider(BinanceDataProvider())
 data = provider.get_historical_data('BTCUSDT', start_date, end_date)
 ```
 
-### **2. Indicator Layer (`src/indicators/`)**
-**Purpose**: Calculate technical indicators for trading signals
+### **2. Technical Layer (`src/tech/`)**
+**Purpose**: Shared technical indicator calculations and feature extraction
 
-- `technical.py` - Contains all technical indicator calculations (RSI, EMA, Bollinger Bands, etc.)
+- `indicators/core.py` - Contains all technical indicator calculations (RSI, EMA, Bollinger Bands, MACD, ATR, etc.)
+- `features/` - ML feature extraction utilities
+- `adapters/row_extractors.py` - Indicator extraction helpers for trading engines
 - Indicators should be pure functions that operate on price/volume data
 - Always return pandas Series or DataFrames
 
@@ -182,9 +184,9 @@ class YourStrategy(BaseStrategy):
 4. Test with existing strategies
 
 ### **3. Adding New Indicators**
-1. Add function to `src/indicators/technical.py`
+1. Add function to `src/tech/indicators/core.py`
 2. Ensure it's a pure function operating on pandas DataFrames
-3. Add tests in `tests/test_indicators.py`
+3. Add tests in `tests/unit/indicators/test_indicators.py`
 4. Update strategy implementations to use new indicator
 
 ---

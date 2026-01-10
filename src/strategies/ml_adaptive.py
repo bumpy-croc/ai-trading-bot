@@ -20,21 +20,29 @@ Ideal for:
 - Simple deployment scenarios
 """
 
-from typing import Any, Optional
-
+from src.config.constants import (
+    DEFAULT_BASE_RISK_PER_TRADE,
+    DEFAULT_MAX_SCALE_INS,
+    DEFAULT_PARTIAL_EXIT_SIZES,
+    DEFAULT_PARTIAL_EXIT_TARGETS,
+    DEFAULT_SCALE_IN_SIZES,
+    DEFAULT_SCALE_IN_THRESHOLDS,
+    DEFAULT_STRATEGY_BASE_FRACTION,
+    DEFAULT_STRATEGY_MIN_CONFIDENCE,
+)
 from src.strategies.components import (
-    Strategy,
-    MLSignalGenerator,
-    RegimeAdaptiveRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
+    MLSignalGenerator,
+    RegimeAdaptiveRiskManager,
+    Strategy,
 )
 
 
 def create_ml_adaptive_strategy(
     name: str = "MlAdaptive",
     sequence_length: int = 120,
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
 ) -> Strategy:
     """
     Create ML Adaptive strategy using component composition.
@@ -59,13 +67,13 @@ def create_ml_adaptive_strategy(
 
     # Create regime-adaptive risk manager
     risk_manager = RegimeAdaptiveRiskManager(
-        base_risk=0.02,  # 2% base risk
+        base_risk=DEFAULT_BASE_RISK_PER_TRADE,
     )
 
-    # Create position sizer with confidence weighting (20% base)
+    # Create position sizer with confidence weighting
     position_sizer = ConfidenceWeightedSizer(
-        base_fraction=0.2,
-        min_confidence=0.3,
+        base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
     )
 
     # Create regime detector
@@ -79,14 +87,16 @@ def create_ml_adaptive_strategy(
         regime_detector=regime_detector,
     )
 
-    strategy._risk_overrides = {
-        "partial_operations": {
-            "exit_targets": [0.03, 0.06, 0.10],
-            "exit_sizes": [0.25, 0.25, 0.50],
-            "scale_in_thresholds": [0.02, 0.05],
-            "scale_in_sizes": [0.25, 0.25],
-            "max_scale_ins": 2,
+    strategy.set_risk_overrides(
+        {
+            "partial_operations": {
+                "exit_targets": list(DEFAULT_PARTIAL_EXIT_TARGETS),
+                "exit_sizes": list(DEFAULT_PARTIAL_EXIT_SIZES),
+                "scale_in_thresholds": list(DEFAULT_SCALE_IN_THRESHOLDS),
+                "scale_in_sizes": list(DEFAULT_SCALE_IN_SIZES),
+                "max_scale_ins": DEFAULT_MAX_SCALE_INS,
+            }
         }
-    }
+    )
 
     return strategy

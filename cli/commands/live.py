@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import argparse
-
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,7 +32,7 @@ if not _IS_RAILWAY:
         from cli.commands.train_commands import train_model_main, train_price_model_main
 
         _TRAINING_AVAILABLE = True
-    except ImportError as e:
+    except ImportError:
         _TRAINING_AVAILABLE = False
         train_model_main = None  # type: ignore
         train_price_model_main = None  # type: ignore
@@ -49,11 +48,11 @@ MODEL_REGISTRY = get_project_root() / "src" / "ml" / "models"
 
 def _handle(ns: argparse.Namespace) -> int:
     tail = ns.args or []
-    return forward_to_module_main("src.live.runner", tail)
+    return forward_to_module_main("src.engines.live.runner", tail)
 
 
 def _date_range(days: int) -> tuple[str, str]:
-    end = datetime.utcnow().date()
+    end = datetime.now(UTC).date()
     start = end - timedelta(days=days)
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
@@ -101,12 +100,13 @@ def _resolve_version_path(path_str: str) -> Path:
     if not candidate.is_absolute():
         candidate = MODEL_REGISTRY / candidate
 
-    # Resolve ALL paths (including absolute) to follow symlinks and normalize
+    # Resolve all paths to follow symlinks and normalize before comparison.
     candidate = candidate.resolve()
+    registry_root = MODEL_REGISTRY.resolve()
 
     if not candidate.exists():
         raise FileNotFoundError(f"Model path does not exist: {candidate}")
-    if MODEL_REGISTRY not in candidate.parents:
+    if registry_root not in candidate.parents and candidate != registry_root:
         raise ValueError("Model path must be inside the registry")
     return candidate
 
@@ -148,7 +148,7 @@ def _repoint_latest(version_dir: Path) -> None:
             except OSError:
                 pass
         logger.error(f"Permission denied when updating symlink at {latest_link}: {e}")
-        raise OSError(f"Failed to update 'latest' symlink: insufficient permissions") from e
+        raise OSError("Failed to update 'latest' symlink: insufficient permissions") from e
     except OSError as e:
         # Clean up temp symlink on failure
         if temp_link.exists() or temp_link.is_symlink():
@@ -214,7 +214,7 @@ def _control(ns: argparse.Namespace) -> int:
 
         meta_path = _latest_metadata(ns.symbol, model_type)
         if meta_path.exists():
-            with open(meta_path, "r", encoding="utf-8") as fh:
+            with open(meta_path, encoding="utf-8") as fh:
                 metadata = json.load(fh)
             print("✅ Model training complete")
             print(

@@ -4,8 +4,6 @@ Technical indicator feature extractor.
 This module provides technical analysis features for prediction.
 """
 
-from typing import Optional
-
 import numpy as np
 import pandas as pd
 
@@ -22,6 +20,7 @@ from src.config.constants import (
     DEFAULT_SEQUENCE_LENGTH,
 )
 from src.tech.indicators.core import (
+    EPSILON,
     calculate_atr,
     calculate_bollinger_bands,
     calculate_macd,
@@ -48,12 +47,12 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         atr_period: int = DEFAULT_ATR_PERIOD,
         bollinger_period: int = DEFAULT_BOLLINGER_PERIOD,
         bollinger_std_dev: float = DEFAULT_BOLLINGER_STD_DEV,
-        ma_periods: Optional[list[int]] = None,
+        ma_periods: list[int] | None = None,
         macd_fast: int = DEFAULT_MACD_FAST_PERIOD,
         macd_slow: int = DEFAULT_MACD_SLOW_PERIOD,
         macd_signal: int = DEFAULT_MACD_SIGNAL_PERIOD,
         nan_threshold: float = 0.5,
-    ):
+    ) -> None:
         """
         Initialize the technical feature extractor.
 
@@ -69,8 +68,35 @@ class TechnicalFeatureExtractor(FeatureExtractor):
             macd_slow: Slow period for MACD
             macd_signal: Signal period for MACD
             nan_threshold: Maximum allowed ratio of NaN values in features
+
+        Raises:
+            ValueError: If any parameter is invalid
         """
         super().__init__("technical")
+
+        # Validate parameters at initialization for fail-fast behavior
+        if sequence_length <= 0:
+            raise ValueError(f"sequence_length must be positive, got {sequence_length}")
+        if normalization_window <= 0:
+            raise ValueError(f"normalization_window must be positive, got {normalization_window}")
+        if rsi_period <= 0:
+            raise ValueError(f"rsi_period must be positive, got {rsi_period}")
+        if atr_period <= 0:
+            raise ValueError(f"atr_period must be positive, got {atr_period}")
+        if bollinger_period <= 0:
+            raise ValueError(f"bollinger_period must be positive, got {bollinger_period}")
+        if bollinger_std_dev <= 0:
+            raise ValueError(f"bollinger_std_dev must be positive, got {bollinger_std_dev}")
+        if macd_fast <= 0:
+            raise ValueError(f"macd_fast must be positive, got {macd_fast}")
+        if macd_slow <= 0:
+            raise ValueError(f"macd_slow must be positive, got {macd_slow}")
+        if macd_signal <= 0:
+            raise ValueError(f"macd_signal must be positive, got {macd_signal}")
+        if macd_fast >= macd_slow:
+            raise ValueError(f"macd_fast ({macd_fast}) must be less than macd_slow ({macd_slow})")
+        if not 0 <= nan_threshold <= 1:
+            raise ValueError(f"nan_threshold must be in [0, 1], got {nan_threshold}")
 
         # Store configuration
         self.sequence_length = sequence_length
@@ -79,16 +105,23 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         self.atr_period = atr_period
         self.bollinger_period = bollinger_period
         self.bollinger_std_dev = bollinger_std_dev
-        self.ma_periods = ma_periods or DEFAULT_MA_PERIODS.copy()
+        # Use explicit None check to distinguish empty list from None
+        # Note: ma_20, ma_50, and ma_200 are required (schema + derived features)
+        # Always copy to avoid mutating caller's list
+        self.ma_periods = list(ma_periods) if ma_periods is not None else DEFAULT_MA_PERIODS.copy()
+
+        # Ensure required periods are always included
+        # ma_20, ma_50: required for derived features (trend_strength, trend_direction)
+        # ma_200: required by TECHNICAL_FEATURES_SCHEMA
+        for required_period in [20, 50, 200]:
+            if required_period not in self.ma_periods:
+                self.ma_periods.append(required_period)
+        self.ma_periods.sort()
+
         self.macd_fast = macd_fast
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
         self.nan_threshold = nan_threshold
-
-        # Enable flags for different feature groups
-        self.enable_bollinger = True
-        self.enable_macd = True
-        self.enable_moving_averages = True
 
         # Initialize feature names from schema
         self._feature_names = TECHNICAL_FEATURES_SCHEMA.get_feature_names()
@@ -125,8 +158,14 @@ class TechnicalFeatureExtractor(FeatureExtractor):
 
             return df
 
-        except Exception as e:
+        except ValueError as e:
+            # Input validation errors from indicator functions
             raise RuntimeError(f"Technical feature extraction failed: {str(e)}") from e
+        except (KeyError, TypeError) as e:
+            # Data structure errors (missing columns, wrong types)
+            raise RuntimeError(
+                f"Technical feature extraction failed due to data error: {str(e)}"
+            ) from e
 
     def _extract_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Extract core technical indicators."""
@@ -155,7 +194,19 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         return df
 
     def _extract_normalized_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Extract normalized price features using rolling min-max normalization."""
+        """
+        Extract normalized price features using rolling min-max normalization.
+
+        Applies min-max normalization over a rolling window to create bounded [0, 1] features.
+        When the rolling window has constant values (min == max) or contains NaN, the normalized
+        value defaults to 0.5 (neutral midpoint) to avoid division by zero and invalid values.
+
+        Args:
+            df: DataFrame with OHLCV data
+
+        Returns:
+            DataFrame with additional {feature}_normalized columns
+        """
         price_features = ["close", "volume", "high", "low", "open"]
 
         for feature in price_features:
@@ -172,15 +223,22 @@ class TechnicalFeatureExtractor(FeatureExtractor):
                 valid_mask = (
                     (rolling_max != rolling_min) & rolling_max.notna() & rolling_min.notna()
                 )
+                # Add epsilon to prevent floating-point precision issues when max ≈ min
+                # Note: When max == min exactly, valid_mask is False and we use 0.5
                 df[f"{feature}_normalized"] = np.where(
                     valid_mask,
-                    (df[feature] - rolling_min) / (rolling_max - rolling_min),
-                    0.5,  # Handle cases where min == max or NaN - use neutral value instead of minimum
+                    (df[feature] - rolling_min) / (rolling_max - rolling_min + EPSILON),
+                    0.5,  # Handle cases where min == max or NaN - use neutral value
                 )
         return df
 
     def _extract_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Extract derived features like volatility and trend measures."""
+        """
+        Extract derived features like volatility and trend measures.
+
+        Applies epsilon protection to prevent division by zero in financial calculations.
+        Ensures required MA columns exist before using them.
+        """
         # Calculate returns
         df["returns"] = df["close"].pct_change()
 
@@ -188,12 +246,16 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         df["volatility_20"] = df["returns"].rolling(window=20).std()
         df["volatility_50"] = df["returns"].rolling(window=50).std()
 
-        # Calculate ATR as percentage of price
-        df["atr_pct"] = df["atr"] / df["close"]
+        # Calculate ATR as percentage of price - protected against zero close prices
+        df["atr_pct"] = df["atr"] / (df["close"] + EPSILON)
 
-        # Calculate trend measures (from MlAdaptive)
-        df["trend_strength"] = (df["close"] - df["ma_50"]) / df["ma_50"]
-        df["trend_direction"] = np.where(df["ma_20"] > df["ma_50"], 1, -1)
+        # Calculate trend measures (from MlAdaptive) - protected against zero MA values
+        # ma_20 and ma_50 are guaranteed to exist (enforced in __init__)
+        df["trend_strength"] = (df["close"] - df["ma_50"]) / (df["ma_50"] + EPSILON)
+        # Use neutral value (0) when MAs are equal (crossover moment)
+        df["trend_direction"] = np.select(
+            [df["ma_20"] > df["ma_50"], df["ma_20"] < df["ma_50"]], [1, -1], default=0
+        )
 
         return df
 
@@ -206,15 +268,22 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         return [f"{feature}_normalized" for feature in ["close", "volume", "high", "low", "open"]]
 
     def get_technical_indicators(self) -> list[str]:
-        """Get list of technical indicator names."""
+        """
+        Get list of technical indicator names actually produced by this extractor.
+
+        Returns features calculated by _extract_technical_indicators and _extract_derived_features.
+        Note: Does not include intermediate columns like bb_std, macd_fast, macd_slow.
+        All indicators are always calculated - this method returns the complete list.
+        """
         indicators = ["rsi", "atr", "atr_pct"]
-        if self.enable_bollinger:
-            indicators.extend(["bb_upper", "bb_lower", "bb_width", "bb_position"])
-        if self.enable_macd:
-            indicators.extend(["macd", "macd_signal", "macd_histogram"])
-        if self.enable_moving_averages:
-            for period in self.ma_periods:
-                indicators.extend([f"ma_{period}", f"ma_{period}_pct"])
+        # bb_middle is used by strategies for distance calculations
+        # bb_std is an intermediate calculation not used directly
+        indicators.extend(["bb_upper", "bb_middle", "bb_lower"])
+        # Returns macd_hist not macd_histogram to match calculate_macd output
+        indicators.extend(["macd", "macd_signal", "macd_hist"])
+        for period in self.ma_periods:
+            # Only ma_{period} is calculated, not ma_{period}_pct
+            indicators.append(f"ma_{period}")
         return indicators
 
     def get_derived_features(self) -> list[str]:
@@ -233,6 +302,10 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         """
         validation_results = {}
         expected_features = self.get_feature_names()
+
+        # Handle empty DataFrame edge case to prevent division by zero
+        if len(data) == 0:
+            return {feature: False for feature in expected_features}
 
         for feature in expected_features:
             if feature not in data.columns:
@@ -265,7 +338,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
                 "atr_period": self.atr_period,
                 "bollinger_period": self.bollinger_period,
                 "bollinger_std_dev": self.bollinger_std_dev,
-                "ma_periods": self.ma_periods,
+                "ma_periods": self.ma_periods.copy(),
                 "macd_fast": self.macd_fast,
                 "macd_slow": self.macd_slow,
                 "macd_signal": self.macd_signal,
@@ -277,8 +350,14 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         """
         Get feature importance weights based on common usage in strategies.
 
+        These are heuristic weights based on typical usage patterns in momentum and
+        trend-following strategies, not empirically derived from model training.
+        Normalized features (1.0) are most important for ML models, technical indicators
+        and derived features (0.8) provide strong signals, moving averages (0.5) are
+        supporting indicators, and other features (0.6) are secondary.
+
         Returns:
-            Dictionary mapping feature names to importance weights
+            Dictionary mapping feature names to importance weights (range: 0.5-1.0)
         """
         weights = {}
         for feature in self.get_feature_names():
@@ -286,7 +365,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
             if feature.endswith("_normalized"):
                 weights[feature] = 1.0
             # Technical indicators get high weights
-            elif feature in ["rsi", "atr", "macd", "bb_position"]:
+            elif feature in ["rsi", "atr", "macd", "macd_hist"]:
                 weights[feature] = 0.8
             # Derived features get medium weights
             elif feature in ["returns", "volatility_20", "trend_strength"]:

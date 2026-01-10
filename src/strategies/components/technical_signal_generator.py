@@ -5,10 +5,13 @@ This module contains technical indicator-based signal generators that use
 traditional technical analysis methods to generate trading signals.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 
+from src.config.constants import DEFAULT_ATR_PERIOD
+from src.strategies.components.regime_context import RegimeContext
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
 from src.tech.indicators.core import (
     calculate_atr,
     calculate_bollinger_bands,
@@ -16,8 +19,6 @@ from src.tech.indicators.core import (
     calculate_moving_averages,
     calculate_rsi,
 )
-from src.strategies.components.regime_context import RegimeContext
-from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
 
 
 class TechnicalSignalGenerator(SignalGenerator):
@@ -48,7 +49,7 @@ class TechnicalSignalGenerator(SignalGenerator):
         ma_long: int = 50,
         bb_period: int = 20,
         bb_std_dev: float = 2.0,
-        atr_period: int = 14,
+        atr_period: int = DEFAULT_ATR_PERIOD,
     ):
         """
         Initialize Technical Signal Generator
@@ -100,7 +101,7 @@ class TechnicalSignalGenerator(SignalGenerator):
         )
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """
         Generate trading signal based on technical indicators
@@ -254,10 +255,9 @@ class TechnicalSignalGenerator(SignalGenerator):
 
         if rsi >= self.rsi_overbought:
             return -1  # Sell signal (overbought)
-        elif rsi <= self.rsi_oversold:
+        if rsi <= self.rsi_oversold:
             return 1  # Buy signal (oversold)
-        else:
-            return 0  # Hold
+        return 0  # Hold
 
     def _get_macd_signal(self, df: pd.DataFrame, index: int) -> int:
         """
@@ -284,10 +284,9 @@ class TechnicalSignalGenerator(SignalGenerator):
         # MACD crossover signals
         if macd_prev <= macd_signal_prev and macd_current > macd_signal_current:
             return 1  # Bullish crossover
-        elif macd_prev >= macd_signal_prev and macd_current < macd_signal_current:
+        if macd_prev >= macd_signal_prev and macd_current < macd_signal_current:
             return -1  # Bearish crossover
-        else:
-            return 0  # No crossover
+        return 0  # No crossover
 
     def _get_ma_signal(self, df: pd.DataFrame, index: int) -> int:
         """
@@ -311,10 +310,9 @@ class TechnicalSignalGenerator(SignalGenerator):
         if current_price > ma_short > ma_long:
             return 1
         # Price below both MAs and short MA below long MA = bearish
-        elif current_price < ma_short < ma_long:
+        if current_price < ma_short < ma_long:
             return -1
-        else:
-            return 0
+        return 0
 
     def _get_bb_signal(self, df: pd.DataFrame, index: int) -> int:
         """
@@ -338,10 +336,9 @@ class TechnicalSignalGenerator(SignalGenerator):
         # Mean reversion signals
         if current_price <= bb_lower:
             return 1  # Buy at lower band (oversold)
-        elif current_price >= bb_upper:
+        if current_price >= bb_upper:
             return -1  # Sell at upper band (overbought)
-        else:
-            return 0  # Hold in middle range
+        return 0  # Hold in middle range
 
     def _combine_signals(
         self,
@@ -349,7 +346,7 @@ class TechnicalSignalGenerator(SignalGenerator):
         macd_signal: int,
         ma_signal: int,
         bb_signal: int,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
     ) -> SignalDirection:
         """
         Combine individual signals into final signal direction
@@ -395,10 +392,9 @@ class TechnicalSignalGenerator(SignalGenerator):
 
         if weighted_signal > threshold:
             return SignalDirection.BUY
-        elif weighted_signal < -threshold:
+        if weighted_signal < -threshold:
             return SignalDirection.SELL
-        else:
-            return SignalDirection.HOLD
+        return SignalDirection.HOLD
 
     def _calculate_signal_strength(
         self, rsi_signal: int, macd_signal: int, ma_signal: int, bb_signal: int
@@ -499,8 +495,12 @@ class TechnicalSignalGenerator(SignalGenerator):
         # Overall confidence as average of factors
         if confidence_factors:
             return sum(confidence_factors) / len(confidence_factors)
-        else:
-            return 0.5  # Default confidence
+        return 0.5  # Default confidence
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.min_periods
 
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
@@ -553,7 +553,7 @@ class RSISignalGenerator(SignalGenerator):
         self.oversold = oversold
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """Generate signal based on RSI levels"""
         self.validate_inputs(df, index)
@@ -639,10 +639,14 @@ class RSISignalGenerator(SignalGenerator):
         # Higher confidence at extremes
         if rsi <= 20 or rsi >= 80:
             return 0.9
-        elif rsi <= 30 or rsi >= 70:
+        if rsi <= 30 or rsi >= 70:
             return 0.7
-        else:
-            return 0.3
+        return 0.3
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.period
 
     def get_parameters(self) -> dict[str, Any]:
         """Get RSI signal generator parameters"""
@@ -683,7 +687,7 @@ class MACDSignalGenerator(SignalGenerator):
         self.min_periods = slow_period + signal_period
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """Generate signal based on MACD crossovers"""
         self.validate_inputs(df, index)
@@ -779,12 +783,16 @@ class MACDSignalGenerator(SignalGenerator):
         hist_abs = abs(macd_hist)
         if hist_abs >= 0.05:
             return 0.9
-        elif hist_abs >= 0.02:
+        if hist_abs >= 0.02:
             return 0.7
-        elif hist_abs >= 0.01:
+        if hist_abs >= 0.01:
             return 0.5
-        else:
-            return 0.3
+        return 0.3
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.min_periods
 
     def get_parameters(self) -> dict[str, Any]:
         """Get MACD signal generator parameters"""

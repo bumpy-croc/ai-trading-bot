@@ -27,7 +27,12 @@ class TrainingPaths:
     models_dir: Path
 
     @classmethod
-    def default(cls) -> "TrainingPaths":
+    def default(cls) -> TrainingPaths:
+        """Create default training paths based on project root.
+
+        Returns:
+            TrainingPaths configured for local development
+        """
         root = get_project_root()
         data_dir = root / "data"
         models_dir = root / "src" / "ml" / "models"
@@ -50,13 +55,37 @@ class TrainingConfig:
     force_sentiment: bool = False
     force_price_only: bool = False
     mixed_precision: bool = True
+    early_stopping_patience: int = 15  # Patience for early stopping callback
     diagnostics: DiagnosticsOptions = field(default_factory=DiagnosticsOptions)
 
     # Model architecture selection (new)
     model_type: str = "cnn_lstm"  # cnn_lstm, attention_lstm, tcn, tcn_attention, lstm
     model_variant: str = "default"  # default, lightweight, deep
 
+    def __post_init__(self):
+        """Validate training configuration parameters for fail-fast behavior."""
+        if self.epochs <= 0:
+            raise ValueError(f"epochs must be positive, got {self.epochs}")
+        if self.batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {self.batch_size}")
+        if self.sequence_length <= 0:
+            raise ValueError(f"sequence_length must be positive, got {self.sequence_length}")
+        if self.start_date >= self.end_date:
+            raise ValueError(
+                f"start_date must be before end_date, got {self.start_date} >= {self.end_date}"
+            )
+        if self.early_stopping_patience <= 0:
+            raise ValueError(
+                f"early_stopping_patience must be positive, got {self.early_stopping_patience}"
+            )
+
     def days_requested(self) -> int:
+        """Calculate number of days in the training date range.
+
+        Returns:
+            Number of days between start_date and end_date.
+            Returns negative if start_date > end_date (caught by __post_init__ validation).
+        """
         return (self.end_date - self.start_date).days
 
 
@@ -69,18 +98,38 @@ class TrainingContext:
 
     @property
     def symbol_exchange(self) -> str:
+        """Convert symbol to exchange format (e.g., BTCUSDT → BTC-USD).
+
+        Returns:
+            Symbol in exchange-specific format for data providers
+        """
         from src.trading.symbols.factory import SymbolFactory
 
         return SymbolFactory.to_exchange_symbol(self.config.symbol, "binance")
 
     @property
     def start_iso(self) -> str:
+        """Get start date in ISO format.
+
+        Returns:
+            Start date as ISO 8601 string (YYYY-MM-DD)
+        """
         return self.config.start_date.strftime("%Y-%m-%dT00:00:00Z")
 
     @property
     def end_iso(self) -> str:
+        """Get end date in ISO format.
+
+        Returns:
+            End date as ISO 8601 string (YYYY-MM-DD)
+        """
         return self.config.end_date.strftime("%Y-%m-%dT23:59:59Z")
 
     @property
     def price_data_glob(self) -> str:
+        """Generate glob pattern for finding downloaded price data files.
+
+        Returns:
+            Glob pattern matching price data files (e.g., 'BTCUSDT_1h_*.csv')
+        """
         return f"{self.symbol_exchange}_{self.config.timeframe}_{self.start_iso}_{self.end_iso}.*"

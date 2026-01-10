@@ -6,9 +6,9 @@ __pycache__/
 .pytest_cache/
 
 .vscode/
-.claude/
+.claude/settings.local.json
 .cursor/mcp.json
-.codex/workflows/
+.codex/
 
 .DS_Store
 

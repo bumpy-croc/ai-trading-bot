@@ -35,7 +35,7 @@ import logging
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, TypedDict
 
@@ -156,7 +156,7 @@ class MonitoringDashboard:
         self.update_interval = update_interval
         self.is_running = False
         self.update_thread: threading.Thread | None = None
-        self.start_time = datetime.now()
+        self.start_time = datetime.now(UTC)
 
         # Configurable monitoring parameters
         self.monitoring_config: dict[str, dict[str, Any]] = {
@@ -286,17 +286,32 @@ class MonitoringDashboard:
                 logger.error(f"Error getting orders for position {position_id}: {e}")
                 return jsonify({"error": str(e)}), 500
 
+        def _validate_limit(limit: int | None, default: int = 50, max_limit: int = 1000) -> int:
+            """Validate and clamp limit parameter to prevent DoS attacks."""
+            if limit is None or limit <= 0:
+                return default
+            # Clamp to maximum to prevent excessive database queries
+            return min(limit, max_limit)
+
+        def _validate_offset(offset: int | None, default: int = 0) -> int:
+            """Validate offset parameter to ensure non-negative values."""
+            if offset is None or offset < 0:
+                return default
+            return offset
+
         @self.app.route("/api/trades")
         def get_recent_trades():
             """Get recent trades"""
-            limit = request.args.get("limit", 50, type=int)
+            limit_raw = request.args.get("limit", 50, type=int)
+            limit = _validate_limit(limit_raw, default=50, max_limit=1000)
             trades = self._get_recent_trades(limit)
             return jsonify(trades)
 
         @self.app.route("/api/partial-trades")
         def get_partial_trades():
             """Get recent partial trades (partial exits and scale-ins)"""
-            limit = request.args.get("limit", 50, type=int)
+            limit_raw = request.args.get("limit", 50, type=int)
+            limit = _validate_limit(limit_raw, default=50, max_limit=1000)
             partial_trades = self._get_partial_trades(limit)
             return jsonify(partial_trades)
 
@@ -384,8 +399,13 @@ class MonitoringDashboard:
         @self.app.route("/api/optimizer/cycles")
         def get_optimizer_cycles():
             """List recent optimizer cycles."""
-            limit = request.args.get("limit", 50, type=int)
-            offset = request.args.get("offset", 0, type=int)
+            limit_raw = request.args.get("limit", 50, type=int)
+            offset_raw = request.args.get("offset", 0, type=int)
+
+            # Validate parameters to prevent DoS attacks
+            limit = _validate_limit(limit_raw, default=50, max_limit=1000)
+            offset = _validate_offset(offset_raw, default=0)
+
             try:
                 rows = self.db_manager.fetch_optimization_cycles(limit=limit, offset=offset)
                 return jsonify({"items": rows, "count": len(rows)})
@@ -456,7 +476,7 @@ class MonitoringDashboard:
                     {
                         "positions_by_status": results,
                         "validation": validation,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     }
                 )
             except Exception as e:
@@ -472,7 +492,7 @@ class MonitoringDashboard:
                     {
                         "success": True,
                         "fixes_applied": fixes,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     }
                 )
             except Exception as e:
@@ -549,7 +569,7 @@ class MonitoringDashboard:
             if "api_latency" in enabled_metrics:
                 metrics["api_latency"] = self._get_api_latency()
             if "last_data_update" in enabled_metrics:
-                metrics["last_data_update"] = datetime.now().isoformat()
+                metrics["last_data_update"] = datetime.now(UTC).isoformat()
             if "system_uptime" in enabled_metrics:
                 metrics["system_uptime"] = float(self._get_system_uptime())
 
@@ -632,7 +652,7 @@ class MonitoringDashboard:
 
         except Exception as e:
             logger.error(f"Error collecting metrics: {e}")
-            return {"error": str(e), "last_update": datetime.now().isoformat()}
+            return {"error": str(e), "last_update": datetime.now(UTC).isoformat()}
 
     def _get_total_pnl(self) -> float:
         """Get total PnL across all trades"""
@@ -881,7 +901,7 @@ class MonitoringDashboard:
                 return "Unknown"
 
             last_update = pd.to_datetime(result[0]["timestamp"])
-            time_diff = (datetime.now() - last_update).total_seconds()
+            time_diff = (datetime.now(UTC) - last_update).total_seconds()
 
             if time_diff < 300:  # 5 minutes
                 return "Healthy"
@@ -965,7 +985,7 @@ class MonitoringDashboard:
         """Get 24h price change percentage"""
         try:
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now() - timedelta(days=2), datetime.now()
+                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=2), datetime.now(UTC)
             )
             if len(df) >= 2:
                 current_price = df.iloc[-1]["close"]
@@ -980,7 +1000,7 @@ class MonitoringDashboard:
         """Get 24h trading volume"""
         try:
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now() - timedelta(days=1), datetime.now()
+                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=1), datetime.now(UTC)
             )
             if not df.empty:
                 return df["volume"].sum()
@@ -995,7 +1015,7 @@ class MonitoringDashboard:
             from src.tech.indicators.core import calculate_rsi
 
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now() - timedelta(days=30), datetime.now()
+                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=30), datetime.now(UTC)
             )
             if len(df) > 14:
                 rsi = calculate_rsi(df["close"], period=14)
@@ -1011,7 +1031,7 @@ class MonitoringDashboard:
             from src.tech.indicators.core import calculate_ema
 
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now() - timedelta(days=30), datetime.now()
+                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=30), datetime.now(UTC)
             )
             if len(df) > 50:
                 ema_short = calculate_ema(df["close"], period=9)
@@ -1064,7 +1084,7 @@ class MonitoringDashboard:
                 return "No Data"
 
             last_update = pd.to_datetime(result[0]["timestamp"])
-            time_diff = (datetime.now() - last_update).total_seconds()
+            time_diff = (datetime.now(UTC) - last_update).total_seconds()
 
             if time_diff < 300:  # 5 minutes
                 return "Active"
@@ -1112,7 +1132,7 @@ class MonitoringDashboard:
     def _get_system_uptime(self) -> float:
         """Get system uptime in minutes"""
         try:
-            uptime = datetime.now() - self.start_time
+            uptime = datetime.now(UTC) - self.start_time
             total_minutes = uptime.total_seconds() / 60.0
             return float(total_minutes)
         except Exception as e:
@@ -1796,13 +1816,7 @@ class MonitoringDashboard:
                         (
                             h["balance"]
                             for h in balance_history
-                            if (
-                                (
-                                    datetime.now(timezone.utc)
-                                    - h["timestamp"].astimezone(timezone.utc)
-                                ).days
-                                >= 1
-                            )
+                            if ((datetime.now(UTC) - h["timestamp"].astimezone(UTC)).days >= 1)
                         ),
                         recent_balance,
                     )

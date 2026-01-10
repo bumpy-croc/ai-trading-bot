@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from src.backtesting.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
+from src.engines.backtest.engine import Backtester
 from src.optimizer.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import Strategy
@@ -141,8 +141,8 @@ class ExperimentRunner:
         if name == "mock":
             # Internal random-walk provider
             return _RandomWalkProvider(
-                start or (datetime.utcnow() - timedelta(days=30)),
-                end or datetime.utcnow(),
+                start or (datetime.now(UTC) - timedelta(days=30)),
+                end or datetime.now(UTC),
                 timeframe=timeframe,
                 seed=seed,
             )

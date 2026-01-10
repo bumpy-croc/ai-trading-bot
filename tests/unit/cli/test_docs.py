@@ -2,9 +2,6 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
-
-import pytest
 
 from cli.commands.docs import DocValidator
 

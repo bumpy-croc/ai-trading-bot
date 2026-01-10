@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -20,7 +19,7 @@ except ImportError:
     _TENSORFLOW_AVAILABLE = False
     tf = None  # type: ignore
 
-from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext
+from src.ml.training_pipeline import TrainingContext
 from src.ml.training_pipeline.artifacts import (
     ArtifactPaths,
     create_training_plots,
@@ -40,12 +39,15 @@ from src.ml.training_pipeline.models import create_model, get_model_callbacks
 
 logger = logging.getLogger(__name__)
 
+# Version generation constants
+MAX_VERSION_GENERATION_RETRIES = 1000  # Allows ~40 versions/hour for 24 hours before collision
+
 
 @dataclass
 class TrainingResult:
     success: bool
     metadata: dict
-    artifact_paths: Optional[ArtifactPaths]
+    artifact_paths: ArtifactPaths | None
     duration_seconds: float
 
 
@@ -66,11 +68,10 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
     Raises:
         RuntimeError: If unable to generate unique version ID after max retries
     """
-    base_timestamp = datetime.utcnow().strftime("%Y-%m-%d_%Hh")
+    base_timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%Hh")
     version_counter = 1
-    max_retries = 1000
 
-    while version_counter <= max_retries:
+    while version_counter <= MAX_VERSION_GENERATION_RETRIES:
         version_id = f"{base_timestamp}_v{version_counter}"
         target_dir = models_dir / symbol.upper() / model_type / version_id
         if not target_dir.exists():
@@ -78,7 +79,7 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
         version_counter += 1
 
     raise RuntimeError(
-        f"Failed to generate unique version ID after {max_retries} attempts "
+        f"Failed to generate unique version ID after {MAX_VERSION_GENERATION_RETRIES} attempts "
         f"for {symbol} {model_type}. Check disk space and permissions."
     )
 
@@ -104,9 +105,9 @@ def enable_mixed_precision(enabled: bool) -> None:
         try:
             tf.config.optimizer.set_jit(True)
             logger.info("Enabled mixed precision and XLA JIT compilation")
-        except Exception:  # noqa: BLE001
-            # XLA may not be available on all platforms (e.g., MPS)
-            logger.info("Enabled mixed precision (XLA not available on this platform)")
+        except (RuntimeError, ValueError, AttributeError) as exc:
+            # XLA may not be available on all platforms (e.g., MPS on Apple Silicon)
+            logger.info("Enabled mixed precision (XLA not available: %s)", exc)
     except (RuntimeError, ValueError) as exc:
         # Mixed precision is an optimization - training should continue with regular precision
         # if setup fails (e.g., GPU driver issues, TensorFlow version incompatibility)
@@ -126,9 +127,9 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
     # Configure GPU early in the pipeline
     device_name = configure_gpu()
     if device_name:
-        logger.info(f"🚀 Training will use device: {device_name}")
+        logger.info("[GPU] Training will use device: %s", device_name)
     else:
-        logger.info("🚀 Training will use CPU")
+        logger.info("[CPU] Training will use CPU")
     try:
         price_df = download_price_data(ctx)
         sentiment_df = load_sentiment_data(ctx)
@@ -226,7 +227,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         metadata = {
             "symbol": ctx.config.symbol,
             "model_type": "sentiment" if has_sentiment else "price",
-            "training_date": pd.Timestamp.now().isoformat(),
+            "training_date": pd.Timestamp.now(tz="UTC").isoformat(),
             "feature_names": feature_names,
             "sequence_length": ctx.config.sequence_length,
             "has_sentiment": has_sentiment,
@@ -276,8 +277,18 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
 
         duration = perf_counter() - start_time
         return TrainingResult(True, metadata, artifact_paths, duration)
-    except Exception as exc:  # noqa: BLE001 - Catch all pipeline errors for graceful degradation
-        # Top-level handler ensures pipeline always returns TrainingResult instead of crashing
-        # Enables proper cleanup, error reporting, and CLI error handling for any failure
-        logger.error("Training pipeline failed: %s", exc)
+    except (ValueError, RuntimeError, ImportError, OSError, KeyError) as exc:
+        # Catch specific expected failure modes in the training pipeline
+        # ValueError: Data validation failures, insufficient data, invalid configuration
+        # RuntimeError: TensorFlow training failures, version ID generation failures
+        # ImportError: Missing required packages (tensorflow, tf2onnx)
+        # OSError: File system errors (permissions, disk space)
+        # KeyError: Missing required configuration or metadata fields
+        logger.error("Training pipeline failed: %s", exc, exc_info=True)
         return TrainingResult(False, {"error": str(exc)}, None, perf_counter() - start_time)
+    except Exception as exc:
+        # Unexpected errors - log with full traceback for debugging
+        logger.exception("Training pipeline failed with unexpected error: %s", exc)
+        return TrainingResult(
+            False, {"error": f"Unexpected error: {exc}"}, None, perf_counter() - start_time
+        )

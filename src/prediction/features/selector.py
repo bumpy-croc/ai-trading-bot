@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.config.constants import DEFAULT_NORMALIZATION_EPSILON
+
 
 class FeatureSelector:
     """Selects and normalizes features according to a schema.
@@ -63,7 +65,7 @@ class FeatureSelector:
             mean = float(norm.get("mean", 0.0))
             std = float(norm.get("std", 1.0))
             if std == 0.0:
-                std = 1e-8
+                std = DEFAULT_NORMALIZATION_EPSILON
             arr[:, j] = (arr[:, j] - mean) / std
 
         return arr

@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import UTC
 from pathlib import Path
 
 # Ensure we can import from the project
@@ -417,9 +418,9 @@ def run_quick_smoke_test():
         # Validate live/backtest trade export units align (cash PnL)
         from datetime import datetime, timedelta
 
-        from src.backtesting.models import Trade as BacktestTrade
-        from src.live.trading_engine import PositionSide
-        from src.live.trading_engine import Trade as LiveTrade
+        from src.engines.backtest.models import Trade as BacktestTrade
+        from src.engines.live.trading_engine import PositionSide
+        from src.engines.live.trading_engine import Trade as LiveTrade
         from src.performance.metrics import Side, cash_pnl, pnl_percent
 
         entry_price = 100.0
@@ -428,7 +429,7 @@ def run_quick_smoke_test():
         account_balance = 10_000.0
         pnl_pct = pnl_percent(entry_price, exit_price, Side.LONG, fraction)
         expected_cash = cash_pnl(pnl_pct, account_balance)
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         live_trade = LiveTrade(
             symbol="BTCUSDT",
             side=PositionSide.LONG,

@@ -62,8 +62,11 @@ class TestRiskMetrics:
 
 class TestPerformanceEdgeCases:
     def test_zero_initial_balance(self):
-        assert total_return(0, 1000) == 0.0
-        assert cagr(0, 1000, 365) == 0.0
+        # Zero or negative initial balance should raise ValueError
+        with pytest.raises(ValueError, match="initial_balance must be positive"):
+            total_return(0, 1000)
+        with pytest.raises(ValueError, match="initial_balance must be positive"):
+            cagr(0, 1000, 365)
 
     def test_zero_days_for_cagr(self):
         assert cagr(1000, 1200, 0) == 0.0

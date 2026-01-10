@@ -6,8 +6,8 @@ a real database connection. This significantly speeds up unit tests.
 """
 
 import json
-from datetime import datetime
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import Mock
 
 from src.database.models import EventType
@@ -16,7 +16,7 @@ from src.database.models import EventType
 class MockDatabaseManager:
     """Mock implementation of DatabaseManager for unit tests"""
 
-    def __init__(self, database_url: Optional[str] = None):
+    def __init__(self, database_url: str | None = None):
         """Initialize mock database with in-memory storage"""
         self.database_url = database_url or "mock://memory"
         self._sessions = {}
@@ -27,6 +27,7 @@ class MockDatabaseManager:
         self._strategy_executions = []
         self._next_id = 1
         self._current_session_id = None
+        self._fallback_balance: float | None = None  # Used when no session exists
 
         # Mock connection stats
         self._connection_stats = {
@@ -37,6 +38,10 @@ class MockDatabaseManager:
             "invalid": 0,
             "total": 5,
         }
+
+    def set_fallback_balance(self, balance: float) -> None:
+        """Set a fallback balance for when no session exists (testing helper)."""
+        self._fallback_balance = balance
 
     def _get_next_id(self) -> int:
         """Get next available ID"""
@@ -79,10 +84,10 @@ class MockDatabaseManager:
         symbol: str,
         timeframe: str,
         initial_balance: float,
-        strategy_config: Optional[dict] = None,
+        strategy_config: dict | None = None,
         mode: str = "backtest",
-        time_exit_config: Optional[dict] = None,
-        market_timezone: Optional[str] = None,
+        time_exit_config: dict | None = None,
+        market_timezone: str | None = None,
         **kwargs: Any,
     ) -> int:
         """Create a new trading session"""
@@ -97,7 +102,7 @@ class MockDatabaseManager:
             "initial_balance": initial_balance,
             "strategy_config": json.dumps(strategy_config or {}),
             "mode": mode,
-            "start_time": datetime.now(),
+            "start_time": datetime.now(UTC),
             "end_time": None,
             "final_balance": None,
             "total_trades": 0,
@@ -107,10 +112,25 @@ class MockDatabaseManager:
             "market_timezone": market_timezone,
         }
 
+        # Create initial balance snapshot so get_current_balance works
+        self._account_snapshots.append(
+            {
+                "timestamp": datetime.now(UTC),
+                "balance": initial_balance,
+                "equity": initial_balance,
+                "margin_used": 0.0,
+                "free_margin": initial_balance,
+                "margin_level": None,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "session_id": session_id,
+            }
+        )
+
         return session_id
 
     def end_trading_session(
-        self, session_id: Optional[int] = None, final_balance: Optional[float] = None
+        self, session_id: int | None = None, final_balance: float | None = None
     ):
         """End a trading session"""
         if session_id is None:
@@ -118,7 +138,7 @@ class MockDatabaseManager:
 
         if session_id and session_id in self._sessions:
             session = self._sessions[session_id]
-            session["end_time"] = datetime.now()
+            session["end_time"] = datetime.now(UTC)
             if final_balance is not None:
                 session["final_balance"] = final_balance
 
@@ -146,10 +166,10 @@ class MockDatabaseManager:
         exit_reason: str,
         strategy_name: str,
         source: Any = None,
-        order_id: Optional[str] = None,
+        order_id: str | None = None,
         fees: float = 0.0,
         slippage: float = 0.0,
-        session_id: Optional[int] = None,
+        session_id: int | None = None,
         **kwargs: Any,
     ) -> int:
         """Log a completed trade"""
@@ -190,12 +210,12 @@ class MockDatabaseManager:
         entry_price: float,
         size: float,
         strategy_name: str,
-        order_id: Optional[str] = None,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        confidence_score: Optional[float] = None,
-        quantity: Optional[float] = None,
-        session_id: Optional[int] = None,
+        order_id: str | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        confidence_score: float | None = None,
+        quantity: float | None = None,
+        session_id: int | None = None,
         **kwargs: Any,
     ) -> int:
         """Log a new position"""
@@ -214,7 +234,7 @@ class MockDatabaseManager:
             "take_profit": take_profit,
             "confidence_score": confidence_score,
             "status": Any,
-            "entry_time": datetime.now(),
+            "entry_time": datetime.now(UTC),
             "session_id": session_id or self._current_session_id,
             # Rolling MFE/MAE fields (optional)
             "mfe": kwargs.get("mfe"),
@@ -230,11 +250,11 @@ class MockDatabaseManager:
     def update_position(
         self,
         position_id: int,
-        current_price: Optional[float] = None,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        status: Optional[Any] = None,
-        notes: Optional[str] = None,
+        current_price: float | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        status: Any | None = None,
+        notes: str | None = None,
         **kwargs: Any,
     ):
         """Update an existing position"""
@@ -264,21 +284,21 @@ class MockDatabaseManager:
             ):
                 if k in kwargs and kwargs[k] is not None:
                     position[k] = kwargs[k]
-            position["last_updated"] = datetime.now()
+            position["last_updated"] = datetime.now(UTC)
 
     def close_position(
         self,
         position_id: int,
-        exit_price: Optional[float] = None,
-        exit_time: Optional[datetime] = None,
-        pnl: Optional[float] = None,
-        exit_reason: Optional[str] = None,
+        exit_price: float | None = None,
+        exit_time: datetime | None = None,
+        pnl: float | None = None,
+        exit_reason: str | None = None,
     ) -> bool:
         """Close a position"""
         if position_id in self._positions:
             position = self._positions[position_id]
             position["status"] = Any
-            position["exit_time"] = exit_time or datetime.now()
+            position["exit_time"] = exit_time or datetime.now(UTC)
             if exit_price is not None:
                 position["exit_price"] = exit_price
             if pnl is not None:
@@ -291,10 +311,10 @@ class MockDatabaseManager:
     def log_event(
         self,
         event_type: EventType | str,
-        description: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        description: str | None = None,
+        metadata: dict | None = None,
         severity: str = "info",
-        session_id: Optional[int] = None,
+        session_id: int | None = None,
         **kwargs: Any,
     ) -> int:
         """Log an event"""
@@ -306,7 +326,7 @@ class MockDatabaseManager:
 
         self._events[event_id] = {
             "id": event_id,
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(UTC),
             "event_type": event_type,
             "description": message,
             "metadata": json.dumps(details or {}),
@@ -322,15 +342,15 @@ class MockDatabaseManager:
         equity: float,
         margin_used: float = 0.0,
         free_margin: float = 0.0,
-        margin_level: Optional[float] = None,
+        margin_level: float | None = None,
         unrealized_pnl: float = 0.0,
         realized_pnl: float = 0.0,
-        session_id: Optional[int] = None,
+        session_id: int | None = None,
         **kwargs: Any,
     ):
         """Log account snapshot"""
         snapshot = {
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(UTC),
             "balance": balance,
             "equity": equity,
             "margin_used": margin_used,
@@ -348,23 +368,30 @@ class MockDatabaseManager:
         new_balance: float,
         update_reason: str,
         updated_by: str,
-        session_id: Optional[int] = None,
+        session_id: int | None = None,
         **kwargs: Any,
     ) -> bool:
+        sess = session_id or self._current_session_id
         self.log_account_snapshot(
             balance=new_balance,
             equity=new_balance,
             realized_pnl=kwargs.get("realized_pnl", 0.0),
             unrealized_pnl=kwargs.get("unrealized_pnl", 0.0),
-            session_id=session_id or self._current_session_id,
+            session_id=sess,
         )
+        # Also update fallback balance for sessionless scenarios
+        if sess is None:
+            self._fallback_balance = new_balance
         return True
 
-    def get_current_balance(self, session_id: Optional[int] = None) -> float:
+    def get_current_balance(self, session_id: int | None = None) -> float:
         sess = session_id or self._current_session_id
         for snap in reversed(self._account_snapshots):
             if snap.get("session_id") == sess:
                 return float(snap.get("balance", 0.0))
+        # Fall back to stored balance if no snapshots (useful for testing without session)
+        if self._fallback_balance is not None:
+            return self._fallback_balance
         return 0.0
 
     def log_strategy_execution(
@@ -373,12 +400,12 @@ class MockDatabaseManager:
         confidence: float,
         indicators: dict[str, Any],
         market_conditions: dict[str, Any],
-        metadata: Optional[dict] = None,
-        session_id: Optional[int] = None,
+        metadata: dict | None = None,
+        session_id: int | None = None,
     ):
         """Log strategy execution details"""
         execution = {
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(UTC),
             "signal": signal,
             "confidence": confidence,
             "indicators": json.dumps(indicators),
@@ -388,7 +415,7 @@ class MockDatabaseManager:
         }
         self._strategy_executions.append(execution)
 
-    def get_active_positions(self, session_id: Optional[int] = None) -> list[dict]:
+    def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions"""
         positions = []
         for pos in self._positions.values():
@@ -397,7 +424,7 @@ class MockDatabaseManager:
                     positions.append(pos)
         return positions
 
-    def get_recent_trades(self, limit: int = 100, session_id: Optional[int] = None) -> list[dict]:
+    def get_recent_trades(self, limit: int = 100, session_id: int | None = None) -> list[dict]:
         """Get recent trades"""
         trades = []
         for trade in self._trades.values():
@@ -408,7 +435,7 @@ class MockDatabaseManager:
         trades.sort(key=lambda t: t.get("exit_time", datetime.min), reverse=True)
         return trades[:limit]
 
-    def get_performance_metrics(self, session_id: Optional[int] = None) -> dict[str, Any]:
+    def get_performance_metrics(self, session_id: int | None = None) -> dict[str, Any]:
         """Get performance metrics"""
         if session_id is None:
             session_id = self._current_session_id
@@ -463,11 +490,63 @@ class MockDatabaseManager:
         """Mock query execution"""
         return []
 
+    def atomic_balance_update(
+        self,
+        balance_change: float,
+        reason: str,
+        updated_by: str = "system",
+        session_id: int | None = None,
+        correlation_id: str | None = None,
+    ):
+        """
+        Context manager for atomic balance updates.
+
+        Mimics the real DatabaseManager's atomic_balance_update for unit tests.
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _atomic_update():
+            # Get current balance
+            sess = session_id or self._current_session_id
+            old_balance = self.get_current_balance(sess)
+            new_balance = old_balance + balance_change
+
+            # Yield the balance info
+            result = {
+                "old_balance": old_balance,
+                "new_balance": new_balance,
+                "change": balance_change,
+            }
+            yield result
+
+            # After successful execution, update the balance
+            self.update_balance(
+                new_balance=new_balance,
+                update_reason=reason,
+                updated_by=updated_by,
+                session_id=sess,
+            )
+
+        return _atomic_update()
+
+    def get_active_session_id(self) -> int | None:
+        """Get the active session ID."""
+        return self._current_session_id
+
+    def recover_last_balance(self, session_id: int | None = None) -> float:
+        """Recover the last balance for a session."""
+        return self.get_current_balance(session_id)
+
+    def log_risk_adjustment(self, **kwargs: Any) -> int:
+        """Log a risk adjustment event."""
+        return self._get_next_id()
+
     def get_session(self):
         """Get a mock session context manager"""
         return MockSession()
 
-    def set_database_manager(self, db_manager, session_id: Optional[int] = None):
+    def set_database_manager(self, db_manager, session_id: int | None = None):
         """Mock method for strategy compatibility"""
         self._current_session_id = session_id
 

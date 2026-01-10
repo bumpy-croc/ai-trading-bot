@@ -26,7 +26,9 @@ Use the global helper to reuse the singleton instance:
 from src.config.config_manager import get_config
 
 config = get_config()
-database_url = config.get_required("DATABASE_URL")
+# For quick experiments, prefer a default so the snippet is runnable without
+# exporting environment variables. Use `get_required` in production paths.
+database_url = config.get("DATABASE_URL", default="postgresql://...")  # set your real URL
 log_level = config.get("LOG_LEVEL", default="INFO")
 cache_ttl = config.get_int("CACHE_TTL_HOURS", default=24)
 ```
@@ -70,6 +72,18 @@ Runtime defaults such as `DEFAULT_INITIAL_BALANCE`, `DEFAULT_CHECK_INTERVAL`, an
 `src/config/constants.py`. Treat them as sensible defaults – short-term adjustments should be supplied via configuration
 or strategy parameters instead of editing the constant file directly. For example, the backtest CLI allows overriding
 initial balance and risk per trade via command-line flags.
+
+## Execution fill policy
+
+`EXECUTION_FILL_POLICY` controls simulated fill behavior in backtests and paper/live
+simulation. The default is `ohlc_conservative`.
+
+- `ohlc_conservative`: limit orders fill at their limit price when a bar crosses the
+  level, no price improvement without quotes, and stop orders behave like stop-market
+  orders (taker liquidity).
+
+Unknown values fall back to the default. Live trading still reconciles fills with the
+exchange when available.
 
 ## Local configuration workflow
 

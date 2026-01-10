@@ -3,7 +3,9 @@ Database models for trade logging and performance tracking
 """
 
 import enum
-from datetime import datetime
+import math
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -43,7 +45,13 @@ class PortableJSON(TypeDecorator):
 
 JSONType = PortableJSON
 
-Base = declarative_base()
+# Type Base as Any to allow mypy to accept dynamic SQLAlchemy base class
+Base: Any = declarative_base()
+
+
+def utc_now() -> datetime:
+    """Return an aware UTC timestamp for database defaults."""
+    return datetime.now(UTC)
 
 
 class PositionSide(enum.Enum):
@@ -165,8 +173,8 @@ class Trade(Base):
         UniqueConstraint("order_id", "session_id", name="uq_trade_order_session"),
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class Position(Base):
@@ -206,7 +214,7 @@ class Position(Base):
 
     # Timestamps
     entry_time = Column(DateTime, nullable=False, index=True)
-    last_update = Column(DateTime, default=datetime.utcnow)
+    last_update = Column(DateTime, default=utc_now)
 
     # Current state
     current_price = Column(Numeric(18, 8))
@@ -228,14 +236,18 @@ class Position(Base):
     # Exchange information
     exchange = Column(String(50), default="binance")
 
+    # Order tracking for live trading
+    entry_order_id = Column(String(100))  # Exchange order ID for entry
+    stop_loss_order_id = Column(String(100))  # Exchange order ID for server-side stop-loss
+
     # Relationships
     trades = relationship("Trade", backref="position")
     partial_trades = relationship("PartialTrade", backref="position")
     orders = relationship("Order", backref="position", cascade="all, delete-orphan")
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
     # Time-based exit fields
     max_holding_until = Column(DateTime)  # When position must be closed
@@ -272,10 +284,10 @@ class Order(Base):
     commission = Column(Numeric(18, 8), default=0)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=utc_now, index=True)
     filled_at = Column(DateTime)
     cancelled_at = Column(DateTime)
-    last_update = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_update = Column(DateTime, default=utc_now, onupdate=utc_now)
 
     # Strategy context
     strategy_name = Column(String(100), nullable=False)
@@ -309,7 +321,7 @@ class PartialTrade(Base):
     price = Column(Numeric(18, 8), nullable=False)
     pnl = Column(Numeric(18, 8))  # Realized PnL in currency units
     target_level = Column(Integer)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=utc_now, index=True)
 
     __table_args__ = (Index("idx_partial_trade_position", "position_id", "timestamp"),)
 
@@ -345,6 +357,12 @@ class AccountHistory(Base):
     daily_pnl = Column(Numeric(18, 8), default=0.0)
     drawdown = Column(Numeric(18, 8), default=0.0)
 
+    # Enhanced risk metrics
+    sharpe_ratio = Column(Numeric(18, 8))
+    sortino_ratio = Column(Numeric(18, 8))
+    calmar_ratio = Column(Numeric(18, 8))
+    var_95 = Column(Numeric(18, 8))
+
     # Position summary
     open_positions = Column(Integer, default=0)
     total_exposure = Column(Numeric(18, 8), default=0.0)
@@ -355,7 +373,7 @@ class AccountHistory(Base):
     # Index for efficient time-series queries
     __table_args__ = (Index("idx_account_time", "timestamp"),)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class PerformanceMetrics(Base):
@@ -380,22 +398,31 @@ class PerformanceMetrics(Base):
 
     # Risk metrics
     max_drawdown = Column(Numeric(18, 8), default=0.0)
+    current_drawdown = Column(Numeric(18, 8), default=0.0)
     max_drawdown_duration = Column(Integer)  # In hours
     sharpe_ratio = Column(Numeric(18, 8))
     sortino_ratio = Column(Numeric(18, 8))
     calmar_ratio = Column(Numeric(18, 8))
+    var_95 = Column(Numeric(18, 8))  # Value at Risk (95% confidence)
 
     # Trade analysis
     avg_win = Column(Numeric(18, 8), default=0.0)
     avg_loss = Column(Numeric(18, 8), default=0.0)
     profit_factor = Column(Numeric(18, 8), default=0.0)
     expectancy = Column(Numeric(18, 8), default=0.0)
+    avg_trade_duration_hours = Column(Numeric(18, 8), default=0.0)
 
     # Best/worst trades
     best_trade_pnl = Column(Numeric(18, 8))
     worst_trade_pnl = Column(Numeric(18, 8))
     largest_win_streak = Column(Integer, default=0)
     largest_loss_streak = Column(Integer, default=0)
+    consecutive_wins_current = Column(Integer, default=0)
+    consecutive_losses_current = Column(Integer, default=0)
+
+    # Costs
+    total_fees_paid = Column(Numeric(18, 8), default=0.0)
+    total_slippage_cost = Column(Numeric(18, 8), default=0.0)
 
     # By strategy breakdown
     strategy_breakdown = Column(JSONType)  # Dict of strategy_name: metrics
@@ -409,8 +436,8 @@ class PerformanceMetrics(Base):
         Index("idx_metrics_period", "period", "period_start"),
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class TradingSession(Base):
@@ -457,8 +484,8 @@ class TradingSession(Base):
     metrics = relationship("PerformanceMetrics", backref="session")
     events = relationship("SystemEvent", backref="session")
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class SystemEvent(Base):
@@ -493,7 +520,7 @@ class SystemEvent(Base):
         Index("idx_event_severity", "severity", "timestamp"),
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class StrategyExecution(Base):
@@ -533,7 +560,7 @@ class StrategyExecution(Base):
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
     trade_id = Column(Integer, ForeignKey("trades.id"))
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class AccountBalance(Base):
@@ -543,17 +570,17 @@ class AccountBalance(Base):
 
     id = Column(Integer, primary_key=True)
 
-    # Balance information
+    # Balance information - use Numeric(18,8) for financial precision (not Float)
     base_currency = Column(String(10), nullable=False, default="USD")  # USD, BTC, ETH, etc.
-    total_balance = Column(Float, nullable=False)  # Total balance in base currency
-    available_balance = Column(Float, nullable=False)  # Available for trading
-    reserved_balance = Column(Float, default=0.0)  # Reserved in open positions
+    total_balance = Column(Numeric(18, 8), nullable=False)  # Total balance in base currency
+    available_balance = Column(Numeric(18, 8), nullable=False)  # Available for trading
+    reserved_balance = Column(Numeric(18, 8), default=0.0)  # Reserved in open positions
 
     # Balance breakdown by asset (for multi-asset support)
     asset_balances = Column(JSONType, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
 
     # Metadata
-    last_updated = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_updated = Column(DateTime, nullable=False, default=utc_now)
     updated_by = Column(String(50), default="system")  # 'system', 'user', 'admin'
     update_reason = Column(String(200))  # 'trade_pnl', 'manual_adjustment', 'deposit', etc.
 
@@ -563,31 +590,51 @@ class AccountBalance(Base):
     # Ensure we have one current balance per session
     __table_args__ = (Index("idx_balance_session_updated", "session_id", "last_updated"),)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     @classmethod
-    def get_current_balance(cls, session_id: int, db_session) -> float:
-        """Get the current balance for a session"""
-        latest_balance = (
+    def get_current_balance(cls, session_id: int, db_session, for_update: bool = False) -> float:
+        """Get the current balance for a session.
+
+        Args:
+            session_id: Trading session ID
+            db_session: SQLAlchemy database session
+            for_update: If True, acquires row-level lock to prevent concurrent updates
+
+        Returns:
+            Current balance as float (0.0 if no balance record exists)
+        """
+        query = (
             db_session.query(cls)
             .filter(cls.session_id == session_id)
             .order_by(cls.last_updated.desc())
-            .first()
         )
 
-        return latest_balance.total_balance if latest_balance else 0.0
+        # Acquire row-level lock for concurrent update safety
+        if for_update:
+            query = query.with_for_update()
+
+        latest_balance = query.first()
+
+        return float(latest_balance.total_balance) if latest_balance else 0.0
 
     @classmethod
     def update_balance(
         cls, session_id: int, new_balance: float, update_reason: str, updated_by: str, db_session
     ) -> "AccountBalance":
         """Update the current balance for a session"""
+        # Validate new_balance
+        if not math.isfinite(new_balance):
+            raise ValueError(f"new_balance must be finite, got {new_balance}")
+        if new_balance < 0:
+            raise ValueError(f"new_balance cannot be negative, got {new_balance}")
+
         balance_record = cls(
             session_id=session_id,
             base_currency="USD",
             total_balance=new_balance,
             available_balance=new_balance,  # Simplified for now
-            last_updated=datetime.utcnow(),
+            last_updated=datetime.now(UTC),
             updated_by=updated_by,
             update_reason=update_reason,
         )
@@ -603,7 +650,7 @@ class OptimizationCycle(Base):
     __tablename__ = "optimization_cycles"
 
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, nullable=False, index=True, default=datetime.utcnow)
+    timestamp = Column(DateTime, nullable=False, index=True, default=utc_now)
     strategy_name = Column(String(100), nullable=False)
     symbol = Column(String(20), nullable=False)
     timeframe = Column(String(10), nullable=False)
@@ -623,8 +670,8 @@ class OptimizationCycle(Base):
         Index("idx_opt_cycle_strategy", "strategy_name", "symbol", "timeframe"),
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class PredictionPerformance(Base):
@@ -659,7 +706,7 @@ class PredictionPerformance(Base):
         Index("idx_pred_perf_model", "model_name", "horizon"),
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class DynamicPerformanceMetrics(Base):
@@ -694,7 +741,7 @@ class DynamicPerformanceMetrics(Base):
         Index("idx_dynamic_perf_session", "session_id"),
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class RiskAdjustment(Base):
@@ -736,7 +783,7 @@ class RiskAdjustment(Base):
         Index("idx_risk_adj_session", "session_id"),
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class CorrelationMatrix(Base):
@@ -786,10 +833,10 @@ class PredictionCache(Base):
     direction = Column(Integer, nullable=False)  # 1, 0, -1
 
     # Cache metadata
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
     access_count = Column(Integer, default=0)
-    last_accessed = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_accessed = Column(DateTime, default=utc_now, onupdate=utc_now)
 
     # Configuration context for cache invalidation
     config_hash = Column(String(64), nullable=False)  # Hash of model configuration
@@ -828,7 +875,7 @@ class StrategyRegistry(Base):
     merge_source = Column(String(100))
 
     # Metadata
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now, index=True)
     created_by = Column(String(100), nullable=False)
     description = Column(Text)
     tags = Column(JSONType, default=lambda: [])
@@ -869,8 +916,8 @@ class StrategyRegistry(Base):
         UniqueConstraint("strategy_id", name="uq_strategy_id"),
     )
 
-    created_at_db = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at_db = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class StrategyVersion(Base):
@@ -885,7 +932,7 @@ class StrategyVersion(Base):
     version = Column(String(20), nullable=False)
 
     # Version metadata
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now, index=True)
     changes = Column(JSONType, nullable=False)  # List of changes
     performance_delta = Column(JSONType)  # Performance comparison with previous version
     is_major = Column(Boolean, default=False)
@@ -899,7 +946,7 @@ class StrategyVersion(Base):
         UniqueConstraint("strategy_id", "version", name="uq_strategy_version"),
     )
 
-    created_at_db = Column(DateTime, default=datetime.utcnow)
+    created_at_db = Column(DateTime, default=utc_now)
 
 
 class StrategyPerformance(Base):
@@ -959,8 +1006,8 @@ class StrategyPerformance(Base):
         Index("idx_perf_period_type", "period_type", "period_start"),
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class StrategyLineage(Base):
@@ -981,7 +1028,7 @@ class StrategyLineage(Base):
     generation_distance = Column(Integer, nullable=False)  # How many generations apart
 
     # Evolution tracking
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
     evolution_reason = Column(String(200))  # Why this evolution was made
     change_impact = Column(JSONType)  # Impact analysis of changes
 
@@ -995,4 +1042,4 @@ class StrategyLineage(Base):
         UniqueConstraint("ancestor_id", "descendant_id", name="uq_lineage_pair"),
     )
 
-    created_at_db = Column(DateTime, default=datetime.utcnow)
+    created_at_db = Column(DateTime, default=utc_now)

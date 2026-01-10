@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from cli.core.forward import forward_to_module_main
@@ -23,7 +23,7 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
         try:
             response = {
                 "status": "healthy",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "service": "ai-trading-bot",
             }
             self.send_response(200)
@@ -37,7 +37,7 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
         try:
             status = {
                 "status": "healthy",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "service": "ai-trading-bot",
                 "components": {},
             }
@@ -99,7 +99,7 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
         except Exception as e:  # pragma: no cover
             error_response = {
                 "status": "unhealthy",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "error": str(e),
             }
             self.send_response(500)
@@ -150,7 +150,7 @@ def _handle(ns: argparse.Namespace) -> int:
         else:
             filtered_args.append(tail[i])
             i += 1
-    return forward_to_module_main("src.live.runner", filtered_args)
+    return forward_to_module_main("src.engines.live.runner", filtered_args)
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:

@@ -1,9 +1,9 @@
 # Live trading
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-12-26
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
-`src/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
+`src/engines/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
 continuous polling, account synchronisation, and resilience features required for production trading.
 
 ## Engine highlights
@@ -16,7 +16,7 @@ continuous polling, account synchronisation, and resilience features required fo
   available just like in the backtester. Position updates emit structured events through `log_engine_event`, `log_order_event`,
   and `log_risk_event`.
 - **Account synchronisation** – `AccountSynchronizer` periodically reconciles balances, open positions, and open orders using the
-  exchange API (`src/live/account_sync.py`). It stores the results through `DatabaseManager` so restarts can resume from the last
+  exchange API (`src/engines/live/account_sync.py`). It stores the results through `DatabaseManager` so restarts can resume from the last
   known state.
 - **Sentiment and regime inputs** – pass a `SentimentDataProvider` (Fear & Greed) or enable the `RegimeStrategySwitcher` to swap
   strategies when market conditions change.
@@ -32,7 +32,7 @@ continuous polling, account synchronisation, and resilience features required fo
     ```python
     from src.data_providers.binance_provider import BinanceProvider
     from src.database.manager import DatabaseManager
-    from src.live.account_sync import AccountSynchronizer
+    from src.engines.live.account_sync import AccountSynchronizer
 
     sync = AccountSynchronizer(BinanceProvider(), DatabaseManager(), session_id=<current_session_id>)
     sync.emergency_sync()
@@ -52,9 +52,56 @@ continuous polling, account synchronisation, and resilience features required fo
 - MFE/MAE tooling (`MfeMaeAnalyzer`) feeds analytics back into strategy tuning so component strategies can adjust thresholds over
   time.
 
+## Performance Tracking
+
+The live trading engine uses the unified `PerformanceTracker` from `src/performance/tracker.py` to calculate real-time performance metrics. All metrics use the same calculation logic as the backtest engine, ensuring consistent validation.
+
+### Available Metrics
+
+The live engine tracks 30+ comprehensive metrics in real-time:
+
+| Category | Metrics | Description |
+| -------- | ------- | ----------- |
+| **Returns** | `total_return_pct`, `annualized_return` | Overall profitability |
+| **Risk-Adjusted** | `sharpe_ratio`, `sortino_ratio`, `calmar_ratio` | Returns adjusted for volatility and drawdown risk |
+| **Risk** | `max_drawdown`, `current_drawdown`, `var_95` | Real-time risk exposure |
+| **Trade Quality** | `win_rate`, `profit_factor`, `expectancy` | Trade effectiveness |
+| **Efficiency** | `avg_trade_duration_hours`, `consecutive_wins`, `consecutive_losses` | Streak tracking and frequency |
+| **Costs** | `total_fees_paid`, `total_slippage_cost` | Transaction cost tracking |
+
+### Accessing Performance Metrics
+
+Retrieve current performance via the `get_performance_summary()` method:
+
+```python
+from src.engines.live.trading_engine import LiveTradingEngine
+
+engine = LiveTradingEngine(...)
+summary = engine.get_performance_summary()
+
+# Access risk-adjusted metrics
+print(f"Sharpe Ratio: {summary['sharpe_ratio']:.2f}")
+print(f"Sortino Ratio: {summary['sortino_ratio']:.2f}")
+print(f"Calmar Ratio: {summary['calmar_ratio']:.2f}")
+print(f"VaR (95%): {summary['var_95']:.4f}")
+
+# Check trade quality
+print(f"Expectancy: {summary['expectancy']:.2f}")
+print(f"Win Rate: {summary['win_rate'] * 100:.1f}%")
+print(f"Consecutive Wins: {summary['consecutive_wins']}")
+```
+
+### Database Persistence
+
+All performance metrics are persisted to PostgreSQL tables:
+- **account_history** - Balance snapshots with Sharpe, Sortino, Calmar, VaR
+- **performance_metrics** - Aggregated metrics including consecutive streaks, fees, slippage
+
+The database schema supports historical analysis and comparison with backtest results.
+
 ## CLI usage
 
-`atb live` forwards arguments to `src/live/runner.py`:
+`atb live` forwards arguments to `src/engines/live/runner.py`:
 
 ```bash
 # Paper trading session (Binance, 60 second polling)
@@ -82,7 +129,9 @@ The control surface lives under `atb live-control`:
 ## Programmatic usage
 
 ```python
-from src.live.trading_engine import LiveTradingEngine
+import os
+
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.strategies.ml_basic import create_ml_basic_strategy
@@ -93,8 +142,9 @@ engine = LiveTradingEngine(
     check_interval=60,
     max_position_size=0.1,
     enable_live_trading=False,  # keep paper trading unless explicitly enabled
+    database_url=os.environ["DATABASE_URL"],  # LiveTradingEngine requires PostgreSQL
 )
-engine.start("BTCUSDT", "1h")
+# engine.start("BTCUSDT", "1h")  # blocking loop (prefer running via `atb live` / `atb live-health`)
 ```
 
 In production deployments wrap the engine in a supervisor (systemd, Docker, Kubernetes) so that `SIGTERM` triggers the graceful

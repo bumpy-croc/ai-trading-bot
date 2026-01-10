@@ -1,13 +1,13 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
-from src.backtesting.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
-from src.strategies.components.risk_manager import RiskManager
+from src.engines.backtest.engine import Backtester
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.strategies.components.strategy import Strategy
 
 
 class SimpleSignalGenerator(SignalGenerator):
@@ -85,8 +85,8 @@ def create_simple_strategy() -> Strategy:
 def test_backtester_records_mfe_mae(monkeypatch):
     strategy = create_simple_strategy()
     provider = MockDataProvider(interval_seconds=1, num_candles=200)
-    start = datetime.now() - timedelta(hours=200)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(hours=200)
+    end = datetime.now(UTC)
 
     bt = Backtester(strategy=strategy, data_provider=provider, log_to_database=False)
     result = bt.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)

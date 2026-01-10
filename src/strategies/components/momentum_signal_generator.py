@@ -5,13 +5,17 @@ Generates momentum/trend-based signals derived from the prior MomentumLeverage
 strategy, designed for component-based composition.
 """
 
-from typing import Any, Optional
+from typing import Any
 
-import numpy as np
 import pandas as pd
 
-from .signal_generator import Signal, SignalDirection, SignalGenerator
+from src.config.constants import (
+    DEFAULT_CONFIDENCE_SCALE_FACTOR,
+    DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM,
+)
+
 from .regime_context import RegimeContext
+from .signal_generator import Signal, SignalDirection, SignalGenerator
 
 
 class MomentumSignalGenerator(SignalGenerator):
@@ -45,7 +49,7 @@ class MomentumSignalGenerator(SignalGenerator):
         self.breakout_lookback = breakout_lookback
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         self.validate_inputs(df, index)
 
@@ -93,8 +97,8 @@ class MomentumSignalGenerator(SignalGenerator):
         if decision_buy:
             # Strength scaled by fast momentum, clipped
             fast = abs(momentum_3 or 0.0)
-            strength = float(max(0.0, min(1.0, fast * 10)))
-            confidence = float(max(0.0, min(1.0, (fast * 8))))
+            strength = float(max(0.0, min(1.0, fast * DEFAULT_CONFIDENCE_SCALE_FACTOR)))
+            confidence = float(max(0.0, min(1.0, fast * DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM)))
             return Signal(
                 direction=SignalDirection.BUY,
                 strength=strength,
@@ -127,45 +131,60 @@ class MomentumSignalGenerator(SignalGenerator):
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
         self.validate_inputs(df, index)
         momentum_3 = self._pct_change(df, "close", self.momentum_fast_window, index) or 0.0
-        return float(max(0.0, min(1.0, abs(momentum_3) * 8)))
+        return float(max(0.0, min(1.0, abs(momentum_3) * DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM)))
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals.
+
+        Requires max of EMA slow period and breakout lookback for reliable calculations.
+        """
+        return max(self.ema_slow, self.breakout_lookback)
 
     @staticmethod
-    def _ema(df: pd.DataFrame, col: str, span: int, index: int) -> Optional[float]:
+    def _ema(df: pd.DataFrame, col: str, span: int, index: int) -> float | None:
+        """Calculate EMA value at index, returning None on failure."""
         try:
             series = df[col].ewm(span=span).mean()
             return float(series.iloc[index])
-        except Exception:
+        except (KeyError, IndexError, ValueError, TypeError):
             return None
 
     @staticmethod
-    def _pct_change(df: pd.DataFrame, col: str, periods: int, index: int) -> Optional[float]:
+    def _pct_change(df: pd.DataFrame, col: str, periods: int, index: int) -> float | None:
+        """Calculate percent change, returning None on failure."""
         if index < periods:
             return None
         try:
+            # Use max(..., 1e-12) to prevent division by zero. ZeroDivisionError in
+            # except is defense-in-depth for edge cases where max() might not help
+            # (e.g., negative values close to zero that could cause floating point issues)
             return float(
                 (df[col].iloc[index] - df[col].iloc[index - periods])
                 / max(df[col].iloc[index - periods], 1e-12)
             )
-        except Exception:
+        except (KeyError, IndexError, ValueError, TypeError, ZeroDivisionError):
             return None
 
     @staticmethod
     def _is_breakout(df: pd.DataFrame, index: int, lookback: int) -> bool:
+        """Check if current close is a breakout above prior high."""
         if index < lookback:
             return False
         try:
             prior_high = float(df["high"].iloc[index - lookback : index].max())
             return float(df["close"].iloc[index]) > prior_high
-        except Exception:
+        except (KeyError, IndexError, ValueError, TypeError):
             return False
 
     @staticmethod
-    def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    def _safe_div(a: float | None, b: float | None) -> float | None:
+        """Perform safe division, returning None on failure."""
         try:
             if a is None or b is None or b == 0:
                 return None
             return float(a / b)
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return None
 
     def get_parameters(self) -> dict[str, Any]:

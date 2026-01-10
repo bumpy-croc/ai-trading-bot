@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
@@ -6,8 +6,8 @@ import pytest
 pytestmark = pytest.mark.integration
 
 try:
-    from src.live.strategy_manager import StrategyManager
-    from src.live.trading_engine import LiveTradingEngine
+    from src.engines.live.strategy_manager import StrategyManager
+    from src.engines.live.trading_engine import LiveTradingEngine
 
     LIVE_TRADING_AVAILABLE = True
     STRATEGY_MANAGER_AVAILABLE = True
@@ -46,7 +46,7 @@ class TestStrategyHotSwapping:
             side="LONG",
             size=0.1,
             entry_price=50000,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test_001",
         )
         engine.positions = {"test_001": position}

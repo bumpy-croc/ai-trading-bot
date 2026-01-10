@@ -1,8 +1,8 @@
 """Tests validating Trade lifecycle behaviour for backtesting."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
-from src.live.trading_engine import Trade
+from src.engines.live.trading_engine import PositionSide, Trade
 
 
 class TestTradeGeneration:
@@ -11,16 +11,14 @@ class TestTradeGeneration:
     def test_trade_creation(self):
         """Trade instances should preserve constructor arguments."""
 
-        from live.trading_engine import PositionSide
-
         trade = Trade(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
             exit_price=50000,
-            entry_time=datetime.now(),
-            exit_time=datetime.now(),
+            entry_time=datetime.now(UTC),
+            exit_time=datetime.now(UTC),
             pnl=0.0,
             exit_reason="init",
         )
@@ -32,8 +30,6 @@ class TestTradeGeneration:
 
     def test_trade_pnl_calculation(self):
         """Profit and loss should match side-specific expectations."""
-
-        from live.trading_engine import PositionSide
 
         trade_long_profit = Trade(
             symbol="BTCUSDT",
@@ -65,8 +61,6 @@ class TestTradeGeneration:
 
     def test_trade_duration_calculation(self):
         """Duration should equal exit minus entry timestamps."""
-
-        from live.trading_engine import PositionSide
 
         entry_time = datetime(2024, 1, 1, 10, 0)
         exit_time = datetime(2024, 1, 1, 12, 0)

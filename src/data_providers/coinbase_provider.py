@@ -5,13 +5,14 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta
-from typing import Any, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 import requests
 
 from src.config import get_config
+from src.infrastructure.network_retry import with_network_retry
 from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
@@ -52,9 +53,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        passphrase: Optional[str] = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        passphrase: str | None = None,
         testnet: bool = False,
     ):
         # Initialize DataProvider
@@ -87,9 +88,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     @staticmethod
     def _validate_credentials(
-        api_key: Optional[str],
-        api_secret: Optional[str],
-        passphrase: Optional[str],
+        api_key: str | None,
+        api_secret: str | None,
+        passphrase: str | None,
         *,
         allow_test_credentials: bool = False,
     ) -> tuple[str, str, str]:
@@ -175,6 +176,40 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         except Exception:
             self._decoded_secret = None
 
+    def close(self) -> None:
+        """Close the HTTP session and release resources."""
+        if hasattr(self, "_session") and self._session is not None:
+            try:
+                self._session.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
+            self._session = None
+
+    def __del__(self) -> None:
+        """Destructor to ensure session is closed when provider is garbage collected."""
+        self.close()
+
+    @staticmethod
+    def _safe_calculate_average_price(executed_value: Any, filled_size: Any) -> float | None:
+        """Safely calculate average price with validation to prevent NaN/inf propagation."""
+        import math
+
+        try:
+            exec_val = float(executed_value)
+            fill_sz = float(filled_size)
+
+            # Validate both values are finite before division
+            if not math.isfinite(exec_val) or not math.isfinite(fill_sz):
+                return None
+
+            if fill_sz > 0:
+                avg_price = exec_val / fill_sz
+                # Validate result is finite
+                return avg_price if math.isfinite(avg_price) else None
+            return None
+        except (TypeError, ValueError):
+            return None
+
     # ------------------------------------------------------------
     # The following methods provide implementations for authenticated endpoints of the Coinbase Exchange API.
     # These methods interact with the API to fetch account information and balances.
@@ -192,8 +227,8 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         self,
         method: str,
         path: str,
-        params: dict[str, Any] = None,
-        body: dict[str, Any] = None,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
         auth: bool = False,
     ):
         """Helper to perform HTTP request with optional Coinbase authentication."""
@@ -214,7 +249,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                     "Content-Type": "application/json",
                 }
             )
-        try:
+
+        # Use retry decorator for network resilience
+        @with_network_retry(max_retries=3, base_delay=1.0, max_delay=30.0)
+        def _make_request() -> dict[str, Any]:
             response = self._session.request(
                 method,
                 url,
@@ -227,8 +265,11 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             if response.text:
                 return response.json()
             return {}
+
+        try:
+            return _make_request()
         except Exception as e:
-            logger.error(f"Coinbase API request error {method} {path}: {e}")
+            logger.error(f"Coinbase API request error {method} {path} after retries: {e}")
             raise
 
     def test_connection(self) -> bool:
@@ -244,7 +285,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             data = self._request("GET", "/accounts", auth=True)
             account_info = {
                 "total_accounts": len(data),
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(UTC),
             }
             return account_info
         except Exception:
@@ -265,7 +306,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                         free=available,
                         locked=balance - available,
                         total=balance,
-                        last_updated=datetime.utcnow(),
+                        last_updated=datetime.now(UTC),
                     )
                 )
             return balances
@@ -273,18 +314,18 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to fetch balances: {e}")
             return []
 
-    def get_balance(self, asset: str) -> Optional[AccountBalance]:
+    def get_balance(self, asset: str) -> AccountBalance | None:
         balances = self.get_balances()
         for bal in balances:
             if bal.asset.upper() == asset.upper():
                 return bal
         return None
 
-    def get_positions(self, symbol: Optional[str] = None) -> list[Position]:
+    def get_positions(self, symbol: str | None = None) -> list[Position]:
         logger.info("get_positions not implemented for Coinbase spot API (only holdings)")
         return []
 
-    def get_open_orders(self, symbol: Optional[str] = None) -> list[Order]:
+    def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         try:
             params = {"status": "open"}
             if symbol:
@@ -303,9 +344,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                         status=self._convert_order_status(od.get("status"), od.get("done_reason")),
                         filled_quantity=float(od.get("filled_size", 0)),
                         average_price=(
-                            (float(od.get("executed_value", 0)) / float(od.get("filled_size", 0)))
-                            if float(od.get("filled_size", 0)) > 0
-                            else None
+                            self._safe_calculate_average_price(
+                                od.get("executed_value", 0), od.get("filled_size", 0)
+                            )
                         ),
                         commission=0.0,
                         commission_asset="",
@@ -313,7 +354,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                         update_time=(
                             datetime.fromisoformat(od.get("done_at"))
                             if od.get("done_at")
-                            else datetime.utcnow()
+                            else datetime.now(UTC)
                         ),
                         stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
                         time_in_force=od.get("time_in_force", "GTC"),
@@ -324,7 +365,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get open orders: {e}")
             return []
 
-    def get_order(self, order_id: str, symbol: str) -> Optional[Order]:
+    def get_order(self, order_id: str, symbol: str) -> Order | None:
         try:
             od = self._request("GET", f"/orders/{order_id}", auth=True)
             return Order(
@@ -337,9 +378,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 status=self._convert_order_status(od.get("status"), od.get("done_reason")),
                 filled_quantity=float(od.get("filled_size", 0)),
                 average_price=(
-                    (float(od.get("executed_value", 0)) / float(od.get("filled_size", 0)))
-                    if float(od.get("filled_size", 0)) > 0
-                    else None
+                    self._safe_calculate_average_price(
+                        od.get("executed_value", 0), od.get("filled_size", 0)
+                    )
                 ),
                 commission=0.0,
                 commission_asset="",
@@ -347,7 +388,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 update_time=(
                     datetime.fromisoformat(od.get("done_at"))
                     if od.get("done_at")
-                    else datetime.utcnow()
+                    else datetime.now(UTC)
                 ),
                 stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
                 time_in_force=od.get("time_in_force", "GTC"),
@@ -365,16 +406,24 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             fills = self._request("GET", "/fills", params=params, auth=True)
             trades: list[Trade] = []
             for fl in fills:
+                # Extract commission asset safely from product_id (e.g., "BTC-USD" -> "USD")
+                product_id = fl.get("product_id")
+                if product_id and "-" in product_id:
+                    parts = product_id.split("-")
+                    commission_asset = parts[1] if len(parts) >= 2 else "USD"
+                else:
+                    commission_asset = "USD"  # Default fallback
+
                 trades.append(
                     Trade(
                         trade_id=fl.get("trade_id"),
                         order_id=fl.get("order_id"),
-                        symbol=fl.get("product_id"),
+                        symbol=product_id,
                         side=OrderSide.BUY if fl.get("side") == "buy" else OrderSide.SELL,
                         quantity=float(fl.get("size")),
                         price=float(fl.get("price")),
                         commission=float(fl.get("fee")),
-                        commission_asset=fl.get("product_id").split("-")[1],
+                        commission_asset=commission_asset,
                         time=datetime.fromisoformat(fl.get("created_at")),
                     )
                 )
@@ -389,10 +438,16 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         side: OrderSide,
         order_type: OrderType,
         quantity: float,
-        price: Optional[float] = None,
-        stop_price: Optional[float] = None,
+        price: float | None = None,
+        stop_price: float | None = None,
         time_in_force: str = "GTC",
-    ) -> Optional[str]:
+        client_order_id: str | None = None,
+    ) -> str | None:
+        """
+        Place an order on Coinbase Advanced Trade API.
+
+        Note: Coinbase Advanced Trade API supports client_order_id for idempotency.
+        """
         try:
             cb_type = self._convert_to_cb_type(order_type)
             body: dict[str, Any] = {
@@ -414,6 +469,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 body["stop_price"] = str(stop_price) if stop_price else None
                 body["stop"] = "loss"  # default stop loss
 
+            # Add client_order_id for idempotency if provided
+            if client_order_id:
+                body["client_order_id"] = client_order_id
+
             order = self._request("POST", "/orders", body=body, auth=True)
             return order.get("id")
         except Exception as e:
@@ -428,7 +487,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
 
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> bool:
+    def cancel_all_orders(self, symbol: str | None = None) -> bool:
         try:
             params = (
                 {"product_id": SymbolFactory.to_exchange_symbol(symbol, "coinbase")}
@@ -441,7 +500,29 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to cancel all orders: {e}")
             return False
 
-    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
+    def place_stop_loss_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity: float,
+        stop_price: float,
+        limit_price: float | None = None,
+    ) -> str | None:
+        """
+        Place a server-side stop-loss order on Coinbase.
+
+        Note: Coinbase Advanced Trade API supports stop orders.
+        This is a placeholder implementation - full Coinbase stop order
+        support would require Advanced Trade API integration.
+        """
+        logger.warning(
+            "Coinbase stop-loss orders not fully implemented - "
+            "positions may not be protected if bot goes offline"
+        )
+        # TODO: Implement Coinbase Advanced Trade API stop orders
+        return None
+
+    def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         try:
             product = self._request(
                 "GET", f"/products/{SymbolFactory.to_exchange_symbol(symbol, 'coinbase')}"
@@ -472,9 +553,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         self,
         product_id: str,
         granularity: int,
-        start: datetime = None,
-        end: datetime = None,
-        limit: int = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int | None = None,
     ) -> list[list[Any]]:
         """Fetch candle data from Coinbase public API."""
         params = {"granularity": granularity}
@@ -514,13 +595,13 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         symbol: str,
         timeframe: str,
         start: datetime,
-        end: Optional[datetime] = None,
+        end: datetime | None = None,
     ) -> pd.DataFrame:
         try:
             granularity = self._convert_timeframe(timeframe)
             product_id = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
             candles = self._fetch_candles_range(
-                product_id, granularity, start, end or datetime.utcnow()
+                product_id, granularity, start, end or datetime.now(UTC)
             )
             df = self._process_ohlcv(candles, timestamp_unit="s")
             self.data = df
@@ -565,16 +646,30 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             raise
 
     def get_current_price(self, symbol: str) -> float:
+        """Get latest price for a symbol.
+
+        Raises:
+            RuntimeError: If price cannot be fetched from exchange.
+                         Caller must handle this to prevent trading with invalid prices.
+        """
         try:
             product_id = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
             url = f"{self.BASE_URL}/products/{product_id}/ticker"
             r = self._session.get(url, timeout=10)
             r.raise_for_status()
             data = r.json()
-            return float(data["price"])
+            price = float(data["price"])
+            # Validate price is positive to prevent downstream calculation errors
+            if price <= 0:
+                raise ValueError(f"Invalid price {price} <= 0 for {symbol}")
+            return price
         except Exception as e:
             logger.error(f"Error fetching current price for {symbol} from Coinbase: {e}")
-            return 0.0
+            # Don't return 0.0 - that could cause division by zero or infinite position sizes
+            # Force caller to handle price fetch failures explicitly
+            raise RuntimeError(
+                f"Failed to fetch current price for {symbol} from Coinbase: {e}"
+            ) from e
 
     # --------------------------- DataProvider --------------------------
 
@@ -587,7 +682,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         }
         return mapping.get(order_type, OrderType.MARKET)
 
-    def _convert_order_status(self, status: str, done_reason: str = None) -> OrderStatus:
+    def _convert_order_status(self, status: str, done_reason: str | None = None) -> OrderStatus:
         """Convert Coinbase order status to internal OrderStatus enum.
 
         Args:

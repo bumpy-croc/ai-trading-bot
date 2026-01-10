@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -8,7 +8,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 try:
-    from src.live.trading_engine import LiveTradingEngine
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     LIVE_TRADING_AVAILABLE = True
 except ImportError:
@@ -32,27 +32,40 @@ class TestThreadSafety:
             pytest.skip("Live trading components not available")
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         mock_data_provider.get_live_data.return_value = pd.DataFrame(
-            {"close": [51000]}, index=[datetime.now()]
+            {"close": [51000]}, index=[datetime.now(UTC)]
         )
 
         def open_positions():
-            if hasattr(engine, "_open_position"):
-                for i in range(3):
-                    try:
-                        engine._open_position(
-                            symbol=f"BTC{i}USDT", side="LONG", size=0.02, price=50000 + i
-                        )
-                    except Exception:
-                        pass
-                    time.sleep(0.01)
+            for i in range(3):
+                try:
+                    engine._execute_entry(
+                        symbol=f"BTC{i}USDT",
+                        side=PositionSide.LONG,
+                        size=0.02,
+                        price=50000 + i,
+                        stop_loss=None,
+                        take_profit=None,
+                        signal_strength=0.0,
+                        signal_confidence=0.0,
+                    )
+                except Exception:
+                    pass
+                time.sleep(0.01)
 
         def close_positions():
             time.sleep(0.05)
             try:
-                positions_to_close = list(engine.positions.values())[:2]
+                positions_to_close = list(engine.live_position_tracker._positions.values())[:2]
                 for position in positions_to_close:
-                    if hasattr(engine, "_close_position"):
-                        engine._close_position(position, "Test close")
+                    engine._execute_exit(
+                        position=position,
+                        reason="Test close",
+                        limit_price=None,
+                        current_price=50000,
+                        candle_high=None,
+                        candle_low=None,
+                        candle=None,
+                    )
                     time.sleep(0.01)
             except Exception:
                 pass
@@ -63,7 +76,7 @@ class TestThreadSafety:
         t2.start()
         t1.join(timeout=2)
         t2.join(timeout=2)
-        assert len(engine.positions) >= 0
+        assert len(engine.live_position_tracker._positions) >= 0
         assert len(engine.completed_trades) >= 0
 
     @pytest.mark.live_trading
@@ -75,7 +88,7 @@ class TestThreadSafety:
         )
         mock_data_provider.get_live_data.return_value = pd.DataFrame(
             {"open": [50000], "high": [50100], "low": [49900], "close": [50050], "volume": [1000]},
-            index=[datetime.now()],
+            index=[datetime.now(UTC)],
         )
 
         def run_trading():

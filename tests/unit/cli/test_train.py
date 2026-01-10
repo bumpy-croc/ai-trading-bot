@@ -1,9 +1,7 @@
 """Tests for atb train commands."""
 
 import argparse
-from unittest.mock import Mock, patch
-
-import pytest
+from unittest.mock import patch
 
 from cli.commands.train import _handle_model
 

@@ -1,7 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 
@@ -16,7 +15,7 @@ class SentimentDataProvider(ABC):
 
     @abstractmethod
     def get_historical_sentiment(
-        self, symbol: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, start: datetime, end: datetime | None = None
     ) -> pd.DataFrame:
         """
         Fetch historical sentiment data.

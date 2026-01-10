@@ -1,16 +1,16 @@
 """Integration tests for dynamic risk management in backtesting"""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.position_management.dynamic_risk import DynamicRiskConfig
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
-from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.strategies.components.strategy import Strategy
 
 pytestmark = pytest.mark.integration
 
@@ -26,7 +26,7 @@ class MockSignalGenerator(SignalGenerator):
             direction=SignalDirection.HOLD,
             confidence=0.0,
             strength=0.0,
-            metadata={"timestamp": df.index[index] if len(df) > index else datetime.now()},
+            metadata={"timestamp": df.index[index] if len(df) > index else datetime.now(UTC)},
         )
 
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
@@ -144,7 +144,7 @@ class TestBacktestingDynamicRiskIntegration:
         backtester.balance = 10000
         backtester.peak_balance = 10000
 
-        adjusted_size = backtester._get_dynamic_risk_adjusted_size(0.05, datetime.now())
+        adjusted_size = backtester._get_dynamic_risk_adjusted_size(0.05, datetime.now(UTC))
 
         # Should be close to original size (no significant adjustment)
         assert 0.04 <= adjusted_size <= 0.06
@@ -153,7 +153,7 @@ class TestBacktestingDynamicRiskIntegration:
         backtester.balance = 8500  # 15% drawdown
         backtester.peak_balance = 10000
 
-        adjusted_size = backtester._get_dynamic_risk_adjusted_size(0.05, datetime.now())
+        adjusted_size = backtester._get_dynamic_risk_adjusted_size(0.05, datetime.now(UTC))
 
         # Should be significantly reduced (0.05 * 0.4 = 0.02)
         assert adjusted_size == pytest.approx(0.02, rel=0.1)
@@ -203,7 +203,7 @@ class TestBacktestingDynamicRiskIntegration:
         backtester.balance = 9500
         backtester.peak_balance = 10000
 
-        adjusted_size = backtester._get_dynamic_risk_adjusted_size(0.04, datetime.now())
+        adjusted_size = backtester._get_dynamic_risk_adjusted_size(0.04, datetime.now(UTC))
 
         # Should apply first reduction factor (0.04 * 0.9 = 0.036)
         assert adjusted_size == pytest.approx(0.036, rel=0.1)
@@ -223,6 +223,6 @@ class TestBacktestingDynamicRiskIntegration:
 
         # Should return original size without error
         original_size = 0.05
-        adjusted_size = backtester._get_dynamic_risk_adjusted_size(original_size, datetime.now())
+        adjusted_size = backtester._get_dynamic_risk_adjusted_size(original_size, datetime.now(UTC))
 
         assert adjusted_size == original_size

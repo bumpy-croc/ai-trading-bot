@@ -1,9 +1,6 @@
 """Tests for atb railway commands."""
 
-import argparse
 from unittest.mock import Mock, patch
-
-import pytest
 
 from cli.commands.railway import _authenticate_railway
 

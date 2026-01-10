@@ -2,7 +2,7 @@
 Unit tests for RegimeContext and EnhancedRegimeDetector components
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -21,7 +21,7 @@ class TestRegimeContext:
 
     def test_regime_context_creation_valid(self):
         """Test creating a valid regime context"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         metadata = {"trend_score": 0.05, "atr_percentile": 0.8}
 
         regime = RegimeContext(
@@ -277,7 +277,7 @@ class TestRegimeTransition:
         """Test creating a regime transition"""
         from_regime = self.create_test_regime(TrendLabel.TREND_UP, VolLabel.LOW)
         to_regime = self.create_test_regime(TrendLabel.TREND_DOWN, VolLabel.HIGH)
-        transition_time = datetime.now()
+        transition_time = datetime.now(UTC)
 
         transition = RegimeTransition(
             from_regime=from_regime,
@@ -299,7 +299,7 @@ class TestRegimeTransition:
         transition = RegimeTransition(
             from_regime=from_regime,
             to_regime=to_regime,
-            transition_time=datetime.now(),
+            transition_time=datetime.now(UTC),
             confidence=0.7,
         )
 
@@ -313,7 +313,7 @@ class TestRegimeTransition:
         transition = RegimeTransition(
             from_regime=from_regime,
             to_regime=to_regime,
-            transition_time=datetime.now(),
+            transition_time=datetime.now(UTC),
             confidence=0.7,
         )
 
@@ -327,7 +327,7 @@ class TestRegimeTransition:
         transition = RegimeTransition(
             from_regime=from_regime,
             to_regime=to_regime,
-            transition_time=datetime.now(),
+            transition_time=datetime.now(UTC),
             confidence=0.7,
         )
 

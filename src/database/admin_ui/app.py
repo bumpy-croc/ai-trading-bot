@@ -1,11 +1,10 @@
 import logging
 import os
-import time
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import sqlalchemy.exc
-from werkzeug.security import check_password_hash, generate_password_hash  # type: ignore
 from sqlalchemy.orm import scoped_session  # type: ignore
+from werkzeug.security import check_password_hash, generate_password_hash  # type: ignore
 
 try:  # pragma: no cover - exercised indirectly in tests
     from flask_wtf.csrf import CSRFProtect  # type: ignore
@@ -71,7 +70,7 @@ def _ensure_secret_key() -> str:
     env_value = os.getenv("ENV")
     flask_env_value = os.getenv("FLASK_ENV")
 
-    normalized_env: Optional[str] = None
+    normalized_env: str | None = None
     for value in (env_value, flask_env_value):
         if value:
             normalized_env = value.lower()
@@ -130,6 +129,8 @@ def create_app() -> "Flask":
     500 status to callers.
     """
 
+    from urllib.parse import urlparse
+
     from flask import (
         Flask,
         Response,
@@ -145,6 +146,7 @@ def create_app() -> "Flask":
     from flask_login import (  # type: ignore
         LoginManager,
         UserMixin,
+        current_user,
         login_required,
         login_user,
         logout_user,
@@ -159,6 +161,14 @@ def create_app() -> "Flask":
         can_view_details = True
         page_size = 50
         form_base_class = SecureForm
+
+        def is_accessible(self):
+            """Require authentication to access Flask-Admin views."""
+            return current_user.is_authenticated
+
+        def inaccessible_callback(self, name, **kwargs):
+            """Redirect unauthenticated users to login page."""
+            return redirect(url_for("login", next=request.url))
 
         def __init__(self, model, session, **kwargs):
             # Dynamically determine searchable string columns
@@ -233,6 +243,20 @@ def create_app() -> "Flask":
             return AdminUser(user_id)
         return None
 
+    def is_safe_redirect_url(target: str | None) -> bool:
+        """
+        Validate that redirect URL is safe (same-origin) to prevent open redirect attacks.
+
+        Returns True only if target is a relative path on the same host.
+        """
+        if not target:
+            return False
+        # Parse the target URL
+        url_parts = urlparse(target)
+        # Reject absolute URLs with scheme or netloc (external redirects)
+        # Only allow relative paths like "/admin" or "/dashboard"
+        return not url_parts.netloc and not url_parts.scheme
+
     @app.route("/login", methods=["GET", "POST"])
     @limiter.limit("5 per minute")  # SEC-009: Rate limit login attempts
     @csrf.exempt
@@ -249,7 +273,13 @@ def create_app() -> "Flask":
                 user = AdminUser(username)
                 login_user(user)
                 logger.info(f"✅ Admin login successful for user: {username}")
-                return redirect(request.args.get("next") or url_for("admin.index"))
+
+                # Validate redirect URL to prevent open redirect attacks (SEC-010)
+                next_url = request.args.get("next")
+                if next_url and is_safe_redirect_url(next_url):
+                    return redirect(next_url)
+                else:
+                    return redirect(url_for("admin.index"))
 
             logger.warning(f"⚠️  Failed admin login attempt for user: {username}")
             return render_template_string(
@@ -293,15 +323,17 @@ def create_app() -> "Flask":
         """Simple health-check endpoint used by load-balancers and uptime monitors."""
         return {"status": "ok"}
 
-    # Database info route (helpful for debugging)
+    # Database info route (helpful for debugging) - requires authentication
     @app.route("/db_info")
+    @login_required
     def db_info() -> Response:
         """Return live connection-pool statistics and configuration details."""
         return jsonify(db_manager.get_database_info())
 
-    # Simple schema "migration" route to ensure new tables are created
-    @app.route("/migrate", methods=["POST", "GET"])
-    @csrf.exempt
+    # Simple schema "migration" route to ensure new tables are created - requires authentication
+    # POST-only to prevent accidental triggering via GET requests (link prefetching, etc.)
+    @app.route("/migrate", methods=["POST"])
+    @login_required
     def migrate():
         """Synchronise database schema (creates any missing tables)."""
         try:
@@ -309,12 +341,12 @@ def create_app() -> "Flask":
             return {"status": "success", "message": "Schema synchronised."}
         except Exception as exc:  # pragma: no cover
             logger.exception("Schema migration failed: %s", exc)
-            return {"status": "error", "message": str(exc)}, 500
+            return {"status": "error", "message": "Schema synchronization failed. Check logs."}, 500
 
     # Clean up DB sessions after each request
     @app.teardown_appcontext
     def shutdown_session(
-        exception: Optional[Exception] = None,
+        exception: Exception | None = None,
     ) -> None:  # noqa: D401, pylint: disable=unused-argument
         """Remove the scoped SQLAlchemy session to avoid connection leaks."""
         db_session.remove()

@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
+
+from src.config.constants import (
+    DEFAULT_BREAKEVEN_BUFFER,
+    DEFAULT_TRAILING_ACTIVATION_THRESHOLD,
+    DEFAULT_TRAILING_DISTANCE_PCT,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -12,35 +22,69 @@ class TrailingStopPolicy:
     are set, atr-based distance takes precedence when ATR is available.
     """
 
-    activation_threshold: float = 0.015  # 1.5% sized PnL to start trailing
-    trailing_distance_pct: float | None = 0.005  # 0.5% trail distance
+    activation_threshold: float = (
+        DEFAULT_TRAILING_ACTIVATION_THRESHOLD  # 1.5% position gain to start trailing
+    )
+    trailing_distance_pct: float | None = DEFAULT_TRAILING_DISTANCE_PCT  # 0.5% trail distance
     atr_multiplier: float | None = None  # e.g., 1.5 * ATR
     breakeven_threshold: float | None = None  # if None, breakeven is disabled
-    breakeven_buffer: float = 0.001  # 0.1% above breakeven for long (below for short)
+    breakeven_buffer: float = (
+        DEFAULT_BREAKEVEN_BUFFER  # 0.1% above breakeven for long (below for short)
+    )
 
     def compute_distance(self, price: float, atr: float | None) -> float | None:
+        """Compute trailing stop distance, validating ATR and price inputs."""
         if (
             atr is not None
             and atr > 0
+            and math.isfinite(atr)
             and self.atr_multiplier is not None
             and self.atr_multiplier > 0
         ):
             return float(atr) * float(self.atr_multiplier)
         if self.trailing_distance_pct is not None and self.trailing_distance_pct > 0:
+            # Validate price before using for distance calculation
+            if not math.isfinite(price) or price <= 0:
+                logger.debug(f"Invalid price for trailing distance: {price}")
+                return None
             return float(price) * float(self.trailing_distance_pct)
         return None
 
     def _pnl_fraction(
         self, entry_price: float, current_price: float, side: str, position_fraction: float
     ) -> float:
-        if entry_price <= 0 or position_fraction <= 0:
+        """Calculate position-level PnL percentage.
+
+        We use position-level PnL instead of portfolio-level (sized) PnL for
+        consistent risk management regardless of position size.
+
+        Args:
+            entry_price: Entry price for the position
+            current_price: Current market price
+            side: "long" or "short"
+            position_fraction: Position size as fraction of balance (0.0-1.0).
+                              Returns 0.0 if <= 0 (no position = no stops needed)
+
+        Returns:
+            Position-level PnL as a decimal (e.g., 0.10 for 10% gain)
+        """
+        # Validate side parameter to prevent incorrect PnL calculations
+        if side not in ("long", "short"):
+            raise ValueError(f"Invalid side: {side}. Must be 'long' or 'short'")
+
+        # No position = no PnL to protect
+        if position_fraction <= 0:
             return 0.0
+
+        if entry_price <= 0:
+            return 0.0
+
         raw = (
             (current_price - entry_price) / entry_price
             if side == "long"
             else (entry_price - current_price) / entry_price
         )
-        return raw * position_fraction
+        return raw
 
     def update_trailing_stop(
         self,
@@ -60,7 +104,28 @@ class TrailingStopPolicy:
         - Breakeven move (with buffer) has priority once threshold is met (if enabled).
         - Works for long and short.
         """
-        # Compute sized PnL fraction (decimal, e.g., 0.015 for +1.5%)
+        # Validate price inputs to prevent NaN/Infinity propagation in stop calculations
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            logger.debug(f"Invalid entry_price in trailing stop: {entry_price}")
+            return existing_stop, trailing_activated, breakeven_triggered
+        if not math.isfinite(current_price) or current_price <= 0:
+            logger.debug(f"Invalid current_price in trailing stop: {current_price}")
+            return existing_stop, trailing_activated, breakeven_triggered
+        if atr is not None and not math.isfinite(atr):
+            logger.debug(f"Invalid ATR in trailing stop: {atr}")
+            return existing_stop, trailing_activated, breakeven_triggered
+        # Validate position_fraction to prevent NaN propagation through max()
+        if not math.isfinite(position_fraction):
+            logger.debug(f"Invalid position_fraction in trailing stop: {position_fraction}")
+            return existing_stop, trailing_activated, breakeven_triggered
+        # Validate existing_stop to prevent NaN propagation through max/min operations
+        if existing_stop is not None and (not math.isfinite(existing_stop) or existing_stop <= 0):
+            logger.warning(
+                f"Invalid existing_stop in trailing stop: {existing_stop}, resetting to None"
+            )
+            existing_stop = None
+
+        # Compute position-level PnL fraction (decimal, e.g., 0.015 for +1.5%)
         pnl_frac = self._pnl_fraction(entry_price, current_price, side, max(0.0, position_fraction))
 
         # Determine activation
@@ -88,11 +153,17 @@ class TrailingStopPolicy:
             and self.breakeven_threshold is not None
             and self.breakeven_threshold > 0
         ):
+            # Validate breakeven_buffer to prevent NaN/Infinity in stop calculation
+            buffer = self.breakeven_buffer
+            if not math.isfinite(buffer):
+                logger.warning(f"Invalid breakeven_buffer: {buffer}, using 0.0")
+                buffer = 0.0
+
             if side == "long":
-                be = entry_price * (1.0 + max(0.0, self.breakeven_buffer))
+                be = entry_price * (1.0 + max(0.0, buffer))
                 new_stop = be if new_stop is None else max(float(new_stop), float(be))
             else:
-                be = entry_price * (1.0 - max(0.0, self.breakeven_buffer))
+                be = entry_price * (1.0 - max(0.0, buffer))
                 new_stop = be if new_stop is None else min(float(new_stop), float(be))
             return new_stop, trailing_activated, breakeven_triggered
 

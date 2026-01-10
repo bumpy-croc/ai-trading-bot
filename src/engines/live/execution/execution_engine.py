@@ -1,0 +1,760 @@
+"""LiveExecutionEngine handles order execution with fees and slippage.
+
+Encapsulates the mechanics of trade execution including:
+- Fee calculations
+- Slippage modeling
+- Live order execution (when enabled)
+- Paper trading simulation
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import time
+import uuid
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from src.config.constants import (
+    DEFAULT_FEE_RATE,
+    DEFAULT_SLIPPAGE_RATE,
+)
+from src.data_providers.exchange_interface import OrderSide, OrderStatus, OrderType
+from src.engines.shared.cost_calculator import CostCalculator
+from src.engines.shared.models import PositionSide
+
+if TYPE_CHECKING:
+    pass
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LiveExecutionResult:
+    """Result of a live trade execution."""
+
+    success: bool
+    order_id: str | None = None
+    executed_price: float | None = None
+    entry_fee: float = 0.0
+    exit_fee: float = 0.0
+    slippage_cost: float = 0.0
+    error: str | None = None
+
+
+@dataclass
+class EntryExecutionResult:
+    """Result of executing an entry order."""
+
+    success: bool
+    order_id: str | None = None
+    executed_price: float = 0.0
+    position_value: float = 0.0
+    quantity: float = 0.0
+    entry_fee: float = 0.0
+    slippage_cost: float = 0.0
+    error: str | None = None
+
+
+@dataclass
+class ExitExecutionResult:
+    """Result of executing an exit order."""
+
+    success: bool
+    executed_price: float = 0.0
+    exit_fee: float = 0.0
+    slippage_cost: float = 0.0
+    error: str | None = None
+
+
+class LiveExecutionEngine:
+    """Handles order execution with fees and slippage for live trading.
+
+    This class encapsulates execution mechanics including:
+    - Fee rate calculations (entry and exit)
+    - Slippage modeling (adverse price movement)
+    - Live order execution via exchange interface
+    - Paper trading simulation mode
+    """
+
+    def __init__(
+        self,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+        enable_live_trading: bool = False,
+        exchange_interface: Any = None,
+    ) -> None:
+        """Initialize execution engine.
+
+        Args:
+            fee_rate: Fee rate per trade (0.001 = 0.1%).
+            slippage_rate: Slippage rate per trade (0.0005 = 0.05%).
+            enable_live_trading: Whether to execute real orders.
+            exchange_interface: Exchange provider for live orders.
+        """
+        self.fee_rate = fee_rate
+        self.slippage_rate = slippage_rate
+        self.enable_live_trading = enable_live_trading
+        self.exchange_interface = exchange_interface
+
+        # Validate that live trading has required exchange interface
+        if enable_live_trading and exchange_interface is None:
+            raise ValueError(
+                "Cannot enable live trading without exchange interface. "
+                "Provide exchange_interface or set enable_live_trading=False."
+            )
+
+        # Use shared cost calculator for all fee and slippage calculations
+        self._cost_calculator = CostCalculator(
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+        )
+
+    @staticmethod
+    def _position_side_to_str(side: PositionSide) -> str:
+        """Convert PositionSide enum to string for cost calculations.
+
+        Args:
+            side: Position side enum.
+
+        Returns:
+            'long' or 'short'.
+        """
+        return "long" if side == PositionSide.LONG else "short"
+
+    @property
+    def total_fees_paid(self) -> float:
+        """Get total fees paid across all trades."""
+        return self._cost_calculator.total_fees_paid
+
+    @property
+    def total_slippage_cost(self) -> float:
+        """Get total slippage cost across all trades."""
+        return self._cost_calculator.total_slippage_cost
+
+    def reset_tracking(self) -> None:
+        """Reset fee and slippage tracking."""
+        self._cost_calculator.reset_totals()
+
+    def _fetch_order_details(self, symbol: str, order_id: str) -> Any | None:
+        """Fetch order details from the exchange when available."""
+        if self.exchange_interface is None:
+            return None
+
+        try:
+            return self.exchange_interface.get_order(order_id, symbol)
+        except (ConnectionError, TimeoutError, ValueError) as exc:
+            logger.debug("Order detail fetch failed for %s: %s", order_id, exc)
+            return None
+
+    def _is_filled_status(self, status: Any) -> bool:
+        """Return True when the order status indicates a fill."""
+        if isinstance(status, OrderStatus):
+            return status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
+        if isinstance(status, str):
+            normalized = status.upper()
+            return normalized in (
+                OrderStatus.FILLED.value,
+                OrderStatus.PARTIALLY_FILLED.value,
+            )
+        return False
+
+    def _adjust_cost_totals(self, fee_delta: float, slippage_delta: float) -> None:
+        """Adjust accumulated cost totals after reconciliation."""
+        self._cost_calculator.total_fees_paid += fee_delta
+        self._cost_calculator.total_slippage_cost += slippage_delta
+
+    def _calculate_slippage_from_fill(
+        self,
+        base_price: float,
+        executed_price: float,
+        notional: float,
+    ) -> float:
+        """Calculate slippage cost from actual fill price versus base price."""
+        if base_price <= 0 or notional <= 0:
+            return 0.0
+        return abs(executed_price - base_price) * (notional / base_price)
+
+    def apply_entry_slippage(self, price: float, side: PositionSide) -> float:
+        """Apply slippage to entry price (price moves against us).
+
+        Slippage models the cost of market impact and adverse selection that occurs
+        when entering a position, ensuring realistic backtest and live trading results.
+
+        This method is kept for backward compatibility. New code should use
+        the shared CostCalculator via calculate_entry_costs.
+
+        Args:
+            price: Base price before slippage.
+            side: Position side (LONG or SHORT).
+
+        Returns:
+            Price after slippage applied.
+        """
+        # Use simple calculation to preserve backward compatibility
+        if side == PositionSide.LONG:
+            return price * (1 + self.slippage_rate)
+        else:
+            return price * (1 - self.slippage_rate)
+
+    def apply_exit_slippage(self, price: float, side: PositionSide) -> float:
+        """Apply slippage to exit price (price moves against us).
+
+        Exit slippage accounts for market impact costs when closing positions,
+        ensuring P&L calculations reflect realistic execution conditions.
+
+        This method is kept for backward compatibility. New code should use
+        the shared CostCalculator via calculate_exit_costs.
+
+        Args:
+            price: Base price before slippage.
+            side: Position side (LONG or SHORT).
+
+        Returns:
+            Price after slippage applied.
+        """
+        # Use simple calculation to preserve backward compatibility
+        if side == PositionSide.LONG:
+            return price * (1 - self.slippage_rate)
+        else:
+            return price * (1 + self.slippage_rate)
+
+    def calculate_entry_fee(self, position_value: float) -> float:
+        """Calculate entry fee for a position.
+
+        Args:
+            position_value: Notional value of position.
+
+        Returns:
+            Fee amount.
+        """
+        return self._cost_calculator.calculate_fee(position_value)
+
+    def calculate_exit_fee(self, position_notional: float) -> float:
+        """Calculate exit fee for a position.
+
+        Args:
+            position_notional: Notional value of position at exit.
+
+        Returns:
+            Fee amount.
+        """
+        return self._cost_calculator.calculate_fee(position_notional)
+
+    def calculate_slippage_cost(self, position_value: float) -> float:
+        """Calculate slippage cost for a trade.
+
+        Args:
+            position_value: Notional value of position.
+
+        Returns:
+            Slippage cost amount.
+        """
+        return abs(position_value * self.slippage_rate)
+
+    def execute_entry(
+        self,
+        symbol: str,
+        side: PositionSide,
+        size_fraction: float,
+        base_price: float,
+        balance: float,
+        liquidity: str | None = None,
+    ) -> EntryExecutionResult:
+        """Execute an entry order with fees and slippage.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side (LONG or SHORT).
+            size_fraction: Position size as fraction of balance.
+            base_price: Current market price.
+            balance: Account balance.
+            liquidity: Liquidity classification for fee and slippage handling.
+
+        Returns:
+            EntryExecutionResult with execution details.
+        """
+        try:
+            # Validate inputs before any calculations to prevent corrupt state
+            if base_price <= 0 or not math.isfinite(base_price):
+                logger.error(
+                    "Invalid base_price %.8f for %s - refusing entry to prevent corrupt state",
+                    base_price,
+                    symbol,
+                )
+                return EntryExecutionResult(success=False, error=f"Invalid price: {base_price}")
+
+            if balance <= 0 or not math.isfinite(balance):
+                logger.error("Invalid balance %.8f for %s - refusing entry", balance, symbol)
+                return EntryExecutionResult(success=False, error=f"Invalid balance: {balance}")
+
+            if size_fraction <= 0 or size_fraction > 1 or not math.isfinite(size_fraction):
+                logger.error(
+                    "Invalid size_fraction %.8f for %s - must be in (0, 1]",
+                    size_fraction,
+                    symbol,
+                )
+                return EntryExecutionResult(
+                    success=False, error=f"Invalid size_fraction: {size_fraction}"
+                )
+
+            # Calculate position value and costs using shared cost calculator
+            position_value = size_fraction * balance
+            original_position_value = position_value
+            side_str = self._position_side_to_str(side)
+
+            cost_result = self._cost_calculator.calculate_entry_costs(
+                price=base_price,
+                notional=position_value,
+                side=side_str,
+                liquidity=liquidity,
+            )
+
+            executed_price = cost_result.executed_price
+            entry_fee = cost_result.fee
+            slippage_cost = cost_result.slippage_cost
+
+            # Validate executed_price before division
+            if executed_price <= 0 or not math.isfinite(executed_price):
+                logger.error(
+                    "Cost calculator returned invalid executed_price %.8f for %s - refusing entry",
+                    executed_price,
+                    symbol,
+                )
+                return EntryExecutionResult(
+                    success=False, error=f"Invalid executed price: {executed_price}"
+                )
+
+            quantity = position_value / executed_price
+
+            # Execute real order if enabled
+            if self.enable_live_trading:
+                order_id = self._execute_live_order(symbol, side, position_value, executed_price)
+                if not order_id:
+                    return EntryExecutionResult(
+                        success=False,
+                        error="Failed to execute live order",
+                    )
+                order_details = self._fetch_order_details(symbol, order_id)
+                if order_details:
+                    status = getattr(order_details, "status", None)
+                    if status is not None and not self._is_filled_status(status):
+                        logger.debug(
+                            "Entry order %s not filled yet (status=%s); using simulated execution",
+                            order_id,
+                            status,
+                        )
+                    elif order_details.average_price:
+                        executed_price = float(order_details.average_price)
+                        filled_qty = float(order_details.filled_quantity or 0.0)
+                        if filled_qty > 0:
+                            quantity = filled_qty
+                            position_value = quantity * executed_price
+                        fee_from_order = float(order_details.commission or 0.0)
+                        if fee_from_order > 0:
+                            fee_delta = fee_from_order - entry_fee
+                            entry_fee = fee_from_order
+                            slippage_cost = self._calculate_slippage_from_fill(
+                                base_price, executed_price, position_value
+                            )
+                            slippage_delta = slippage_cost - cost_result.slippage_cost
+                            self._adjust_cost_totals(fee_delta, slippage_delta)
+                        else:
+                            # Preserves liquidity-aware fee rate when commissions are unavailable.
+                            fee_rate = (
+                                cost_result.fee / original_position_value
+                                if original_position_value > 0
+                                else 0.0
+                            )
+                            entry_fee = position_value * fee_rate
+                            slippage_cost = self._calculate_slippage_from_fill(
+                                base_price, executed_price, position_value
+                            )
+                            fee_delta = entry_fee - cost_result.fee
+                            slippage_delta = slippage_cost - cost_result.slippage_cost
+                            if fee_delta != 0 or slippage_delta != 0:
+                                self._adjust_cost_totals(fee_delta, slippage_delta)
+                    else:
+                        logger.debug(
+                            "Entry order %s fill missing average price; using simulated execution",
+                            order_id,
+                        )
+            else:
+                order_id = f"paper_{int(time.time() * 1000)}"
+                logger.info("PAPER TRADE - Would open %s position on %s", side.value, symbol)
+
+            return EntryExecutionResult(
+                success=True,
+                order_id=order_id,
+                executed_price=executed_price,
+                position_value=position_value,
+                quantity=quantity,
+                entry_fee=entry_fee,
+                slippage_cost=slippage_cost,
+            )
+
+        except (ValueError, ArithmeticError, TypeError) as e:
+            logger.error("Failed to execute entry: %s", e, exc_info=True)
+            return EntryExecutionResult(
+                success=False,
+                error=str(e),
+            )
+
+    def execute_exit(
+        self,
+        symbol: str,
+        side: PositionSide,
+        order_id: str,
+        base_price: float,
+        position_notional: float,
+        liquidity: str | None = None,
+        apply_slippage: bool = True,
+    ) -> ExitExecutionResult:
+        """Execute an exit order with fees and slippage.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side (LONG or SHORT).
+            order_id: Order ID of position to close.
+            base_price: Exit price before slippage.
+            position_notional: Notional value of position.
+            liquidity: Liquidity classification for fee and slippage handling.
+            apply_slippage: When False, slippage is suppressed.
+
+        Returns:
+            ExitExecutionResult with execution details.
+        """
+        try:
+            # Validate inputs before any calculations to prevent corrupt state
+            if base_price <= 0 or not math.isfinite(base_price):
+                logger.error(
+                    "Invalid base_price %.8f for exit on %s - refusing exit to prevent corrupt state",
+                    base_price,
+                    symbol,
+                )
+                return ExitExecutionResult(success=False, error=f"Invalid exit price: {base_price}")
+
+            if position_notional <= 0 or not math.isfinite(position_notional):
+                logger.error(
+                    "Invalid position_notional %.8f for exit on %s", position_notional, symbol
+                )
+                return ExitExecutionResult(
+                    success=False, error=f"Invalid position notional: {position_notional}"
+                )
+
+            original_notional = position_notional
+
+            # Calculate costs using shared cost calculator
+            side_str = self._position_side_to_str(side)
+
+            cost_result = self._cost_calculator.calculate_exit_costs(
+                price=base_price,
+                notional=position_notional,
+                side=side_str,
+                liquidity=liquidity,
+                apply_slippage=apply_slippage,
+            )
+
+            executed_price = cost_result.executed_price
+            exit_fee = cost_result.fee
+            slippage_cost = cost_result.slippage_cost
+
+            # Execute real order if enabled
+            if self.enable_live_trading:
+                # Already validated base_price > 0 above
+                quantity = position_notional / base_price
+                close_order_id = self._close_live_order(
+                    symbol,
+                    side,
+                    quantity,
+                    position_notional=position_notional,
+                    order_id=order_id,
+                )
+                if not close_order_id:
+                    return ExitExecutionResult(
+                        success=False,
+                        error="Failed to close live order",
+                    )
+                order_details = self._fetch_order_details(symbol, close_order_id)
+                if order_details:
+                    status = getattr(order_details, "status", None)
+                    if status is not None and not self._is_filled_status(status):
+                        logger.debug(
+                            "Exit order %s not filled yet (status=%s); using simulated execution",
+                            close_order_id,
+                            status,
+                        )
+                    elif order_details.average_price:
+                        executed_price = float(order_details.average_price)
+                        filled_qty = float(order_details.filled_quantity or 0.0)
+                        if filled_qty > 0:
+                            position_notional = filled_qty * executed_price
+                        fee_from_order = float(order_details.commission or 0.0)
+                        if fee_from_order > 0:
+                            fee_delta = fee_from_order - exit_fee
+                            exit_fee = fee_from_order
+                            slippage_cost = self._calculate_slippage_from_fill(
+                                base_price, executed_price, position_notional
+                            )
+                            slippage_delta = slippage_cost - cost_result.slippage_cost
+                            self._adjust_cost_totals(fee_delta, slippage_delta)
+                        else:
+                            # Preserves liquidity-aware fee rate when commissions are unavailable.
+                            fee_rate = (
+                                cost_result.fee / original_notional
+                                if original_notional > 0
+                                else 0.0
+                            )
+                            exit_fee = position_notional * fee_rate
+                            slippage_cost = self._calculate_slippage_from_fill(
+                                base_price, executed_price, position_notional
+                            )
+                            fee_delta = exit_fee - cost_result.fee
+                            slippage_delta = slippage_cost - cost_result.slippage_cost
+                            self._adjust_cost_totals(fee_delta, slippage_delta)
+                    else:
+                        logger.debug(
+                            "Exit order %s fill missing average price; using simulated execution",
+                            close_order_id,
+                        )
+            else:
+                logger.info("PAPER TRADE - Would close %s position on %s", side.value, symbol)
+
+            return ExitExecutionResult(
+                success=True,
+                executed_price=executed_price,
+                exit_fee=exit_fee,
+                slippage_cost=slippage_cost,
+            )
+
+        except (ValueError, ArithmeticError, TypeError) as e:
+            logger.error("Failed to execute exit: %s", e, exc_info=True)
+            return ExitExecutionResult(
+                success=False,
+                error=str(e),
+            )
+
+    def _execute_live_order(
+        self,
+        symbol: str,
+        side: PositionSide,
+        value: float,
+        price: float,
+    ) -> str | None:
+        """Execute a real market order via exchange with idempotency.
+
+        Generates a client order ID based on timestamp and order details to prevent
+        duplicate orders on network failures or retries.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side.
+            value: Order value.
+            price: Expected price.
+
+        Returns:
+            Order ID if successful, None otherwise.
+        """
+        # CRITICAL VALIDATION: Never allow live trading mode without exchange interface
+        if self.exchange_interface is None:
+            if self.enable_live_trading:
+                # Fail loudly - this is a configuration error that must be fixed
+                logger.critical(
+                    "CRITICAL: Live trading enabled but no exchange interface configured! "
+                    "This would create fake orders. Aborting order placement."
+                )
+                return None
+            else:
+                # Paper trading mode - this is expected
+                logger.debug("Paper trading mode - generating simulated order ID")
+                return f"paper_{int(time.time() * 1000)}"
+
+        try:
+            # Defensive validation - should already be validated by caller but check anyway
+            if price <= 0 or not math.isfinite(price):
+                logger.error(
+                    "Invalid price %.8f for live order on %s - refusing to place order",
+                    price,
+                    symbol,
+                )
+                return None
+
+            if value <= 0 or not math.isfinite(value):
+                logger.error(
+                    "Invalid value %.8f for live order on %s - refusing to place order",
+                    value,
+                    symbol,
+                )
+                return None
+
+            order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
+            quantity = value / price
+            quantity = self._normalize_quantity(symbol, quantity, value)
+            if quantity <= 0:
+                return None
+
+            # Generate deterministic client order ID for idempotency
+            # Format: atb_SYMBOL_SIDE_TIMESTAMP_UUID
+            # UUID prevents collision if multiple orders placed within same millisecond
+            timestamp_ms = int(time.time() * 1000)
+            unique_suffix = uuid.uuid4().hex[:8]
+            client_order_id = f"atb_{symbol}_{side.value}_{timestamp_ms}_{unique_suffix}"
+
+            return self.exchange_interface.place_order(
+                symbol=symbol,
+                side=order_side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+                client_order_id=client_order_id,
+            )
+        except (ConnectionError, TimeoutError, ValueError) as e:
+            logger.error("Live order execution failed: %s", e)
+            return None
+
+    def _close_live_order(
+        self,
+        symbol: str,
+        side: PositionSide,
+        quantity: float,
+        position_notional: float,
+        order_id: str | None = None,
+    ) -> str | None:
+        """Close a real market order via exchange.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side to close.
+            quantity: Quantity to close.
+            order_id: Order ID to close.
+
+        Returns:
+            Order ID if successful, None otherwise.
+        """
+        if self.exchange_interface is None:
+            logger.warning("No exchange interface configured - simulating order close")
+            return None
+
+        try:
+            if quantity <= 0:
+                logger.error("Invalid close quantity %.8f for %s", quantity, symbol)
+                return None
+
+            order_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+            quantity = self._normalize_quantity(symbol, quantity, position_notional)
+            if quantity <= 0:
+                return None
+
+            # Generate deterministic client order ID for exit order idempotency
+            # Use UUID to prevent collision, timestamp for ordering
+            timestamp_ms = int(time.time() * 1000)
+            close_side_str = "SELL" if side == PositionSide.LONG else "BUY"
+            unique_suffix = uuid.uuid4().hex[:8]
+            client_order_id = f"atb_close_{symbol}_{close_side_str}_{timestamp_ms}_{unique_suffix}"
+            if order_id:
+                # Include original order ID for traceability
+                client_order_id = f"{client_order_id}_{order_id[:8]}"
+
+            close_order_id = self.exchange_interface.place_order(
+                symbol=symbol,
+                side=order_side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+                client_order_id=client_order_id,
+            )
+            if close_order_id:
+                logger.info(
+                    "Live close order placed: %s %s qty=%.8f order_id=%s",
+                    symbol,
+                    order_side.value,
+                    quantity,
+                    close_order_id,
+                )
+                return close_order_id
+            logger.error("Failed to close live order for %s (order_id=%s)", symbol, order_id)
+            return None
+        except (ConnectionError, TimeoutError, ValueError) as e:
+            logger.error("Live order close failed: %s", e)
+            return None
+
+    def _normalize_quantity(self, symbol: str, quantity: float, value: float) -> float:
+        """Normalize quantity based on exchange symbol info with robust error handling."""
+        if quantity <= 0 or self.exchange_interface is None:
+            return 0.0
+
+        try:
+            symbol_info = self.exchange_interface.get_symbol_info(symbol)
+        except (ConnectionError, TimeoutError) as e:
+            logger.error("Failed to fetch symbol info for %s: %s - using raw quantity", symbol, e)
+            return quantity
+
+        if not symbol_info or not isinstance(symbol_info, dict):
+            logger.warning(
+                "Missing or invalid symbol info for %s (type=%s) - using raw quantity",
+                symbol,
+                type(symbol_info).__name__ if symbol_info else "None",
+            )
+            return quantity
+
+        # Validate and apply step_size
+        step_size = symbol_info.get("step_size")
+        if step_size is None or not isinstance(step_size, (int, float)):
+            logger.warning("Invalid step_size for %s - using raw quantity", symbol)
+            # Continue without step_size normalization
+        elif step_size <= 0 or not math.isfinite(step_size):
+            logger.warning(
+                "Invalid step_size value %.8f for %s - using raw quantity", step_size, symbol
+            )
+        else:
+            # Apply step_size rounding
+            try:
+                normalized = round(quantity / step_size) * step_size
+                if not math.isfinite(normalized):
+                    logger.error(
+                        "Normalization produced non-finite value for %s - keeping original",
+                        symbol,
+                    )
+                else:
+                    quantity = normalized
+            except (ArithmeticError, ValueError) as e:
+                logger.error("Step_size normalization failed for %s: %s", symbol, e)
+
+        # Validate min_qty constraint
+        min_qty = symbol_info.get("min_qty")
+        if min_qty and isinstance(min_qty, (int, float)) and min_qty > 0:
+            if quantity < min_qty:
+                logger.error(
+                    "Calculated quantity %.8f below minimum %.8f for %s",
+                    quantity,
+                    min_qty,
+                    symbol,
+                )
+                return 0.0
+
+        # Validate min_notional constraint
+        min_notional = symbol_info.get("min_notional")
+        if min_notional and isinstance(min_notional, (int, float)) and min_notional > 0:
+            if value < min_notional:
+                logger.error(
+                    "Order value %.2f below minimum notional %.2f for %s",
+                    value,
+                    min_notional,
+                    symbol,
+                )
+                return 0.0
+
+        return quantity
+
+    def get_execution_stats(self) -> dict:
+        """Get execution statistics.
+
+        Returns:
+            Dictionary with fee and slippage totals.
+        """
+        return {
+            "total_fees_paid": self.total_fees_paid,
+            "total_slippage_cost": self.total_slippage_cost,
+            "fee_rate": self.fee_rate,
+            "slippage_rate": self.slippage_rate,
+            "enable_live_trading": self.enable_live_trading,
+        }

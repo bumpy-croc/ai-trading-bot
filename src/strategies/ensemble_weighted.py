@@ -20,23 +20,20 @@ Risk Management:
 - Dynamic position sizing based on confidence
 """
 
-from typing import Any, Optional
-
+from src.config.constants import DEFAULT_STRATEGY_MIN_CONFIDENCE
 from src.strategies.components import (
-    Strategy,
-    WeightedVotingSignalGenerator,
-    VolatilityRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
     MLBasicSignalGenerator,
     MLSignalGenerator,
+    Strategy,
+    VolatilityRiskManager,
+    WeightedVotingSignalGenerator,
 )
 
-
-# Configuration constants
-MIN_STRATEGIES_FOR_SIGNAL = 1
-PERFORMANCE_WINDOW = 30
-WEIGHT_UPDATE_FREQUENCY = 10
+# Configuration constants for ensemble strategy
+# Note: MIN_STRATEGIES_FOR_SIGNAL, PERFORMANCE_WINDOW, and WEIGHT_UPDATE_FREQUENCY
+# are reserved for future dynamic weight adjustment features.
 BASE_POSITION_SIZE = 0.50
 MIN_POSITION_SIZE_RATIO = 0.20
 MAX_POSITION_SIZE_RATIO = 0.80
@@ -62,6 +59,13 @@ def create_ensemble_weighted_strategy(
     Returns:
         Configured Strategy instance
     """
+    # Validate at least one signal generator is enabled
+    if not any([use_ml_basic, use_ml_adaptive, use_ml_sentiment]):
+        raise ValueError(
+            "At least one signal generator must be enabled. "
+            "Set one of use_ml_basic, use_ml_adaptive, or use_ml_sentiment to True."
+        )
+
     # Create individual signal generators with weights
     generators = {}
 
@@ -75,7 +79,7 @@ def create_ensemble_weighted_strategy(
     # Create weighted voting signal generator
     signal_generator = WeightedVotingSignalGenerator(
         generators=generators,
-        min_confidence=0.3,
+        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         consensus_threshold=0.6,
     )
 
@@ -90,7 +94,7 @@ def create_ensemble_weighted_strategy(
     # Create aggressive position sizer
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=BASE_POSITION_SIZE,
-        min_confidence=0.3,
+        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
     )
 
     # Create regime detector
@@ -118,14 +122,16 @@ def create_ensemble_weighted_strategy(
     }
 
     # Configure trailing stop behavior via risk overrides
-    strategy._risk_overrides = {
-        "trailing_stop": {
-            "enabled": True,
-            "activation_threshold": 0.04,
-            "distance": 0.02,
-            "step": 0.01,
-            "cooldown_hours": 4,
+    strategy.set_risk_overrides(
+        {
+            "trailing_stop": {
+                "enabled": True,
+                "activation_threshold": 0.04,
+                "distance": 0.02,
+                "step": 0.01,
+                "cooldown_hours": 4,
+            }
         }
-    }
+    )
 
     return strategy

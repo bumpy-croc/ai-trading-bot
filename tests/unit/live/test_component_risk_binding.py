@@ -1,6 +1,6 @@
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.risk_adapter import CoreRiskAdapter
@@ -15,9 +15,15 @@ class DummyComponent:
     def get_feature_generators(self):  # pragma: no cover - interface compatibility
         return []
 
+    def generate_signal(self, *args, **kwargs):  # pragma: no cover - interface compatibility
+        return None
+
 
 class DummySizer(DummyComponent):
     def size_position(self, *args, **kwargs):  # pragma: no cover - interface compatibility
+        return 0.0
+
+    def calculate_size(self, *args, **kwargs):  # pragma: no cover - interface compatibility
         return 0.0
 
 
@@ -40,7 +46,7 @@ def _build_engine(
     strategy: ComponentStrategy,
     **engine_kwargs,
 ) -> LiveTradingEngine:
-    monkeypatch.setattr("src.live.trading_engine.DatabaseManager", MockDatabaseManager)
+    monkeypatch.setattr("src.engines.live.trading_engine.DatabaseManager", MockDatabaseManager)
     engine_kwargs.setdefault("data_provider", object())
     engine_kwargs.setdefault("enable_live_trading", False)
     engine_kwargs.setdefault("log_trades", False)

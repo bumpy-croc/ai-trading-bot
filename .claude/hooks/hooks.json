@@ -1,0 +1,16 @@
+{
+  "description": "AI Trading Bot project-specific hooks",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_HOOK_DIR}/post-file-edit.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

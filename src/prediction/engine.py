@@ -7,14 +7,24 @@ engineering, and model inference.
 """
 
 import hashlib
+import logging
+import math
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
+logger = logging.getLogger(__name__)
+
+# Constants
+ENSEMBLE_MODEL_PREFIX = "ensemble:"
+
+from src.config.constants import DEFAULT_INFERENCE_TIMEOUT
+from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
+from src.infrastructure.timeout import run_with_timeout
 from src.regime.detector import RegimeConfig, RegimeDetector
 
 from .config import PredictionConfig
@@ -22,12 +32,13 @@ from .ensemble import SimpleEnsembleAggregator
 from .exceptions import (
     FeatureExtractionError,
     InvalidInputError,
+    ModelInferenceError,
     ModelNotFoundError,
 )
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
-from .models.registry import PredictionModelRegistry, StrategyModel
 from .models.onnx_runner import ModelPrediction
+from .models.registry import PredictionModelRegistry, StrategyModel
 from .utils.caching import PredictionCacheManager
 
 
@@ -43,14 +54,14 @@ class PredictionResult:
     inference_time: float
     features_used: int
     cache_hit: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class PredictionEngine:
     """Main prediction engine facade that orchestrates all components"""
 
-    def __init__(self, config: Optional[PredictionConfig] = None, database_manager=None):
+    def __init__(self, config: PredictionConfig | None = None, database_manager=None):
         """
         Initialize prediction engine with configuration
 
@@ -85,12 +96,10 @@ class PredictionEngine:
 
         # Optional helpers
         self._ensemble_aggregator = None
-        if getattr(self.config, "enable_ensemble", False):
-            self._ensemble_aggregator = SimpleEnsembleAggregator(
-                getattr(self.config, "ensemble_method", "mean")
-            )
+        if self.config.enable_ensemble:
+            self._ensemble_aggregator = SimpleEnsembleAggregator(self.config.ensemble_method)
         self._regime_detector = None
-        if getattr(self.config, "enable_regime_aware_confidence", False):
+        if self.config.enable_regime_aware_confidence:
             self._regime_detector = RegimeDetector(RegimeConfig())
 
         # Performance tracking
@@ -107,7 +116,7 @@ class PredictionEngine:
 
         # No cached structured selection helpers (avoid hidden state)
 
-    def predict(self, data: pd.DataFrame, model_name: Optional[str] = None) -> PredictionResult:
+    def predict(self, data: pd.DataFrame, model_name: str | None = None) -> PredictionResult:
         """
         Main prediction method - unified interface for all predictions
 
@@ -156,7 +165,27 @@ class PredictionEngine:
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
-                prediction = model.predict(prepared_features)
+                # Wrap prediction with timeout to prevent hanging on slow/hung models
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else DEFAULT_INFERENCE_TIMEOUT
+                )
+                try:
+                    prediction = run_with_timeout(
+                        model.predict,
+                        args=(prepared_features,),
+                        timeout_seconds=timeout_seconds,
+                        operation_name="ML model inference",
+                    )
+                except InfraTimeoutError as timeout_err:
+                    # Prediction exceeded timeout - return error result
+                    inference_time = time.time() - start_time
+                    raise ModelInferenceError(
+                        f"Model inference timeout after {timeout_seconds}s"
+                    ) from timeout_err
+
                 final_price = prediction.price
                 final_conf = prediction.confidence
                 final_dir = prediction.direction
@@ -165,9 +194,7 @@ class PredictionEngine:
                 features_used = self._count_features_used(prepared_features)
 
                 # Apply rolling MinMax denormalization if needed
-                final_price = self._apply_rolling_denormalization(
-                    final_price, bundle, data
-                )
+                final_price = self._apply_rolling_denormalization(final_price, bundle, data)
             else:
                 # Run all available structured runners for ensemble
                 preds = []
@@ -188,6 +215,14 @@ class PredictionEngine:
                 if not ensemble_bundles:
                     ensemble_bundles = [bundle]
 
+                # Same timeout configuration as single model
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else DEFAULT_INFERENCE_TIMEOUT
+                )
+
                 for ensemble_bundle in ensemble_bundles:
                     ensemble_features = self._prepare_features_for_bundle(
                         ensemble_bundle, features, features_df
@@ -195,7 +230,17 @@ class PredictionEngine:
                     if not features_used:
                         features_used = self._count_features_used(ensemble_features)
 
-                    raw_prediction = ensemble_bundle.runner.predict(ensemble_features)
+                    try:
+                        raw_prediction = run_with_timeout(
+                            ensemble_bundle.runner.predict,
+                            args=(ensemble_features,),
+                            timeout_seconds=timeout_seconds,
+                            operation_name=f"Ensemble model {ensemble_bundle.model_name} inference",
+                        )
+                    except InfraTimeoutError:
+                        # Skip this ensemble member if it times out
+                        continue
+
                     denormalized_price = self._apply_rolling_denormalization(
                         raw_prediction.price, ensemble_bundle, data
                     )
@@ -208,11 +253,18 @@ class PredictionEngine:
                             inference_time=raw_prediction.inference_time,
                         )
                     )
+
+                # Check for empty predictions (all ensemble members timed out)
+                if not preds:
+                    raise ModelInferenceError(
+                        "All ensemble members timed out - no predictions available"
+                    )
+
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence
                 final_dir = ens.direction
-                final_model_name = f"ensemble:{self.config.ensemble_method}"
+                final_model_name = f"{ENSEMBLE_MODEL_PREFIX}{self.config.ensemble_method}"
                 member_preds = ens.member_predictions
                 if not features_used:
                     features_used = self._count_features_used(features)
@@ -232,7 +284,7 @@ class PredictionEngine:
                     confidence=0.0,
                     direction=0,
                     model_name=final_model_name,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     inference_time=inference_time,
                     features_used=features_used,
                     error=f"Prediction timeout after {inference_time:.3f}s (max: {self.config.max_prediction_latency}s)",
@@ -265,7 +317,7 @@ class PredictionEngine:
                 confidence=adjusted_conf,
                 direction=final_dir,
                 model_name=final_model_name,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 inference_time=inference_time,
                 features_used=features_used,
                 cache_hit=cache_hit,
@@ -306,7 +358,7 @@ class PredictionEngine:
                 confidence=0.0,
                 direction=0,
                 model_name=model_name or "unknown",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 inference_time=total_time,
                 features_used=0,
                 error=error_message,
@@ -319,10 +371,10 @@ class PredictionEngine:
     def predict_series(
         self,
         data: pd.DataFrame,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         batch_size: int = 1024,
         return_denormalized: bool = False,
-        sequence_length_override: Optional[int] = None,
+        sequence_length_override: int | None = None,
     ) -> dict[str, Any]:
         """
         Predict over a long OHLCV series efficiently.
@@ -339,7 +391,7 @@ class PredictionEngine:
         bundle = self._resolve_bundle(model_name)
         model = bundle.runner
 
-        features_df: Optional[pd.DataFrame]
+        features_df: pd.DataFrame | None
         if isinstance(features_df_or_arr, pd.DataFrame):
             features_df = features_df_or_arr
         else:
@@ -360,7 +412,7 @@ class PredictionEngine:
             base_features = np.asarray(features_df_or_arr, dtype=np.float32)
 
         feat = base_features
-        schema_sequence_length: Optional[int] = None
+        schema_sequence_length: int | None = None
         if features_df is not None and bundle.feature_schema:
             try:
                 aligned_matrix, schema_sequence_length = self._select_schema_features(
@@ -392,6 +444,13 @@ class PredictionEngine:
                 "normalized": not return_denormalized,
             }
 
+        # Validate model session exists (prevents AttributeError with stub runners)
+        if model.session is None:
+            raise ModelInferenceError(
+                f"Model {bundle.key} has no valid session (stub runner). "
+                "Model loading may have failed - check logs for errors."
+            )
+
         session = model.session
         input_name = session.get_inputs()[0].name
 
@@ -409,10 +468,32 @@ class PredictionEngine:
 
         num_windows = windows.shape[0]
         preds_norm = np.empty((num_windows,), dtype=np.float32)
+
+        # Configure timeout for series prediction
+        timeout_seconds = (
+            self.config.max_prediction_latency
+            if hasattr(self.config, "max_prediction_latency")
+            and isinstance(self.config.max_prediction_latency, (int, float))
+            else DEFAULT_INFERENCE_TIMEOUT
+        )
+
         for start in range(0, num_windows, batch_size):
             end = min(start + batch_size, num_windows)
             batch = windows[start:end]
-            output = session.run(None, {input_name: batch})
+
+            # Wrap session.run with timeout to prevent hanging on large batches
+            try:
+                output = run_with_timeout(
+                    session.run,
+                    args=(None, {input_name: batch}),
+                    timeout_seconds=timeout_seconds,
+                    operation_name=f"Series prediction batch {start}-{end}",
+                )
+            except InfraTimeoutError as timeout_err:
+                raise ModelInferenceError(
+                    f"Series prediction batch timeout after {timeout_seconds}s"
+                ) from timeout_err
+
             out = output[0]
             preds_norm[start:end] = out.reshape(out.shape[0], -1)[:, 0].astype(np.float32)
 
@@ -437,7 +518,7 @@ class PredictionEngine:
         return {"indices": indices, "preds": preds_denorm, "normalized": False}
 
     def predict_batch(
-        self, data_batches: list[pd.DataFrame], model_name: Optional[str] = None
+        self, data_batches: list[pd.DataFrame], model_name: str | None = None
     ) -> list[PredictionResult]:
         """
         Batch prediction for multiple data sets
@@ -465,7 +546,7 @@ class PredictionEngine:
                     confidence=0.0,
                     direction=0,
                     model_name=model_name or "unknown",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     inference_time=0.0,
                     features_used=0,
                     error=str(e),
@@ -517,13 +598,27 @@ class PredictionEngine:
                 self._total_feature_extraction_time += feature_time
                 self._feature_extraction_count += 1
 
-                # Make prediction with pre-loaded model
-                prediction = model.predict(prepared_features)
+                # Make prediction with pre-loaded model (with timeout protection)
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else DEFAULT_INFERENCE_TIMEOUT
+                )
+                try:
+                    prediction = run_with_timeout(
+                        model.predict,
+                        args=(prepared_features,),
+                        timeout_seconds=timeout_seconds,
+                        operation_name=f"Batch prediction {i+1}/{len(data_batches)}",
+                    )
+                except InfraTimeoutError as timeout_err:
+                    raise ModelInferenceError(
+                        f"Batch prediction timeout after {timeout_seconds}s"
+                    ) from timeout_err
 
                 # Apply rolling MinMax denormalization if needed
-                denorm_price = self._apply_rolling_denormalization(
-                    prediction.price, bundle, data
-                )
+                denorm_price = self._apply_rolling_denormalization(prediction.price, bundle, data)
 
                 # Calculate total inference time
                 inference_time = time.time() - start_time
@@ -534,7 +629,7 @@ class PredictionEngine:
                     confidence=prediction.confidence,
                     direction=prediction.direction,
                     model_name=prediction.model_name,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     inference_time=inference_time,
                     features_used=self._count_features_used(prepared_features),
                     cache_hit=self._was_cache_hit(),
@@ -559,7 +654,7 @@ class PredictionEngine:
                     confidence=0.0,
                     direction=0,
                     model_name=model_name or "unknown",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     inference_time=time.time() - start_time,
                     features_used=0,
                     error=str(e),
@@ -661,7 +756,7 @@ class PredictionEngine:
 
         return stats
 
-    def invalidate_model_cache(self, model_name: Optional[str] = None) -> int:
+    def invalidate_model_cache(self, model_name: str | None = None) -> int:
         """
         Invalidate prediction cache for specific model or all models.
 
@@ -695,7 +790,7 @@ class PredictionEngine:
         health = {
             "status": "healthy",
             "components": {},
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Check feature pipeline
@@ -771,6 +866,10 @@ class PredictionEngine:
         if (data[required_columns] <= 0).any().any():
             raise InvalidInputError("Input data contains non-positive values")
 
+        # Check for infinite values (defense-in-depth before feature extraction)
+        if np.isinf(data[required_columns].select_dtypes(include=[np.number])).any().any():
+            raise InvalidInputError("Input data contains infinite values")
+
     def _extract_features(self, data: pd.DataFrame) -> np.ndarray:
         """Extract features using feature pipeline"""
         try:
@@ -842,7 +941,7 @@ class PredictionEngine:
         self,
         bundle: StrategyModel,
         raw_features: np.ndarray,
-        features_df: Optional[pd.DataFrame],
+        features_df: pd.DataFrame | None,
     ) -> np.ndarray:
         """Align feature matrix to a bundle's schema when available."""
 
@@ -853,9 +952,15 @@ class PredictionEngine:
                 if window.ndim == 2:
                     return window[None, :, :]
                 return window
-            except Exception:
-                # Fall back to raw features if selection fails
-                pass
+            except Exception as exc:
+                # Feature schema alignment failed - log warning and fall back to raw features
+                # This could indicate train/inference mismatch (model expects different features)
+                logger.warning(
+                    "Feature schema alignment failed for model %s: %s. Using raw features. "
+                    "This may indicate train/inference mismatch.",
+                    bundle.key,
+                    exc,
+                )
 
         if isinstance(raw_features, np.ndarray):
             return raw_features.astype(np.float32, copy=False)
@@ -869,7 +974,7 @@ class PredictionEngine:
             return int(features.shape[-1])
         return 0
 
-    def _resolve_bundle(self, model_name: Optional[str]) -> StrategyModel:
+    def _resolve_bundle(self, model_name: str | None) -> StrategyModel:
         """Resolve the model bundle to use for an inference request."""
 
         bundles = list(self.model_registry.list_bundles())
@@ -889,7 +994,7 @@ class PredictionEngine:
 
         raise ModelNotFoundError("No prediction models available")
 
-    def _get_model(self, model_name: Optional[str]):
+    def _get_model(self, model_name: str | None):
         """Get model runner for prediction (structured-only)."""
         bundle = self._resolve_bundle(model_name)
         return bundle.runner
@@ -974,6 +1079,16 @@ class PredictionEngine:
         window_data = input_data[target_feature].tail(window)
         window_min = float(window_data.min())
         window_max = float(window_data.max())
+
+        # Validate min/max are finite to prevent NaN propagation
+        if not math.isfinite(window_min) or not math.isfinite(window_max):
+            logger.error(
+                "Invalid window min/max (min=%.8f, max=%.8f) for denormalization - "
+                "input data contains NaN/inf. Returning raw normalized prediction.",
+                window_min,
+                window_max,
+            )
+            return normalized_price
 
         # Denormalize: real_price = normalized * (max - min) + min
         if window_max == window_min:

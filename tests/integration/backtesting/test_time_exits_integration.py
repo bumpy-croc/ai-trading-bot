@@ -2,7 +2,7 @@ from datetime import time
 
 import pandas as pd
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.position_management.time_exits import MarketSessionDef, TimeExitPolicy
 from src.strategies.ml_basic import create_ml_basic_strategy
 

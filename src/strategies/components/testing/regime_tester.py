@@ -8,7 +8,7 @@ in specific market regimes, with regime filtering and regime-specific performanc
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -62,12 +62,12 @@ class RegimeTestResults:
     calmar_ratio: float  # Return / Max Drawdown
 
     # Component performance (if available)
-    signal_accuracy_in_regime: Optional[float] = None
-    risk_control_effectiveness: Optional[float] = None
-    position_sizing_optimality: Optional[float] = None
+    signal_accuracy_in_regime: float | None = None
+    risk_control_effectiveness: float | None = None
+    position_sizing_optimality: float | None = None
 
     # Regime transition analysis
-    transition_performance: Dict[str, float] = None  # Performance during regime changes
+    transition_performance: dict[str, float] = None  # Performance during regime changes
 
     # Error tracking
     error_count: int = 0
@@ -78,7 +78,7 @@ class RegimeTestResults:
 class RegimeComparisonResults:
     """Results from comparing performance across multiple regimes"""
 
-    regime_results: Dict[str, RegimeTestResults]
+    regime_results: dict[str, RegimeTestResults]
 
     # Cross-regime analysis
     best_regime: str
@@ -103,7 +103,7 @@ class RegimeTester:
     """
 
     def __init__(
-        self, test_data: pd.DataFrame, regime_detection_params: Optional[Dict[str, Any]] = None
+        self, test_data: pd.DataFrame, regime_detection_params: dict[str, Any] | None = None
     ):
         """
         Initialize regime tester
@@ -233,7 +233,7 @@ class RegimeTester:
         current_regime = None
         current_duration = 0
 
-        for i, (idx, row) in enumerate(regime_data.iterrows()):
+        for i, (_idx, row) in enumerate(regime_data.iterrows()):
             regime_key = f"{row['trend']}_{row['volatility']}"
 
             if regime_key == current_regime:
@@ -260,7 +260,7 @@ class RegimeTester:
         overall_strength = (trend_strength + vol_strength) / 2
         return overall_strength.fillna(0.5)
 
-    def _create_regime_datasets(self) -> Dict[str, pd.DataFrame]:
+    def _create_regime_datasets(self) -> dict[str, pd.DataFrame]:
         """Create filtered datasets for each regime type"""
         regime_datasets = {}
 
@@ -311,7 +311,6 @@ class RegimeTester:
 
         # Initialize tracking variables
         balance = initial_balance
-        positions = []
         trades = []
         portfolio_values = [balance]
         error_count = 0
@@ -321,43 +320,32 @@ class RegimeTester:
             try:
                 current_data = regime_data.iloc[: i + 1]
 
-                # Create regime context with safe parsing and enum conversion
-                regime_parts = regime_type.split("_")
-                if len(regime_parts) >= 4:
-                    trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
-                    volatility_str = f"{regime_parts[2]}_{regime_parts[3]}"
-                elif len(regime_parts) >= 3:
-                    # Handle legacy format without _vol suffix
-                    trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
-                    volatility_str = regime_parts[2]
-                else:
-                    # Log warning for unexpected format
-                    logger.warning(
-                        f"Unexpected regime_type format: '{regime_type}'. Using fallback values."
-                    )
-                    trend_str = "range"
-                    volatility_str = "low_vol"
+                # Regime parsing and context creation commented out - strategy detects regime internally
+                # regime_parts = regime_type.split("_")
+                # if len(regime_parts) >= 4:
+                #     trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
+                #     volatility_str = f"{regime_parts[2]}_{regime_parts[3]}"
+                # elif len(regime_parts) >= 3:
+                #     trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
+                #     volatility_str = regime_parts[2]
+                # else:
+                #     logger.warning(f"Unexpected regime_type format: '{regime_type}'. Using fallback values.")
+                #     trend_str = "range"
+                #     volatility_str = "low_vol"
+                # trend = self._parse_trend_label(trend_str)
+                # volatility = self._parse_vol_label(volatility_str)
+                # raw_duration = regime_data.iloc[i]["regime_duration"]
+                # duration = int(max(1, min(raw_duration, 1_000_000))) if not np.isnan(raw_duration) else 1
+                # regime_context = RegimeContext(
+                #     trend=trend,
+                #     volatility=volatility,
+                #     confidence=regime_data.iloc[i]["regime_confidence"],
+                #     duration=duration,
+                #     strength=regime_data.iloc[i]["regime_strength"],
+                #     metadata={"regime_type": regime_type},
+                # )
 
-                # Convert to enums
-                trend = self._parse_trend_label(trend_str)
-                volatility = self._parse_vol_label(volatility_str)
-
-                # Validate and bound duration value
-                raw_duration = regime_data.iloc[i]["regime_duration"]
-                duration = (
-                    int(max(1, min(raw_duration, 1_000_000))) if not np.isnan(raw_duration) else 1
-                )
-
-                regime_context = RegimeContext(
-                    trend=trend,
-                    volatility=volatility,
-                    confidence=regime_data.iloc[i]["regime_confidence"],
-                    duration=duration,
-                    strength=regime_data.iloc[i]["regime_strength"],
-                    metadata={"regime_type": regime_type},
-                )
-
-                # Process candle with strategy (pass balance, strategy detects regime internally)
+                # Process candle with strategy (strategy detects regime internally)
                 decision = strategy.process_candle(current_data, i, balance)
 
                 # Execute trades based on decision (TradingDecision is a dataclass)
@@ -380,9 +368,9 @@ class RegimeTester:
 
                 portfolio_values.append(balance)
 
-            except Exception as e:
+            except Exception:
                 error_count += 1
-                logger.error(f"Error testing strategy in regime at index {i}: {e}", exc_info=True)
+                logger.exception("Error testing strategy in regime at index %d", i)
                 continue
 
         # Calculate performance metrics
@@ -453,7 +441,7 @@ class RegimeTester:
 
     def _execute_trade(
         self, decision, entry_data: pd.Series, exit_data: pd.Series, balance: float
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Execute a trade based on strategy decision"""
         try:
             entry_price = entry_data["close"]
@@ -495,8 +483,8 @@ class RegimeTester:
                 "exit_time": exit_data.name,
             }
 
-        except Exception as e:
-            logger.error(f"Error executing trade: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Error executing trade")
             return None
 
     def _calculate_sharpe_ratio(self, returns: pd.Series, risk_free_rate: float = 0.0) -> float:
@@ -517,7 +505,7 @@ class RegimeTester:
         return abs(drawdown.min())
 
     def _calculate_regime_entry_accuracy(
-        self, trades: List[Dict[str, Any]], regime_data: pd.DataFrame
+        self, trades: list[dict[str, Any]], regime_data: pd.DataFrame
     ) -> float:
         """Calculate how well strategy performs when entering regime"""
         if not trades:
@@ -532,19 +520,19 @@ class RegimeTester:
         successful_entries = sum(1 for t in early_regime_trades if t["return"] > 0)
         return successful_entries / len(early_regime_trades)
 
-    def _is_early_regime_trade(self, trade: Dict[str, Any], regime_data: pd.DataFrame) -> bool:
+    def _is_early_regime_trade(self, trade: dict[str, Any], regime_data: pd.DataFrame) -> bool:
         """Check if trade occurred early in a regime period"""
         try:
             trade_time = trade["entry_time"]
             if trade_time in regime_data.index:
                 duration = regime_data.loc[trade_time, "regime_duration"]
                 return duration <= 5  # Consider first 5 periods as "early"
-        except:
+        except (KeyError, IndexError, ValueError):
             pass
         return False
 
     def _calculate_regime_exit_timing(
-        self, trades: List[Dict[str, Any]], regime_data: pd.DataFrame
+        self, trades: list[dict[str, Any]], regime_data: pd.DataFrame
     ) -> float:
         """Calculate how well strategy handles regime transitions"""
         if not trades:
@@ -561,14 +549,14 @@ class RegimeTester:
         )  # Small loss acceptable
         return successful_transitions / len(transition_trades)
 
-    def _is_transition_trade(self, trade: Dict[str, Any], regime_data: pd.DataFrame) -> bool:
+    def _is_transition_trade(self, trade: dict[str, Any], regime_data: pd.DataFrame) -> bool:
         """Check if trade occurred during regime transition"""
         try:
             trade_time = trade["entry_time"]
             if trade_time in regime_data.index:
                 confidence = regime_data.loc[trade_time, "regime_confidence"]
                 return confidence < 0.5  # Low confidence indicates transition
-        except:
+        except (KeyError, IndexError, ValueError):
             pass
         return False
 
@@ -606,7 +594,7 @@ class RegimeTester:
     def compare_regime_performance(
         self,
         strategy: Strategy,
-        regime_types: Optional[List[str]] = None,
+        regime_types: list[str] | None = None,
         initial_balance: float = 10000.0,
     ) -> RegimeComparisonResults:
         """
@@ -629,8 +617,8 @@ class RegimeTester:
             try:
                 result = self.test_strategy_in_regime(strategy, regime_type, initial_balance)
                 regime_results[regime_type] = result
-            except Exception as e:
-                logger.error(f"Error testing regime {regime_type}: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error testing regime %s", regime_type)
                 continue
 
         if not regime_results:
@@ -686,8 +674,8 @@ class RegimeTester:
         )
 
     def test_component_in_regime(
-        self, component: Union[SignalGenerator, RiskManager, PositionSizer], regime_type: str
-    ) -> Dict[str, Any]:
+        self, component: SignalGenerator | RiskManager | PositionSizer, regime_type: str
+    ) -> dict[str, Any]:
         """
         Test individual component performance in specific regime
 
@@ -705,16 +693,15 @@ class RegimeTester:
 
         if isinstance(component, SignalGenerator):
             return self._test_signal_generator_in_regime(component, regime_data, regime_type)
-        elif isinstance(component, RiskManager):
+        if isinstance(component, RiskManager):
             return self._test_risk_manager_in_regime(component, regime_data, regime_type)
-        elif isinstance(component, PositionSizer):
+        if isinstance(component, PositionSizer):
             return self._test_position_sizer_in_regime(component, regime_data, regime_type)
-        else:
-            raise ValueError(f"Unsupported component type: {type(component)}")
+        raise ValueError(f"Unsupported component type: {type(component)}")
 
     def _test_signal_generator_in_regime(
         self, generator: SignalGenerator, regime_data: pd.DataFrame, regime_type: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Test signal generator in specific regime"""
         signals = []
         accuracies = []
@@ -767,20 +754,17 @@ class RegimeTester:
                     else signal.direction
                 )
 
-                if direction_value == "buy" and future_return > 0:
-                    accurate = True
-                elif direction_value == "sell" and future_return < 0:
-                    accurate = True
-                elif direction_value == "hold" and abs(future_return) < 0.01:
-                    accurate = True
-                else:
-                    accurate = False
+                accurate = (
+                    (direction_value == "buy" and future_return > 0)
+                    or (direction_value == "sell" and future_return < 0)
+                    or (direction_value == "hold" and abs(future_return) < 0.01)
+                )
 
                 signals.append(signal)
                 accuracies.append(accurate)
 
-            except Exception as e:
-                logger.error(f"Error testing signal generator in regime: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error testing signal generator in regime")
                 continue
 
         if not signals:
@@ -802,7 +786,7 @@ class RegimeTester:
 
     def _test_risk_manager_in_regime(
         self, risk_manager: RiskManager, regime_data: pd.DataFrame, regime_type: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Test risk manager in specific regime"""
         # Placeholder implementation - would need more sophisticated testing
         return {
@@ -814,7 +798,7 @@ class RegimeTester:
 
     def _test_position_sizer_in_regime(
         self, position_sizer: PositionSizer, regime_data: pd.DataFrame, regime_type: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Test position sizer in specific regime"""
         # Placeholder implementation - would need more sophisticated testing
         return {
@@ -824,7 +808,7 @@ class RegimeTester:
             "regime_adaptation": 0.8,  # Placeholder
         }
 
-    def get_regime_statistics(self) -> Dict[str, Any]:
+    def get_regime_statistics(self) -> dict[str, Any]:
         """Get statistics about regimes in the test data"""
         regime_stats = {}
 
@@ -843,7 +827,7 @@ class RegimeTester:
 
         return regime_stats
 
-    def create_regime_transition_analysis(self) -> Dict[str, Any]:
+    def create_regime_transition_analysis(self) -> dict[str, Any]:
         """Analyze regime transitions in the data"""
         transitions = []
 

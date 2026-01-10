@@ -6,7 +6,7 @@ automatic strategy switching components.
 """
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pandas as pd
@@ -63,7 +63,7 @@ class TestPerformanceMonitoringSystemIntegration(unittest.TestCase):
         self, tracker: PerformanceTracker, good_performance: bool = True
     ):
         """Populate a strategy with test performance data"""
-        base_time = datetime.now() - timedelta(days=30)
+        base_time = datetime.now(UTC) - timedelta(days=30)
 
         for i in range(20):
             timestamp = base_time + timedelta(days=i)

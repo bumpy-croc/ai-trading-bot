@@ -8,7 +8,7 @@ This is a modular cryptocurrency trading bot focused on long-term, risk-balanced
 - Medium-large Python project (~50+ modules)
 - Python 3.11+ required, primarily Python 3.11/3.12 tested
 - Key dependencies: Flask, SQLAlchemy, TensorFlow/ONNX, pandas, scikit-learn, python-binance, ccxt
-- Database: PostgreSQL only (no SQLite fallback)
+- Database: PostgreSQL required for runtime/live/integration; unit tests may use SQLite in-memory
 - Runtime: CLI tool (`atb`) with web dashboards
 - Deployment: Railway (primary), Docker support
 - Target: Long-running trading strategies with real-time monitoring
@@ -31,7 +31,7 @@ atb db verify                  # Verify connection
 
 # 3. Test installation
 atb --help                   # Verify CLI works
-atb test unit                # Run test suite (requires DB)
+atb test unit                # Unit tests (DB not required unless a test opts into it)
 ```
 
 ### Build System Details
@@ -119,15 +119,23 @@ PYTHONPATH=./src:. pytest -m "not integration" -n 2 --dist=loadgroup
 ```
 backtesting/       # Vectorized simulation engine
 config/            # Typed configuration + constants + feature flags
+dashboards/        # Flask dashboards (monitoring/backtesting/market prediction)
 data_providers/    # Market & sentiment providers + caching
 database/          # SQLAlchemy models + DatabaseManager
+infrastructure/    # Logging configuration + runtime helpers
 live/              # Live trading engine
 ml/                # Trained models (.onnx/.keras) + metadata
-monitoring/        # Real-time dashboards (Flask + SocketIO)
+optimizer/         # Optimization cycle tooling
+performance/       # Performance and diagnostics helpers
+position_management/ # Partial exits, trailing stops, dynamic risk policies
 prediction/        # Model registry, ONNX runtime, caching
+regime/            # Market regime detection and analysis
 risk/              # Risk parameters & position sizing
+sentiment/         # Sentiment adapters and data mergers
 strategies/        # Built-in strategies (ml_basic)
-utils/             # Shared utilities
+tech/              # Shared indicator math + feature builders + adapters
+trading/           # Trading interfaces plus symbol utilities
+indicators/        # Legacy shim that re-exports `src.tech` (kept for compatibility)
 ```
 
 ### Key Configuration Files
@@ -145,10 +153,10 @@ utils/             # Shared utilities
 - **Utilities**: `atb db verify`, `atb tests heartbeat`
 
 ### Database Schema & Migrations
-- **Database**: PostgreSQL only, managed by SQLAlchemy
+- **Database**: PostgreSQL managed by SQLAlchemy (SQLite is used only in isolated unit tests)
 - **Migrations**: Alembic (`alembic upgrade head`)
 - **Connection**: Via `DATABASE_URL` environment variable
-- **Local Setup**: `docker-compose up -d postgres`
+- **Local Setup**: `docker compose up -d postgres`
 
 ## Common Tasks & Workflows
 

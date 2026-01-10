@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 
@@ -104,10 +104,9 @@ class TestTimeExitPolicyEdgeCases:
         assert reason == "Max holding period"
 
         # Mixed timezone handling should work
-        from datetime import timezone
 
-        entry_utc = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
-        now_utc = datetime(2024, 1, 2, 1, 0, tzinfo=timezone.utc)
+        entry_utc = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+        now_utc = datetime(2024, 1, 2, 1, 0, tzinfo=UTC)
         should_exit, reason = policy.check_time_exit_conditions(entry_utc, now_utc)
         assert should_exit
         assert reason == "Max holding period"
@@ -300,9 +299,8 @@ class TestTimeExitPolicyEdgeCases:
         entry = datetime(2024, 1, 1, 0, 0)
         now = datetime(2024, 1, 1, 2, 0)  # 2 hours later (past max holding)
         nxt = policy.get_next_exit_time(entry, now)
-        assert nxt is not None
-        # Should return the past candidate (min of all candidates)
-        assert nxt == entry + timedelta(hours=1)
+        # Should return None when all candidates are in the past (no future exits)
+        assert nxt is None
 
 
 class TestMarketSessionDefEdgeCases:

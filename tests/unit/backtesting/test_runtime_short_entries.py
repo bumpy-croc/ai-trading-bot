@@ -2,8 +2,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from src.backtesting.engine import Backtester
 from src.data_providers.data_provider import DataProvider
+from src.engines.backtest.engine import Backtester
 from src.strategies.components.position_sizer import PositionSizer
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.risk_manager import MarketData, Position, RiskManager
@@ -67,6 +67,8 @@ class _ShortRiskManager(RiskManager):
         return balance * 0.1 if signal.direction != SignalDirection.HOLD else 0.0
 
     def should_exit(self, position: Position, current_data: MarketData, regime: RegimeContext | None = None) -> bool:  # type: ignore[override]
+        # After model consolidation, position.side may be either a string or enum
+        # The component Position validator ensures it's always a string
         if position.side == "short":
             return current_data.price <= position.entry_price * 0.9
         return current_data.price >= position.entry_price * 1.1
@@ -122,6 +124,7 @@ def test_runtime_short_entry_blocks_when_flag_false():
         log_to_database=False,
         enable_dynamic_risk=False,
         enable_engine_risk_exits=False,
+        use_next_bar_execution=False,  # Disable for this test
     )
 
     result = backtester.run(
@@ -146,6 +149,7 @@ def test_runtime_short_entry_honors_metadata():
         log_to_database=False,
         enable_dynamic_risk=False,
         enable_engine_risk_exits=False,
+        use_next_bar_execution=False,  # Disable for this test
     )
 
     result = backtester.run(
@@ -157,7 +161,10 @@ def test_runtime_short_entry_honors_metadata():
 
     assert result["total_trades"] == 1
     assert backtester.trades
-    assert backtester.trades[0].side == "short"
+    # side is now a PositionSide enum after model consolidation
+    from src.engines.shared.models import PositionSide
+
+    assert backtester.trades[0].side == PositionSide.SHORT
 
 
 def test_runtime_short_entry_blocks_when_metadata_missing():
@@ -171,6 +178,7 @@ def test_runtime_short_entry_blocks_when_metadata_missing():
         log_to_database=False,
         enable_dynamic_risk=False,
         enable_engine_risk_exits=False,
+        use_next_bar_execution=False,  # Disable for this test
     )
 
     result = backtester.run(

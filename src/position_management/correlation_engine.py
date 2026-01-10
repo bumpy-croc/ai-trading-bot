@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import numpy as np
+
+logger = logging.getLogger(__name__)
 import pandas as pd
 
 from src.config.constants import (
@@ -11,6 +16,7 @@ from src.config.constants import (
     DEFAULT_CORRELATION_THRESHOLD,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
+    DEFAULT_EXPOSURE_PRECISION_DECIMALS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
 )
 
@@ -42,8 +48,26 @@ class CorrelationEngine:
         # Lightweight memoization to avoid expensive recomputation on each call
         self._last_signature: tuple[tuple[str, ...], pd.Timestamp | None, int] | None = None
 
+    @staticmethod
+    def _safe_size_add(total: float, size: Any) -> float:
+        """Safely add size to total if size is valid, otherwise return total unchanged.
+
+        Validates that size is numeric, finite, and non-negative before adding to prevent
+        TypeError or NaN propagation from corrupted position data.
+
+        Args:
+            total: Current total exposure
+            size: Size value to add if valid
+
+        Returns:
+            total + size if size is valid, otherwise total unchanged
+        """
+        if isinstance(size, int | float) and math.isfinite(size) and size >= 0:
+            return total + float(size)
+        return total
+
     def should_update(self, now: datetime | None = None) -> bool:
-        now = now or datetime.utcnow()
+        now = now or datetime.now(UTC)
         if self._last_update_at is None:
             return True
         return now - self._last_update_at >= timedelta(
@@ -69,7 +93,8 @@ class CorrelationEngine:
         end_time = None
         for s in price_series_by_symbol.values():
             if not s.empty:
-                end_time = max(end_time or s.index.max(), s.index.max())
+                series_max = s.index.max()
+                end_time = max(end_time or series_max, series_max)
         if end_time is None:
             return pd.DataFrame()
         start_time = end_time - timedelta(days=self.config.correlation_window_days)
@@ -107,9 +132,14 @@ class CorrelationEngine:
 
         # Use returns for correlation robustness
         returns = prices.pct_change().dropna(how="any")
+        # Replace inf/-inf values from pct_change (when price goes to/from zero)
+        # Inf values corrupt correlation calculations
+        returns = returns.replace([np.inf, -np.inf], np.nan).dropna(how="any")
+        if returns.empty or returns.shape[0] < self.config.sample_min_size:
+            return pd.DataFrame()
         corr = returns.corr()
         self._last_matrix = corr
-        self._last_update_at = now or datetime.utcnow()
+        self._last_update_at = now or datetime.now(UTC)
         self._last_signature = signature
         return corr
 
@@ -136,11 +166,20 @@ class CorrelationEngine:
 
         thr = float(self.config.correlation_threshold)
         for i, a in enumerate(symbols):
+            # Skip if symbol was filtered out during correlation calculation
+            if a not in corr.columns:
+                continue
             for j in range(i + 1, len(symbols)):
                 b = symbols[j]
-                val = corr.at[a, b]
-                if pd.notna(val) and val >= thr:
-                    union(a, b)
+                if b not in corr.columns:
+                    continue
+                try:
+                    val = corr.at[a, b]
+                    if pd.notna(val) and val >= thr:
+                        union(a, b)
+                except (KeyError, IndexError):
+                    logger.debug(f"Correlation pair ({a}, {b}) not found in matrix")
+                    continue
 
         groups: dict[str, list[str]] = {}
         for s in symbols:
@@ -164,8 +203,9 @@ class CorrelationEngine:
             for sym in group:
                 info = positions.get(sym)
                 if info:
-                    total += float(info.get("size", 0.0))
-            exposures[tuple(sorted(group))] = round(total, 8)
+                    size = info.get("size", 0.0)
+                    total = self._safe_size_add(total, size)
+            exposures[tuple(sorted(group))] = round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         return exposures
 
     def compute_size_reduction_factor(
@@ -207,7 +247,8 @@ class CorrelationEngine:
         for g in affected_groups:
             current = 0.0
             for sym in g:
-                current += float(positions.get(sym, {}).get("size", 0.0))
+                size = positions.get(sym, {}).get("size", 0.0)
+                current = self._safe_size_add(current, size)
             projected = current + candidate_fraction
             if projected > max_allowed and projected > 0:
                 factor = min(factor, max(0.0, max_allowed / projected))
@@ -233,12 +274,14 @@ class CorrelationGroupManager:
             present: list[str] = []
             for s in symbols:
                 if s in positions:
-                    present.append(s)
-                    total += float(positions[s].get("size", 0.0))
+                    size = positions[s].get("size", 0.0)
+                    if isinstance(size, int | float) and math.isfinite(size) and size >= 0:
+                        present.append(s)
+                        total = CorrelationEngine._safe_size_add(total, size)
             out[name] = {
-                "total_exposure": round(total, 8),
+                "total_exposure": round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS),
                 "position_count": len(present),
                 "symbols": present,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(UTC).isoformat(),
             }
         return out

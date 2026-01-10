@@ -13,8 +13,8 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -46,7 +46,7 @@ class TradingDecision:
     timestamp: datetime
     signal: Signal
     position_size: float
-    regime: Optional[RegimeContext]
+    regime: RegimeContext | None
     risk_metrics: dict[str, float]
     execution_time_ms: float
     metadata: dict[str, Any]
@@ -110,7 +110,13 @@ class Strategy:
             regime_detector: Optional regime detection component
             enable_logging: Whether to enable detailed logging
             max_history: Maximum number of decisions to keep in history
+
+        Raises:
+            ValueError: If required components are None or invalid
         """
+        # Validate required components before initialization
+        self._validate_components(name, signal_generator, risk_manager, position_sizer)
+
         self.name = name
         self.signal_generator = signal_generator
         self.risk_manager = risk_manager
@@ -137,15 +143,15 @@ class Strategy:
             "avg_execution_time_ms": 0.0,
             "avg_signal_confidence": 0.0,
             "avg_position_size": 0.0,
-            "last_updated": datetime.now(),
+            "last_updated": datetime.now(UTC),
         }
 
         # Runtime configuration
         self._warmup_override: int | None = None
-        self._last_signal: Optional[Signal] = None
-        self._additional_risk_context_provider: Optional[
-            Callable[[pd.DataFrame, int, Signal], Optional[dict[str, Any]]]
-        ] = None
+        self._last_signal: Signal | None = None
+        self._additional_risk_context_provider: (
+            Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None
+        ) = None
 
         self.logger.info(
             f"Strategy '{name}' initialized with components: "
@@ -153,6 +159,64 @@ class Strategy:
             f"RiskMgr={risk_manager.name}, "
             f"PosSizer={position_sizer.name}"
         )
+
+    @staticmethod
+    def _validate_components(
+        name: str,
+        signal_generator: SignalGenerator | None,
+        risk_manager: RiskManager | None,
+        position_sizer: PositionSizer | None,
+    ) -> None:
+        """Validate that required components are properly initialized.
+
+        Args:
+            name: Strategy name for error messages.
+            signal_generator: Signal generator component to validate.
+            risk_manager: Risk manager component to validate.
+            position_sizer: Position sizer component to validate.
+
+        Raises:
+            ValueError: If any required component is None or invalid.
+        """
+        if not name or not isinstance(name, str):
+            raise ValueError(f"Strategy name must be a non-empty string, got: {name}")
+
+        if signal_generator is None:
+            raise ValueError(
+                f"Strategy '{name}': signal_generator cannot be None. "
+                "Provide a valid SignalGenerator instance."
+            )
+
+        if risk_manager is None:
+            raise ValueError(
+                f"Strategy '{name}': risk_manager cannot be None. "
+                "Provide a valid RiskManager instance."
+            )
+
+        if position_sizer is None:
+            raise ValueError(
+                f"Strategy '{name}': position_sizer cannot be None. "
+                "Provide a valid PositionSizer instance."
+            )
+
+        # Validate components have required interface (duck typing check)
+        if not hasattr(signal_generator, "generate_signal"):
+            raise ValueError(
+                f"Strategy '{name}': signal_generator missing 'generate_signal' method. "
+                f"Got type: {type(signal_generator).__name__}"
+            )
+
+        if not hasattr(risk_manager, "calculate_position_size"):
+            raise ValueError(
+                f"Strategy '{name}': risk_manager missing 'calculate_position_size' method. "
+                f"Got type: {type(risk_manager).__name__}"
+            )
+
+        if not hasattr(position_sizer, "calculate_size"):
+            raise ValueError(
+                f"Strategy '{name}': position_sizer missing 'calculate_size' method. "
+                f"Got type: {type(position_sizer).__name__}"
+            )
 
     @property
     def warmup_period(self) -> int:
@@ -239,7 +303,7 @@ class Strategy:
             IndexError: If index is out of bounds
         """
         start_time = time.time()
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
 
         try:
             # Validate inputs
@@ -298,7 +362,7 @@ class Strategy:
                     regime,
                     **policy_kwargs,
                 )
-            except Exception as policy_error:
+            except (ValueError, KeyError, AttributeError) as policy_error:
                 self.logger.debug("Risk policy extraction failed: %s", policy_error)
 
             # Create trading decision
@@ -322,11 +386,11 @@ class Strategy:
 
             return decision
 
-        except Exception as e:
+        except (ValueError, KeyError, IndexError, TypeError) as e:
             # Handle errors gracefully
             execution_time_ms = (time.time() - start_time) * 1000
 
-            self.logger.error(f"Error processing candle at index {index}: {e}")
+            self.logger.exception("Error processing candle at index %d", index)
 
             # Return safe decision
             safe_signal = Signal(
@@ -353,7 +417,7 @@ class Strategy:
         self,
         position: Position,
         current_data: MarketData,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
     ) -> bool:
         """
         Determine if a position should be exited
@@ -368,15 +432,15 @@ class Strategy:
         """
         try:
             return self.risk_manager.should_exit(position, current_data, regime)
-        except Exception as e:
-            self.logger.error(f"Error in exit decision: {e}")
+        except (ValueError, KeyError, AttributeError):
+            self.logger.exception("Error in exit decision")
             return False  # Conservative default
 
     def get_stop_loss_price(
         self,
         entry_price: float,
         signal: Signal,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
     ) -> float:
         """
         Get stop loss price for a position
@@ -391,15 +455,14 @@ class Strategy:
         """
         try:
             return self.risk_manager.get_stop_loss(entry_price, signal, regime)
-        except Exception as e:
-            self.logger.error(f"Error calculating stop loss: {e}")
+        except (ValueError, KeyError, AttributeError):
+            self.logger.exception("Error calculating stop loss")
             # Return conservative stop loss
             if signal.direction == SignalDirection.BUY:
                 return entry_price * 0.95  # 5% stop loss for long
-            elif signal.direction == SignalDirection.SELL:
+            if signal.direction == SignalDirection.SELL:
                 return entry_price * 1.05  # 5% stop loss for short
-            else:
-                return entry_price
+            return entry_price
 
     def get_performance_metrics(self, lookback_decisions: int = 100) -> dict[str, Any]:
         """
@@ -455,7 +518,7 @@ class Strategy:
                 "risk_manager": self.risk_manager.get_parameters(),
                 "position_sizer": self.position_sizer.get_parameters(),
             },
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": datetime.now(UTC).isoformat(),
         }
 
     def get_recent_decisions(self, count: int = 10) -> list[dict[str, Any]]:
@@ -482,13 +545,13 @@ class Strategy:
             "avg_execution_time_ms": 0.0,
             "avg_signal_confidence": 0.0,
             "avg_position_size": 0.0,
-            "last_updated": datetime.now(),
+            "last_updated": datetime.now(UTC),
         }
         self.logger.info("Strategy history and metrics cleared")
 
     def set_additional_risk_context_provider(
         self,
-        provider: Optional[Callable[[pd.DataFrame, int, Signal], Optional[dict[str, Any]]]],
+        provider: Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None,
     ) -> None:
         """Register a hook that can enrich the risk context before delegation."""
 
@@ -539,9 +602,20 @@ class Strategy:
                 params[attr] = getattr(self, attr)
         return params
 
-    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
+    def get_risk_overrides(self) -> dict[str, Any] | None:
         """Return configured risk overrides when provided."""
         return getattr(self, "_risk_overrides", None)
+
+    def set_risk_overrides(self, overrides: dict[str, Any] | None) -> None:
+        """Set risk overrides for the strategy.
+
+        Args:
+            overrides: Dictionary of risk override parameters, or None to clear.
+        """
+        if overrides is None:
+            self._risk_overrides = {}
+        else:
+            self._risk_overrides = dict(overrides)
 
     def _validate_inputs(self, df: pd.DataFrame, index: int, balance: float) -> None:
         """Validate input parameters"""
@@ -560,25 +634,25 @@ class Strategy:
         if missing_columns:
             raise ValueError(f"DataFrame missing required columns: {missing_columns}")
 
-    def _detect_regime(self, df: pd.DataFrame, index: int) -> Optional[RegimeContext]:
+    def _detect_regime(self, df: pd.DataFrame, index: int) -> RegimeContext | None:
         """Detect market regime"""
         try:
             return self.regime_detector.detect_regime(df, index)
         except Exception as e:
-            self.logger.warning(f"Regime detection failed: {e}")
+            self.logger.warning("Regime detection failed: %s", e)
             return None
 
     def _generate_signal(
         self,
         df: pd.DataFrame,
         index: int,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> Signal:
         """Generate trading signal"""
         try:
             return self.signal_generator.generate_signal(df, index, regime)
         except Exception as e:
-            self.logger.error(f"Signal generation failed: {e}")
+            self.logger.exception("Signal generation failed")
             return Signal(
                 direction=SignalDirection.HOLD,
                 strength=0.0,
@@ -607,7 +681,7 @@ class Strategy:
         if self._additional_risk_context_provider is not None:
             try:
                 extra_context = self._additional_risk_context_provider(df, index, signal)
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except (ValueError, KeyError, TypeError) as exc:  # pragma: no cover - defensive logging
                 self.logger.debug(
                     "Additional risk context provider failed at index %s: %s",
                     index,
@@ -629,14 +703,14 @@ class Strategy:
 
         try:
             row = df.iloc[index]
-        except Exception:
+        except (IndexError, KeyError):
             return {}
 
         snapshot: dict[str, Any] = {}
         for column in df.columns:
             try:
                 snapshot[column] = row[column]
-            except Exception:
+            except (KeyError, TypeError):
                 continue
 
         # Propagate signal metadata keys when present for adapters that rely on them.
@@ -668,7 +742,7 @@ class Strategy:
         self,
         signal: Signal,
         balance: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
         context: dict[str, Any],
     ) -> float:
         """Calculate risk-based position size"""
@@ -682,8 +756,8 @@ class Strategy:
                 regime,
                 **filtered_context,
             )
-        except Exception as e:
-            self.logger.error(f"Risk position size calculation failed: {e}")
+        except Exception:
+            self.logger.exception("Risk position size calculation failed")
             return 0.0
 
     def _calculate_final_position_size(
@@ -691,13 +765,13 @@ class Strategy:
         signal: Signal,
         balance: float,
         risk_amount: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> float:
         """Calculate final position size using position sizer"""
         try:
             return self.position_sizer.calculate_size(signal, balance, risk_amount, regime)
-        except Exception as e:
-            self.logger.error(f"Final position size calculation failed: {e}")
+        except Exception:
+            self.logger.exception("Final position size calculation failed")
             return risk_amount  # Fallback to risk manager's calculation
 
     def _validate_position_size(
@@ -705,7 +779,7 @@ class Strategy:
         position_size: float,
         signal: Signal,
         balance: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> float:
         """Validate and bound position size"""
         if signal.direction == SignalDirection.HOLD:
@@ -728,7 +802,7 @@ class Strategy:
         balance: float,
         risk_position_size: float,
         final_position_size: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> dict[str, float]:
         """Calculate risk-related metrics"""
         return {
@@ -749,7 +823,7 @@ class Strategy:
         index: int,
         balance: float,
         current_positions: list[Position] | None,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
         signal: Signal,
         risk_position_size: float,
         final_position_size: float,
@@ -834,7 +908,7 @@ class Strategy:
             self.metrics["avg_position_size"] * (total - 1) + decision.position_size
         ) / total
 
-        self.metrics["last_updated"] = datetime.now()
+        self.metrics["last_updated"] = datetime.now(UTC)
 
     def _log_decision(self, decision: TradingDecision) -> None:
         """Log trading decision"""

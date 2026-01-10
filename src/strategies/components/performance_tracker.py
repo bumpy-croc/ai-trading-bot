@@ -10,9 +10,9 @@ import logging
 import statistics
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -55,8 +55,8 @@ class TradeResult:
     duration_hours: float
     strategy_id: str
     confidence: float
-    regime: Optional[str] = None
-    exit_reason: Optional[str] = None
+    regime: str | None = None
+    exit_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -164,7 +164,7 @@ class PerformanceTracker:
     """
 
     def __init__(
-        self, strategy_id: str, max_history: int = 10000, storage_backend: Optional[Any] = None
+        self, strategy_id: str, max_history: int = 10000, storage_backend: Any | None = None
     ):
         """
         Initialize performance tracker
@@ -259,8 +259,8 @@ class PerformanceTracker:
         if self.storage_backend:
             try:
                 self.storage_backend.save_trade(trade)
-            except Exception as e:
-                self.logger.error(f"Failed to persist trade: {e}")
+            except Exception:
+                self.logger.exception("Failed to persist trade")
 
         self.logger.debug(
             f"Recorded trade: PnL={trade.pnl:.2f}, Balance={self.current_balance:.2f}"
@@ -269,8 +269,8 @@ class PerformanceTracker:
     def get_performance_metrics(
         self,
         period: PerformancePeriod = PerformancePeriod.ALL_TIME,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> PerformanceMetrics:
         """
         Get performance metrics for specified period
@@ -293,7 +293,7 @@ class PerformanceTracker:
 
         if not filtered_trades:
             # Return empty metrics
-            now = datetime.now()
+            now = datetime.now(UTC)
             return PerformanceMetrics(
                 total_return=0.0,
                 total_return_pct=0.0,
@@ -332,11 +332,11 @@ class PerformanceTracker:
 
         # Cache results
         self._metrics_cache[cache_key] = metrics
-        self._cache_expiry[cache_key] = datetime.now() + self._cache_duration
+        self._cache_expiry[cache_key] = datetime.now(UTC) + self._cache_duration
 
         return metrics
 
-    def get_regime_performance(self, regime: Optional[str] = None) -> dict[str, RegimePerformance]:
+    def get_regime_performance(self, regime: str | None = None) -> dict[str, RegimePerformance]:
         """
         Get performance metrics by market regime
 
@@ -404,7 +404,7 @@ class PerformanceTracker:
                 "volatility_difference": self_metrics.volatility - other_metrics.volatility,
             },
             "winner": self._determine_winner(self_metrics, other_metrics),
-            "comparison_date": datetime.now().isoformat(),
+            "comparison_date": datetime.now(UTC).isoformat(),
         }
 
         return comparison
@@ -434,14 +434,14 @@ class PerformanceTracker:
                 "max_drawdown": self.max_drawdown,
             },
             "trade_count": self.trade_count,
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": datetime.now(UTC).isoformat(),
         }
 
     def get_trade_history(
         self,
-        limit: Optional[int] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        limit: int | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[TradeResult]:
         """
         Get trade history with optional filtering
@@ -548,8 +548,8 @@ class PerformanceTracker:
     def _filter_trades_by_period(
         self,
         period: PerformancePeriod,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[TradeResult]:
         """Filter trades by time period"""
         trades = list(self.trades)
@@ -564,7 +564,7 @@ class PerformanceTracker:
             return trades
 
         # Calculate period boundaries
-        now = datetime.now()
+        now = datetime.now(UTC)
 
         if period == PerformancePeriod.DAILY:
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -592,7 +592,7 @@ class PerformanceTracker:
     ) -> PerformanceMetrics:
         """Calculate comprehensive performance metrics"""
         if not trades:
-            now = datetime.now()
+            now = datetime.now(UTC)
             return PerformanceMetrics(
                 total_return=0.0,
                 total_return_pct=0.0,
@@ -804,10 +804,9 @@ class PerformanceTracker:
 
         if score1 > score2:
             return "strategy_1"
-        elif score2 > score1:
+        if score2 > score1:
             return "strategy_2"
-        else:
-            return "tie"
+        return "tie"
 
     def _is_cache_valid(self, cache_key: str) -> bool:
         """Check if cached metrics are still valid"""
@@ -817,7 +816,7 @@ class PerformanceTracker:
         if cache_key not in self._cache_expiry:
             return False
 
-        return datetime.now() < self._cache_expiry[cache_key]
+        return datetime.now(UTC) < self._cache_expiry[cache_key]
 
     def _clear_metrics_cache(self) -> None:
         """Clear all cached metrics"""

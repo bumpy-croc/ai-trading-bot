@@ -9,6 +9,14 @@ _logger = logging.getLogger(__name__)
 
 
 def _emit(event_type: str, level: int, message: str, **fields: Any) -> None:
+    """Emit a structured log event with context.
+
+    Args:
+        event_type: Categorical type for the event (e.g., "engine_event").
+        level: Python logging level (e.g., logging.INFO).
+        message: Human-readable log message.
+        **fields: Additional structured fields to include in the log record.
+    """
     ctx = get_context()
     payload: dict[str, Any] = {
         "event_type": event_type,

@@ -6,7 +6,6 @@ This module defines the schema for features and feature extractors.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class FeatureType(Enum):
@@ -40,10 +39,10 @@ class FeatureDefinition:
     description: str
     normalization: NormalizationMethod = NormalizationMethod.NONE
     required: bool = True
-    default_value: Optional[float] = None
-    min_value: Optional[float] = None
-    max_value: Optional[float] = None
-    dependencies: Optional[list[str]] = None
+    default_value: float | None = None
+    min_value: float | None = None
+    max_value: float | None = None
+    dependencies: list[str] | None = None
 
     def __post_init__(self):
         if self.dependencies is None:
@@ -73,6 +72,39 @@ class FeatureSchema:
     def get_features_by_type(self, feature_type: FeatureType) -> list[FeatureDefinition]:
         """Get features of a specific type."""
         return [f for f in self.features if f.feature_type == feature_type]
+
+    def validate_dependencies(self, data) -> list[str]:
+        """
+        Validate that all base feature dependencies exist in the input data.
+
+        Only validates dependencies on base OHLCV columns, not on derived features
+        (since those will be calculated during extraction).
+
+        Args:
+            data: DataFrame to validate against
+
+        Returns:
+            List of validation error messages (empty if all dependencies are met)
+        """
+        import pandas as pd
+
+        missing_deps = []
+        if not isinstance(data, pd.DataFrame):
+            return ["Data must be a pandas DataFrame"]
+
+        # Get set of all feature names that will be calculated
+        calculated_features = {f.name for f in self.features}
+
+        for feature in self.features:
+            if feature.dependencies:
+                for dep in feature.dependencies:
+                    # Only validate base data dependencies, not feature-to-feature deps
+                    if dep not in calculated_features and dep not in data.columns:
+                        missing_deps.append(
+                            f"Feature '{feature.name}' requires base column '{dep}'"
+                        )
+
+        return missing_deps
 
 
 # Define standard technical features schema

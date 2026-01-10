@@ -7,23 +7,20 @@ regime-aware threshold adjustments and confidence calculations.
 """
 
 import logging
-from pathlib import Path
-from typing import Any, Optional
+import math
+from typing import Any
 
-import numpy as np
-import onnxruntime as ort
 import pandas as pd
-
-logger = logging.getLogger(__name__)
 
 from src.config.config_manager import get_config
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
-from src.tech.features.technical import TechnicalFeatureExtractor
 from src.regime.detector import TrendLabel, VolLabel
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+
+logger = logging.getLogger(__name__)
 
 
 class MLSignalGenerator(SignalGenerator):
@@ -56,7 +53,7 @@ class MLSignalGenerator(SignalGenerator):
         self,
         name: str = "ml_signal_generator",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
     ):
         """
         Initialize ML Signal Generator
@@ -126,19 +123,19 @@ class MLSignalGenerator(SignalGenerator):
             # Health check
             health = engine.health_check()
             if health.get("status") != "healthy" and not self._engine_warning_emitted:
-                print(f"[MLSignalGenerator] Prediction engine health degraded: {health}")
+                logger.warning("MLSignalGenerator: Prediction engine health degraded: %s", health)
                 self._engine_warning_emitted = True
 
             self.prediction_engine = engine
 
-        except Exception as e:
+        except Exception:
             if not self._engine_warning_emitted:
-                print(f"[MLSignalGenerator] Prediction engine initialization failed: {e}")
+                logger.exception("MLSignalGenerator: Prediction engine initialization failed")
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """
         Generate trading signal based on ML prediction
@@ -178,7 +175,24 @@ class MLSignalGenerator(SignalGenerator):
             )
 
         current_price = df["close"].iloc[index]
-        predicted_return = (prediction - current_price) / current_price if current_price > 0 else 0
+
+        # Validate prediction and current_price are finite to prevent NaN/Infinity propagation
+        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+            return Signal(
+                direction=SignalDirection.HOLD,
+                strength=0.0,
+                confidence=0.0,
+                metadata={
+                    "generator": self.name,
+                    "reason": "invalid_prediction_or_price",
+                    "prediction": prediction,
+                    "current_price": current_price,
+                    "predicted_return": 0,  # Set to 0 when price is invalid
+                    "index": index,
+                },
+            )
+
+        predicted_return = (prediction - current_price) / current_price
 
         # Determine signal direction
         if predicted_return > 0:
@@ -243,11 +257,16 @@ class MLSignalGenerator(SignalGenerator):
             return 0.0
 
         current_price = df["close"].iloc[index]
-        predicted_return = (prediction - current_price) / current_price if current_price > 0 else 0
+
+        # Return zero confidence if prediction or price are invalid (prevents NaN propagation)
+        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+            return 0.0
+
+        predicted_return = (prediction - current_price) / current_price
 
         return self._calculate_confidence(predicted_return)
 
-    def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> Optional[float]:
+    def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> float | None:
         """
         Get ML prediction for the given index
 
@@ -259,20 +278,8 @@ class MLSignalGenerator(SignalGenerator):
             Predicted price or None if prediction fails
         """
         try:
-            # Prepare input features
-            price_features = ["close", "volume", "high", "low", "open"]
-            feature_columns = [f"{feature}_normalized" for feature in price_features]
-
-            # Check if features exist
-            missing_features = [col for col in feature_columns if col not in df.columns]
-            if missing_features:
-                # Apply feature pipeline if features are missing
-                df_processed = self.feature_pipeline.transform(df.copy())
-                input_data = (
-                    df_processed[feature_columns].iloc[index - self.sequence_length : index].values
-                )
-            else:
-                input_data = df[feature_columns].iloc[index - self.sequence_length : index].values
+            # Feature pipeline transformation currently not used
+            # (prediction engine handles raw price data directly)
 
             # Get prediction from prediction engine
             if self.prediction_engine is None:
@@ -288,12 +295,12 @@ class MLSignalGenerator(SignalGenerator):
             # Prediction engine returns real prices
             return pred
 
-        except Exception as e:
-            print(f"[MLSignalGenerator] Prediction error at index {index}: {e}")
+        except Exception:
+            logger.exception("MLSignalGenerator: Prediction error at index %d", index)
             return None
 
     def _should_generate_short_signal(
-        self, predicted_return: float, regime: Optional[RegimeContext]
+        self, predicted_return: float, regime: RegimeContext | None
     ) -> bool:
         """
         Determine if a short signal should be generated based on predicted return and regime
@@ -364,6 +371,11 @@ class MLSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.sequence_length
+
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
@@ -396,13 +408,17 @@ class MLBasicSignalGenerator(SignalGenerator):
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
     CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
 
+    # Default symbol used for registry selection when none specified
+    DEFAULT_SYMBOL = "BTCUSDT"
+
     def __init__(
         self,
         name: str = "ml_basic_signal_generator",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
-        model_type: Optional[str] = None,
-        timeframe: Optional[str] = None,
+        model_name: str | None = None,
+        model_type: str | None = None,
+        timeframe: str | None = None,
+        symbol: str | None = None,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -413,6 +429,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             model_name: Model name for prediction engine (optional)
             model_type: Model type for registry selection (optional)
             timeframe: Timeframe for registry selection (optional)
+            symbol: Trading symbol for registry selection (optional, defaults to BTCUSDT)
         """
         super().__init__(name)
 
@@ -421,6 +438,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         # Registry model selection preferences
         self.model_type = model_type or "basic"
         self.model_timeframe = timeframe or "1h"
+        self.symbol = symbol or self.DEFAULT_SYMBOL
 
         # Model name configuration
         cfg = get_config()
@@ -479,7 +497,9 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Health check
             health = engine.health_check()
             if health.get("status") != "healthy" and not self._engine_warning_emitted:
-                print(f"[MLBasicSignalGenerator] Prediction engine health degraded: {health}")
+                logger.warning(
+                    "MLBasicSignalGenerator: Prediction engine health degraded: %s", health
+                )
                 self._engine_warning_emitted = True
 
             self.prediction_engine = engine
@@ -487,17 +507,18 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Initialize registry for structured selection
             try:
                 self._registry = engine.model_registry
-            except Exception:
+            except AttributeError:
+                # Engine doesn't have model_registry attribute
                 self._registry = None
 
-        except Exception as e:
+        except Exception:
             if not self._engine_warning_emitted:
-                print(f"[MLBasicSignalGenerator] Prediction engine initialization failed: {e}")
+                logger.exception("MLBasicSignalGenerator: Prediction engine initialization failed")
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """
         Generate trading signal based on ML prediction (basic, no regime awareness)
@@ -537,7 +558,24 @@ class MLBasicSignalGenerator(SignalGenerator):
             )
 
         current_price = df["close"].iloc[index]
-        predicted_return = (prediction - current_price) / current_price if current_price > 0 else 0
+
+        # Validate prediction and current_price are finite to prevent NaN/Infinity propagation
+        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+            return Signal(
+                direction=SignalDirection.HOLD,
+                strength=0.0,
+                confidence=0.0,
+                metadata={
+                    "generator": self.name,
+                    "reason": "invalid_prediction_or_price",
+                    "prediction": prediction,
+                    "current_price": current_price,
+                    "predicted_return": 0,  # Set to 0 when price is invalid
+                    "index": index,
+                },
+            )
+
+        predicted_return = (prediction - current_price) / current_price
 
         # Determine signal direction (basic logic without regime awareness)
         if predicted_return > 0:
@@ -598,11 +636,16 @@ class MLBasicSignalGenerator(SignalGenerator):
             return 0.0
 
         current_price = df["close"].iloc[index]
-        predicted_return = (prediction - current_price) / current_price if current_price > 0 else 0
+
+        # Return zero confidence if prediction or price are invalid (prevents NaN propagation)
+        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+            return 0.0
+
+        predicted_return = (prediction - current_price) / current_price
 
         return self._calculate_confidence(predicted_return)
 
-    def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> Optional[float]:
+    def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> float | None:
         """
         Get ML prediction for the given index using prediction engine
 
@@ -616,7 +659,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         try:
             # Get prediction from prediction engine
             if self.prediction_engine is None:
-                print("[MLBasicSignalGenerator] Prediction engine not initialized")
+                logger.warning("MLBasicSignalGenerator: Prediction engine not initialized")
                 return None
 
             # Use prediction engine with registry selection
@@ -629,12 +672,13 @@ class MLBasicSignalGenerator(SignalGenerator):
             if self._registry is not None:
                 try:
                     bundle = self._registry.select_bundle(
-                        symbol="BTCUSDT",  # Default trading pair
+                        symbol=self.symbol,
                         model_type=self.model_type,
                         timeframe=self.model_timeframe,
                     )
                     selected_bundle_key = bundle.key
-                except Exception:
+                except (KeyError, ValueError, AttributeError):
+                    # Bundle not found or invalid - fall back to default
                     selected_bundle_key = None
 
             # Prefer registry selection by symbol/type/timeframe when available
@@ -644,7 +688,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                     result = self.prediction_engine.predict(window_df, model_name=engine_model_name)
                 else:
                     result = self.prediction_engine.predict(window_df)
-            except Exception:
+            except (KeyError, ValueError):
                 # Fall back to default registry resolution if explicit lookup fails
                 result = self.prediction_engine.predict(window_df)
 
@@ -653,8 +697,8 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Prediction engine returns real prices
             return pred
 
-        except Exception as e:
-            print(f"[MLBasicSignalGenerator] Prediction error at index {index}: {e}")
+        except Exception:
+            logger.exception("MLBasicSignalGenerator: Prediction error at index %d", index)
             return None
 
     def _calculate_confidence(self, predicted_return: float) -> float:
@@ -670,6 +714,11 @@ class MLBasicSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing valid signals."""
+        return self.sequence_length
+
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
@@ -679,6 +728,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                 "model_name": self.model_name,
                 "model_type": self.model_type,
                 "model_timeframe": self.model_timeframe,
+                "symbol": self.symbol,
                 "short_entry_threshold": self.SHORT_ENTRY_THRESHOLD,
                 "confidence_multiplier": self.CONFIDENCE_MULTIPLIER,
             }

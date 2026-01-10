@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
-from src.backtesting.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
+from src.engines.backtest.engine import Backtester
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.strategies.components import (
@@ -57,7 +57,7 @@ def backtester() -> Backtester:
 
 def test_apply_policies_from_decision_updates_backtester_state(backtester: Backtester) -> None:
     decision = TradingDecision(
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
         signal=Signal(
             direction=SignalDirection.BUY,
             strength=1.0,
@@ -96,7 +96,5 @@ def test_apply_policies_from_decision_updates_backtester_state(backtester: Backt
     assert backtester.trailing_stop_policy.trailing_distance_pct == pytest.approx(0.01)
     assert backtester.enable_dynamic_risk is True
     assert backtester.dynamic_risk_manager is not None
-    assert (
-        backtester.dynamic_risk_manager.config.performance_window_days == 15
-    )
+    assert backtester.dynamic_risk_manager.config.performance_window_days == 15
     assert backtester.dynamic_risk_manager.config.drawdown_thresholds == [0.1]

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from src.optimizer.runner import ExperimentRunner
 from src.optimizer.schemas import ExperimentConfig, ParameterSet
@@ -6,7 +6,7 @@ from src.optimizer.schemas import ExperimentConfig, ParameterSet
 
 def test_runner_with_mock_provider_executes():
     runner = ExperimentRunner()
-    end = datetime.now()
+    end = datetime.now(UTC)
     start = end - timedelta(days=3)
 
     cfg = ExperimentConfig(
@@ -34,8 +34,8 @@ def test_runner_applies_parameter_overrides_to_components():
     runner = ExperimentRunner()
     strategy = runner._load_strategy("ml_basic")
 
-    start = datetime.now() - timedelta(days=1)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(days=1)
+    end = datetime.now(UTC)
     cfg = ExperimentConfig(
         strategy_name="ml_basic",
         symbol="BTCUSDT",

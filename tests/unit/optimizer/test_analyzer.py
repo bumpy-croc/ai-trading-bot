@@ -1,12 +1,12 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from src.optimizer.analyzer import AnalyzerConfig, PerformanceAnalyzer
 from src.optimizer.schemas import ExperimentConfig, ExperimentResult
 
 
 def _make_result(**overrides) -> ExperimentResult:
-    start = datetime.now() - timedelta(days=30)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(days=30)
+    end = datetime.now(UTC)
     cfg = ExperimentConfig(
         strategy_name="ml_basic",
         symbol="BTCUSDT",

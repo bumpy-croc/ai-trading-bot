@@ -4,8 +4,8 @@ Unit tests for MomentumLeverage strategy - Component-Based Implementation
 
 import pytest
 
+from src.strategies.components import SignalDirection, Strategy
 from src.strategies.momentum_leverage import create_momentum_leverage_strategy
-from src.strategies.components import Strategy, SignalDirection
 
 pytestmark = pytest.mark.unit
 

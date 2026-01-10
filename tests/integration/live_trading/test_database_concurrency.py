@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -12,10 +12,10 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.mock_only
 def test_concurrent_open_close_with_database(tmp_path, mock_strategy, mock_data_provider):
-    from src.live.trading_engine import LiveTradingEngine, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     # Basic deterministic data
-    idx = pd.date_range(datetime.utcnow(), periods=5, freq="1min")
+    idx = pd.date_range(datetime.now(UTC), periods=5, freq="1min")
     prices = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=idx)
     mock_data_provider.get_live_data.return_value = pd.DataFrame({"close": prices})
     mock_data_provider.get_current_price.return_value = 102.0
@@ -33,16 +33,33 @@ def test_concurrent_open_close_with_database(tmp_path, mock_strategy, mock_data_
 
     def open_positions():
         for i in range(3):
-            engine._open_position("BTCUSDT", PositionSide.LONG, size=0.05, price=100.0 + i)
+            engine._execute_entry(
+                symbol="BTCUSDT",
+                side=PositionSide.LONG,
+                size=0.05,
+                price=100.0 + i,
+                stop_loss=None,
+                take_profit=None,
+                signal_strength=0.0,
+                signal_confidence=0.0,
+            )
             time.sleep(0.01)
 
     def close_some():
         time.sleep(0.05)
         # close first two if present
         for _ in range(2):
-            if engine.positions:
-                position = next(iter(engine.positions.values()))
-                engine._close_position(position, reason="concurrent-close")
+            if engine.live_position_tracker._positions:
+                position = next(iter(engine.live_position_tracker._positions.values()))
+                engine._execute_exit(
+                    position=position,
+                    reason="concurrent-close",
+                    limit_price=None,
+                    current_price=102.0,
+                    candle_high=None,
+                    candle_low=None,
+                    candle=None,
+                )
                 time.sleep(0.01)
 
     t1 = threading.Thread(target=open_positions)

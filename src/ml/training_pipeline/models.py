@@ -19,7 +19,16 @@ from typing import TYPE_CHECKING, Any
 try:
     import tensorflow as tf
     from tensorflow.keras import callbacks
-    from tensorflow.keras.layers import Conv1D, Dense, Dropout, Input, LSTM, MaxPooling1D
+    from tensorflow.keras.layers import (
+        GRU,
+        BatchNormalization,
+        Conv1D,
+        Dense,
+        Dropout,
+        Input,
+        LayerNormalization,
+        MaxPooling1D,
+    )
     from tensorflow.keras.models import Model
 
     _TENSORFLOW_AVAILABLE = True
@@ -32,14 +41,15 @@ except ImportError:
     Dense = None  # type: ignore
     Dropout = None  # type: ignore
     Input = None  # type: ignore
-    LSTM = None  # type: ignore
+    GRU = None  # type: ignore
     MaxPooling1D = None  # type: ignore
     Model = None  # type: ignore
+    BatchNormalization = None  # type: ignore
+    LayerNormalization = None  # type: ignore
 
 if TYPE_CHECKING:
-    # For type checking, assume tensorflow is available
-    from tensorflow.keras.models import Model as ModelType
     from tensorflow.keras import callbacks as CallbacksType
+    from tensorflow.keras.models import Model as ModelType
 else:
     ModelType = Any  # type: ignore
     CallbacksType = Any  # type: ignore
@@ -54,40 +64,61 @@ def _ensure_tensorflow_available() -> None:
         )
 
 
-def create_adaptive_model(input_shape, has_sentiment: bool = True) -> Any:
+def create_adaptive_model(input_shape: tuple[int, int], has_sentiment: bool = True) -> Any:
+    """Create an optimized model with good speed/accuracy tradeoff.
+
+    Architecture: Efficient Conv1D + GRU with batch normalization
+    Optimized for fast training while maintaining good accuracy.
+
+    Args:
+        input_shape: Tuple of (sequence_length, num_features)
+        has_sentiment: Whether sentiment features are included (unused, for compatibility)
+
+    Returns:
+        Compiled Keras model
+
+    Raises:
+        ValueError: If input_shape is invalid for model architecture
+    """
     _ensure_tensorflow_available()
+
+    # Validate input shape for model architecture requirements
+    # Two MaxPooling1D(pool_size=2) layers require sequence_length >= 4
+    sequence_length, num_features = input_shape
+    if sequence_length < 4:
+        raise ValueError(
+            f"sequence_length must be >= 4 for model architecture (two pooling layers), "
+            f"got {sequence_length}"
+        )
+    if num_features <= 0:
+        raise ValueError(f"num_features must be positive, got {num_features}")
+
     inputs = Input(shape=input_shape)
-    x = Conv1D(filters=64, kernel_size=3, activation="relu")(inputs)
+
+    # Two convolutional blocks with batch norm
+    x = Conv1D(filters=48, kernel_size=3, activation=None, padding="same")(inputs)
+    x = BatchNormalization()(x)
+    x = tf.keras.layers.Activation("relu")(x)
     x = MaxPooling1D(pool_size=2)(x)
-    x = Conv1D(filters=128, kernel_size=3, activation="relu")(x)
+
+    x = Conv1D(filters=96, kernel_size=3, activation=None, padding="same")(x)
+    x = BatchNormalization()(x)
+    x = tf.keras.layers.Activation("relu")(x)
     x = MaxPooling1D(pool_size=2)(x)
-    x = LSTM(100, return_sequences=True)(x)
+
+    # GRU layers with layer normalization
+    x = GRU(80, return_sequences=True)(x)
+    x = LayerNormalization()(x)
     x = Dropout(0.2)(x)
-    x = LSTM(50, return_sequences=False)(x)
+    x = GRU(40, return_sequences=False)(x)
     x = Dropout(0.2)(x)
-    x = Dense(50, activation="relu")(x)
+
+    # Output layers
+    x = Dense(40, activation="relu")(x)
     x = Dropout(0.2)(x)
     outputs = Dense(1, activation="linear")(x)
 
     model = Model(inputs=inputs, outputs=outputs)
-    model.compile(
-        optimizer="adam",
-        loss="mse",
-        metrics=[tf.keras.metrics.RootMeanSquaredError(name="rmse")],
-    )
-    return model
-
-
-def build_price_only_model(sequence_length: int, num_features: int) -> Any:
-    _ensure_tensorflow_available()
-    inputs = tf.keras.layers.Input(shape=(sequence_length, num_features))
-    x = tf.keras.layers.LSTM(128, return_sequences=True)(inputs)
-    x = tf.keras.layers.Dropout(0.2)(x)
-    x = tf.keras.layers.LSTM(64)(x)
-    x = tf.keras.layers.Dense(64, activation="relu")(x)
-    x = tf.keras.layers.Dropout(0.2)(x)
-    outputs = tf.keras.layers.Dense(1, activation="sigmoid")(x)
-    model = tf.keras.Model(inputs=inputs, outputs=outputs)
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
         loss="mse",
@@ -96,12 +127,34 @@ def build_price_only_model(sequence_length: int, num_features: int) -> Any:
     return model
 
 
-def default_callbacks(patience: int = 15) -> list[Any]:
+def default_callbacks(patience: int = 15, reduce_lr_patience: int | None = None) -> list[Any]:
+    """Create default training callbacks with optimized parameters.
+
+    Args:
+        patience: Epochs to wait before early stopping
+        reduce_lr_patience: Epochs to wait before reducing LR (default: patience // 3)
+
+    Returns:
+        List of Keras callbacks
+    """
     _ensure_tensorflow_available()
+
+    # Avoid reassigning function parameter (CODE.md line 77)
+    lr_patience = reduce_lr_patience if reduce_lr_patience is not None else max(patience // 3, 3)
+
     return [
-        callbacks.EarlyStopping(monitor="val_loss", patience=patience, restore_best_weights=True),
+        callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=patience,
+            restore_best_weights=True,
+            verbose=1,
+        ),
         callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=0.5, patience=max(patience // 3, 3), min_lr=1e-5, verbose=1
+            monitor="val_loss",
+            factor=0.5,
+            patience=lr_patience,
+            min_lr=1e-6,
+            verbose=1,
         ),
     ]
 
@@ -145,7 +198,7 @@ def create_model(
     """
     model_type_lower = model_type.lower()
 
-    # CNN-LSTM (original/baseline)
+    # CNN-LSTM (original/baseline) - use optimized adaptive model
     if model_type_lower in ["cnn_lstm", "adaptive", "default"]:
         has_sentiment = kwargs.get("has_sentiment", True)
         return create_adaptive_model(input_shape, has_sentiment)
@@ -269,3 +322,17 @@ MODEL_VARIANTS = {
     "lightweight": "Fewer parameters, faster training/inference",
     "deep": "More parameters, potentially better accuracy on large datasets",
 }
+
+
+# Backwards compatibility function
+def build_price_only_model(sequence_length: int, num_features: int) -> Any:
+    """Provides backwards compatibility for code using the old function signature.
+
+    Args:
+        sequence_length: Length of input sequences
+        num_features: Number of features per timestep
+
+    Returns:
+        Compiled Keras model
+    """
+    return create_model((sequence_length, num_features), has_sentiment=False)

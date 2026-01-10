@@ -29,7 +29,7 @@ config = PredictionConfig.from_config_manager()
 engine = PredictionEngine(config=config)
 
 provider = BinanceProvider()
-end = datetime.utcnow()
+end = datetime.now(UTC)
 start = end - timedelta(days=90)
 df = provider.get_historical_data("BTCUSDT", "1h", start, end)
 result = engine.predict(df)

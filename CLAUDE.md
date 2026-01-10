@@ -11,6 +11,17 @@ This is a modular cryptocurrency trading system focused on long-term, risk-balan
 ## Essential Commands
 
 ### Environment Setup
+
+**Remote Environments (Claude Code Web)**:
+
+You are operating in a claude code web environment if CLAUDE_CODE_REMOTE == true:
+
+- The virtual environment is automatically created and configured by the `sessionStart` hook
+- Dependencies from `requirements-server.txt` are installed automatically at session start
+- Use the existing `.venv` for all operations - it's already activated
+- Only install packages manually as a fallback if venv is unavailable or broken
+
+**Local Development**:
 ```bash
 # Create virtual environment and install
 python -m venv .venv && source .venv/bin/activate
@@ -74,7 +85,7 @@ atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30
 atb live ml_basic --symbol BTCUSDT --paper-trading
 
 # Live trading with health endpoint
-atb live-health --port 8000 -- ml_basic --paper-trading
+PORT=8000 atb live-health -- ml_basic --paper-trading
 ```
 
 ### ML Model Training & Deployment
@@ -121,14 +132,16 @@ Data Providers → Indicators → Strategy → Risk Manager → Execution
 ### Directory Structure
 
 **Core Application** (`src/`):
-- `backtesting/` - Vectorized simulation engine for strategy testing
 - `config/` - Typed configuration loader, constants, feature flags
 - `data_providers/` - Market & sentiment providers (Binance, Coinbase) with caching
 - `database/` - SQLAlchemy models, DatabaseManager, Flask-Admin UI
+- `engines/` - Trading engines (backtest + live):
+  - `backtest/` - Vectorized simulation engine for strategy testing
+  - `live/` - Live trading engine with real-time execution
+  - `shared/` - Unified logic for both engines (models, cost calculator, risk handlers)
 - `infrastructure/` - Cross-cutting concerns:
   - `logging/` - Centralized logging config, context, structured events
   - `runtime/` - Path resolution, geo detection, cache TTL, secrets
-- `live/` - Live trading engine with real-time execution
 - `ml/` - Trained models and metadata
   - **Registry**: `models/{SYMBOL}/{TYPE}/{VERSION}/` (versioned structure with latest symlinks)
   - All strategies now exclusively use registry-based model loading
@@ -248,7 +261,7 @@ LOG_JSON=true  # Enable structured logging
    git checkout -b feature/your-feature
    ```
 
-2. **Write code** following conventions (see AGENTS.md for full details):
+2. **Write code** guidelines and conventions in CODE.md **MUST BE FOLLOWED AT ALL TIMES**:
    - **Functions**: Keep concise, self-evident purpose, always include docstrings
    - **Types**: Use type hints, avoid `Any` where possible
    - **Variables**: Use descriptive names, extract magic numbers to constants
@@ -273,7 +286,21 @@ LOG_JSON=true  # Enable structured logging
    atb test unit
    ```
 
-5. **Commit frequently** with clear messages:
+5. **Review code with agents** after significant changes:
+   - Use the `architecture-reviewer` agent for:
+     - New features or modules
+     - Refactoring or architectural changes
+     - Trading logic (position management, risk management, order execution)
+     - Financial calculations (P&L, fees, position sizing)
+   - Use the `code-reviewer` agent for:
+     - Bug fixes and code correctness
+     - Pull request reviews
+   - Run both agents in parallel for comprehensive reviews:
+     ```
+     Launch the architecture-reviewer and code-reviewer agents in parallel to review these changes
+     ```
+
+6. **Commit frequently** with clear messages:
    ```bash
    # Use imperative, present-tense
    git commit -m "Add short-entry guardrails to ml_basic strategy"
@@ -282,19 +309,6 @@ LOG_JSON=true  # Enable structured logging
    # Only commit changes made during the session, not whole working tree
    # Verify correct branch before committing
    ```
-
-### Using ExecPlans for Complex Work
-
-For significant features or refactors, create an ExecPlan following `.agents/PLANS.md`:
-
-**ExecPlan Structure**:
-- **Purpose**: User-visible behavior enabled by this change
-- **Progress**: Checkbox list with timestamps of granular steps
-- **Surprises & Discoveries**: Unexpected behaviors encountered
-- **Decision Log**: Key decisions with rationale and dates
-- **Outcomes & Retrospective**: Summary of achievements and lessons
-
-**Location**: Store in `docs/execplans/descriptive_name.md`
 
 **Key Requirements**:
 - Self-contained - includes all context needed
@@ -382,6 +396,18 @@ When addressing review comments from a PR link:
 - Address the specific feedback identified in the comment
 - Commit changes with clear message referencing the issue
 - Do not fetch the full PR diff or all comments unless necessary
+
+### Railway Environments
+
+This project is deployed on Railway. Below are guidelines for interacting with the Railway environment:
+- The project name is **innovative-transformation**.
+- Use the Railway MCP server (docs: https://docs.railway.com/reference/mcp-server) or `railway` CLI command (docs: https://docs.railway.com/guides/cli) to interact with the environment.
+- There are 3 environments
+  - **development** - synced to the `develop` branch
+  - **staging** - synced to the `staging` branch
+  - **main** - synced to the `main` branch (**CRITICAL:** this is the production environment. Never perform destructive operations here!)
+
+
 
 ## Important Context
 
@@ -472,9 +498,228 @@ railway logs --environment production
 - For local databases: run `atb db migrate` after schema updates
 - Ensure backups in `backups/` are encrypted or excluded from commits
 
+## Regression Prevention
+
+When Claude makes a mistake or you discover a best practice during development, add it to the "Learned Constraints" section below. This builds institutional knowledge and prevents repeating mistakes.
+
+### Learned Constraints
+
+- Always validate model paths with `.resolve()` before loading to prevent path traversal
+- Never use `.iloc[]` without bounds checking in the backtesting engine
+- ML models require feature schema validation even when features appear unused
+- Always run `atb dev quality` before committing to catch type errors early
+- Run `architecture-reviewer` and `code-reviewer` agents after significant changes (features, refactoring, trading logic, financial calculations)
+- Use `--paper-trading` flag when testing live trading changes
+- Check for existing branches before creating new ones to avoid duplicates
+- Verify database connection before running integration tests
+
+### Common PR Review Issues
+
+The following patterns have been identified from PR reviews as recurring mistakes. **Avoid these proactively:**
+
+#### 1. Timezone Handling (Naive/Aware DateTime Mixing)
+- **Problem**: Mixing `datetime.now(UTC)` with timezone-naive timestamps from pandas causes `TypeError`
+- **Prevention**: Use consistent timezone handling - either all UTC-aware OR all naive
+- **Example**: When comparing `datetime.now(UTC)` with `df.index[-1]`, ensure the index is also UTC-aware
+```python
+# ❌ Bad: Mixing aware and naive
+if datetime.now(UTC) - df.index[-1] > timedelta(hours=1):  # TypeError!
+
+# ✅ Good: Consistent timezone handling
+if datetime.now(UTC) - df.index[-1].tz_localize('UTC') > timedelta(hours=1):
+```
+
+#### 2. Missing Input Validation
+- **Problem**: Division by zero, NaN/Infinity propagation, negative values, invalid enum values
+- **Prevention**: Validate ALL inputs at API boundaries BEFORE calculations
+- **Critical areas**: Price (must be positive), notional (must be non-negative), side (must be valid enum)
+```python
+# ✅ Good: Validate before calculating
+if price <= 0:
+    raise ValueError(f"Price must be positive, got {price}")
+if not math.isfinite(price):
+    raise ValueError(f"Price must be finite, got {price}")
+```
+
+#### 3. Financial Calculation Consistency (Backtest vs Live Parity)
+- **Problem**: Fees/slippage applied differently between engines, causing backtest results to not match live
+- **Prevention**: Use shared calculation modules in `src/engines/shared/` - NEVER duplicate financial logic
+- **Verification**: Write parity tests that run BOTH engines with identical inputs and assert identical outputs
+```python
+# ✅ Good: True parity test
+backtest_result = backtester.run(data)
+live_result = simulate_live(data)
+assert backtest_result.final_balance == pytest.approx(live_result.final_balance)
+```
+
+#### 4. Race Conditions / Thread Safety
+- **Problem**: Time-of-check-time-of-use (TOCTOU) vulnerabilities in position management
+- **Prevention**: Re-verify position existence immediately before mutations; use locks consistently
+- **Pattern**: Check → Action should be atomic or re-check before action
+```python
+# ❌ Bad: TOCTOU race - position may be closed between check and action
+if position_tracker.has_position(order_id):
+    # Another thread could close position here!
+    position_tracker.close_position(order_id)
+
+# ✅ Good: Re-verify inside critical section
+with positions_lock:
+    if position_tracker.has_position(order_id):
+        position_tracker.close_position(order_id)
+```
+
+#### 5. Error Handling Gaps
+- **Problem**: Broad `except Exception` with silent logging at DEBUG level hides production bugs
+- **Prevention**: Catch specific exceptions, log at WARNING for unexpected failures
+```python
+# ❌ Bad: Hides all errors
+except Exception as e:
+    logger.debug("Failed: %s", e)
+
+# ✅ Good: Specific exceptions, visible logging
+except (ValueError, KeyError, ZeroDivisionError) as e:
+    logger.warning("Expected error in calculation: %s", e)
+except Exception as e:
+    logger.warning("Unexpected error: %s", e, exc_info=True)
+```
+
+#### 6. Data Structure Validation
+- **Problem**: Parallel lists with mismatched lengths (e.g., `exit_targets` and `exit_sizes`) cause IndexError
+- **Prevention**: Validate configuration invariants at initialization, fail fast
+```python
+# ✅ Good: Validate at init
+if len(exit_targets) != len(exit_sizes):
+    raise ValueError(f"exit_targets ({len(exit_targets)}) must match exit_sizes ({len(exit_sizes)})")
+```
+
+#### 7. Division by Zero in Loops
+- **Problem**: Iterating over positions that become fully closed during the loop
+- **Prevention**: Check divisor before dividing; add epsilon protection
+```python
+# ✅ Good: Protect against division by zero
+current_fraction = position.current_size / position.original_size
+if abs(current_fraction) < 1e-9:  # Position fully closed
+    break
+exit_of_current = exit_of_original / current_fraction
+```
+
+#### 8. Loop Safety in Partial Operations
+- **Problem**: Malformed configurations could cause infinite loops
+- **Prevention**: Add maximum iteration guards as defense-in-depth
+```python
+MAX_ITERATIONS = 10
+iteration = 0
+while iteration < MAX_ITERATIONS:
+    # ... loop body ...
+    iteration += 1
+```
+
+#### 9. Property vs Private Attribute Confusion
+- **Problem**: Using `self._total_fees_paid` when `self.total_fees_paid` property exists
+- **Prevention**: When delegating to sub-components, always use properties; avoid direct private attribute access
+```python
+# ❌ Bad: References non-existent private attribute
+return {"total_fees": self._total_fees_paid}  # AttributeError!
+
+# ✅ Good: Use property that delegates to component
+return {"total_fees": self.total_fees_paid}  # Works
+```
+
+#### 10. Missing Tests for New Components
+- **Problem**: New shared modules added without corresponding unit tests
+- **Prevention**: Every new module needs tests BEFORE merge; add parity tests for shared engine components
+
+#### 11. Missing Retry Logic for External APIs
+- **Problem**: Network calls to exchanges fail without retry, causing position management issues
+- **Prevention**: Add retry with exponential backoff for transient failures
+```python
+# ✅ Good: Retry with backoff
+for attempt in range(3):
+    try:
+        result = exchange.get_order(order_id)
+        break
+    except (ConnectionError, TimeoutError) as e:
+        if attempt == 2:
+            logger.error("Failed after 3 attempts: %s", e)
+            return None
+        time.sleep(2 ** attempt)  # 1s, 2s, 4s
+```
+
+#### 12. Database/In-Memory State Divergence
+- **Problem**: In-memory state updated but DB update fails, causing inconsistency
+- **Prevention**: Either rollback in-memory on DB failure OR log critical warning for manual reconciliation
+```python
+# ✅ Good: Fail-fast or rollback
+try:
+    db_manager.update_position(position)
+except Exception as e:
+    # Option 1: Rollback in-memory state
+    position.current_size = previous_size
+    logger.error("DB update failed, rolled back: %s", e)
+    # Option 2: Log critical for manual fix
+    logger.critical("DB/memory state diverged for %s: %s", position.symbol, e)
+```
+
+#### 13. Magic Numbers Without Justification
+- **Problem**: Constants like `MAX_PARTIAL_EXITS_PER_CYCLE = 10` lack explanation
+- **Prevention**: Add comments explaining why the value was chosen
+```python
+# ✅ Good: Explain the reasoning
+# Maximum partial exits per cycle - limits to 10 to prevent infinite loops
+# from malformed policies while allowing legitimate multi-level exits (typically 2-3)
+MAX_PARTIAL_EXITS_PER_CYCLE = 10
+```
+
+#### 14. Weak Test Assertions
+- **Problem**: Using `or` instead of `and` in assertions makes tests too permissive
+- **Prevention**: Assert each condition independently
+```python
+# ❌ Bad: Passes if either is true
+assert result.updated is False or result.new_stop_price is None
+
+# ✅ Good: Assert both conditions
+assert result.updated is False
+assert result.new_stop_price is None
+```
+
+#### 15. Runtime Validation Instead of Init Validation
+- **Problem**: Checking for required dependencies at runtime instead of initialization
+- **Prevention**: Validate required dependencies in `__init__`, fail fast
+```python
+# ❌ Bad: Fails at order execution time
+def execute_order(self):
+    if self.exchange_interface is None:  # Too late!
+        logger.error("Exchange not initialized")
+        return None
+
+# ✅ Good: Fail at init
+def __init__(self, exchange_interface, enable_live_trading):
+    if enable_live_trading and exchange_interface is None:
+        raise ValueError("Cannot enable live trading without exchange interface")
+```
+
+---
+
+## Automated Documentation
+
+The following documents are "living documents" that should be kept updated:
+
+| Document | Purpose | Update Frequency |
+|----------|---------|------------------|
+| `docs/changelog.md` | Timeline of all changes | After each feature/fix |
+| `docs/project_status.md` | Current milestones, last session summary | Start/end of sessions |
+| `docs/architecture.md` | System design overview | After architectural changes |
+
+**Update Command**: Use `/update-docs` to refresh all automated documentation.
+
+---
+
 ## Documentation References
 
 - **Full Docs**: `docs/README.md` - Complete documentation index
+- **Architecture**: `docs/architecture.md` - System design and components
+- **Changelog**: `docs/changelog.md` - Timeline of changes
+- **Project Status**: `docs/project_status.md` - Current milestones and focus
 - **Backtesting**: `docs/backtesting.md` - Engine internals and CLI usage
 - **Live Trading**: `docs/live_trading.md` - Safety controls and deployment
 - **Data Pipeline**: `docs/data_pipeline.md` - Offline cache and download utilities

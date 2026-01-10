@@ -1,6 +1,6 @@
 """Data retrieval tests for DatabaseManager."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -24,7 +24,7 @@ class TestDataRetrieval:
         mock_position.unrealized_pnl_percent = 2.22
         mock_position.stop_loss = 43000.0
         mock_position.take_profit = 47000.0
-        mock_position.entry_time = datetime.utcnow()
+        mock_position.entry_time = datetime.now(UTC)
         mock_position.strategy_name = "TestStrategy"
 
         mock_order = Mock()
@@ -39,8 +39,8 @@ class TestDataRetrieval:
         mock_order.filled_quantity = 0.1
         mock_order.filled_price = 45000.0
         mock_order.commission = 0.0
-        mock_order.created_at = datetime.utcnow()
-        mock_order.filled_at = datetime.utcnow()
+        mock_order.created_at = datetime.now(UTC)
+        mock_order.filled_at = datetime.now(UTC)
         mock_order.cancelled_at = None
         mock_order.target_level = None
         mock_order.size_fraction = None
@@ -77,8 +77,8 @@ class TestDataRetrieval:
         mock_trade.size = 0.1
         mock_trade.pnl = 100.0
         mock_trade.pnl_percent = 2.22
-        mock_trade.entry_time = datetime.utcnow()
-        mock_trade.exit_time = datetime.utcnow()
+        mock_trade.entry_time = datetime.now(UTC)
+        mock_trade.exit_time = datetime.now(UTC)
         mock_trade.exit_reason = "Take profit"
         mock_trade.strategy_name = "TestStrategy"
 
@@ -96,8 +96,8 @@ class TestDataRetrieval:
         """Test getting performance metrics"""
         mock_trade = Mock()
         mock_trade.pnl = 100.0
-        mock_trade.exit_time = datetime.utcnow()
-        mock_trade.entry_time = datetime.utcnow() - timedelta(hours=1)
+        mock_trade.exit_time = datetime.now(UTC)
+        mock_trade.entry_time = datetime.now(UTC) - timedelta(hours=1)
 
         mock_query = Mock()
         mock_query.filter.return_value = mock_query

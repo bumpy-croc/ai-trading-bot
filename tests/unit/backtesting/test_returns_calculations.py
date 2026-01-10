@@ -1,21 +1,20 @@
 from datetime import datetime
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
 from src.data_providers.data_provider import DataProvider
+from src.engines.backtest.engine import Backtester
 from src.strategies.components import (
+    EnhancedRegimeDetector,
     Signal,
     SignalDirection,
     SignalGenerator,
     Strategy,
-    EnhancedRegimeDetector,
 )
-from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
 
 pytestmark = pytest.mark.unit
 
@@ -26,7 +25,7 @@ class DummyDataProvider(DataProvider):
         self._df = df
 
     def get_historical_data(
-        self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ):
         return self._df.copy()
 
@@ -149,6 +148,10 @@ def test_yearly_returns_positive_and_negative():
         risk_parameters=None,
         initial_balance=1000,
         log_to_database=False,
+        # Disable realistic execution for this test (legacy behavior)
+        fee_rate=0.0,
+        slippage_rate=0.0,
+        use_next_bar_execution=False,
     )
     result = backtester.run(symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1])
     yr = result["yearly_returns"]

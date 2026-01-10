@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -45,7 +45,7 @@ class StrategyVersionRecord:
         if isinstance(created_at, str):
             payload["created_at"] = datetime.fromisoformat(created_at)
         elif created_at is None:
-            payload["created_at"] = datetime.now()
+            payload["created_at"] = datetime.now(UTC)
         return cls(**payload)
 
 

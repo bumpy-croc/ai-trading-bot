@@ -6,7 +6,7 @@ cooling-off periods, audit trails, and performance impact analysis.
 """
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 from src.strategies.components.performance_monitor import (
@@ -153,7 +153,7 @@ class TestStrategySwitcher(unittest.TestCase):
     def test_evaluate_switch_need_cooling_off_period(self):
         """Test switch evaluation during cooling-off period"""
         # Set last switch time to recent
-        self.switcher.last_switch_time = datetime.now() - timedelta(minutes=30)
+        self.switcher.last_switch_time = datetime.now(UTC) - timedelta(minutes=30)
 
         result = self.switcher.evaluate_switch_need(
             self.current_strategy,
@@ -191,7 +191,7 @@ class TestStrategySwitcher(unittest.TestCase):
             from_strategy=self.current_strategy,
             to_strategy=self.alternative_strategy,
             reason="Test switch",
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="test_user",
         )
 
@@ -222,7 +222,7 @@ class TestStrategySwitcher(unittest.TestCase):
             from_strategy=self.current_strategy,
             to_strategy=self.alternative_strategy,
             reason="Test switch",
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="test_user",
         )
 
@@ -246,7 +246,7 @@ class TestStrategySwitcher(unittest.TestCase):
             from_strategy=self.current_strategy,
             to_strategy=self.alternative_strategy,
             reason="Test switch",
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="test_user",
         )
 
@@ -296,7 +296,7 @@ class TestStrategySwitcher(unittest.TestCase):
         """Test manual override automatic expiry"""
         # Set override to expire in the past
         self.switcher.manual_override_active = True
-        self.switcher.manual_override_until = datetime.now() - timedelta(hours=1)
+        self.switcher.manual_override_until = datetime.now(UTC) - timedelta(hours=1)
 
         # Check that override is no longer active
         self.assertFalse(self.switcher._is_manual_override_active())
@@ -309,21 +309,21 @@ class TestStrategySwitcher(unittest.TestCase):
 
     def test_can_switch_now_within_cooling_off(self):
         """Test switch timing check within cooling-off period"""
-        self.switcher.last_switch_time = datetime.now() - timedelta(minutes=30)
+        self.switcher.last_switch_time = datetime.now(UTC) - timedelta(minutes=30)
 
         result = self.switcher._can_switch_now(SwitchTrigger.PERFORMANCE_DEGRADATION)
         self.assertFalse(result)
 
     def test_can_switch_now_after_cooling_off(self):
         """Test switch timing check after cooling-off period"""
-        self.switcher.last_switch_time = datetime.now() - timedelta(hours=2)
+        self.switcher.last_switch_time = datetime.now(UTC) - timedelta(hours=2)
 
         result = self.switcher._can_switch_now(SwitchTrigger.PERFORMANCE_DEGRADATION)
         self.assertTrue(result)
 
     def test_can_switch_now_emergency_trigger(self):
         """Test switch timing check with emergency trigger"""
-        self.switcher.last_switch_time = datetime.now() - timedelta(minutes=30)
+        self.switcher.last_switch_time = datetime.now(UTC) - timedelta(minutes=30)
 
         # Emergency switches have shorter cooling-off period
         result = self.switcher._can_switch_now(SwitchTrigger.EMERGENCY_STOP)
@@ -346,7 +346,7 @@ class TestStrategySwitcher(unittest.TestCase):
                     from_strategy="strategy_a",
                     to_strategy="strategy_b",
                     reason="Test",
-                    requested_at=datetime.now() - timedelta(hours=i),
+                    requested_at=datetime.now(UTC) - timedelta(hours=i),
                     requested_by="test",
                 ),
                 validation_result=ValidationResult.APPROVED,
@@ -369,7 +369,7 @@ class TestStrategySwitcher(unittest.TestCase):
                     from_strategy="strategy_a",
                     to_strategy="strategy_b",
                     reason="Test",
-                    requested_at=datetime.now() - timedelta(days=i),
+                    requested_at=datetime.now(UTC) - timedelta(days=i),
                     requested_by="test",
                 ),
                 validation_result=ValidationResult.APPROVED,
@@ -391,7 +391,7 @@ class TestStrategySwitcher(unittest.TestCase):
                 from_strategy="strategy_a",
                 to_strategy="strategy_b",
                 reason="Test",
-                requested_at=datetime.now() - timedelta(days=1),
+                requested_at=datetime.now(UTC) - timedelta(days=1),
                 requested_by="test",
             ),
             validation_result=ValidationResult.APPROVED,
@@ -406,7 +406,7 @@ class TestStrategySwitcher(unittest.TestCase):
                 from_strategy="strategy_a",
                 to_strategy="strategy_b",
                 reason="Test",
-                requested_at=datetime.now() - timedelta(days=40),
+                requested_at=datetime.now(UTC) - timedelta(days=40),
                 requested_by="test",
             ),
             validation_result=ValidationResult.APPROVED,
@@ -431,7 +431,7 @@ class TestStrategySwitcher(unittest.TestCase):
                 from_strategy="target_strategy",
                 to_strategy="other_strategy",
                 reason="Test",
-                requested_at=datetime.now() - timedelta(days=1),
+                requested_at=datetime.now(UTC) - timedelta(days=1),
                 requested_by="test",
             ),
             validation_result=ValidationResult.APPROVED,
@@ -446,7 +446,7 @@ class TestStrategySwitcher(unittest.TestCase):
                 from_strategy="other_strategy",
                 to_strategy="different_strategy",
                 reason="Test",
-                requested_at=datetime.now() - timedelta(days=1),
+                requested_at=datetime.now(UTC) - timedelta(days=1),
                 requested_by="test",
             ),
             validation_result=ValidationResult.APPROVED,
@@ -489,7 +489,7 @@ class TestStrategySwitcher(unittest.TestCase):
                 from_strategy="strategy_a",
                 to_strategy="strategy_b",
                 reason="Test",
-                requested_at=datetime.now() - timedelta(days=1),
+                requested_at=datetime.now(UTC) - timedelta(days=1),
                 requested_by="test",
             ),
             validation_result=ValidationResult.APPROVED,
@@ -504,7 +504,7 @@ class TestStrategySwitcher(unittest.TestCase):
                 from_strategy="strategy_a",
                 to_strategy="strategy_c",
                 reason="Test",
-                requested_at=datetime.now() - timedelta(days=2),
+                requested_at=datetime.now(UTC) - timedelta(days=2),
                 requested_by="test",
             ),
             validation_result=ValidationResult.APPROVED,
@@ -549,7 +549,7 @@ class TestStrategySwitcher(unittest.TestCase):
             from_strategy=self.current_strategy,
             to_strategy=self.alternative_strategy,
             reason="Test switch",
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="test_user",
         )
 
@@ -582,7 +582,7 @@ class TestStrategySwitcher(unittest.TestCase):
             from_strategy=self.current_strategy,
             to_strategy=self.alternative_strategy,
             reason="Test switch",
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="automatic_evaluation",
             switch_decision=low_confidence_decision,
         )
@@ -608,7 +608,7 @@ class TestStrategySwitcher(unittest.TestCase):
             from_strategy=self.current_strategy,
             to_strategy=self.alternative_strategy,
             reason="Test switch",
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="automatic_evaluation",
             switch_decision=high_confidence_decision,
         )
@@ -627,7 +627,7 @@ class TestStrategySwitcher(unittest.TestCase):
             from_strategy=self.current_strategy,
             to_strategy=self.alternative_strategy,
             reason="Manual switch",
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="test_user",
             switch_decision=None,
         )
@@ -662,7 +662,7 @@ class TestStrategySwitcher(unittest.TestCase):
             from_strategy=self.current_strategy,
             to_strategy=self.alternative_strategy,
             reason="Test switch",
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="automatic_evaluation",
             switch_decision=medium_confidence_decision,
         )

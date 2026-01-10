@@ -1,22 +1,135 @@
 # Backtesting
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-12-26
 > **Related Documentation**: [Live trading](live_trading.md), [Data pipeline](data_pipeline.md)
 
-The vectorised backtesting engine in `src/backtesting/engine.py` replays historical candles, applies the strategy lifecycle, and
+The vectorised backtesting engine in `src/engines/backtest/` replays historical candles, applies the strategy lifecycle, and
 records trades, risk metrics, and optional database logs. It mirrors the live engine behaviour: partial exits, trailing stops,
 regime-aware strategy switching, and dynamic risk controls all share the same helpers.
 
-## Key components
+## Architecture Overview
+
+The backtesting engine uses a modular, handler-based architecture that separates concerns into focused components:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         Backtester                          │
+│                    (Orchestrator ~400 lines)                │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+     ┌────────────────────┬┴┬────────────────────┐
+     ▼                    ▼ ▼                    ▼
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│ EntryHandler │   │ ExitHandler  │   │ EventLogger  │
+│   (entry     │   │   (exit      │   │  (database   │
+│   signals)   │   │  conditions) │   │   logging)   │
+└──────┬───────┘   └──────┬───────┘   └──────────────┘
+       │                  │
+       ▼                  ▼
+┌──────────────────────────────────┐
+│       ExecutionEngine            │
+│  (fees, slippage, next-bar)      │
+└──────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────┐
+│       PositionTracker            │
+│   (active trade, MFE/MAE)        │
+└──────────────────────────────────┘
+```
+
+## Module Reference
+
+### Core Modules (`src/engines/backtest/`)
+
+| Module | Purpose |
+| ------ | ------- |
+| `engine.py` | Orchestrates the backtest run loop, delegates to handlers |
+| `models.py` | Data classes: `Trade`, `ActiveTrade` |
+| `utils.py` | Performance metric calculations, data extraction helpers |
+
+### Execution Handlers (`src/engines/backtest/execution/`)
+
+| Module | Purpose |
+| ------ | ------- |
+| `execution_engine.py` | Fee/slippage calculations, next-bar execution queuing |
+| `position_tracker.py` | Active trade state, MFE/MAE tracking, partial operations |
+| `entry_handler.py` | Entry signal processing, position sizing, correlation control |
+| `exit_handler.py` | Exit conditions (SL/TP/trailing/time), exit execution |
+
+### Risk Handlers (`src/engines/backtest/risk/`)
+
+| Module | Purpose |
+| ------ | ------- |
+| `correlation_handler.py` | Correlation-based position size adjustment |
+
+### Regime Handlers (`src/engines/backtest/regime/`)
+
+| Module | Purpose |
+| ------ | ------- |
+| `regime_handler.py` | Regime analysis, strategy switching |
+
+### Logging (`src/engines/backtest/logging/`)
+
+| Module | Purpose |
+| ------ | ------- |
+| `event_logger.py` | Database logging coordination, session management |
+
+## Key Components
 
 - `Backtester` orchestrates the run, handles warm-up periods, and computes summary metrics using
-  `src/backtesting/utils.compute_performance_metrics`.
-- Strategies use component-based architecture with `Strategy` class that composes `SignalGenerator`, `RiskManager`, 
+  `src/engines/backtest/utils.compute_performance_metrics`.
+- `ExecutionEngine` handles realistic execution modeling: fees, slippage, and optional next-bar execution
+  for lookahead bias prevention.
+- `PositionTracker` manages active trade lifecycle including partial exits, scale-ins, and MFE/MAE tracking.
+- `EntryHandler` processes entry signals through risk management, correlation control, and position sizing.
+- `ExitHandler` evaluates exit conditions (stop-loss, take-profit, trailing stops, time-based) and executes exits.
+- `EventLogger` coordinates all database logging operations for trades, strategy decisions, and sessions.
+- Strategies use component-based architecture with `Strategy` class that composes `SignalGenerator`, `RiskManager`,
   and `PositionSizer` components. The engine calls `strategy.process_candle()` for each candle to get trading decisions.
 - Risk controls rely on `RiskManager`, `DynamicRiskManager`, `TrailingStopPolicy`, and optional partial exit policies – the same
   classes used by the live engine.
 - When `log_to_database=True`, the engine persists trades, strategy executions, and session records through
   `DatabaseManager` so dashboards can visualise results next to live data.
+
+## Performance Metrics
+
+The backtest engine uses the unified `PerformanceTracker` from `src/performance/tracker.py` to calculate 30+ comprehensive metrics. All metrics use pure calculation functions from `src/performance/metrics.py`, ensuring consistency with live trading results.
+
+### Available Metrics
+
+| Category | Metrics | Description |
+| -------- | ------- | ----------- |
+| **Returns** | `total_return_pct`, `annualized_return`, `cagr` | Overall profitability measures |
+| **Risk-Adjusted** | `sharpe_ratio`, `sortino_ratio`, `calmar_ratio` | Returns adjusted for volatility and drawdown risk |
+| **Risk** | `max_drawdown`, `current_drawdown`, `var_95` | Maximum and current risk exposure |
+| **Trade Quality** | `win_rate`, `profit_factor`, `expectancy` | Trade effectiveness measures |
+| **Trade Stats** | `avg_win`, `avg_loss`, `largest_win`, `largest_loss` | Win/loss distribution |
+| **Efficiency** | `avg_trade_duration_hours`, `consecutive_wins`, `consecutive_losses` | Trading frequency and streak tracking |
+| **Costs** | `total_fees_paid`, `total_slippage_cost` | Transaction cost tracking |
+
+### Accessing Metrics
+
+All metrics are included in the results dictionary returned by `backtester.run()`:
+
+```python
+results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start)
+
+# Access new risk-adjusted metrics
+print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
+print(f"Sortino Ratio: {results['sortino_ratio']:.2f}")
+print(f"Calmar Ratio: {results['calmar_ratio']:.2f}")
+print(f"VaR (95%): {results['var_95']:.4f}")
+
+# Check trade quality
+print(f"Expectancy: {results['expectancy']:.2f}")
+print(f"Profit Factor: {results['profit_factor']:.2f}")
+print(f"Consecutive Wins: {results['consecutive_wins']}")
+```
+
+### Metric Parity with Live Trading
+
+All core metrics calculated in backtesting use identical calculation logic as the live trading engine, ensuring accurate validation of backtest results against live performance. The shared `PerformanceTracker` guarantees metric consistency across both engines.
 
 ## CLI usage
 
@@ -77,7 +190,7 @@ Backtests can also run from Python modules or notebooks:
 ```python
 from datetime import datetime, timedelta
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.strategies.ml_basic import create_ml_basic_strategy
@@ -85,7 +198,7 @@ from src.strategies.ml_basic import create_ml_basic_strategy
 strategy = create_ml_basic_strategy()
 provider = CachedDataProvider(BinanceProvider(), cache_ttl_hours=24)
 backtester = Backtester(strategy=strategy, data_provider=provider, initial_balance=10_000)
-start = datetime.utcnow() - timedelta(days=120)
+start = datetime.now(UTC) - timedelta(days=120)
 results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start)
 print(results["total_return"], results["max_drawdown"])
 ```

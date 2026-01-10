@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components.position_sizer import PositionSizer
 from src.strategies.components.risk_manager import RiskManager
@@ -27,7 +27,9 @@ class AlwaysBuySignalGenerator(SignalGenerator):
             confidence=1.0,
             strength=1.0,
             metadata={
-                "timestamp": df.index[index] if len(df.index) > index else pd.Timestamp.utcnow()
+                "timestamp": (
+                    df.index[index] if len(df.index) > index else pd.Timestamp.now(tz="UTC")
+                )
             },
         )
 
@@ -132,7 +134,7 @@ def test_backtester_correlation_reduces_size(monkeypatch):
     bt.risk_manager.positions = {"BTCUSDT": {"size": 0.06, "entry_price": 110.0, "side": "long"}}
     bt.positions = [SimpleNamespace(symbol="BTCUSDT")]
 
-    original_apply = bt._apply_correlation_control
+    original_apply = bt.correlation_handler.apply_correlation_control
     captures: dict[str, float] = {}
 
     def _wrap(self, *args, **kwargs):
@@ -144,7 +146,11 @@ def test_backtester_correlation_reduces_size(monkeypatch):
         captures["after"] = result
         return result
 
-    monkeypatch.setattr(bt, "_apply_correlation_control", MethodType(_wrap, bt))
+    monkeypatch.setattr(
+        bt.correlation_handler,
+        "apply_correlation_control",
+        MethodType(_wrap, bt.correlation_handler),
+    )
 
     start = df.index[0]
     end = df.index[-1]

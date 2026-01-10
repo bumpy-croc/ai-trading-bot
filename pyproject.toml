@@ -46,7 +46,11 @@ dependencies = [
     "gevent>=25.8.2",
     "gevent-websocket>=0.10.1",
     "alembic>=1.13.1",
+]
 
+[project.optional-dependencies]
+cloud = [
+    "boto3>=1.34.0",
 ]
 
 [project.scripts]

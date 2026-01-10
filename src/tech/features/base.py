@@ -56,12 +56,13 @@ class FeatureExtractor(ABC):
         """
         pass
 
-    def validate_input(self, data: pd.DataFrame) -> bool:
+    def validate_input(self, data: pd.DataFrame, strict: bool = False) -> bool:
         """
-        Validate input data format.
+        Validate input data format and optionally data quality.
 
         Args:
             data: Input DataFrame to validate
+            strict: If True, validate price/volume data quality (positive, finite)
 
         Returns:
             True if data is valid, False otherwise
@@ -70,7 +71,26 @@ class FeatureExtractor(ABC):
             return False
 
         required_columns = ["open", "high", "low", "close", "volume"]
-        return all(col in data.columns for col in required_columns)
+        if not all(col in data.columns for col in required_columns):
+            return False
+
+        # Optional strict validation for data quality
+        if strict:
+            import numpy as np
+
+            price_cols = ["open", "high", "low", "close"]
+            for col in price_cols:
+                # Check for non-positive prices
+                if (data[col] <= 0).any():
+                    return False
+                # Check for non-finite values (NaN, inf)
+                if not np.isfinite(data[col]).all():
+                    return False
+            # Validate volume is non-negative
+            if (data["volume"] < 0).any():
+                return False
+
+        return True
 
     def handle_missing_values(
         self, data: pd.DataFrame, method: str = "forward_fill"

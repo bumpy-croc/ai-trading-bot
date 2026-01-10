@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -87,8 +87,8 @@ class MetricComparison:
     relative_difference: float
     tolerance: float
     result: ValidationResult
-    p_value: Optional[float] = None
-    confidence_interval: Optional[Tuple[float, float]] = None
+    p_value: float | None = None
+    confidence_interval: tuple[float, float] | None = None
     notes: str = ""
 
 
@@ -105,12 +105,12 @@ class PerformanceComparisonReport:
     overall_result: ValidationResult
 
     # Individual metric comparisons
-    metric_comparisons: List[MetricComparison] = field(default_factory=list)
+    metric_comparisons: list[MetricComparison] = field(default_factory=list)
 
     # Statistical tests
     equity_curve_correlation: float = 0.0
-    kolmogorov_smirnov_test: Optional[Tuple[float, float]] = None
-    mann_whitney_test: Optional[Tuple[float, float]] = None
+    kolmogorov_smirnov_test: tuple[float, float] | None = None
+    mann_whitney_test: tuple[float, float] | None = None
 
     # Trade-level analysis
     trade_count_legacy: int = 0
@@ -125,11 +125,11 @@ class PerformanceComparisonReport:
 
     # Certification
     certified: bool = False
-    certification_timestamp: Optional[datetime] = None
+    certification_timestamp: datetime | None = None
     certification_notes: str = ""
 
     # Detailed analysis
-    detailed_analysis: Dict[str, Any] = field(default_factory=dict)
+    detailed_analysis: dict[str, Any] = field(default_factory=dict)
 
 
 class PerformanceParityValidator:
@@ -141,7 +141,7 @@ class PerformanceParityValidator:
     equivalence within acceptable tolerances.
     """
 
-    def __init__(self, tolerance_config: Optional[ToleranceConfig] = None):
+    def __init__(self, tolerance_config: ToleranceConfig | None = None):
         """
         Initialize the performance parity validator.
 
@@ -209,10 +209,10 @@ class PerformanceParityValidator:
 
             self.logger.info(f"Performance parity validation completed: {report.overall_result}")
 
-        except Exception as e:
-            self.logger.error(f"Error during performance parity validation: {e}")
+        except (ValueError, KeyError, TypeError) as e:
+            self.logger.exception("Error during performance parity validation")
             report.overall_result = ValidationResult.FAIL
-            report.certification_notes = f"Validation failed due to error: {str(e)}"
+            report.certification_notes = f"Validation failed due to error: {e!s}"
 
         return report
 
@@ -454,8 +454,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to perform KS test: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Failed to perform KS test: %s", e)
 
         # Mann-Whitney U test for median difference
         try:
@@ -486,8 +486,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to perform Mann-Whitney test: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Failed to perform Mann-Whitney test: %s", e)
 
     def _analyze_equity_curve_correlation(
         self,
@@ -537,8 +537,8 @@ class PerformanceParityValidator:
                 )
             )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to calculate equity curve correlation: {e}")
+        except (ValueError, KeyError, TypeError) as e:
+            self.logger.warning("Failed to calculate equity curve correlation: %s", e)
 
     def _create_metric_comparison(
         self,
@@ -593,7 +593,7 @@ class PerformanceParityValidator:
             if report.metrics_warning == 0:
                 report.overall_result = ValidationResult.PASS
                 report.certified = True
-                report.certification_timestamp = datetime.now()
+                report.certification_timestamp = datetime.now(UTC)
                 report.certification_notes = "All metrics passed validation"
             else:
                 report.overall_result = ValidationResult.WARNING
@@ -632,7 +632,7 @@ class PerformanceParityValidator:
 
     def _calculate_temporal_overlap(
         self, legacy_results: pd.DataFrame, new_results: pd.DataFrame
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Calculate temporal overlap statistics."""
 
         legacy_start = legacy_results["timestamp"].min()
@@ -659,13 +659,13 @@ class PerformanceParityValidator:
 
         lines = [
             "=" * 80,
-            f"PERFORMANCE PARITY VALIDATION REPORT",
+            "PERFORMANCE PARITY VALIDATION REPORT",
             "=" * 80,
             f"Strategy: {report.strategy_name}",
             f"Comparison Period: {report.comparison_period}",
             f"Legacy Strategy ID: {report.legacy_strategy_id}",
             f"New Strategy ID: {report.new_strategy_id}",
-            f"Validation Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Validation Date: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             f"OVERALL RESULT: {report.overall_result.value.upper()}",
             f"Certified: {'YES' if report.certified else 'NO'}",
@@ -730,22 +730,21 @@ class PerformanceParityReporter:
     def export_to_csv(report: PerformanceComparisonReport, filepath: str) -> None:
         """Export metric comparisons to CSV format."""
 
-        data = []
-        for comparison in report.metric_comparisons:
-            data.append(
-                {
-                    "metric_name": comparison.metric_name,
-                    "metric_type": comparison.metric_type.value,
-                    "legacy_value": comparison.legacy_value,
-                    "new_value": comparison.new_value,
-                    "difference": comparison.difference,
-                    "relative_difference": comparison.relative_difference,
-                    "tolerance": comparison.tolerance,
-                    "result": comparison.result.value,
-                    "p_value": comparison.p_value,
-                    "notes": comparison.notes,
-                }
-            )
+        data = [
+            {
+                "metric_name": comparison.metric_name,
+                "metric_type": comparison.metric_type.value,
+                "legacy_value": comparison.legacy_value,
+                "new_value": comparison.new_value,
+                "difference": comparison.difference,
+                "relative_difference": comparison.relative_difference,
+                "tolerance": comparison.tolerance,
+                "result": comparison.result.value,
+                "p_value": comparison.p_value,
+                "notes": comparison.notes,
+            }
+            for comparison in report.metric_comparisons
+        ]
 
         df = pd.DataFrame(data)
         df.to_csv(filepath, index=False)

@@ -20,12 +20,12 @@ Data Providers → Indicators → Strategies → Risk Manager → Execution Laye
 
 ### Key Directories
 - `src/strategies/` - Trading strategy implementations
-- `src/live/` - Live trading engine (core component)
-- `src/backtesting/` - Historical simulation engine
+- `src/engines/live/` - Live trading engine (core component)
+- `src/engines/backtest/` - Historical simulation engine
 - `src/risk/` - Risk management system
 - `src/data_providers/` - Market & sentiment data adapters
 - `src/ml/` - Trained ML models (.h5/.keras/.onnx)
-- `scripts/` - CLI utilities & automation
+- `bin/` - Developer tooling scripts (type checks, helpers)
 - `tests/` - Comprehensive test suite
 
 ---
@@ -102,10 +102,10 @@ max_drawdown = 0.20
 atb live-control emergency-stop
 
 # Check current positions and health
-atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading
+PORT=8000 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading
 
 # Emergency database backup
-python scripts/backup_database.py --emergency
+atb db backup --backup-dir ./backups --retention 7
 ```
 
 ### Warning Signs (STOP IMMEDIATELY)
@@ -145,7 +145,7 @@ atb dashboards run monitoring --port 8000
 ### Safety
 ```bash
 # Health check
-python scripts/health_check.py
+curl http://localhost:8000/health
 
 # Critical tests
 python tests/run_tests.py critical
@@ -175,7 +175,7 @@ atb live-control emergency-stop
 - "start dashboard" → `atb dashboards run monitoring --port 8000`
 
 ### Health & Monitoring
-- "check health" → `atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading`
+- "check health" → `PORT=8000 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading`
 - "check positions" → `atb db verify`
 - "check cache" → `atb data cache-manager info`
 

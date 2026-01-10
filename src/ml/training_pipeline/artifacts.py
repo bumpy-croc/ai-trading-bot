@@ -10,7 +10,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,7 +21,7 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None  # type: ignore
+    tf = None
 
 if TYPE_CHECKING:
     from tensorflow.keras.models import Model as ModelType
@@ -29,6 +29,17 @@ else:
     ModelType = Any  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+# Plotting and performance metric constants
+PLOT_SAMPLE_SIZE = (
+    100  # Number of predictions to show in training plot (balances detail vs readability)
+)
+MIN_MAPE_DENOMINATOR = (
+    1e-8  # Minimum denominator for MAPE calculation (prevents division by near-zero values)
+)
+MAX_PERCENTAGE_ERROR_CAP = (
+    1000.0  # Cap MAPE errors at 1000% to prevent outliers from dominating metrics
+)
 
 
 class PerformanceMetrics(TypedDict):
@@ -62,9 +73,9 @@ class RobustnessValidationResult(TypedDict, total=False):
 class ArtifactPaths:
     directory: Path
     keras_path: Path
-    onnx_path: Optional[Path]
+    onnx_path: Path | None
     metadata_path: Path
-    plot_path: Optional[Path]
+    plot_path: Path | None
 
 
 def create_training_plots(
@@ -72,12 +83,12 @@ def create_training_plots(
     model: Any,
     X_test: np.ndarray,
     y_test: np.ndarray,
-    feature_names: List[str],
+    feature_names: list[str],
     symbol: str,
     model_type: str,
     output_dir: Path,
     enable_plots: bool,
-) -> Optional[Path]:
+) -> Path | None:
     """Create training plots."""
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(
@@ -87,6 +98,11 @@ def create_training_plots(
     if not enable_plots:
         return None
     try:
+        # Validate training history exists before generating plots
+        if not history.history.get("loss"):
+            logger.warning("No training history available for plots")
+            return None
+
         plt.figure(figsize=(15, 10))
         plt.subplot(2, 2, 1)
         plt.plot(history.history["loss"], label="Train Loss")
@@ -109,7 +125,7 @@ def create_training_plots(
 
         plt.subplot(2, 2, 4)
         test_predictions = model.predict(X_test, verbose=0)
-        sample = min(100, len(y_test))
+        sample = min(PLOT_SAMPLE_SIZE, len(y_test))
         plt.plot(y_test[:sample], label="Actual", alpha=0.8, linewidth=2)
         plt.plot(test_predictions[:sample].flatten(), label="Predicted", alpha=0.8, linewidth=2)
         plt.title("Prediction Sample (Test Set)")
@@ -124,10 +140,12 @@ def create_training_plots(
         plt.savefig(plot_path, dpi=300, bbox_inches="tight")
         plt.close()
         return plot_path
-    except Exception:  # noqa: BLE001 - Catch all matplotlib/display errors
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
         # Plot generation is diagnostic only - training should continue if plotting fails
-        # (e.g., missing display, matplotlib backend issues, file write errors)
-        logger.warning("Failed to generate training plots", exc_info=True)
+        # ValueError/TypeError: Invalid plot data or configuration
+        # OSError: File write errors, permission issues
+        # RuntimeError: Matplotlib backend issues, display errors
+        logger.warning("Failed to generate training plots: %s", exc, exc_info=True)
         return None
 
 
@@ -135,7 +153,7 @@ def validate_model_robustness(
     model: Any,
     X_test: np.ndarray,
     y_test: np.ndarray,
-    feature_names: List[str],
+    feature_names: list[str],
     has_sentiment: bool,
 ) -> RobustnessValidationResult:
     """Validate model robustness."""
@@ -145,30 +163,35 @@ def validate_model_robustness(
             "Install it with: pip install tensorflow"
         )
     # Validate input tensor shape
-    assert (
-        len(X_test.shape) == 3
-    ), f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}"
+    if len(X_test.shape) != 3:
+        raise ValueError(
+            f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}"
+        )
 
-    results = {"base_performance": {}}
     base_pred = model.predict(X_test)
     base_mse = np.mean((base_pred.flatten() - y_test) ** 2)
-    results["base_performance"] = {"mse": float(base_mse), "rmse": float(np.sqrt(base_mse))}
+    results: RobustnessValidationResult = {
+        "base_performance": {"mse": float(base_mse), "rmse": float(np.sqrt(base_mse))}
+    }
 
     if has_sentiment:
         sentiment_indices = [i for i, name in enumerate(feature_names) if "sentiment" in name]
         if sentiment_indices:
             X_no_sentiment = X_test.copy()
-            # Safely set sentiment features to zero with bounds check
-            assert all(
-                i < X_test.shape[2] for i in sentiment_indices
-            ), f"Sentiment feature indices {sentiment_indices} exceed feature dimension {X_test.shape[2]}"
+            # Validate sentiment feature indices are within bounds
+            if not all(i < X_test.shape[2] for i in sentiment_indices):
+                raise ValueError(
+                    f"Sentiment feature indices {sentiment_indices} exceed feature dimension {X_test.shape[2]}"
+                )
             X_no_sentiment[:, :, sentiment_indices] = 0
             no_sentiment_pred = model.predict(X_no_sentiment)
             no_sentiment_mse = np.mean((no_sentiment_pred.flatten() - y_test) ** 2)
+            # Prevent division by zero when base_mse is zero (perfect predictions)
+            base_mse_safe = max(base_mse, MIN_MAPE_DENOMINATOR)
             results["no_sentiment_performance"] = {
                 "mse": float(no_sentiment_mse),
                 "rmse": float(np.sqrt(no_sentiment_mse)),
-                "degradation_pct": float(((no_sentiment_mse - base_mse) / base_mse) * 100),
+                "degradation_pct": float(((no_sentiment_mse - base_mse) / base_mse_safe) * 100),
             }
     return results
 
@@ -179,8 +202,8 @@ def evaluate_model_performance(
     y_train: np.ndarray,
     X_test: np.ndarray,
     y_test: np.ndarray,
-    close_scaler: Optional[Any] = None,
-) -> Dict[str, float]:
+    close_scaler: Any | None = None,
+) -> dict[str, float]:
     """Evaluate model performance."""
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(
@@ -197,18 +220,16 @@ def evaluate_model_performance(
             test_predictions.flatten().reshape(-1, 1)
         ).flatten()
         # Guard against division by near-zero values in MAPE calculation
-        # Use max(abs(actual), threshold) to avoid unrealistic MAPE values (>10^10%)
-        # when actual values are very small relative to prediction errors
-        denominator = np.maximum(np.abs(y_test_denorm), 1e-8)
+        denominator = np.maximum(np.abs(y_test_denorm), MIN_MAPE_DENOMINATOR)
         percentage_errors = np.abs((y_test_denorm - pred_denorm) / denominator) * 100
-        # Cap individual errors at 1000% to prevent extreme outliers from dominating MAPE
-        percentage_errors = np.minimum(percentage_errors, 1000.0)
+        # Cap individual errors to prevent extreme outliers from dominating MAPE
+        percentage_errors = np.minimum(percentage_errors, MAX_PERCENTAGE_ERROR_CAP)
     else:
         # Guard against division by near-zero values in MAPE calculation
-        denominator = np.maximum(np.abs(y_test), 1e-8)
+        denominator = np.maximum(np.abs(y_test), MIN_MAPE_DENOMINATOR)
         percentage_errors = np.abs((y_test - test_predictions.flatten()) / denominator) * 100
-        # Cap individual errors at 1000% to prevent extreme outliers from dominating MAPE
-        percentage_errors = np.minimum(percentage_errors, 1000.0)
+        # Cap individual errors to prevent extreme outliers from dominating MAPE
+        percentage_errors = np.minimum(percentage_errors, MAX_PERCENTAGE_ERROR_CAP)
     mape = np.mean(percentage_errors)
 
     return {
@@ -220,7 +241,7 @@ def evaluate_model_performance(
     }
 
 
-def convert_to_onnx(model: Any, output_path: Path) -> Optional[Path]:
+def convert_to_onnx(model: Any, output_path: Path) -> Path | None:
     """Convert Keras model to ONNX format.
 
     Args:
@@ -260,9 +281,13 @@ def convert_to_onnx(model: Any, output_path: Path) -> Optional[Path]:
             return output_path
         logger.warning("ONNX conversion failed: %s", result.stderr)
         return None
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         # ONNX conversion timeout - training should continue with Keras model
         logger.warning("ONNX conversion timed out after 300 seconds")
+        if exc.stdout:
+            logger.debug("Partial stdout: %s", exc.stdout[:500])
+        if exc.stderr:
+            logger.debug("Partial stderr: %s", exc.stderr[:500])
         return None
     except Exception as exc:  # noqa: BLE001 - Catch all ONNX conversion errors
         # ONNX export is optional - training should continue with Keras model if conversion fails
@@ -301,7 +326,7 @@ def save_artifacts(
     keras_path = version_dir / "model.keras"
     model.save(keras_path)
 
-    onnx_path: Optional[Path] = None
+    onnx_path: Path | None = None
     if enable_onnx:
         candidate = version_dir / "model.onnx"
         onnx_path = convert_to_onnx(model, candidate)
@@ -310,8 +335,19 @@ def save_artifacts(
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, default=str)
 
+    # Save feature schema for validation and inference alignment
+    feature_names = metadata.get("feature_names", [])
+    sequence_length = metadata.get("sequence_length", 120)
+    feature_schema = {
+        "sequence_length": sequence_length,
+        "features": [{"name": name, "required": True} for name in feature_names],
+    }
+    feature_schema_path = version_dir / "feature_schema.json"
+    with open(feature_schema_path, "w", encoding="utf-8") as f:
+        json.dump(feature_schema, f, indent=2)
+
     # Atomic symlink update to avoid race conditions (TOCTOU vulnerability)
-    # Create temporary symlink, then atomically replace the old one
+    # Create temporary symlink, then atomically replace the existing symlink
     latest_link = type_dir / "latest"
     temp_link = type_dir / f".latest.{version_dir.name}.tmp"
 
@@ -320,10 +356,10 @@ def save_artifacts(
         if temp_link.exists() or temp_link.is_symlink():
             temp_link.unlink()
 
-        # Create new symlink with temporary name
+        # Create symlink with temporary name
         temp_link.symlink_to(version_dir.name)
 
-        # Atomically replace old symlink (rename is atomic on POSIX systems)
+        # Atomically replace existing symlink (rename is atomic on POSIX systems)
         temp_link.replace(latest_link)
 
     except OSError as e:
@@ -332,8 +368,9 @@ def save_artifacts(
             try:
                 temp_link.unlink()
             except OSError:
+                # Ignores cleanup errors - primary error takes precedence
                 pass
-        logger.error(f"Failed to update 'latest' symlink: {e}")
+        logger.error("Failed to update 'latest' symlink: %s", e)
         raise RuntimeError(f"Failed to update 'latest' symlink at {latest_link}") from e
 
     return ArtifactPaths(

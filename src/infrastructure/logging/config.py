@@ -86,7 +86,7 @@ class SensitiveDataFilter(logging.Filter):
             # Best-effort redaction of mapping/tuple args
             if isinstance(record.args, dict):
                 record.args = self._redact_mapping(record.args)
-            elif isinstance(record.args, (list, tuple)):
+            elif isinstance(record.args, list | tuple):
                 sanitized = []
                 for a in record.args:  # type: ignore[assignment]
                     if isinstance(a, str):
@@ -167,8 +167,11 @@ class SamplingFilter(logging.Filter):
         super().__init__()
         try:
             cfg = get_config()
-            self.rate_debug = float(cfg.get("LOG_SAMPLING_RATE_DEBUG", "1.0"))
-            self.rate_info = float(cfg.get("LOG_SAMPLING_RATE_INFO", "1.0"))
+            rate_debug = float(cfg.get("LOG_SAMPLING_RATE_DEBUG", "1.0"))
+            rate_info = float(cfg.get("LOG_SAMPLING_RATE_INFO", "1.0"))
+            # Clamp to valid range [0.0, 1.0] to prevent undefined behavior
+            self.rate_debug = max(0.0, min(1.0, rate_debug))
+            self.rate_info = max(0.0, min(1.0, rate_info))
         except Exception:
             self.rate_debug = 1.0
             self.rate_info = 1.0
@@ -194,11 +197,16 @@ class MaxMessageLengthFilter(logging.Filter):
     Controlled via config LOG_MAX_MESSAGE_LEN (default 5000 characters).
     """
 
+    # Minimum message length to prevent truncating everything
+    _MIN_MESSAGE_LEN = 100
+
     def __init__(self) -> None:
         super().__init__()
         try:
             cfg = get_config()
-            self.max_len = int(cfg.get("LOG_MAX_MESSAGE_LEN", "5000"))
+            max_len = int(cfg.get("LOG_MAX_MESSAGE_LEN", "5000"))
+            # Ensure max_len is at least _MIN_MESSAGE_LEN to prevent over-truncation
+            self.max_len = max(self._MIN_MESSAGE_LEN, max_len)
         except Exception:
             self.max_len = 5000
 
@@ -260,15 +268,31 @@ class SimpleJsonFormatter(logging.Formatter):
             ]:
                 log_entry[key] = value
 
-        return json.dumps(log_entry)
+        try:
+            return json.dumps(log_entry, default=str)
+        except Exception:
+            # Fallback if serialization still fails (e.g., str() raises exception)
+            # Catches all exceptions to prevent logging system crashes
+            return json.dumps(
+                {"level": record.levelname, "message": message, "error": "serialization_failed"}
+            )
 
 
-def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
+def build_logging_config(level_name: str | None = None, use_json: bool = False) -> dict[str, Any]:
+    """Build a logging configuration dictionary.
+
+    Args:
+        level_name: Log level name (e.g., "INFO", "DEBUG"). Falls back to LOG_LEVEL env var.
+        use_json: Whether to use JSON formatter for structured logging.
+
+    Returns:
+        dict: Logging configuration dictionary suitable for logging.config.dictConfig().
+    """
     cfg = get_config()
     level = (level_name or cfg.get("LOG_LEVEL", "INFO")).upper()
 
-    # * Use custom JSON formatter for structured logging
-    if json:
+    # Use custom JSON formatter for structured logging
+    if use_json:
         formatter = {
             "()": "src.infrastructure.logging.config.SimpleJsonFormatter",
         }
@@ -332,5 +356,5 @@ def configure_logging(level_name: str | None = None, use_json: bool | None = Non
             ).lower()
             is_production = env_name == "production"
             use_json = is_railway or is_production
-    config = build_logging_config(level_name, json=use_json)
+    config = build_logging_config(level_name, use_json=use_json)
     logging.config.dictConfig(config)

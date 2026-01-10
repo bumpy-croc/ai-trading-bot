@@ -1,15 +1,11 @@
 """Tests for atb regime commands."""
 
-import argparse
-import tempfile
-from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
 
-from cli.commands.regime import _fetch_price_data, _apply_regime_detection
+from cli.commands.regime import _apply_regime_detection, _fetch_price_data
 
 
 class TestFetchPriceData:

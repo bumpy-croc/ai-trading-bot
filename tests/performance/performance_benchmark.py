@@ -11,7 +11,7 @@ import statistics
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,7 @@ class TestPerformanceBenchmark:
 
     def save_baseline(self):
         """Save baseline data to file"""
-        self.baseline_data["last_updated"] = datetime.now().isoformat()
+        self.baseline_data["last_updated"] = datetime.now(UTC).isoformat()
         with open(self.results_file, "w") as f:
             json.dump(self.baseline_data, f, indent=2)
 
@@ -62,7 +62,7 @@ class TestPerformanceBenchmark:
                 "duration": round(duration, 2),
                 "test_count": test_count,
                 "success": success,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "tests_per_second": (
                     round(test_count / duration, 2) if duration > 0 and test_count > 0 else 0
                 ),
@@ -82,7 +82,7 @@ class TestPerformanceBenchmark:
                 "test_count": 0,
                 "success": False,
                 "error": str(e),
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "tests_per_second": 0,
             }
 

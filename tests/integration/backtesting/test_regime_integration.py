@@ -1,17 +1,17 @@
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import ModuleType, SimpleNamespace
 
 import pandas as pd
 
-from src.backtesting import engine as backtesting_engine
-from src.backtesting.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
+from src.engines.backtest import engine as backtesting_engine
+from src.engines.backtest.engine import Backtester
 from src.regime.detector import RegimeConfig, RegimeDetector
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
-from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.strategies.components.strategy import Strategy
 
 
 class PeriodicSignalGenerator(SignalGenerator):
@@ -83,8 +83,8 @@ def test_backtester_regime_annotation(monkeypatch):
     monkeypatch.setenv("FEATURE_ENABLE_REGIME_DETECTION", "true")
     strategy = create_dummy_strategy()
     provider = MockDataProvider(interval_seconds=1, num_candles=500)
-    start = datetime.now() - timedelta(hours=400)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(hours=400)
+    end = datetime.now(UTC)
     backtester = Backtester(
         strategy=strategy,
         data_provider=provider,
@@ -109,7 +109,7 @@ def test_backtester_regime_annotation(monkeypatch):
                     "confidence": 0.75,
                     "agreement_score": 0.6,
                 },
-                "analysis_timestamp": datetime.now(),
+                "analysis_timestamp": datetime.now(UTC),
             }
 
         def should_switch_strategy(self, regime_analysis, current_candle_index):
@@ -122,7 +122,19 @@ def test_backtester_regime_annotation(monkeypatch):
             }
 
     backtester.enable_regime_switching = True
-    backtester.regime_switcher = StubRegimeSwitcher()
+
+    # Manually initialize regime handler with stub switcher
+    from src.engines.backtest.regime.regime_handler import RegimeHandler
+    from src.engines.live.strategy_manager import StrategyManager
+
+    strategy_manager = StrategyManager()
+    regime_switcher = StubRegimeSwitcher()
+    backtester.regime_handler = RegimeHandler(
+        regime_switcher=regime_switcher,
+        strategy_manager=strategy_manager,
+        initial_strategy_name="DummyStrategy",
+    )
+
     result = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)
     # Detector should be initialized and run without error
     assert backtester.regime_detector is not None
@@ -132,7 +144,7 @@ def test_backtester_regime_annotation(monkeypatch):
     assert result["regime_switching_enabled"] is True
     assert result["total_strategy_switches"] == 0
     assert len(result["regime_history"]) == 7
-    assert result["regime_history"] == backtester.regime_history
+    assert result["regime_history"] == backtester.regime_handler.regime_history
     regime_indices = [entry["candle_index"] for entry in result["regime_history"]]
     assert regime_indices == [100, 150, 200, 250, 300, 350, 400]
     last_regime = result["regime_history"][-1]
@@ -192,7 +204,7 @@ def test_regime_switcher_respects_lookback(monkeypatch):
                     "agreement_score": 1.0,
                 },
                 "timeframe_regimes": {},
-                "analysis_timestamp": datetime.now(),
+                "analysis_timestamp": datetime.now(UTC),
             }
 
         @staticmethod
@@ -207,18 +219,18 @@ def test_regime_switcher_respects_lookback(monkeypatch):
                 "agreement": regime_analysis["consensus_regime"]["agreement_score"],
             }
 
-    strategy_manager_module = ModuleType("src.live.strategy_manager")
+    strategy_manager_module = ModuleType("src.engines.live.strategy_manager")
     strategy_manager_module.StrategyManager = DummyStrategyManager
-    monkeypatch.setitem(sys.modules, "src.live.strategy_manager", strategy_manager_module)
+    monkeypatch.setitem(sys.modules, "src.engines.live.strategy_manager", strategy_manager_module)
 
-    switcher_module = ModuleType("src.live.regime_strategy_switcher")
+    switcher_module = ModuleType("src.engines.live.regime_strategy_switcher")
     switcher_module.RegimeStrategySwitcher = DummySwitcher
-    monkeypatch.setitem(sys.modules, "src.live.regime_strategy_switcher", switcher_module)
+    monkeypatch.setitem(sys.modules, "src.engines.live.regime_strategy_switcher", switcher_module)
 
     strategy = create_dummy_strategy()
     provider = MockDataProvider(interval_seconds=3600, num_candles=500, seed=123)
-    start = datetime.now() - timedelta(hours=600)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(hours=600)
+    end = datetime.now(UTC)
 
     raw_df = provider.get_historical_data("BTCUSDT", "1h", start, end)
     prepared_df = raw_df.copy()

@@ -5,15 +5,15 @@ These tests validate end-to-end workflows and component interactions.
 They are slower but critical for ensuring the system works as a whole.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
-from src.live.strategy_manager import StrategyManager
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.backtest.engine import Backtester
+from src.engines.live.strategy_manager import StrategyManager
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import SignalDirection
 from src.strategies.ml_basic import create_ml_basic_strategy
@@ -289,10 +289,23 @@ class TestComponentInteractions:
             initial_balance=10000,
         )
 
+        # Create a trading session (required for balance updates)
+        engine.trading_session_id = engine.db_manager.create_trading_session(
+            strategy_name="ml_basic",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="paper",
+            initial_balance=10000,
+        )
+        # Initialize balance in the database (mirrors what start() does)
+        engine.db_manager.update_balance(
+            10000, "session_start", "system", engine.trading_session_id
+        )
+
         # Mock data provider
         market_data = pd.DataFrame(
             {"open": [50000], "high": [50200], "low": [49800], "close": [50100], "volume": [1000]},
-            index=[datetime.now()],
+            index=[datetime.now(UTC)],
         )
 
         mock_data_provider.get_live_data.return_value = market_data
@@ -303,11 +316,20 @@ class TestComponentInteractions:
         assert data is not None
 
         # 2. Position opening (if strategy allows)
-        from src.live.trading_engine import PositionSide
+        from src.engines.live.trading_engine import PositionSide
 
-        initial_position_count = len(engine.positions)
-        engine._open_position("BTCUSDT", PositionSide.LONG, 0.1, 50000)
-        assert len(engine.positions) == initial_position_count + 1
+        initial_position_count = len(engine.live_position_tracker._positions)
+        engine._execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            price=50000,
+            stop_loss=None,
+            take_profit=None,
+            signal_strength=0.0,
+            signal_confidence=0.0,
+        )
+        assert len(engine.live_position_tracker._positions) == initial_position_count + 1
 
         # 3. Performance tracking
         engine._update_performance_metrics()
@@ -379,7 +401,7 @@ class TestRealTimeScenarios:
                     "close": [50050],
                     "volume": [1000],
                 },
-                index=[datetime.now()],
+                index=[datetime.now(UTC)],
             ),
         ]
 
@@ -405,7 +427,7 @@ class TestRealTimeScenarios:
         # Mock continuous data
         mock_data_provider.get_live_data.return_value = pd.DataFrame(
             {"open": [50000], "high": [50100], "low": [49900], "close": [50050], "volume": [1000]},
-            index=[datetime.now()],
+            index=[datetime.now(UTC)],
         )
 
         # Simulate extended operation
@@ -468,18 +490,18 @@ class TestProductionReadiness:
 
         # Mock data for closing positions - make sure the mock is configured properly
         mock_data_provider.get_live_data.return_value = pd.DataFrame(
-            {"close": [51000]}, index=[datetime.now()]
+            {"close": [51000]}, index=[datetime.now(UTC)]
         )
 
         # Add some mock positions
-        from src.live.trading_engine import Position, PositionSide
+        from src.engines.live.trading_engine import Position, PositionSide
 
         position = Position(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test_001",
         )
         engine.positions["test_001"] = position

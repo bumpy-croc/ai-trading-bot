@@ -10,13 +10,15 @@ import logging
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from scipy import stats
+
+from src.config.constants import DEFAULT_MAX_DRAWDOWN
 
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
@@ -54,7 +56,7 @@ class PerformanceDegradationConfig:
     long_term_days: int = 90
 
     # Performance thresholds (all must be met for degradation)
-    max_drawdown_threshold: float = 0.20  # 20% max drawdown
+    max_drawdown_threshold: float = DEFAULT_MAX_DRAWDOWN  # 20% max drawdown
     sharpe_ratio_threshold: float = 0.5  # Minimum acceptable Sharpe
     win_rate_threshold: float = 0.35  # Minimum win rate
 
@@ -102,9 +104,9 @@ class SwitchDecision:
     should_switch: bool
     reason: str
     confidence: float
-    recommended_strategy: Optional[str] = None
+    recommended_strategy: str | None = None
     degradation_severity: DegradationSeverity = DegradationSeverity.NONE
-    timeframe_results: Optional[list[TimeFrameAnalysis]] = None
+    timeframe_results: list[TimeFrameAnalysis] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -129,7 +131,7 @@ class PerformanceMonitor:
     intelligent strategy switching decisions.
     """
 
-    def __init__(self, config: Optional[PerformanceDegradationConfig] = None):
+    def __init__(self, config: PerformanceDegradationConfig | None = None):
         """
         Initialize performance monitor
 
@@ -159,7 +161,7 @@ class PerformanceMonitor:
         current_strategy_id: str,
         performance_tracker: PerformanceTracker,
         market_data: pd.DataFrame,
-        current_regime: Optional[RegimeContext] = None,
+        current_regime: RegimeContext | None = None,
     ) -> SwitchDecision:
         """
         Determine if strategy should be switched based on performance degradation
@@ -222,7 +224,7 @@ class PerformanceMonitor:
         switch_confidence = self._calculate_switch_confidence(timeframe_results, severity)
 
         # Record degradation
-        self.degradation_history.append((datetime.now(), current_strategy_id, severity))
+        self.degradation_history.append((datetime.now(UTC), current_strategy_id, severity))
 
         return SwitchDecision(
             should_switch=True,
@@ -236,7 +238,7 @@ class PerformanceMonitor:
         self,
         strategy_id: str,
         performance_tracker: PerformanceTracker,
-        regime: Optional[str] = None,
+        regime: str | None = None,
     ) -> None:
         """
         Update performance baseline for a strategy
@@ -249,7 +251,7 @@ class PerformanceMonitor:
         # Update baselines for each timeframe
         for timeframe in TimeFrame:
             days = self._get_timeframe_days(timeframe)
-            end_date = datetime.now()
+            end_date = datetime.now(UTC)
             start_date = end_date - timedelta(days=days)
 
             # Get performance metrics for this timeframe
@@ -328,7 +330,7 @@ class PerformanceMonitor:
             return False
 
         oldest_trade = min(performance_tracker.trades, key=lambda t: t.timestamp)
-        days_active = (datetime.now() - oldest_trade.timestamp).days
+        days_active = (datetime.now(UTC) - oldest_trade.timestamp).days
 
         if days_active < self.config.min_days_for_evaluation:
             self.logger.debug(
@@ -342,14 +344,14 @@ class PerformanceMonitor:
         self,
         strategy_id: str,
         performance_tracker: PerformanceTracker,
-        current_regime: Optional[RegimeContext],
+        current_regime: RegimeContext | None,
     ) -> list[TimeFrameAnalysis]:
         """Analyze performance across multiple timeframes"""
         results = []
 
         for timeframe in TimeFrame:
             days = self._get_timeframe_days(timeframe)
-            end_date = datetime.now()
+            end_date = datetime.now(UTC)
             start_date = end_date - timedelta(days=days)
 
             # Get current performance for this timeframe
@@ -431,7 +433,7 @@ class PerformanceMonitor:
     ) -> float:
         """Calculate statistical significance of performance difference"""
         # Get recent trades for the timeframe
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
         recent_trades = [t for t in performance_tracker.trades if t.timestamp >= cutoff_date]
 
         if len(recent_trades) < 10:
@@ -466,18 +468,17 @@ class PerformanceMonitor:
             # Return significance level (1 - p_value for underperformance)
             if t_stat < 0:  # Underperforming
                 return 1.0 - p_value
-            else:
-                return 0.0  # Not underperforming
+            return 0.0  # Not underperforming
 
-        except Exception as e:
-            self.logger.warning(f"Statistical significance calculation failed: {e}")
+        except (ValueError, ZeroDivisionError, statistics.StatisticsError) as e:
+            self.logger.warning("Statistical significance calculation failed: %s", e)
             return 0.0
 
     def _calculate_confidence_interval(
         self, metrics: PerformanceMetrics, performance_tracker: PerformanceTracker, days: int
     ) -> tuple[float, float]:
         """Calculate confidence interval for performance metrics"""
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
         recent_trades = [t for t in performance_tracker.trades if t.timestamp >= cutoff_date]
 
         if len(recent_trades) < 5:
@@ -494,8 +495,8 @@ class PerformanceMonitor:
 
             return (mean_return - margin_of_error, mean_return + margin_of_error)
 
-        except Exception as e:
-            self.logger.warning(f"Confidence interval calculation failed: {e}")
+        except (ValueError, ZeroDivisionError, statistics.StatisticsError) as e:
+            self.logger.warning("Confidence interval calculation failed: %s", e)
             return (0.0, 0.0)
 
     def _determine_timeframe_severity(
@@ -522,14 +523,13 @@ class PerformanceMonitor:
 
         if severity_score < 0.1:
             return DegradationSeverity.NONE
-        elif severity_score < 0.3:
+        if severity_score < 0.3:
             return DegradationSeverity.MINOR
-        elif severity_score < 0.6:
+        if severity_score < 0.6:
             return DegradationSeverity.MODERATE
-        elif severity_score < 1.0:
+        if severity_score < 1.0:
             return DegradationSeverity.SEVERE
-        else:
-            return DegradationSeverity.CRITICAL
+        return DegradationSeverity.CRITICAL
 
     def _is_statistically_significant(self, timeframe_results: list[TimeFrameAnalysis]) -> bool:
         """Check if underperformance is statistically significant"""
@@ -543,7 +543,7 @@ class PerformanceMonitor:
         return len(significant_timeframes) >= 2
 
     def _is_regime_transition_period(
-        self, market_data: pd.DataFrame, current_regime: Optional[RegimeContext]
+        self, market_data: pd.DataFrame, current_regime: RegimeContext | None
     ) -> bool:
         """Check if we're in a regime transition period"""
         if not current_regime or market_data.empty:
@@ -553,10 +553,7 @@ class PerformanceMonitor:
         if current_regime.confidence < 0.7:
             return True
 
-        if current_regime.duration < self.config.min_regime_duration_days:
-            return True
-
-        return False
+        return current_regime.duration < self.config.min_regime_duration_days
 
     def _calculate_degradation_severity(
         self, timeframe_results: list[TimeFrameAnalysis]
@@ -570,14 +567,13 @@ class PerformanceMonitor:
         # Determine overall severity based on worst case and frequency
         if severity_counts.get(DegradationSeverity.CRITICAL, 0) >= 1:
             return DegradationSeverity.CRITICAL
-        elif severity_counts.get(DegradationSeverity.SEVERE, 0) >= 2:
+        if severity_counts.get(DegradationSeverity.SEVERE, 0) >= 2:
             return DegradationSeverity.SEVERE
-        elif severity_counts.get(DegradationSeverity.MODERATE, 0) >= 2:
+        if severity_counts.get(DegradationSeverity.MODERATE, 0) >= 2:
             return DegradationSeverity.MODERATE
-        elif severity_counts.get(DegradationSeverity.MINOR, 0) >= 2:
+        if severity_counts.get(DegradationSeverity.MINOR, 0) >= 2:
             return DegradationSeverity.MINOR
-        else:
-            return DegradationSeverity.NONE
+        return DegradationSeverity.NONE
 
     def _calculate_switch_confidence(
         self, timeframe_results: list[TimeFrameAnalysis], severity: DegradationSeverity
@@ -611,18 +607,17 @@ class PerformanceMonitor:
         """Get number of days for a timeframe"""
         if timeframe == TimeFrame.SHORT_TERM:
             return self.config.short_term_days
-        elif timeframe == TimeFrame.MEDIUM_TERM:
+        if timeframe == TimeFrame.MEDIUM_TERM:
             return self.config.medium_term_days
-        elif timeframe == TimeFrame.LONG_TERM:
+        if timeframe == TimeFrame.LONG_TERM:
             return self.config.long_term_days
-        else:
-            return 30  # Default
+        return 30  # Default
 
     def get_degradation_history(
-        self, strategy_id: Optional[str] = None, days: int = 30
+        self, strategy_id: str | None = None, days: int = 30
     ) -> list[dict[str, Any]]:
         """Get degradation history for analysis"""
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
 
         filtered_history = [
             {"timestamp": timestamp.isoformat(), "strategy_id": sid, "severity": severity.value}
@@ -632,7 +627,7 @@ class PerformanceMonitor:
 
         return filtered_history
 
-    def reset_baselines(self, strategy_id: Optional[str] = None) -> None:
+    def reset_baselines(self, strategy_id: str | None = None) -> None:
         """Reset performance baselines"""
         if strategy_id:
             if strategy_id in self.performance_baselines:

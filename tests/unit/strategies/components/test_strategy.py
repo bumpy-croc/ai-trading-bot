@@ -5,7 +5,8 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.execution.position_tracker import LivePositionTracker
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import Strategy
 from src.strategies.components.position_sizer import PositionSizer
@@ -183,6 +184,7 @@ def test_live_engine_supplies_correlation_context(sample_dataframe: pd.DataFrame
 
     engine = LiveTradingEngine.__new__(LiveTradingEngine)
     engine.logger = logging.getLogger("live-engine-test")
+    engine.live_position_tracker = LivePositionTracker()
     engine.positions = {}
     engine.correlation_engine = FakeCorrelationEngine()
     engine.data_provider = FakeDataProvider(sample_dataframe)

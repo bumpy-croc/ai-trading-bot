@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -26,7 +25,7 @@ class StatisticalTestResult:
     test_name: str
     statistic: float
     p_value: float
-    critical_value: Optional[float] = None
+    critical_value: float | None = None
     confidence_level: float = 0.95
     reject_null: bool = False
     interpretation: str = ""
@@ -51,7 +50,7 @@ class FinancialStatisticalTests:
 
     def test_return_distribution_equality(
         self, returns1: pd.Series, returns2: pd.Series
-    ) -> List[StatisticalTestResult]:
+    ) -> list[StatisticalTestResult]:
         """
         Test if two return series have the same distribution.
 
@@ -89,8 +88,8 @@ class FinancialStatisticalTests:
                     notes="Tests if two samples come from the same distribution",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"KS test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("KS test failed: %s", e)
 
         # Anderson-Darling test
         try:
@@ -110,14 +109,14 @@ class FinancialStatisticalTests:
                     notes="More sensitive to tail differences than KS test",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Anderson-Darling test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Anderson-Darling test failed: %s", e)
 
         return results
 
     def test_mean_equality(
         self, returns1: pd.Series, returns2: pd.Series
-    ) -> List[StatisticalTestResult]:
+    ) -> list[StatisticalTestResult]:
         """
         Test if two return series have equal means.
 
@@ -154,8 +153,8 @@ class FinancialStatisticalTests:
                     notes="Assumes unequal variances between samples",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Welch's t-test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Welch's t-test failed: %s", e)
 
         # Mann-Whitney U test (non-parametric)
         try:
@@ -176,14 +175,14 @@ class FinancialStatisticalTests:
                     notes="Non-parametric test for median equality",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Mann-Whitney U test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Mann-Whitney U test failed: %s", e)
 
         return results
 
     def test_variance_equality(
         self, returns1: pd.Series, returns2: pd.Series
-    ) -> List[StatisticalTestResult]:
+    ) -> list[StatisticalTestResult]:
         """
         Test if two return series have equal variances.
 
@@ -220,8 +219,8 @@ class FinancialStatisticalTests:
                     notes="Robust test for variance equality",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Levene's test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Levene's test failed: %s", e)
 
         # Bartlett's test (assumes normality)
         try:
@@ -240,12 +239,12 @@ class FinancialStatisticalTests:
                     notes="Assumes normal distributions; sensitive to non-normality",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Bartlett's test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Bartlett's test failed: %s", e)
 
         return results
 
-    def test_normality(self, returns: pd.Series) -> List[StatisticalTestResult]:
+    def test_normality(self, returns: pd.Series) -> list[StatisticalTestResult]:
         """
         Test if return series follows normal distribution.
 
@@ -281,8 +280,8 @@ class FinancialStatisticalTests:
                         notes="Most powerful normality test for small samples",
                     )
                 )
-        except Exception as e:
-            self.logger.warning(f"Shapiro-Wilk test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Shapiro-Wilk test failed: %s", e)
 
         # Jarque-Bera test
         try:
@@ -301,8 +300,8 @@ class FinancialStatisticalTests:
                     notes="Tests for normality based on skewness and kurtosis",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"Jarque-Bera test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Jarque-Bera test failed: %s", e)
 
         # D'Agostino's normality test
         try:
@@ -321,8 +320,8 @@ class FinancialStatisticalTests:
                     notes="Combines tests for skewness and kurtosis",
                 )
             )
-        except Exception as e:
-            self.logger.warning(f"D'Agostino's test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("D'Agostino's test failed: %s", e)
 
         return results
 
@@ -378,16 +377,16 @@ class FinancialStatisticalTests:
                 p_value=1.0,
                 interpretation="statsmodels required for this test",
             )
-        except Exception as e:
-            self.logger.warning(f"Ljung-Box test failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Ljung-Box test failed: %s", e)
             return StatisticalTestResult(
                 test_name="Ljung-Box Autocorrelation Test",
                 statistic=0.0,
                 p_value=1.0,
-                interpretation=f"Test failed: {str(e)}",
+                interpretation=f"Test failed: {e!s}",
             )
 
-    def test_stationarity(self, series: pd.Series) -> List[StatisticalTestResult]:
+    def test_stationarity(self, series: pd.Series) -> list[StatisticalTestResult]:
         """
         Test for stationarity in time series.
 
@@ -446,8 +445,8 @@ class FinancialStatisticalTests:
 
         except ImportError:
             self.logger.warning("statsmodels not available for stationarity tests")
-        except Exception as e:
-            self.logger.warning(f"Stationarity tests failed: {e}")
+        except (ValueError, RuntimeError, TypeError) as e:
+            self.logger.warning("Stationarity tests failed: %s", e)
 
         return results
 
@@ -457,7 +456,7 @@ class FinancialStatisticalTests:
         returns2: pd.Series,
         series1_name: str = "Series 1",
         series2_name: str = "Series 2",
-    ) -> Dict[str, List[StatisticalTestResult]]:
+    ) -> dict[str, list[StatisticalTestResult]]:
         """
         Perform comprehensive statistical comparison of two return series.
 
@@ -508,7 +507,7 @@ class EquivalenceTests:
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
     def two_one_sided_test(
-        self, returns1: pd.Series, returns2: pd.Series, equivalence_margin: Optional[float] = None
+        self, returns1: pd.Series, returns2: pd.Series, equivalence_margin: float | None = None
     ) -> StatisticalTestResult:
         """
         Perform Two One-Sided Test (TOST) for equivalence of means.
@@ -574,17 +573,17 @@ class EquivalenceTests:
                 notes=f"Equivalence margin: ±{margin:.4f}, Mean difference: {mean_diff:.6f}",
             )
 
-        except Exception as e:
-            self.logger.warning(f"TOST failed: {e}")
+        except (ValueError, RuntimeError, TypeError, ZeroDivisionError) as e:
+            self.logger.warning("TOST failed: %s", e)
             return StatisticalTestResult(
                 test_name="Two One-Sided Test (TOST) for Equivalence",
                 statistic=0.0,
                 p_value=1.0,
-                interpretation=f"Test failed: {str(e)}",
+                interpretation=f"Test failed: {e!s}",
             )
 
 
-def format_test_results(results: Dict[str, List[StatisticalTestResult]]) -> str:
+def format_test_results(results: dict[str, list[StatisticalTestResult]]) -> str:
     """
     Format statistical test results into a readable report.
 

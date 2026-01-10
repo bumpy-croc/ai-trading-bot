@@ -9,9 +9,9 @@ while maintaining consistent data synchronization.
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +74,15 @@ class Order:
     side: OrderSide
     order_type: OrderType
     quantity: float
-    price: Optional[float]  # None for market orders
+    price: float | None  # None for market orders
     status: OrderStatus
     filled_quantity: float
-    average_price: Optional[float]
+    average_price: float | None
     commission: float
     commission_asset: str
     create_time: datetime
     update_time: datetime
-    stop_price: Optional[float] = None
+    stop_price: float | None = None
     time_in_force: str = "GTC"
 
 
@@ -146,22 +146,22 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
-    def get_balance(self, asset: str) -> Optional[AccountBalance]:
+    def get_balance(self, asset: str) -> AccountBalance | None:
         """Get balance for a specific asset"""
         pass
 
     @abstractmethod
-    def get_positions(self, symbol: Optional[str] = None) -> list[Position]:
+    def get_positions(self, symbol: str | None = None) -> list[Position]:
         """Get open positions (for futures/margin trading)"""
         pass
 
     @abstractmethod
-    def get_open_orders(self, symbol: Optional[str] = None) -> list[Order]:
+    def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         """Get all open orders"""
         pass
 
     @abstractmethod
-    def get_order(self, order_id: str, symbol: str) -> Optional[Order]:
+    def get_order(self, order_id: str, symbol: str) -> Order | None:
         """Get specific order by ID"""
         pass
 
@@ -177,11 +177,27 @@ class ExchangeInterface(ABC):
         side: OrderSide,
         order_type: OrderType,
         quantity: float,
-        price: Optional[float] = None,
-        stop_price: Optional[float] = None,
+        price: float | None = None,
+        stop_price: float | None = None,
         time_in_force: str = "GTC",
-    ) -> Optional[str]:
-        """Place a new order and return order ID"""
+        client_order_id: str | None = None,
+    ) -> str | None:
+        """
+        Place a new order and return order ID.
+
+        Args:
+            symbol: Trading pair symbol
+            side: Order side (BUY or SELL)
+            order_type: Order type (MARKET, LIMIT, etc.)
+            quantity: Order quantity
+            price: Limit price (required for LIMIT orders)
+            stop_price: Stop price (required for STOP orders)
+            time_in_force: Time in force (GTC, IOC, FOK)
+            client_order_id: Optional client-generated order ID for idempotency
+
+        Returns:
+            Exchange order ID if successful, None otherwise
+        """
         pass
 
     @abstractmethod
@@ -190,12 +206,41 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> bool:
+    def cancel_all_orders(self, symbol: str | None = None) -> bool:
         """Cancel all open orders"""
         pass
 
     @abstractmethod
-    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
+    def place_stop_loss_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity: float,
+        stop_price: float,
+        limit_price: float | None = None,
+    ) -> str | None:
+        """
+        Place a server-side stop-loss order.
+
+        This creates a stop-loss order on the exchange that triggers when
+        price reaches stop_price. Using server-side stop-losses ensures
+        positions are protected even if the bot goes offline.
+
+        Args:
+            symbol: Trading symbol (e.g., BTCUSDT)
+            side: Order side (SELL for long positions, BUY for short positions)
+            quantity: Amount to sell/buy when stop triggers
+            stop_price: Price that triggers the stop order
+            limit_price: Optional limit price for STOP_LOSS_LIMIT orders.
+                         If None, uses stop_price * 0.99 for sells, * 1.01 for buys.
+
+        Returns:
+            Order ID from exchange, or None on failure
+        """
+        pass
+
+    @abstractmethod
+    def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         """Get trading symbol information (min qty, price precision, etc.)"""
         pass
 
@@ -222,7 +267,7 @@ class ExchangeInterface(ABC):
             open_orders = self.get_open_orders()
 
             sync_data = {
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(UTC),
                 "account_info": account_info,
                 "balances": balances,
                 "positions": positions,
@@ -239,7 +284,7 @@ class ExchangeInterface(ABC):
 
         except Exception as e:
             logger.error(f"Account synchronization failed: {e}")
-            return {"timestamp": datetime.utcnow(), "sync_successful": False, "error": str(e)}
+            return {"timestamp": datetime.now(UTC), "sync_successful": False, "error": str(e)}
 
     def validate_order_parameters(
         self,
@@ -247,8 +292,8 @@ class ExchangeInterface(ABC):
         side: OrderSide,
         order_type: OrderType,
         quantity: float,
-        price: Optional[float] = None,
-    ) -> tuple[bool, Optional[str]]:
+        price: float | None = None,
+    ) -> tuple[bool, str | None]:
         """
         Validate order parameters before placing.
 
@@ -262,13 +307,17 @@ class ExchangeInterface(ABC):
                 return False, f"Symbol {symbol} not found"
 
             # Validate quantity
-            min_qty = symbol_info.get("min_qty", 0)
+            # Extract min_qty with safe type checking to prevent TypeError
+            min_qty_raw = symbol_info.get("min_qty", 0)
+            min_qty = float(min_qty_raw) if isinstance(min_qty_raw, (int, float)) else 0.0
             if quantity < min_qty:
                 return False, f"Quantity {quantity} below minimum {min_qty}"
 
             # Validate price for limit orders
             if order_type == OrderType.LIMIT and price is not None:
-                min_price = symbol_info.get("min_price", 0)
+                # Extract min_price with safe type checking to prevent TypeError
+                min_price_raw = symbol_info.get("min_price", 0)
+                min_price = float(min_price_raw) if isinstance(min_price_raw, (int, float)) else 0.0
                 if price < min_price:
                     return False, f"Price {price} below minimum {min_price}"
 
@@ -292,6 +341,16 @@ class ExchangeInterface(ABC):
             total_equity = 0.0
 
             for balance in balances:
+                # Validate balance.total is numeric before use to prevent TypeError/NaN corruption
+                if not isinstance(balance.total, (int, float)):
+                    logger.warning(
+                        "Skipping balance with non-numeric total: asset=%s, total=%s (type=%s)",
+                        balance.asset,
+                        balance.total,
+                        type(balance.total).__name__,
+                    )
+                    continue
+
                 if balance.asset == base_currency:
                     total_equity += balance.total
                 else:

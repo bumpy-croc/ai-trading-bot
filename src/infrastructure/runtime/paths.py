@@ -1,8 +1,8 @@
 """Project path utilities for finding project root and managing paths."""
 
 import os
+from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 
 def find_project_root() -> Path:
@@ -27,7 +27,7 @@ def find_project_root() -> Path:
         return app_dir.resolve()
 
     # * Helper: look for common project markers while walking up
-    def _search_up(start: Path) -> Optional[Path]:
+    def _search_up(start: Path) -> Path | None:
         markers = ("alembic.ini", "pyproject.toml", "migrations")
         for parent in [start, *start.parents]:
             try:
@@ -54,13 +54,10 @@ def find_project_root() -> Path:
     return cwd
 
 
-# Cache the project root to avoid repeated filesystem operations
-_PROJECT_ROOT: Optional[Path] = None
-
-
+@lru_cache(maxsize=1)
 def get_project_root() -> Path:
-    """Get the cached project root, computing it if necessary."""
-    global _PROJECT_ROOT
-    if _PROJECT_ROOT is None:
-        _PROJECT_ROOT = find_project_root()
-    return _PROJECT_ROOT
+    """Get the cached project root, computing it if necessary.
+
+    Uses lru_cache for thread-safe lazy initialization.
+    """
+    return find_project_root()

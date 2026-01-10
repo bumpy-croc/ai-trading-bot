@@ -1,6 +1,6 @@
 import pytest
 
-from src.live.strategy_manager import StrategyManager
+from src.engines.live.strategy_manager import StrategyManager
 
 pytestmark = pytest.mark.integration
 
@@ -8,7 +8,7 @@ pytestmark = pytest.mark.integration
 class TestStrategyManagerIntegration:
     @pytest.mark.live_trading
     def test_strategy_manager_with_live_engine(self, temp_directory, mock_data_provider):
-        from src.live.trading_engine import LiveTradingEngine
+        from src.engines.live.trading_engine import LiveTradingEngine
 
         manager = StrategyManager(staging_dir=str(temp_directory))
         initial_strategy = manager.load_strategy("ml_basic")

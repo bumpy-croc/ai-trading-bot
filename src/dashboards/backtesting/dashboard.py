@@ -120,12 +120,22 @@ class BacktestDashboard:
         return summaries
 
     def _load_single_backtest(self, filename: str) -> dict[str, Any] | None:
-        if "../" in filename or "..\\" in filename:
-            raise Exception("Invalid file path")
-        path = self.logs_dir / filename
-        if not path.exists():
-            return None
+        # Prevent path traversal attacks by validating resolved path is within logs_dir
         try:
+            # Resolve the path to follow symlinks and normalize
+            path = (self.logs_dir / filename).resolve()
+
+            # Validate the resolved path is still within logs_dir
+            # This prevents attacks using ../, symlinks, or URL encoding
+            if self.logs_dir.resolve() not in path.parents and path != self.logs_dir.resolve():
+                logger.error(
+                    "Path traversal attempt blocked: %s resolves outside logs_dir", filename
+                )
+                return None
+
+            if not path.exists():
+                return None
+
             with open(path) as f:
                 return json.load(f)
         except Exception as exc:

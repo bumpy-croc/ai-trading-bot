@@ -19,14 +19,13 @@ Research-backed approach:
 Key insight: Beat buy-and-hold by being MORE aggressive, not more conservative.
 """
 
-from typing import Any
-
+from src.config.constants import DEFAULT_STRATEGY_MIN_CONFIDENCE_AGGRESSIVE
 from src.strategies.components import (
-    Strategy,
-    MomentumSignalGenerator,
-    VolatilityRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
+    MomentumSignalGenerator,
+    Strategy,
+    VolatilityRiskManager,
 )
 
 
@@ -80,7 +79,7 @@ def create_momentum_leverage_strategy(
     effective_base_fraction = min(base_fraction, 0.5)
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=effective_base_fraction,  # 50% base allocation cap for safety
-        min_confidence=0.2,  # Lower threshold for aggressive trading
+        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE_AGGRESSIVE,  # Lower threshold for aggressive trading
     )
 
     # Create regime detector
@@ -99,32 +98,34 @@ def create_momentum_leverage_strategy(
     strategy.take_profit_pct = take_profit_pct
 
     # Restore aggressive runtime overrides consumed by backtesting/live engines
-    strategy._risk_overrides = {
-        "position_sizer": "confidence_weighted",
-        "base_fraction": base_fraction,
-        "min_fraction": min_position_size_ratio,
-        "max_fraction": max_position_size_ratio,
-        "stop_loss_pct": base_risk,
-        "take_profit_pct": take_profit_pct,
-        "dynamic_risk": {
-            "enabled": True,
-            "drawdown_thresholds": [0.25, 0.35, 0.45],
-            "risk_reduction_factors": [0.95, 0.85, 0.75],
-            "recovery_thresholds": [0.12, 0.25],
-        },
-        "partial_operations": {
-            "exit_targets": [0.08, 0.15, 0.25],
-            "exit_sizes": [0.20, 0.30, 0.50],
-            "scale_in_thresholds": [0.02, 0.04],
-            "scale_in_sizes": [0.40, 0.30],
-            "max_scale_ins": 3,
-        },
-        "trailing_stop": {
-            "activation_threshold": 0.06,
-            "trailing_distance_pct": 0.03,
-            "breakeven_threshold": 0.10,
-            "breakeven_buffer": 0.02,
-        },
-    }
+    strategy.set_risk_overrides(
+        {
+            "position_sizer": "confidence_weighted",
+            "base_fraction": base_fraction,
+            "min_fraction": min_position_size_ratio,
+            "max_fraction": max_position_size_ratio,
+            "stop_loss_pct": base_risk,
+            "take_profit_pct": take_profit_pct,
+            "dynamic_risk": {
+                "enabled": True,
+                "drawdown_thresholds": [0.25, 0.35, 0.45],
+                "risk_reduction_factors": [0.95, 0.85, 0.75],
+                "recovery_thresholds": [0.12, 0.25],
+            },
+            "partial_operations": {
+                "exit_targets": [0.08, 0.15, 0.25],
+                "exit_sizes": [0.20, 0.30, 0.50],
+                "scale_in_thresholds": [0.02, 0.04],
+                "scale_in_sizes": [0.40, 0.30],
+                "max_scale_ins": 3,
+            },
+            "trailing_stop": {
+                "activation_threshold": 0.06,
+                "trailing_distance_pct": 0.03,
+                "breakeven_threshold": 0.10,
+                "breakeven_buffer": 0.02,
+            },
+        }
+    )
 
     return strategy

@@ -1,13 +1,10 @@
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock
-
 import pandas as pd
 import pytest
 
 pytestmark = pytest.mark.integration
 
 try:
-    from src.live.trading_engine import LiveTradingEngine, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     LIVE_TRADING_AVAILABLE = True
 except ImportError:
@@ -43,10 +40,10 @@ class TestLiveTradingFallbacks:
         # and log their execution properly
         try:
             from src.strategies.components import (
-                Strategy,
-                MLBasicSignalGenerator,
-                FixedRiskManager,
                 ConfidenceWeightedSizer,
+                FixedRiskManager,
+                MLBasicSignalGenerator,
+                Strategy,
             )
 
             # Create a component-based strategy

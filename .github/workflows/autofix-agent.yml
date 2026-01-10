@@ -1,206 +1,174 @@
-name: Autofix Agent
+name: Codex Review Autofix Agent
 
 on:
-  workflow_dispatch:  # Allow manual trigger
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: read
   actions: read
+  issues: read
 
 jobs:
-  # Autofix agent - triggers on any test failure
-  autofix_agent:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+  # Codex review autofix agent - triggers on PR comments by chatgpt-codex-connector
+  codex_review_autofix:
+    if: ${{ github.event.issue.pull_request && github.event.comment.user.login == 'chatgpt-codex-connector' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: read
       actions: read
-    
+      issues: read
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.workflow_run.head_branch }}
+        fetch-depth: 0
 
-    - name: Download all test artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: test-artifacts
-
-    - name: Analyze Test Failures
-      id: analyze-failures
-      env:
-        EVENT_NAME: ${{ github.event_name }}
-        PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number || '' }}
-        PR_TITLE: ${{ github.event.workflow_run.pull_requests[0].title || '' }}
-        PR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+    - name: Check Comment Content
+      id: check-comment
       run: |
-        echo "=== Analyzing test failures ==="
-        
-        # Determine which tests failed
-        FAILURE_TYPES=()
-        
-        # Check if unit tests failed by looking for unit test artifacts
-        if find test-artifacts -name "unit-test-reports-*" -type d | grep -q .; then
-          FAILURE_TYPES+=("unit")
-        fi
-        
-        # Check if integration tests failed by looking for integration test artifacts
-        if find test-artifacts -name "integration-test-reports" -type d | grep -q .; then
-          FAILURE_TYPES+=("integration")
-        fi
-        
-        FAILURE_STRING=$(IFS=" and "; echo "${FAILURE_TYPES[*]}")
-        
-        echo "Failed test types: $FAILURE_STRING"
-        echo "failure_string=$FAILURE_STRING" >> $GITHUB_OUTPUT
-        
-        # Get PR information if available
-        if [[ "$EVENT_NAME" == "workflow_run" && -n "$PR_NUMBER" ]]; then
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "pr_title=$PR_TITLE" >> $GITHUB_OUTPUT
-          echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
+        echo "=== Checking PR comment content ==="
+
+        COMMENT_BODY="${{ github.event.comment.body }}"
+        echo "Comment author: ${{ github.event.comment.user.login }}"
+        echo "Comment body length: ${#COMMENT_BODY}"
+
+        # Check if comment contains the "no major issues" text
+        if echo "$COMMENT_BODY" | grep -q "Codex Review: Didn't find any major issues"; then
+          echo "Found 'Codex Review: Didn't find any major issues' - stopping workflow"
+          echo "should_stop=true" >> $GITHUB_OUTPUT
         else
-          echo "pr_number=" >> $GITHUB_OUTPUT
-          echo "pr_title=" >> $GITHUB_OUTPUT
-          echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
+          echo "No 'Codex Review: Didn't find any major issues' found - launching agent"
+          echo "should_stop=false" >> $GITHUB_OUTPUT
         fi
 
-    - name: Extract Test Failure Details
-      id: extract-failures
+    - name: Get PR Branch Information
+      if: steps.check-comment.outputs.should_stop == 'false'
+      id: pr-info
       run: |
-        echo "=== Extracting detailed test failure information ==="
-        
-        # Create a comprehensive failure report
-        FAILURE_REPORT=""
-        
-        # Process unit test failures (all 4 splits)
-        if find test-artifacts -name "unit-test-reports-*" -type d | grep -q .; then
-          echo "Processing unit test failures..."
-          
-          for i in {1..4}; do
-            if [[ -f "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" ]]; then
-              # Use the dedicated Python script to parse XML and extract failure details
-              python3 scripts/parse_junit_failures.py "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" >> failure_details.txt
-              
-              FAILURE_REPORT+="$(cat failure_details.txt)\n"
-              rm -f failure_details.txt
-            fi
-          done
-        fi
-        
-        # Process integration test failures
-        if [[ -f "test-artifacts/integration-test-reports/junit-integration.xml" ]]; then
-          echo "Processing integration test failures..."
-          
-          echo "Found integration test report"
-          
-          FAILURE_REPORT+="\n\n=== INTEGRATION TESTS FAILURES ===\n"
-          
-          # Extract failure details from JUnit XML using the dedicated script
-          python3 scripts/parse_junit_failures.py "test-artifacts/integration-test-reports/junit-integration.xml" >> integration_failure_details.txt
-          
-          FAILURE_REPORT+="$(cat integration_failure_details.txt)\n"
-          rm -f integration_failure_details.txt
-        fi
-        
-        # Save the comprehensive failure report
-        echo -e "$FAILURE_REPORT" > comprehensive_failure_report.txt
-        
-        # Count total failures
-        TOTAL_FAILURES=$(echo -e "$FAILURE_REPORT" | grep -c "Test:" || echo "0")
-        echo "total_failures=$TOTAL_FAILURES" >> $GITHUB_OUTPUT
-        
-        echo "Extracted $TOTAL_FAILURES test failures"
-        echo "Comprehensive failure report saved to comprehensive_failure_report.txt"
+        echo "=== Getting PR branch information ==="
 
-    - name: Launch Cursor Background Agent
+        PR_NUMBER="${{ github.event.issue.number }}"
+        REPO="${{ github.repository }}"
+        TOKEN="${{ secrets.GITHUB_TOKEN }}"
+        echo "PR Number: $PR_NUMBER"
+        echo "Repository: $REPO"
+
+        # Ensure required tools are available
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "Error: jq is required but not available"
+          exit 1
+        fi
+
+        # Get PR details using GitHub REST API directly (more reliable than gh CLI)
+        API_URL="https://api.github.com/repos/$REPO/pulls/$PR_NUMBER"
+        echo "API URL: $API_URL"
+
+        if ! PR_DATA=$(curl -s -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github.v3+json" "$API_URL"); then
+          echo "Error: Failed to fetch PR data for #$PR_NUMBER"
+          exit 1
+        fi
+
+        # Check if API call was successful (GitHub API returns error objects)
+        if echo "$PR_DATA" | jq -e '.message' >/dev/null 2>&1; then
+          ERROR_MSG=$(echo "$PR_DATA" | jq -r '.message')
+          echo "Error: GitHub API returned error: $ERROR_MSG"
+          exit 1
+        fi
+
+        # Extract the head branch (the branch with the changes)
+        PR_BRANCH=$(echo "$PR_DATA" | jq -r '.head.ref')
+        PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+
+        # Validate that we got valid data
+        if [[ "$PR_BRANCH" == "null" || -z "$PR_BRANCH" ]]; then
+          echo "Error: Could not determine PR branch from API response"
+          echo "API Response: $PR_DATA"
+          echo "This likely means the PR does not exist or access is denied"
+          exit 1
+        fi
+
+        # Additional validation - ensure branch name looks reasonable
+        if [[ ! "$PR_BRANCH" =~ ^[a-zA-Z0-9._/-]+$ ]] || [[ ${#PR_BRANCH} -gt 255 ]]; then
+          echo "Error: PR branch name '$PR_BRANCH' appears invalid"
+          exit 1
+        fi
+
+        # Ensure this is not accidentally the default branch (main/master/develop)
+        DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+        if [[ "$PR_BRANCH" == "$DEFAULT_BRANCH" ]]; then
+          echo "Warning: PR branch matches repository default branch ($DEFAULT_BRANCH)"
+          echo "This might indicate an issue with the PR data retrieval"
+          # Don't exit here as it could be a legitimate case, but log the warning
+        fi
+
+        echo "PR Branch: $PR_BRANCH"
+        echo "PR Head SHA: $PR_HEAD_SHA"
+        echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
+        echo "pr_head_sha=$PR_HEAD_SHA" >> $GITHUB_OUTPUT
+
+    - name: Launch Cursor Agent for PR Fix
+      if: steps.check-comment.outputs.should_stop == 'false'
       run: |
-        echo "=== Launching Cursor Background Agent for Test Failures ==="
-        echo "Failed tests: ${{ steps.analyze-failures.outputs.failure_string }}"
-        echo "Total failures: ${{ steps.extract-failures.outputs.total_failures }}"
-        echo "PR: ${{ steps.analyze-failures.outputs.pr_number }}"
-        echo "Branch: ${{ steps.analyze-failures.outputs.pr_branch }}"
-        
-        # Get the run URL for context
-        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        
-        # Read the comprehensive failure report
-        FAILURE_DETAILS=$(cat comprehensive_failure_report.txt)
-        
-        # Construct detailed prompt for fixing test failures
+        echo "=== Launching Cursor Agent for PR Comment Fix ==="
+
+        # Get PR information
+        PR_NUMBER="${{ github.event.issue.number }}"
+        PR_BRANCH="${{ steps.pr-info.outputs.pr_branch }}"
+        PR_HEAD_SHA="${{ steps.pr-info.outputs.pr_head_sha }}"
+        COMMENT_BODY="${{ github.event.comment.body }}"
+
+        # Validate that we have the required information
+        if [[ -z "$PR_BRANCH" ]]; then
+          echo "Error: PR branch information is missing - cannot proceed with agent launch"
+          exit 1
+        fi
+
+        echo "PR Number: $PR_NUMBER"
+        echo "PR Branch: $PR_BRANCH"
+        echo "PR Head SHA: $PR_HEAD_SHA"
+        echo "Repository: ${{ github.repository }}"
+        echo "Comment author: ${{ github.event.comment.user.login }}"
+
+        # Construct the prompt for fixing the PR comment
         cat > prompt.txt << EOF
-        CI tests have failed and require immediate attention and fixes.
+        Fix this PR comment
 
-        Repository: ${{ github.repository }}
-        Branch: ${{ steps.analyze-failures.outputs.pr_branch }}
-        PR: ${{ steps.analyze-failures.outputs.pr_number }}
-        PR Title: ${{ steps.analyze-failures.outputs.pr_title }}
-        Failed Tests: ${{ steps.analyze-failures.outputs.failure_string }} tests
-        Total Failures: ${{ steps.extract-failures.outputs.total_failures }}
-        CI Run: $RUN_URL
+        $COMMENT_BODY
 
-        DETAILED FAILURE ANALYSIS:
-        $FAILURE_DETAILS
-
-        Please analyze the failing tests and fix them:
-
-        1. **Investigate the failures:** 
-           - Review the detailed failure information above
-           - Identify the root causes of the test failures
-           - Check the test artifacts in the CI run for additional context
-           
-        2. **Implement fixes:**
-           - Make minimal, targeted fixes to resolve the test failures
-           - Ensure fixes follow the project's coding standards and patterns
-           - Add or update tests if necessary to prevent regression
-           - Focus on the most critical failures first
-           
-        3. **Commit and push:**
-           - Commit your changes directly to the PR branch: ${{ steps.analyze-failures.outputs.pr_branch }}
-           - Use clear, descriptive commit messages explaining what was fixed
-           - Do NOT create a new PR - push to the existing branch
-           
-        4. **Verify:**
-           - Ensure your fixes address the specific test failures mentioned
-           - Follow the project's testing guidelines and code quality standards
-           - Run tests locally if possible to verify fixes
-
-        IMPORTANT: This is the ONLY agent being launched for these test failures. 
-        All ${{ steps.extract-failures.outputs.total_failures }} failures need to be addressed 
-        in a single comprehensive fix. Do not create multiple agents or duplicate efforts.
-
-        Context: This is an automated fix request triggered by CI test failures. 
-        Focus on getting the tests passing while maintaining code quality and following 
-        existing patterns in the codebase.
+        Once you fixed the comment, leave another comment on the PR saying "@codex review"
         EOF
 
-        echo "=== Sending to Cursor Background Agent ==="
+        echo "=== Sending to Cursor Agent ==="
 
         # Launch Cursor background agent
         curl -X POST "https://api.cursor.com/v0/agents" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
-          -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ steps.analyze-failures.outputs.pr_branch }}\" } }"
+          -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"$PR_BRANCH\" } }"
 
         echo ""
-        echo "=== Cursor Background Agent Launched ==="
-        echo "The agent will analyze all ${{ steps.extract-failures.outputs.total_failures }} test failures and implement comprehensive fixes."
-        echo "Check the PR branch for any commits made by the agent."
+        echo "=== Cursor Agent Launched ==="
+        echo "The agent will fix the issues mentioned in the PR comment and add a @codex review comment when done."
 
         # Cleanup temporary files
-        rm -f prompt.txt comprehensive_failure_report.txt
+        rm -f prompt.txt
 
-    - name: Log Failure Details
+    - name: Log Workflow Details
       run: |
-        echo "=== Test Failure Summary ==="
+        echo "=== PR Comment Autofix Summary ==="
         echo "Repository: ${{ github.repository }}"
-        echo "Branch: ${{ steps.analyze-failures.outputs.pr_branch }}"
-        echo "PR: ${{ steps.analyze-failures.outputs.pr_number }}"
-        echo "Failed tests: ${{ steps.analyze-failures.outputs.failure_string }}"
-        echo "Total failures: ${{ steps.extract-failures.outputs.total_failures }}"
-        echo "CI run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        echo "Single Cursor agent launched successfully with comprehensive failure details"
+        echo "PR: ${{ github.event.issue.number }}"
+        echo "Comment author: ${{ github.event.comment.user.login }}"
+        echo "Should stop: ${{ steps.check-comment.outputs.should_stop }}"
+        if [[ "${{ steps.check-comment.outputs.should_stop }}" == "false" ]]; then
+          echo "PR Branch: ${{ steps.pr-info.outputs.pr_branch }}"
+          echo "PR Head SHA: ${{ steps.pr-info.outputs.pr_head_sha }}"
+          echo "Cursor agent launched to fix PR comment issues"
+        else
+          echo "Workflow stopped - no major issues found in comment"
+        fi

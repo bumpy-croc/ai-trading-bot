@@ -241,3 +241,133 @@ class TestFeatureCache:
 
         stats = cache.get_stats()
         assert stats["total_entries"] == 2
+
+    def test_cache_concurrent_access_thread_safety(self, cache, sample_data, sample_result):
+        """Test thread safety under concurrent read/write operations"""
+        import threading
+        import time
+
+        extractor_name = "test_extractor"
+        config = {"param": "value"}
+
+        # Number of threads and iterations per thread
+        num_threads = 10
+        iterations_per_thread = 50
+
+        # Track results from each thread
+        errors = []
+        results = []
+
+        def worker(thread_id):
+            """Worker function that performs concurrent cache operations"""
+            try:
+                for i in range(iterations_per_thread):
+                    # Create unique data per thread-iteration
+                    data = pd.DataFrame(
+                        {
+                            "close": [thread_id * 1000 + i],
+                            "volume": [thread_id * 100 + i],
+                        }
+                    )
+                    result = pd.DataFrame({"value": [thread_id * 10 + i]})
+
+                    # Set entry
+                    cache.set(data, extractor_name, config, result)
+
+                    # Get entry (may or may not exist due to concurrency)
+                    cached = cache.get(data, extractor_name, config)
+
+                    # Check existence
+                    exists = cache.has(data, extractor_name, config)
+
+                    results.append(
+                        {
+                            "thread_id": thread_id,
+                            "iteration": i,
+                            "cached": cached is not None,
+                            "exists": exists,
+                        }
+                    )
+
+                    # Small sleep to increase contention
+                    time.sleep(0.0001)
+
+            except Exception as e:
+                errors.append({"thread_id": thread_id, "error": str(e)})
+
+        # Create and start threads
+        threads = []
+        for i in range(num_threads):
+            t = threading.Thread(target=worker, args=(i,))
+            threads.append(t)
+            t.start()
+
+        # Wait for all threads to complete
+        for t in threads:
+            t.join()
+
+        # Verify no errors occurred
+        assert len(errors) == 0, f"Thread safety errors: {errors}"
+
+        # Verify cache stats are consistent
+        stats = cache.get_stats()
+        assert stats["sets"] == num_threads * iterations_per_thread
+        assert stats["hits"] + stats["misses"] >= num_threads * iterations_per_thread
+
+        # Verify all operations completed
+        assert len(results) == num_threads * iterations_per_thread
+
+    def test_cache_concurrent_clear_thread_safety(self, cache):
+        """Test thread safety during concurrent clear operations"""
+        import threading
+        import time
+
+        num_threads = 5
+        iterations = 20
+
+        errors = []
+        clear_count = [0]  # Use list to share across threads
+
+        def worker_clear():
+            """Worker that clears the cache"""
+            try:
+                for _ in range(iterations):
+                    cache.clear()
+                    clear_count[0] += 1
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append({"operation": "clear", "error": str(e)})
+
+        def worker_stats():
+            """Worker that reads stats"""
+            try:
+                for _ in range(iterations):
+                    stats = cache.get_stats()
+                    assert stats["total_entries"] >= 0
+                    assert stats["hits"] >= 0
+                    assert stats["misses"] >= 0
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append({"operation": "stats", "error": str(e)})
+
+        # Create threads
+        threads = []
+        for _ in range(2):
+            threads.append(threading.Thread(target=worker_clear))
+        for _ in range(3):
+            threads.append(threading.Thread(target=worker_stats))
+
+        # Start all threads
+        for t in threads:
+            t.start()
+
+        # Wait for completion
+        for t in threads:
+            t.join()
+
+        # Verify no errors
+        assert len(errors) == 0, f"Thread safety errors: {errors}"
+
+        # Verify cache is in consistent state
+        stats = cache.get_stats()
+        assert stats["total_entries"] == 0  # Cache should be empty after clears

@@ -1,15 +1,58 @@
 """
-Risk Manager Components
+Strategy-Level Risk Manager Components (Layer 1 of 3-Layer Risk Architecture)
 
 This module defines the abstract RiskManager interface and related data models
 for managing position sizing, stop losses, and risk controls in the component-based
 strategy architecture.
+
+ARCHITECTURE ROLE:
+    This is LAYER 1 (Strategy Level) of the three-layer risk management architecture.
+    It provides the abstract interface for strategy-specific, signal-based risk decisions.
+
+SCOPE:
+    - Per-signal, per-strategy tactical decisions
+    - Signal-specific position sizing
+    - Regime-aware adjustments
+    - Stop loss and take profit calculation for individual signals
+
+RELATIONSHIP TO OTHER RISK LAYERS:
+    Layer 1 (This file): Strategy component - "What size makes sense for THIS signal?"
+    Layer 2 (src/risk/risk_manager.py): Portfolio manager - "What size is ALLOWED globally?"
+    Layer 3 (src/engines/shared/dynamic_risk_handler.py): Dynamic adjustments - "Reduce size due to performance?"
+
+CONCRETE IMPLEMENTATIONS:
+    - FixedRiskManager: Simple percentage-based risk
+    - VolatilityRiskManager: ATR-based volatility-adjusted risk
+    - RegimeAdaptiveRiskManager: Regime-aware risk adjustments
+
+USAGE:
+    >>> from src.strategies.components import Strategy
+    >>> from src.strategies.components.risk_manager import VolatilityRiskManager
+    >>>
+    >>> # Compose into strategy
+    >>> strategy = Strategy(
+    ...     name="my_strategy",
+    ...     signal_generator=my_signal_gen,
+    ...     risk_manager=VolatilityRiskManager(atr_multiplier=2.0),
+    ...     position_sizer=my_sizer,
+    ... )
+    >>>
+    >>> # Strategy uses risk manager for signal-based decisions
+    >>> decision = strategy.process_candle(df, index, balance, positions)
+
+See also:
+    - docs/risk_management_architecture.md: Complete architecture documentation
+    - src/risk/risk_manager.py: Portfolio-level global risk manager (Layer 2)
+    - src/engines/shared/dynamic_risk_handler.py: Dynamic risk adjustments (Layer 3)
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional
+
+from src.config.constants import DEFAULT_BASE_RISK_PER_TRADE, DEFAULT_STOP_LOSS_PCT
 
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
@@ -104,10 +147,10 @@ class MarketData:
     symbol: str
     price: float
     volume: float
-    bid: Optional[float] = None
-    ask: Optional[float] = None
-    timestamp: Optional[datetime] = None
-    volatility: Optional[float] = None
+    bid: float | None = None
+    ask: float | None = None
+    timestamp: datetime | None = None
+    volatility: float | None = None
 
     def __post_init__(self):
         """Validate market data parameters after initialization"""
@@ -135,13 +178,13 @@ class MarketData:
                 f"volatility must be non-negative when provided, got {self.volatility}"
             )
 
-    def get_spread(self) -> Optional[float]:
+    def get_spread(self) -> float | None:
         """Get bid-ask spread if both bid and ask are available"""
         if self.bid is not None and self.ask is not None:
             return self.ask - self.bid
         return None
 
-    def get_spread_percentage(self) -> Optional[float]:
+    def get_spread_percentage(self) -> float | None:
         """Get bid-ask spread as percentage of mid price"""
         spread = self.get_spread()
         if spread is not None and self.bid is not None and self.ask is not None:
@@ -190,7 +233,6 @@ class RiskManager(ABC):
         Raises:
             ValueError: If input parameters are invalid
         """
-        pass
 
     @abstractmethod
     def should_exit(
@@ -211,7 +253,6 @@ class RiskManager(ABC):
         Returns:
             True if position should be exited, False otherwise
         """
-        pass
 
     @abstractmethod
     def get_stop_loss(
@@ -235,7 +276,6 @@ class RiskManager(ABC):
         Raises:
             ValueError: If input parameters are invalid
         """
-        pass
 
     def validate_inputs(self, balance: float) -> None:
         """
@@ -310,7 +350,11 @@ class FixedRiskManager(RiskManager):
     Uses fixed percentage risk per trade and simple stop loss rules
     """
 
-    def __init__(self, risk_per_trade: float = 0.02, stop_loss_pct: float = 0.05):
+    def __init__(
+        self,
+        risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE,
+        stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT,
+    ):
         """
         Initialize fixed risk manager
 
@@ -377,10 +421,7 @@ class FixedRiskManager(RiskManager):
         loss_pct = abs(position.get_pnl_percentage()) / 100
 
         # Exit if loss exceeds stop loss threshold
-        if position.get_pnl_percentage() < 0 and loss_pct >= self.stop_loss_pct:
-            return True
-
-        return False
+        return position.get_pnl_percentage() < 0 and loss_pct >= self.stop_loss_pct
 
     def get_stop_loss(
         self,
@@ -396,12 +437,11 @@ class FixedRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price * (1 - self.stop_loss_pct)
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price * (1 + self.stop_loss_pct)
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
         """Get position size multiplier based on regime"""
@@ -458,10 +498,10 @@ class VolatilityRiskManager(RiskManager):
 
     def __init__(
         self,
-        base_risk: float = 0.02,
+        base_risk: float = DEFAULT_BASE_RISK_PER_TRADE,
         atr_multiplier: float = 2.0,
         min_risk: float = 0.005,
-        max_risk: float = 0.05,
+        max_risk: float = DEFAULT_STOP_LOSS_PCT,
     ):
         """
         Initialize volatility risk manager
@@ -553,10 +593,7 @@ class VolatilityRiskManager(RiskManager):
         loss_pct = abs(position.get_pnl_percentage()) / 100
 
         # Exit if loss exceeds dynamic stop loss threshold
-        if position.get_pnl_percentage() < 0 and loss_pct >= stop_loss_pct:
-            return True
-
-        return False
+        return position.get_pnl_percentage() < 0 and loss_pct >= stop_loss_pct
 
     def get_stop_loss(
         self,
@@ -578,12 +615,11 @@ class VolatilityRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price - stop_distance
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price + stop_distance
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
         """Get position size multiplier based on regime"""
@@ -638,7 +674,7 @@ class VolatilityRiskManager(RiskManager):
         elif context and "volatility" in context:
             try:
                 distance = float(context["volatility"]) * entry_price
-            except Exception:
+            except (ValueError, TypeError):
                 distance = None
 
         if distance is None:
@@ -660,7 +696,9 @@ class RegimeAdaptiveRiskManager(RiskManager):
     """
 
     def __init__(
-        self, base_risk: float = 0.02, regime_multipliers: Optional[dict[str, float]] = None
+        self,
+        base_risk: float = DEFAULT_BASE_RISK_PER_TRADE,
+        regime_multipliers: dict[str, float] | None = None,
     ):
         """
         Initialize regime-adaptive risk manager
@@ -755,10 +793,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
             return True
 
         # Check for regime transition exit conditions
-        if regime is not None and self._should_exit_on_regime_change(regime):
-            return True
-
-        return False
+        return regime is not None and self._should_exit_on_regime_change(regime)
 
     def get_stop_loss(
         self,
@@ -777,12 +812,11 @@ class RegimeAdaptiveRiskManager(RiskManager):
         if signal.direction.value == "buy":
             # For long positions, stop loss is below entry price
             return entry_price * (1 - stop_loss_pct)
-        elif signal.direction.value == "sell":
+        if signal.direction.value == "sell":
             # For short positions, stop loss is above entry price
             return entry_price * (1 + stop_loss_pct)
-        else:
-            # No stop loss for hold signals
-            return entry_price
+        # No stop loss for hold signals
+        return entry_price
 
     def get_take_profit(
         self,
@@ -842,9 +876,9 @@ class RegimeAdaptiveRiskManager(RiskManager):
         if hasattr(regime, "trend") and hasattr(regime, "volatility"):
             if regime.trend.value == "trend_up" and regime.volatility.value == "low_vol":
                 return 0.03  # 3% tight stop in bull low vol
-            elif regime.trend.value == "trend_down":
+            if regime.trend.value == "trend_down":
                 return 0.08  # 8% wider stop in bear market
-            elif regime.volatility.value == "high_vol":
+            if regime.volatility.value == "high_vol":
                 return 0.07  # 7% wider stop in high volatility
 
         return 0.05  # 5% default
@@ -856,10 +890,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
             return True
 
         # Exit if regime duration is very short (unstable regime)
-        if hasattr(regime, "duration") and regime.duration < 3:
-            return True
-
-        return False
+        return hasattr(regime, "duration") and regime.duration < 3
 
     def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive risk manager parameters"""

@@ -544,31 +544,28 @@ class TestTrailingStopPolicyEdgeCases:
         pnl = policy._pnl_fraction(100.0, 110.0, "long", -1.0)
         assert pnl == 0.0
 
-        # Long side calculation
+        # Long side calculation (position-level PnL, not sized)
         pnl = policy._pnl_fraction(100.0, 110.0, "long", 0.5)
-        assert pnl == pytest.approx(0.05)  # 10% move * 0.5 position
+        assert pnl == pytest.approx(0.1)  # 10% move (position-level, not multiplied by fraction)
 
-        # Short side calculation
+        # Short side calculation (position-level PnL, not sized)
         pnl = policy._pnl_fraction(100.0, 90.0, "short", 0.5)
-        assert pnl == pytest.approx(0.05)  # 10% favorable move * 0.5 position
+        assert pnl == pytest.approx(0.1)  # 10% favorable move (position-level)
 
     def test_invalid_side_parameter(self):
         """Test behavior with invalid side parameter."""
         policy = TrailingStopPolicy(activation_threshold=0.01, trailing_distance_pct=0.005)
 
-        # The current implementation doesn't validate side parameter
-        # It will default to long behavior for invalid sides
-        new_sl, activated, be = policy.update_trailing_stop(
-            side="invalid",  # Invalid side
-            entry_price=100.0,
-            current_price=102.0,
-            existing_stop=None,
-            position_fraction=1.0,
-        )
-
-        # Should behave like long side, but may not activate if PnL calculation fails
-        assert isinstance(activated, bool)
-        assert isinstance(be, bool)
+        # Side parameter is now validated in _pnl_fraction
+        # Should raise ValueError for invalid side
+        with pytest.raises(ValueError, match="Invalid side: invalid"):
+            policy.update_trailing_stop(
+                side="invalid",  # Invalid side
+                entry_price=100.0,
+                current_price=102.0,
+                existing_stop=None,
+                position_fraction=1.0,
+            )
 
     def test_float_precision_edge_cases(self):
         """Test behavior with floating point precision edge cases."""

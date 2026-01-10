@@ -30,9 +30,21 @@ class SimpleEnsembleAggregator:
         self.method = method
 
     def aggregate(self, preds: Iterable[ModelPrediction]) -> EnsembleResult:
+        """
+        Aggregate predictions from multiple models.
+
+        Args:
+            preds: Iterable of ModelPrediction objects
+
+        Returns:
+            EnsembleResult with aggregated values
+
+        Raises:
+            ValueError: If predictions list is empty
+        """
         members = list(preds)
         if not members:
-            return EnsembleResult(price=0.0, confidence=0.0, direction=0, member_predictions=[])
+            raise ValueError("Cannot aggregate empty predictions list")
 
         prices = np.array([p.price for p in members], dtype=float)
         confs = np.array([max(0.0, min(1.0, p.confidence)) for p in members], dtype=float)

@@ -6,6 +6,8 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
+from src.data_providers.data_provider import DataProvider
+
 pytestmark = pytest.mark.unit
 
 try:
@@ -15,6 +17,47 @@ try:
 except ImportError:
     CACHE_AVAILABLE = False
     CachedDataProvider = Mock
+
+# Check if parquet support is available (required for cache persistence tests)
+try:
+    import pyarrow  # noqa: F401
+
+    PARQUET_AVAILABLE = True
+except ImportError:
+    PARQUET_AVAILABLE = False
+
+
+class DummyDataProvider(DataProvider):
+    """Simple data provider for testing cache behavior without mocks."""
+
+    def __init__(self):
+        super().__init__()
+        self.historical_calls = 0
+
+    def get_historical_data(self, symbol, timeframe, start, end=None):
+        self.historical_calls += 1
+        end = end or start
+        index = pd.date_range(start=start, end=end, freq="D")
+        data = pd.DataFrame(
+            {
+                "open": [1.0 + i for i in range(len(index))],
+                "high": [1.5 + i for i in range(len(index))],
+                "low": [0.5 + i for i in range(len(index))],
+                "close": [1.2 + i for i in range(len(index))],
+                "volume": [100 + i for i in range(len(index))],
+            },
+            index=index,
+        )
+        return data
+
+    def get_live_data(self, symbol, timeframe, limit=100):
+        return pd.DataFrame({"close": [1.0]})
+
+    def update_live_data(self, symbol, timeframe):
+        return pd.DataFrame({"close": [1.1]})
+
+    def get_current_price(self, symbol):
+        return 42.0
 
 
 @pytest.mark.skipif(not CACHE_AVAILABLE, reason="Cache provider not available")
@@ -44,6 +87,7 @@ class TestCachedDataProvider:
             shutil.rmtree(temp_cache_dir, ignore_errors=True)
 
     @pytest.mark.data_provider
+    @pytest.mark.skipif(not PARQUET_AVAILABLE, reason="pyarrow not available for parquet support")
     def test_cached_provider_subsequent_calls(self, mock_data_provider):
         temp_cache_dir = tempfile.mkdtemp()
         try:
@@ -86,3 +130,43 @@ class TestCachedDataProvider:
             assert len(result) == 0
         finally:
             shutil.rmtree(temp_cache_dir, ignore_errors=True)
+
+
+@pytest.mark.skipif(not CACHE_AVAILABLE, reason="Cache provider not available")
+@pytest.mark.skipif(not PARQUET_AVAILABLE, reason="pyarrow not available for parquet support")
+class TestCachedDataProviderWithDummyProvider:
+    """Tests using a real (non-mock) data provider to verify cache behavior."""
+
+    @pytest.mark.data_provider
+    def test_cached_provider_persists_year_cache(self, tmp_path):
+        """Test that year-based caching works correctly."""
+        provider = DummyDataProvider()
+        cached = CachedDataProvider(provider, cache_dir=str(tmp_path), cache_ttl_hours=1)
+
+        start = datetime(2022, 1, 1)
+        end = datetime(2022, 1, 2)
+
+        first = cached.get_historical_data("BTCUSDT", "1d", start, end)
+        assert provider.historical_calls == 1
+        assert not first.empty
+
+        second = cached.get_historical_data("BTCUSDT", "1d", start, end)
+        assert provider.historical_calls == 1, "expected year cache to satisfy second request"
+        pd.testing.assert_frame_equal(first, second)
+
+        # Verify cache key is a SHA256 hash (64 hex chars)
+        key = cached._generate_year_cache_key("BTCUSDT", "1d", 2022)
+        assert len(key) == 64
+
+    @pytest.mark.data_provider
+    def test_cached_provider_handles_single_day_range(self, tmp_path):
+        """Test that single-day (zero-length) date ranges are handled correctly."""
+        provider = DummyDataProvider()
+        cached = CachedDataProvider(provider, cache_dir=str(tmp_path), cache_ttl_hours=1)
+
+        day = datetime(2022, 6, 1)
+
+        result = cached.get_historical_data("ETHUSDT", "1d", day, day)
+
+        assert not result.empty, "Expected data for a zero-length date range"
+        assert provider.historical_calls == 1

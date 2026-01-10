@@ -4,7 +4,7 @@ Integration tests for the Order table with the database.
 Tests that the Order table works correctly with the database and Position relationships.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -150,7 +150,7 @@ class TestOrderTableIntegration:
             order.status = OrderStatus.FILLED
             order.filled_quantity = 0.001
             order.filled_price = 50100.0
-            order.filled_at = datetime.utcnow()
+            order.filled_at = datetime.now(UTC)
             session.commit()
 
             # * Verify the update

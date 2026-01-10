@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.strategies.components import (
     FixedFractionSizer,
     FixedRiskManager,
@@ -11,7 +12,22 @@ from src.strategies.components import (
     Strategy,
     StrategyRuntime,
 )
-from src.performance.metrics import Side, cash_pnl, pnl_percent
+from tests.mocks import MockDatabaseManager
+
+
+@pytest.fixture(autouse=True)
+def mock_database_manager(monkeypatch):
+    """Mock the DatabaseManager for all tests in this module."""
+    # Create a factory that sets fallback balance from initial_balance
+    original_init = MockDatabaseManager.__init__
+
+    def patched_init(self, database_url=None):
+        original_init(self, database_url)
+        # Default fallback balance for tests - will be overwritten by trading session creation
+        self._fallback_balance = 1_000.0  # Default test balance
+
+    monkeypatch.setattr(MockDatabaseManager, "__init__", patched_init)
+    monkeypatch.setattr("src.engines.live.trading_engine.DatabaseManager", MockDatabaseManager)
 
 
 @pytest.mark.parametrize(
@@ -36,6 +52,9 @@ def test_close_position_cash_matches_backtester(side, fraction, entry_price, exi
         initial_balance=initial_balance,
         enable_live_trading=False,
         log_trades=False,
+        # Disable fees/slippage to test pure P&L calculation
+        fee_rate=0.0,
+        slippage_rate=0.0,
     )
 
     position = Position(
@@ -43,21 +62,29 @@ def test_close_position_cash_matches_backtester(side, fraction, entry_price, exi
         side=side,
         size=fraction,
         entry_price=entry_price,
-        entry_time=datetime.now(),
+        entry_time=datetime.now(UTC),
         order_id="order-1",
         original_size=fraction,
         current_size=fraction,
     )
-    engine.positions[position.order_id] = position
+    engine.live_position_tracker.track_recovered_position(position, db_id=None)
 
     expected_pct = pnl_percent(entry_price, exit_price, Side(side.value), fraction)
     expected_cash = cash_pnl(expected_pct, initial_balance)
 
-    engine._close_position(position, reason="unit-test")
+    engine._execute_exit(
+        position=position,
+        reason="unit-test",
+        limit_price=None,
+        current_price=exit_price,
+        candle_high=None,
+        candle_low=None,
+        candle=None,
+    )
 
     assert engine.current_balance == pytest.approx(initial_balance + expected_cash)
-    assert engine.total_pnl == pytest.approx(expected_cash)
-    assert position.order_id not in engine.positions
+    assert engine.performance_tracker.get_metrics().total_pnl == pytest.approx(expected_cash)
+    assert position.order_id not in engine.live_position_tracker._positions
 
 
 def _build_component_strategy() -> Strategy:
@@ -81,6 +108,9 @@ def test_live_engine_accepts_strategy_runtime():
         enable_live_trading=False,
         log_trades=False,
         enable_hot_swapping=False,
+        # Disable fees/slippage for this structural test
+        fee_rate=0.0,
+        slippage_rate=0.0,
     )
 
     assert engine.strategy is component_strategy

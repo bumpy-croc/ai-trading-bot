@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 
@@ -73,7 +73,7 @@ class ComparisonConfig:
     # Reporting configuration
     generate_detailed_report: bool = True
     export_results: bool = True
-    export_directory: Optional[str] = None
+    export_directory: str | None = None
 
     # Validation requirements
     require_statistical_equivalence: bool = True
@@ -95,19 +95,19 @@ class StrategyComparisonResult:
     parity_report: PerformanceComparisonReport
 
     # Statistical test results
-    statistical_tests: Dict[str, List[StatisticalTestResult]]
+    statistical_tests: dict[str, list[StatisticalTestResult]]
 
     # Equivalence test results
-    equivalence_tests: List[StatisticalTestResult]
+    equivalence_tests: list[StatisticalTestResult]
 
     # Overall assessment
     overall_validation_result: ValidationResult
     certification_status: str
-    recommendations: List[str] = field(default_factory=list)
+    recommendations: list[str] = field(default_factory=list)
 
     # Raw data for further analysis
-    legacy_backtest_results: Optional[pd.DataFrame] = None
-    new_backtest_results: Optional[pd.DataFrame] = None
+    legacy_backtest_results: pd.DataFrame | None = None
+    new_backtest_results: pd.DataFrame | None = None
 
 
 class PerformanceComparisonEngine:
@@ -124,8 +124,8 @@ class PerformanceComparisonEngine:
 
     def __init__(
         self,
-        config: Optional[ComparisonConfig] = None,
-        backtest_engine: Optional[BacktestEngineProtocol] = None,
+        config: ComparisonConfig | None = None,
+        backtest_engine: BacktestEngineProtocol | None = None,
     ):
         """
         Initialize the performance comparison engine.
@@ -151,7 +151,7 @@ class PerformanceComparisonEngine:
         legacy_strategy: Strategy,
         new_strategy: Strategy,
         market_data: pd.DataFrame,
-        comparison_id: Optional[str] = None,
+        comparison_id: str | None = None,
     ) -> StrategyComparisonResult:
         """
         Perform comprehensive comparison between legacy and new strategies.
@@ -165,7 +165,7 @@ class PerformanceComparisonEngine:
         Returns:
             Complete comparison result with validation and recommendations
         """
-        comparison_id = comparison_id or f"comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        comparison_id = comparison_id or f"comparison_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
 
         self.logger.info(f"Starting strategy comparison: {comparison_id}")
 
@@ -189,7 +189,7 @@ class PerformanceComparisonEngine:
                 f"{legacy_strategy.__class__.__name__} vs {new_strategy.__class__.__name__}",
                 f"legacy_{legacy_strategy.__class__.__name__}",
                 f"new_{new_strategy.__class__.__name__}",
-                f"backtest_{datetime.now().strftime('%Y-%m-%d')}",
+                f"backtest_{datetime.now(UTC).strftime('%Y-%m-%d')}",
             )
 
             # Perform statistical tests
@@ -203,7 +203,7 @@ class PerformanceComparisonEngine:
             # Create comparison result
             result = StrategyComparisonResult(
                 comparison_id=comparison_id,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
                 legacy_strategy_name=legacy_strategy.__class__.__name__,
                 new_strategy_name=new_strategy.__class__.__name__,
                 parity_report=parity_report,
@@ -226,11 +226,11 @@ class PerformanceComparisonEngine:
             return result
 
         except Exception as e:
-            self.logger.error(f"Strategy comparison failed: {e}")
+            self.logger.exception("Strategy comparison failed")
             # Return a failed result
             return StrategyComparisonResult(
                 comparison_id=comparison_id,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
                 legacy_strategy_name=legacy_strategy.__class__.__name__,
                 new_strategy_name=new_strategy.__class__.__name__,
                 parity_report=PerformanceComparisonReport(
@@ -243,8 +243,8 @@ class PerformanceComparisonEngine:
                 statistical_tests={},
                 equivalence_tests=[],
                 overall_validation_result=ValidationResult.FAIL,
-                certification_status=f"Failed: {str(e)}",
-                recommendations=[f"Fix error: {str(e)}"],
+                certification_status=f"Failed: {e!s}",
+                recommendations=[f"Fix error: {e!s}"],
             )
 
     def _run_backtest(
@@ -293,7 +293,7 @@ class PerformanceComparisonEngine:
 
     def _perform_statistical_analysis(
         self, legacy_results: pd.DataFrame, new_results: pd.DataFrame
-    ) -> Dict[str, List[StatisticalTestResult]]:
+    ) -> dict[str, list[StatisticalTestResult]]:
         """Perform comprehensive statistical analysis."""
 
         # Extract return series
@@ -307,7 +307,7 @@ class PerformanceComparisonEngine:
 
     def _perform_equivalence_tests(
         self, legacy_results: pd.DataFrame, new_results: pd.DataFrame
-    ) -> List[StatisticalTestResult]:
+    ) -> list[StatisticalTestResult]:
         """Perform equivalence tests."""
 
         legacy_returns = legacy_results["balance"].pct_change().dropna()
@@ -324,12 +324,13 @@ class PerformanceComparisonEngine:
         # Start with parity validation result
         parity_result = result.parity_report.overall_result
 
-        # Check statistical test results
-        statistical_failures = []
-        for category, tests in result.statistical_tests.items():
-            for test in tests:
-                if test.reject_null and "equality" in test.test_name.lower():
-                    statistical_failures.append(f"{category}: {test.test_name}")
+        # Check statistical test results using list comprehension
+        statistical_failures = [
+            f"{category}: {test.test_name}"
+            for category, tests in result.statistical_tests.items()
+            for test in tests
+            if test.reject_null and "equality" in test.test_name.lower()
+        ]
 
         # Check equivalence test results
         # TOST (Two One-Sided Test) tests for equivalence, so we check if reject_null is True
@@ -437,8 +438,8 @@ class PerformanceComparisonEngine:
 
             self.logger.info(f"Results exported to {export_dir}")
 
-        except Exception as e:
-            self.logger.warning(f"Failed to export results: {e}")
+        except (OSError, ValueError, KeyError) as e:
+            self.logger.warning("Failed to export results: %s", e)
 
     def generate_text_report(self, result: StrategyComparisonResult) -> str:
         """Generate comprehensive text report."""
@@ -525,7 +526,7 @@ def quick_strategy_comparison(
     legacy_strategy: Strategy,
     new_strategy: Strategy,
     market_data: pd.DataFrame,
-    tolerance_config: Optional[ToleranceConfig] = None,
+    tolerance_config: ToleranceConfig | None = None,
 ) -> StrategyComparisonResult:
     """
     Quick strategy comparison with default settings.
@@ -552,7 +553,7 @@ def validate_migration_readiness(
     new_strategy: Strategy,
     market_data: pd.DataFrame,
     strict_validation: bool = True,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """
     Validate if a strategy migration is ready for production.
 

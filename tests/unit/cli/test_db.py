@@ -3,9 +3,7 @@
 import argparse
 from unittest.mock import Mock, patch
 
-import pytest
-
-from cli.commands.db import _verify, _migrate, _backup
+from cli.commands.db import _backup, _migrate, _verify
 
 
 class TestDbVerify:

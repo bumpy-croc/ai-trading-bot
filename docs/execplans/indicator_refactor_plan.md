@@ -14,6 +14,7 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 - [x] (2025-10-25 20:25Z) Relocated indicator/sentiment extraction helpers into `src/tech/adapters/row_extractors.py` and wired trading/backtesting consumers to it.
 - [x] (2025-10-25 20:50Z) Updated prediction feature extractors, risk/risk managers, dashboards, and trading/backtesting integrations to import from the `src.tech` API while leaving shims for compatibility.
 - [x] (2025-10-27) Refreshed documentation (indicator README, prediction docs, tech_indicators.md created). Note: Repository requires Python 3.11+ due to union-type syntax in multiple modules.
+- [x] (2026-01-04) Removed deprecated `src/indicators` directory and all backward-compatibility shims. All code now imports directly from `src.tech.indicators.core`.
 
 ## Surprises & Discoveries
 
@@ -42,8 +43,7 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 - Documentation updated across the board
 
 ### Remaining Gaps
-- Legacy shims in `src/indicators` remain for backward compatibility (can be fully removed in future major version)
-- Some external documentation may still reference old paths
+- None - migration is complete. The deprecated `src/indicators` directory was removed on 2026-01-04.
 
 ### Lessons Learned
 - Moving TechnicalFeatureExtractor revealed circular import issues that were resolved by creating proper layer separation
@@ -52,13 +52,15 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 
 ## Context and Orientation
 
-Technical indicators currently live in `src/indicators/technical.py` with exports in `src/indicators/__init__.py`. Indicator row extraction helpers exist twice: once in `src/trading/shared/indicators.py` and again in `src/backtesting/utils.py` (with identical logic). The ML prediction pipeline (`src/prediction/features/technical.py` and `src/prediction/features/pipeline.py`) imports indicator math directly from `src.indicators`. Risk management (`src/risk/risk_manager.py`), manual signal generators (`src/strategies/components/technical_signal_generator.py`), live dashboards (`src/dashboards/monitoring/dashboard.py`), and trading/backtesting engines rely on the same functions. This duplication causes drift and makes naming confusing. The repo already groups prediction-specific code under `src/prediction`, so we need a neutral home (`src/tech`) for shared indicator logic while keeping prediction orchestration local.
+Before the migration, technical indicators lived under `src/indicators/` and indicator row extraction helpers were duplicated across trading/backtesting modules. As of 2026-01-04 (see Progress), indicators live under `src/tech/indicators/core.py` and engines use the consolidated adapter layer. The repo already groups prediction-specific code under `src/prediction`, so a neutral home (`src/tech`) keeps shared indicator logic discoverable while prediction orchestration stays local.
 
 ## Plan of Work
 
-First, introduce a `src/tech` package with three subpackages: `indicators` for pure calculations, `features` for reusable feature builders, and `adapters` for wrappers that expose indicator snapshots to other systems. Provide an `__init__.py` that re-exports the stable API so consumers import via `src.tech import indicators`. Author lightweight `README.md` files for `src/tech`, `src/tech/indicators`, `src/tech/features`, and `src/tech/adapters` describing what belongs there and how to extend each layer, since `.agents/PLANS.md` requires documentation for new modules. Move the existing functions from `src/indicators/technical.py` into `src/tech/indicators/core.py` and split them logically (moving averages, oscillators, volatility, support/resistance). Keep `src/indicators/__init__.py` as a thin shim that imports from the new location and emits a deprecation warning until all code migrates. Next, extract the repeated `extract_indicators`, `extract_sentiment_data`, and `extract_ml_predictions` helpers into `src/tech/adapters/row_extractors.py`, then update `src/trading/shared/indicators.py`, `src/backtesting/utils.py`, and the trading/backtesting engines to call the shared module. After the extraction helpers migrate, replace the bodies in the old modules with imports and TODO comments so tests continue passing during the transition.
+First, introduce a `src/tech` package with three subpackages: `indicators` for pure calculations, `features` for reusable feature builders, and `adapters` for wrappers that expose indicator snapshots to other systems. Provide an `__init__.py` that re-exports the stable API so consumers import via `src.tech import indicators`. Author lightweight `README.md` files for `src/tech`, `src/tech/indicators`, `src/tech/features`, and `src/tech/adapters` describing what belongs there and how to extend each layer, since `.agents/PLANS.md` requires documentation for new modules. Move the existing functions from `src/indicators/technical.py` into `src/tech/indicators/core.py` and split them logically (moving averages, oscillators, volatility, support/resistance). Keep `src/indicators/__init__.py` as a thin shim that imports from the new location and emits a deprecation warning until all code migrates. Next, extract the repeated `extract_indicators`, `extract_sentiment_data`, and `extract_ml_predictions` helpers into `src/tech/adapters/row_extractors.py`, then update consumers to call the shared module. After the extraction helpers migrate, replace the bodies in the old modules with imports and follow-up markers so tests continue passing during the transition.
 
 Once the shared modules exist, update every consumer (`src/prediction/features/technical.py`, `src/risk/risk_manager.py`, `src/strategies/components/technical_signal_generator.py`, dashboards, tests, etc.) to import from `src.tech.indicators.core`. Ensure the prediction feature extractor keeps its ML-specific responsibilities (normalization, derived features) but sources indicator math through the shared API. Update unit tests under `tests/unit/indicators` and trading tests to reference the new modules. After all imports move and tests pass, delete the deprecated modules or convert them into compatibility shims that raise informative errors if someone keeps using the old path. Finally, refresh `docs/README.md`, `docs/prediction.md`, and `src/indicators/README.md` (moving or rewriting content under `docs/architecture` or a new `docs/tech_indicators.md`) so contributors know where to add new indicators.
+
+Note: The migration described in this plan is complete. `src/indicators/` has been removed (2026-01-04), and indicator guidance now lives in `docs/tech_indicators.md` plus the `src/tech/*/README.md` files.
 
 ## Concrete Steps
 
@@ -73,7 +75,7 @@ Once the shared modules exist, update every consumer (`src/prediction/features/t
 
 3. Centralize row extraction helpers.
        cp src/trading/shared/indicators.py src/tech/adapters/row_extractors.py
-   Remove duplicated copies from `src/backtesting/utils.py` by importing `row_extractors` and deleting local implementations. Ensure both live and backtesting engines call `row_extractors.extract_indicators`.
+   Remove duplicated copies by importing `row_extractors` and deleting local implementations. Ensure both live and backtesting engines call `row_extractors.extract_indicators`.
 
 4. Update consumers.
        rg -n "src\\.indicators" -g"*.py"
@@ -100,7 +102,7 @@ At completion, the following contracts must exist:
 - `src/tech/indicators/core.py` exports pure functions: `calculate_moving_averages(df: pd.DataFrame, periods: list[int]) -> pd.DataFrame`, `calculate_rsi(data: pd.DataFrame | pd.Series, period: int = 14) -> pd.Series`, `calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame`, `calculate_bollinger_bands(df: pd.DataFrame, period: int = 20, std_dev: float = 2.0) -> pd.DataFrame`, `calculate_macd(...)`, `detect_market_regime(...)`, `calculate_support_resistance(...)`, and `calculate_ema(series: pd.Series, period: int = 9) -> pd.Series`.
 - `src/tech/features/technical.py` (new) wraps `core` to provide ML feature extraction utilities that prediction and other modules can import without pulling in prediction-only caching logic.
 - `src/tech/adapters/row_extractors.py` defines `extract_indicators(df: pd.DataFrame, index: int) -> dict[str, float | str]`, `extract_sentiment_data(...)`, and `extract_ml_predictions(...)`, with strict handling of NaNs and numeric casting.
-- `src/indicators/__init__.py` remains as a compatibility shim temporarily but must import from `src.tech.indicators.core` and raise a `DeprecationWarning` documenting the new path.
+- `src/indicators/` has been removed (2026-01-04). All imports now use `src.tech.indicators.core` directly.
 - Documentation in `docs/tech_indicators.md` and `docs/prediction.md` explains where to add new indicators and how `src.tech` fits into the architecture.
 
 Document any future deviations or enhancements in the Decision Log and Progress sections as they arise.

@@ -3,9 +3,9 @@
 import argparse
 import json
 import tempfile
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
@@ -31,7 +31,7 @@ class TestBacktestIntegration:
         """Provides mock historical OHLCV data."""
         # Create 7 days of hourly data
         dates = pd.date_range(
-            start=datetime.now() - timedelta(days=7), periods=168, freq="1h"  # 7 days * 24 hours
+            start=datetime.now(UTC) - timedelta(days=7), periods=168, freq="1h"  # 7 days * 24 hours
         )
         data = {
             "timestamp": dates,
@@ -88,7 +88,7 @@ class TestBacktestIntegration:
             assert len(log_files) == 1
 
             # Verify log file contains expected data
-            with open(log_files[0], "r") as f:
+            with open(log_files[0]) as f:
                 log_data = json.load(f)
                 # Strategy is logged as class name (MlBasic) not identifier (ml_basic)
                 assert log_data["strategy"] == "MlBasic"
@@ -142,8 +142,8 @@ class TestBacktestIntegration:
     def test_backtest_with_date_range(self, temp_project_root, mock_historical_data):
         """Test backtest with explicit start and end dates."""
         # Arrange
-        start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%d")
+        end_date = datetime.now(UTC).strftime("%Y-%m-%d")
 
         args = argparse.Namespace(
             strategy="ml_basic",
@@ -184,7 +184,7 @@ class TestBacktestIntegration:
             log_files = list(logs_dir.glob("*.json"))
             assert len(log_files) == 1
 
-            with open(log_files[0], "r") as f:
+            with open(log_files[0]) as f:
                 log_data = json.load(f)
                 assert start_date in log_data["start_date"]
                 assert end_date in log_data["end_date"]
@@ -230,7 +230,7 @@ class TestBacktestIntegration:
             logs_dir = temp_project_root / "logs" / "backtest"
             log_files = list(logs_dir.glob("*.json"))
 
-            with open(log_files[0], "r") as f:
+            with open(log_files[0]) as f:
                 log_data = json.load(f)
                 results = log_data["results"]
 

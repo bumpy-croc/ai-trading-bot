@@ -237,6 +237,12 @@ def test_sec_002_login_missing_password_graceful_failure(monkeypatch):
     def dummy_logout_user():
         return None
 
+    # Mock current_user for Flask-Admin authentication check
+    class DummyCurrentUser:
+        is_authenticated = False
+
+    dummy_current_user = DummyCurrentUser()
+
     with patch.dict(
         os.environ,
         {
@@ -255,6 +261,7 @@ def test_sec_002_login_missing_password_graceful_failure(monkeypatch):
 
         flask_login_module.LoginManager = DummyLoginManager
         flask_login_module.UserMixin = DummyUserMixin
+        flask_login_module.current_user = dummy_current_user
         flask_login_module.login_required = dummy_login_required
         flask_login_module.login_user = dummy_login_user
         flask_login_module.logout_user = dummy_logout_user

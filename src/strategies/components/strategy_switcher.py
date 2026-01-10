@@ -8,13 +8,14 @@ cooling-off periods, audit trails, and performance impact analysis.
 import logging
 import threading
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -24,10 +25,11 @@ from .regime_context import RegimeContext
 from .strategy_selector import StrategyScore, StrategySelector
 
 
-class TimeoutError(Exception):
-    """Exception raised when a callback execution times out"""
+class ExecutionTimeoutError(Exception):
+    """Exception raised when a callback execution times out.
 
-    pass
+    Named to avoid shadowing the Python builtin TimeoutError.
+    """
 
 
 def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
@@ -47,7 +49,7 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
         Result of the function execution
 
     Raises:
-        TimeoutError: If execution exceeds the specified timeout
+        ExecutionTimeoutError: If execution exceeds the specified timeout
     """
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="strategy_switcher_timeout")
     future = executor.submit(func, *args, **kwargs)
@@ -57,7 +59,7 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
     except FutureTimeoutError as exc:
         # Attempt to cancel the running future and shut down the executor without waiting
         future.cancel()
-        raise TimeoutError(f"Execution timed out after {timeout_seconds} seconds") from exc
+        raise ExecutionTimeoutError(f"Execution timed out after {timeout_seconds} seconds") from exc
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -74,7 +76,7 @@ def timeout_context(seconds: int):
         seconds: Maximum execution time in seconds
 
     Raises:
-        TimeoutError: If execution exceeds the specified timeout
+        ExecutionTimeoutError: If execution exceeds the specified timeout
     """
     timeout_occurred = threading.Event()
     original_exception = None
@@ -103,7 +105,7 @@ def timeout_context(seconds: int):
             if original_exception:
                 raise original_exception
             else:
-                raise TimeoutError(f"Execution timed out after {seconds} seconds")
+                raise ExecutionTimeoutError(f"Execution timed out after {seconds} seconds")
 
 
 class SwitchTrigger(Enum):
@@ -178,15 +180,15 @@ class SwitchRequest:
     request_id: str
     trigger: SwitchTrigger
     from_strategy: str
-    to_strategy: Optional[str]  # None for auto-selection
+    to_strategy: str | None  # None for auto-selection
     reason: str
     requested_at: datetime
     requested_by: str
     priority: int = 1  # 1=low, 2=medium, 3=high, 4=emergency
 
     # Switch decision context
-    switch_decision: Optional[SwitchDecision] = None
-    alternative_scores: Optional[list[StrategyScore]] = None
+    switch_decision: SwitchDecision | None = None
+    alternative_scores: list[StrategyScore] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -214,16 +216,16 @@ class SwitchRecord:
     request: SwitchRequest
     validation_result: ValidationResult
     status: SwitchStatus
-    executed_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    executed_at: datetime | None = None
+    completed_at: datetime | None = None
 
     # Performance tracking
-    pre_switch_performance: Optional[dict[str, float]] = None
-    post_switch_performance: Optional[dict[str, float]] = None
-    performance_impact: Optional[dict[str, float]] = None
+    pre_switch_performance: dict[str, float] | None = None
+    post_switch_performance: dict[str, float] | None = None
+    performance_impact: dict[str, float] | None = None
 
     # Error information
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -253,7 +255,7 @@ class StrategySwitcher:
         self,
         performance_monitor: PerformanceMonitor,
         strategy_selector: StrategySelector,
-        config: Optional[SwitchConfig] = None,
+        config: SwitchConfig | None = None,
     ):
         """
         Initialize strategy switcher
@@ -271,18 +273,18 @@ class StrategySwitcher:
         # Switch history and state
         self.switch_history: deque[SwitchRecord] = deque(maxlen=1000)
         self.pending_requests: dict[str, SwitchRequest] = {}
-        self.last_switch_time: Optional[datetime] = None
+        self.last_switch_time: datetime | None = None
 
         # Manual override controls
         self.manual_override_active = False
-        self.manual_override_until: Optional[datetime] = None
-        self.manual_override_reason: Optional[str] = None
+        self.manual_override_until: datetime | None = None
+        self.manual_override_reason: str | None = None
 
         # Circuit breaker for critical failures
         self.circuit_breaker_active = False
-        self.circuit_breaker_activated_at: Optional[datetime] = None
-        self.circuit_breaker_reason: Optional[str] = None
-        self.last_active_strategy: Optional[str] = None
+        self.circuit_breaker_activated_at: datetime | None = None
+        self.circuit_breaker_reason: str | None = None
+        self.last_active_strategy: str | None = None
 
         # Switch callbacks
         self.pre_switch_callbacks: list[Callable[[str, str], bool]] = []
@@ -299,8 +301,8 @@ class StrategySwitcher:
         performance_tracker: PerformanceTracker,
         available_strategies: dict[str, PerformanceTracker],
         market_data: pd.DataFrame,
-        current_regime: Optional[RegimeContext] = None,
-    ) -> Optional[SwitchRequest]:
+        current_regime: RegimeContext | None = None,
+    ) -> SwitchRequest | None:
         """
         Evaluate if a strategy switch is needed
 
@@ -352,12 +354,12 @@ class StrategySwitcher:
 
         # Create switch request
         request = SwitchRequest(
-            request_id=f"auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            request_id=f"auto_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
             trigger=SwitchTrigger.PERFORMANCE_DEGRADATION,
             from_strategy=current_strategy_id,
             to_strategy=alternative_scores[0].strategy_id,
             reason=switch_decision.reason,
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="automatic_evaluation",
             priority=self._determine_priority(switch_decision.degradation_severity),
             switch_decision=switch_decision,
@@ -387,12 +389,12 @@ class StrategySwitcher:
             Request ID for tracking
         """
         request = SwitchRequest(
-            request_id=f"manual_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            request_id=f"manual_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
             trigger=SwitchTrigger.MANUAL_REQUEST,
             from_strategy=from_strategy,
             to_strategy=to_strategy,
             reason=reason,
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by=requested_by,
             priority=2,  # Medium priority for manual requests
         )
@@ -410,7 +412,7 @@ class StrategySwitcher:
         self,
         request: SwitchRequest,
         strategy_activation_callback: Callable[[str], bool],
-        performance_trackers: Optional[dict[str, PerformanceTracker]] = None,
+        performance_trackers: dict[str, PerformanceTracker] | None = None,
     ) -> SwitchRecord:
         """
         Execute a strategy switch request
@@ -424,7 +426,7 @@ class StrategySwitcher:
             Switch record with execution results
         """
         switch_record = SwitchRecord(
-            switch_id=f"switch_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}",
+            switch_id=f"switch_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S_%f')}",
             request=request,
             validation_result=ValidationResult.APPROVED,  # Will be updated
             status=SwitchStatus.PENDING,
@@ -441,7 +443,7 @@ class StrategySwitcher:
                 return switch_record
 
             switch_record.status = SwitchStatus.EXECUTING
-            switch_record.executed_at = datetime.now()
+            switch_record.executed_at = datetime.now(UTC)
 
             # Capture pre-switch performance with detailed metrics if tracker available
             from_tracker = (
@@ -464,15 +466,15 @@ class StrategySwitcher:
                         switch_record.status = SwitchStatus.FAILED
                         switch_record.error_message = f"Pre-switch callback #{i} returned False"
                         return switch_record
-                except TimeoutError as e:
-                    self.logger.error(f"Pre-switch callback #{i} timed out: {e}")
+                except ExecutionTimeoutError as e:
+                    self.logger.warning("Pre-switch callback #%d timed out: %s", i, e)
                     switch_record.status = SwitchStatus.FAILED
                     switch_record.error_message = (
                         f"Pre-switch callback #{i} timed out after 30 seconds"
                     )
                     return switch_record
-                except Exception as e:
-                    self.logger.error(f"Pre-switch callback #{i} error: {e}")
+                except (ValueError, TypeError, RuntimeError) as e:
+                    self.logger.exception("Pre-switch callback #%d error", i)
                     switch_record.status = SwitchStatus.FAILED
                     switch_record.error_message = f"Pre-switch callback #{i} error: {e}"
                     return switch_record
@@ -480,11 +482,9 @@ class StrategySwitcher:
             # Activate new strategy
             try:
                 success = strategy_activation_callback(request.to_strategy)
-            except Exception as activation_error:
+            except (ValueError, TypeError, RuntimeError) as activation_error:
                 # Handle activation callback exceptions the same way as False returns
-                self.logger.error(
-                    f"Strategy activation callback raised exception: {activation_error}"
-                )
+                self.logger.exception("Strategy activation callback raised exception")
                 success = False
                 # Store the exception for potential rollback error message
                 activation_exception = activation_error
@@ -523,7 +523,7 @@ class StrategySwitcher:
                             "Rollback callback returned False; previous strategy may already be active or activation callback is non-idempotent"
                         )
                         self.last_active_strategy = request.from_strategy
-                except Exception as rollback_error:
+                except (ValueError, TypeError, RuntimeError) as rollback_error:
                     # CRITICAL: Exception during rollback - activate circuit breaker
                     switch_record.status = SwitchStatus.FAILED
                     # Include both activation and rollback exception info if available
@@ -533,13 +533,14 @@ class StrategySwitcher:
                             f"rollback error: {rollback_error} - circuit breaker activated"
                         )
                         self.logger.critical(
-                            f"CIRCUIT BREAKER ACTIVATED: Activation exception: {activation_exception}, "
-                            f"Rollback error: {rollback_error}"
+                            "CIRCUIT BREAKER ACTIVATED: Activation exception: %s, Rollback error: %s",
+                            activation_exception,
+                            rollback_error,
                         )
                     else:
                         switch_record.error_message = f"CRITICAL: Strategy activation failed, rollback error: {rollback_error} - circuit breaker activated"
                         self.logger.critical(
-                            f"CIRCUIT BREAKER ACTIVATED: Rollback error: {rollback_error}"
+                            "CIRCUIT BREAKER ACTIVATED: Rollback error: %s", rollback_error
                         )
 
                     self._activate_circuit_breaker(
@@ -549,9 +550,9 @@ class StrategySwitcher:
                 return switch_record
 
             # Update switch state only after successful activation
-            self.last_switch_time = datetime.now()
+            self.last_switch_time = datetime.now(UTC)
             switch_record.status = SwitchStatus.COMPLETED
-            switch_record.completed_at = datetime.now()
+            switch_record.completed_at = datetime.now(UTC)
 
             # Execute post-switch callbacks with timeout protection (non-blocking)
             for i, callback in enumerate(self.post_switch_callbacks):
@@ -563,10 +564,10 @@ class StrategySwitcher:
                         request.to_strategy,
                         True,
                     )
-                except TimeoutError as e:
-                    self.logger.error(f"Post-switch callback #{i} timed out: {e}")
-                except Exception as e:
-                    self.logger.error(f"Post-switch callback #{i} error: {e}")
+                except ExecutionTimeoutError as e:
+                    self.logger.warning("Post-switch callback #%d timed out: %s", i, e)
+                except (ValueError, TypeError, RuntimeError):
+                    self.logger.exception("Post-switch callback #%d error", i)
 
             # Start performance tracking
             if self.config.track_switch_performance:
@@ -576,10 +577,10 @@ class StrategySwitcher:
                 f"Strategy switch completed: {request.from_strategy} -> {request.to_strategy}"
             )
 
-        except Exception as e:
+        except (ValueError, TypeError, RuntimeError, KeyError) as e:
             switch_record.status = SwitchStatus.FAILED
             switch_record.error_message = str(e)
-            self.logger.error(f"Strategy switch failed: {e}")
+            self.logger.exception("Strategy switch failed")
 
             # Execute post-switch callbacks with failure flag and timeout protection
             for i, callback in enumerate(self.post_switch_callbacks):
@@ -591,10 +592,10 @@ class StrategySwitcher:
                         request.to_strategy,
                         False,
                     )
-                except TimeoutError as te:
-                    self.logger.error(f"Post-switch callback #{i} timed out: {te}")
-                except Exception as callback_error:
-                    self.logger.error(f"Post-switch callback #{i} error: {callback_error}")
+                except ExecutionTimeoutError as te:
+                    self.logger.warning("Post-switch callback #%d timed out: %s", i, te)
+                except (ValueError, TypeError, RuntimeError):
+                    self.logger.exception("Post-switch callback #%d error", i)
 
         finally:
             # Add to history
@@ -607,7 +608,7 @@ class StrategySwitcher:
         return switch_record
 
     def set_manual_override(
-        self, active: bool, duration_hours: Optional[int] = None, reason: Optional[str] = None
+        self, active: bool, duration_hours: int | None = None, reason: str | None = None
     ) -> None:
         """
         Set manual override to prevent/allow automatic switching
@@ -620,7 +621,7 @@ class StrategySwitcher:
         self.manual_override_active = active
 
         if active and duration_hours:
-            self.manual_override_until = datetime.now() + timedelta(hours=duration_hours)
+            self.manual_override_until = datetime.now(UTC) + timedelta(hours=duration_hours)
         else:
             self.manual_override_until = None
 
@@ -633,7 +634,7 @@ class StrategySwitcher:
         self.logger.info(f"Manual override {status}{duration_str}{reason_str}")
 
     def get_switch_history(
-        self, days: int = 30, strategy_id: Optional[str] = None
+        self, days: int = 30, strategy_id: str | None = None
     ) -> list[SwitchRecord]:
         """
         Get switch history for analysis
@@ -645,16 +646,16 @@ class StrategySwitcher:
         Returns:
             List of switch records
         """
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
 
         filtered_history = []
         for record in self.switch_history:
             if record.request.requested_at < cutoff_date:
                 continue
 
-            if strategy_id and (
-                record.request.from_strategy != strategy_id
-                and record.request.to_strategy != strategy_id
+            if strategy_id and strategy_id not in (
+                record.request.from_strategy,
+                record.request.to_strategy,
             ):
                 continue
 
@@ -763,14 +764,19 @@ class StrategySwitcher:
                 return ValidationResult.REJECTED_INSUFFICIENT_DATA
 
         # Check improvement threshold
-        if request.switch_decision and request.alternative_scores:
-            if not self._meets_improvement_threshold(request):
-                return ValidationResult.REJECTED_NO_BETTER_ALTERNATIVE
+        if (
+            request.switch_decision
+            and request.alternative_scores
+            and not self._meets_improvement_threshold(request)
+        ):
+            return ValidationResult.REJECTED_NO_BETTER_ALTERNATIVE
 
         # Check risk increase
-        if self._exceeds_risk_threshold(request):
-            if self.config.require_manual_approval_for_high_risk:
-                return ValidationResult.REJECTED_HIGH_RISK
+        if (
+            self._exceeds_risk_threshold(request)
+            and self.config.require_manual_approval_for_high_risk
+        ):
+            return ValidationResult.REJECTED_HIGH_RISK
 
         return ValidationResult.APPROVED
 
@@ -779,7 +785,7 @@ class StrategySwitcher:
         if not self.manual_override_active:
             return False
 
-        if self.manual_override_until and datetime.now() > self.manual_override_until:
+        if self.manual_override_until and datetime.now(UTC) > self.manual_override_until:
             # Override has expired
             self.manual_override_active = False
             self.manual_override_until = None
@@ -808,11 +814,11 @@ class StrategySwitcher:
         else:
             min_interval = timedelta(hours=self.config.min_switch_interval_hours)
 
-        return datetime.now() - self.last_switch_time >= min_interval
+        return datetime.now(UTC) - self.last_switch_time >= min_interval
 
     def _within_switch_limits(self) -> bool:
         """Check if we're within daily/weekly switch limits"""
-        now = datetime.now()
+        now = datetime.now(UTC)
 
         # Check daily limit
         daily_cutoff = now - timedelta(days=1)
@@ -833,10 +839,7 @@ class StrategySwitcher:
             if r.request.requested_at >= weekly_cutoff and r.status == SwitchStatus.COMPLETED
         )
 
-        if weekly_switches >= self.config.max_switches_per_week:
-            return False
-
-        return True
+        return weekly_switches < self.config.max_switches_per_week
 
     def _meets_improvement_threshold(self, request: SwitchRequest) -> bool:
         """Check if the proposed switch meets minimum improvement threshold"""
@@ -882,7 +885,7 @@ class StrategySwitcher:
             relative_improvement = improvement / estimated_current_score
         else:
             # If current score is 0 or negative, any positive improvement is significant
-            relative_improvement = improvement if improvement > 0 else 0
+            relative_improvement = max(0, improvement)
 
         # Check if improvement meets the threshold
         meets_threshold = relative_improvement >= self.config.min_improvement_threshold
@@ -938,18 +941,17 @@ class StrategySwitcher:
         """Determine switch priority based on degradation severity"""
         if severity == DegradationSeverity.CRITICAL:
             return 4  # Emergency
-        elif severity == DegradationSeverity.SEVERE:
+        if severity == DegradationSeverity.SEVERE:
             return 3  # High
-        elif severity == DegradationSeverity.MODERATE:
+        if severity == DegradationSeverity.MODERATE:
             return 2  # Medium
-        else:
-            return 1  # Low
+        return 1  # Low
 
     def _capture_performance_snapshot(
-        self, strategy_id: str, performance_tracker: Optional[PerformanceTracker] = None
+        self, strategy_id: str, performance_tracker: PerformanceTracker | None = None
     ) -> dict[str, float]:
         """Capture performance snapshot before/after switch"""
-        snapshot = {"timestamp": datetime.now().timestamp(), "strategy_id": strategy_id}
+        snapshot = {"timestamp": datetime.now(UTC).timestamp(), "strategy_id": strategy_id}
 
         # If performance tracker is provided, capture detailed metrics
         if performance_tracker:
@@ -966,8 +968,8 @@ class StrategySwitcher:
                         "volatility": metrics.volatility,
                     }
                 )
-            except Exception as e:
-                self.logger.warning(f"Failed to capture detailed metrics: {e}")
+            except (AttributeError, KeyError, TypeError) as e:
+                self.logger.warning("Failed to capture detailed metrics: %s", e)
 
         return snapshot
 
@@ -978,8 +980,9 @@ class StrategySwitcher:
 
         tracking_info = {
             "switch_id": switch_record.switch_id,
-            "start_time": datetime.now(),
-            "end_time": datetime.now() + timedelta(days=self.config.switch_performance_window_days),
+            "start_time": datetime.now(UTC),
+            "end_time": datetime.now(UTC)
+            + timedelta(days=self.config.switch_performance_window_days),
             "from_strategy": switch_record.request.from_strategy,
             "to_strategy": switch_record.request.to_strategy,
             "pre_switch_performance": switch_record.pre_switch_performance,
@@ -993,7 +996,7 @@ class StrategySwitcher:
         self, performance_trackers: dict[str, PerformanceTracker]
     ) -> None:
         """Update performance tracking for recent switches"""
-        now = datetime.now()
+        now = datetime.now(UTC)
         completed_tracking = []
 
         for switch_id, tracking_info in self.switch_performance_tracking.items():
@@ -1031,7 +1034,7 @@ class StrategySwitcher:
         self, pre_performance: dict[str, float], post_performance: dict[str, float]
     ) -> dict[str, float]:
         """Calculate performance impact of a switch"""
-        impact = {"calculated_at": datetime.now().timestamp()}
+        impact = {"calculated_at": datetime.now(UTC).timestamp()}
 
         # Calculate changes in key metrics
         metrics_to_compare = [
@@ -1086,7 +1089,7 @@ class StrategySwitcher:
         return impact
 
     def _activate_circuit_breaker(
-        self, reason: str, last_known_strategy: Optional[str] = None
+        self, reason: str, last_known_strategy: str | None = None
     ) -> None:
         """
         Activate circuit breaker to prevent further automatic switches
@@ -1096,7 +1099,7 @@ class StrategySwitcher:
             last_known_strategy: Last strategy that was known to be active
         """
         self.circuit_breaker_active = True
-        self.circuit_breaker_activated_at = datetime.now()
+        self.circuit_breaker_activated_at = datetime.now(UTC)
         self.circuit_breaker_reason = reason
         self.last_active_strategy = last_known_strategy
 

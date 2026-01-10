@@ -5,7 +5,7 @@ This module tests the ComponentStrategyManager implementation including strategy
 rollback capabilities, validation gates, and comprehensive management features.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -65,7 +65,7 @@ class TestPromotionRequest:
 
     def test_promotion_request_creation(self):
         """Test PromotionRequest creation"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
 
         request = PromotionRequest(
             request_id="promo_123",
@@ -85,7 +85,7 @@ class TestPromotionRequest:
 
     def test_promotion_request_serialization(self):
         """Test PromotionRequest serialization"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         request = PromotionRequest(
             request_id="promo_456",
             strategy_id="strategy_002",
@@ -130,7 +130,7 @@ class TestStrategyManager:
     @pytest.fixture
     def sample_trade_results(self):
         """Create sample trade results"""
-        base_time = datetime.now() - timedelta(days=30)
+        base_time = datetime.now(UTC) - timedelta(days=30)
         trades = []
 
         # Create profitable trades to meet validation thresholds

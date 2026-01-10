@@ -1,9 +1,7 @@
 """Unit tests for ML training pipeline data ingestion module."""
 
-from argparse import Namespace
 from datetime import datetime
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest

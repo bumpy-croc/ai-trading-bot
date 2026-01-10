@@ -47,8 +47,10 @@ class TestTechnicalFeatureExtractor:
         data = pd.DataFrame(
             {
                 "open": prices,
-                "high": [p * (1 + h) for p, h in zip(prices, high_offset)],
-                "low": [p * (1 + low_delta) for p, low_delta in zip(prices, low_offset)],
+                "high": [p * (1 + h) for p, h in zip(prices, high_offset, strict=False)],
+                "low": [
+                    p * (1 + low_delta) for p, low_delta in zip(prices, low_offset, strict=False)
+                ],
                 "close": prices,
                 "volume": volume,
             },
@@ -149,7 +151,8 @@ class TestTechnicalFeatureExtractor:
         assert "trend_direction" in result.columns
         trend_direction_data = result["trend_direction"].dropna()
         if len(trend_direction_data) > 0:
-            assert set(trend_direction_data.unique()).issubset({-1, 1})
+            # trend_direction can be -1 (down), 0 (neutral/crossover), or 1 (up)
+            assert set(trend_direction_data.unique()).issubset({-1, 0, 1})
 
     def test_invalid_input_handling(self, extractor):
         """Test handling of invalid input data."""

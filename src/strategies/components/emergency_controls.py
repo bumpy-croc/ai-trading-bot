@@ -8,18 +8,19 @@ and alerting for strategy performance.
 
 import logging
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
 from .strategy_switcher import (
+    ExecutionTimeoutError,
     StrategySwitcher,
     SwitchRequest,
     SwitchTrigger,
-    TimeoutError,
     execute_with_timeout,
 )
 
@@ -122,10 +123,10 @@ class EmergencyAlert:
     message: str
     triggered_at: datetime
     acknowledged: bool = False
-    acknowledged_by: Optional[str] = None
-    acknowledged_at: Optional[datetime] = None
+    acknowledged_by: str | None = None
+    acknowledged_at: datetime | None = None
     resolved: bool = False
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -159,12 +160,12 @@ class ApprovalRequest:
     status: ApprovalStatus = ApprovalStatus.PENDING
 
     # Approval details
-    approved_by: Optional[str] = None
-    approved_at: Optional[datetime] = None
-    rejection_reason: Optional[str] = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    rejection_reason: str | None = None
 
     # Associated data
-    switch_request: Optional[SwitchRequest] = None
+    switch_request: SwitchRequest | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -193,9 +194,7 @@ class EmergencyControls:
     conservative mode, approval workflows, and real-time monitoring.
     """
 
-    def __init__(
-        self, strategy_switcher: StrategySwitcher, config: Optional[EmergencyConfig] = None
-    ):
+    def __init__(self, strategy_switcher: StrategySwitcher, config: EmergencyConfig | None = None):
         """
         Initialize emergency controls
 
@@ -222,8 +221,8 @@ class EmergencyControls:
         self.approval_history: deque[ApprovalRequest] = deque(maxlen=500)
 
         # Monitoring state
-        self.last_performance_check: Optional[datetime] = None
-        self.last_emergency_check: Optional[datetime] = None
+        self.last_performance_check: datetime | None = None
+        self.last_emergency_check: datetime | None = None
 
         # Callbacks for external integration
         self.alert_callbacks: list[Callable[[EmergencyAlert], None]] = []
@@ -232,7 +231,7 @@ class EmergencyControls:
         # Performance tracking for emergency detection
         self.performance_snapshots: dict[str, list[dict[str, float]]] = {}
         self.active_strategies: set[str] = set()  # Track active strategies
-        self.last_cleanup_time: datetime = datetime.now()
+        self.last_cleanup_time: datetime = datetime.now(UTC)
 
         self.logger.info("EmergencyControls initialized")
 
@@ -240,7 +239,7 @@ class EmergencyControls:
         self,
         strategy_id: str,
         performance_tracker: PerformanceTracker,
-        current_regime: Optional[RegimeContext] = None,
+        _current_regime: RegimeContext | None = None,
     ) -> EmergencyLevel:
         """
         Check for emergency conditions in strategy performance
@@ -248,7 +247,7 @@ class EmergencyControls:
         Args:
             strategy_id: Strategy to check
             performance_tracker: Performance tracker for the strategy
-            current_regime: Current market regime
+            _current_regime: Current market regime (reserved for future regime-aware checks)
 
         Returns:
             Emergency level detected
@@ -299,7 +298,7 @@ class EmergencyControls:
         # Update emergency level
         if current_level > self.emergency_level:
             self.emergency_level = current_level
-            self.logger.warning(f"Emergency level escalated to {current_level.value}")
+            self.logger.warning("Emergency level escalated to %s", current_level.value)
 
             # Auto-activate conservative mode for high/critical levels
             if current_level in [EmergencyLevel.HIGH, EmergencyLevel.CRITICAL]:
@@ -332,12 +331,12 @@ class EmergencyControls:
         """
         # Create switch request
         switch_request = SwitchRequest(
-            request_id=f"manual_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            request_id=f"manual_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
             trigger=SwitchTrigger.MANUAL_REQUEST,
             from_strategy=from_strategy,
             to_strategy=to_strategy,
             reason=reason,
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by=requested_by,
             priority=2,  # Medium priority for manual requests
         )
@@ -351,14 +350,14 @@ class EmergencyControls:
 
             # Create approval request
             approval_request = ApprovalRequest(
-                request_id=f"approval_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                request_id=f"approval_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
                 operation_type="strategy_switch",
                 strategy_id=from_strategy,
                 requested_by=requested_by,
-                requested_at=datetime.now(),
+                requested_at=datetime.now(UTC),
                 reason=reason,
                 priority=2,
-                expires_at=datetime.now() + timedelta(hours=self.config.approval_timeout_hours),
+                expires_at=datetime.now(UTC) + timedelta(hours=self.config.approval_timeout_hours),
                 switch_request=switch_request,
             )
 
@@ -370,27 +369,28 @@ class EmergencyControls:
                     execute_with_timeout(
                         callback, 10, approval_request
                     )  # 10 second timeout for approval callbacks
-                except TimeoutError as error:
-                    self.logger.error(f"Approval callback #{i} timed out: {error}")
-                except Exception as error:
-                    self.logger.error(f"Approval callback #{i} error: {error}")
+                except ExecutionTimeoutError as error:
+                    self.logger.warning("Approval callback #%d timed out: %s", i, error)
+                except Exception:
+                    # Catch all exceptions from user-provided callbacks to prevent
+                    # third-party failures from disrupting emergency controls
+                    self.logger.exception("Approval callback #%d error", i)
 
             self.logger.info(
                 f"Manual switch request requires approval: {approval_request.request_id}"
             )
             return approval_request.request_id
 
-        else:
-            # Execute switch directly
-            request_id = self.strategy_switcher.request_manual_switch(
-                from_strategy, to_strategy, reason, requested_by
-            )
+        # Execute switch directly
+        request_id = self.strategy_switcher.request_manual_switch(
+            from_strategy, to_strategy, reason, requested_by
+        )
 
-            self.logger.info(f"Manual switch request submitted directly: {request_id}")
-            return request_id
+        self.logger.info("Manual switch request submitted directly: %s", request_id)
+        return request_id
 
     def approve_request(
-        self, request_id: str, approved_by: str, rejection_reason: Optional[str] = None
+        self, request_id: str, approved_by: str, rejection_reason: str | None = None
     ) -> bool:
         """
         Approve or reject a pending approval request
@@ -404,15 +404,15 @@ class EmergencyControls:
             True if request was processed, False if not found or already processed
         """
         if request_id not in self.pending_approvals:
-            self.logger.warning(f"Approval request not found: {request_id}")
+            self.logger.warning("Approval request not found: %s", request_id)
             return False
 
         approval_request = self.pending_approvals[request_id]
 
         # Check if request has expired
-        if datetime.now() > approval_request.expires_at:
+        if datetime.now(UTC) > approval_request.expires_at:
             approval_request.status = ApprovalStatus.EXPIRED
-            self.logger.warning(f"Approval request expired: {request_id}")
+            self.logger.warning("Approval request expired: %s", request_id)
             return False
 
         # Process approval/rejection
@@ -420,7 +420,7 @@ class EmergencyControls:
             # Reject the request
             approval_request.status = ApprovalStatus.REJECTED
             approval_request.approved_by = approved_by
-            approval_request.approved_at = datetime.now()
+            approval_request.approved_at = datetime.now(UTC)
             approval_request.rejection_reason = rejection_reason
 
             self.logger.info(
@@ -431,7 +431,7 @@ class EmergencyControls:
             # Approve the request
             approval_request.status = ApprovalStatus.APPROVED
             approval_request.approved_by = approved_by
-            approval_request.approved_at = datetime.now()
+            approval_request.approved_at = datetime.now(UTC)
 
             # Execute the approved operation
             if approval_request.switch_request:
@@ -441,9 +441,9 @@ class EmergencyControls:
                     f"Approved: {approval_request.switch_request.reason}",
                     approved_by,
                 )
-                self.logger.info(f"Approved switch request executed: {switch_request_id}")
+                self.logger.info("Approved switch request executed: %s", switch_request_id)
 
-            self.logger.info(f"Request approved by {approved_by}: {request_id}")
+            self.logger.info("Request approved by %s: %s", approved_by, request_id)
 
         # Move to history
         self.approval_history.append(approval_request)
@@ -506,9 +506,9 @@ class EmergencyControls:
         for alert in self.active_alerts.values():
             if alert.alert_type == AlertType.EMERGENCY_STOP:
                 alert.resolved = True
-                alert.resolved_at = datetime.now()
+                alert.resolved_at = datetime.now(UTC)
 
-        self.logger.info(f"Emergency stop deactivated by {deactivated_by}: {reason}")
+        self.logger.info("Emergency stop deactivated by %s: %s", deactivated_by, reason)
 
         return True
 
@@ -524,7 +524,7 @@ class EmergencyControls:
 
         self.conservative_mode = ConservativeMode.ENABLED
 
-        self.logger.info(f"Conservative mode activated: {reason}")
+        self.logger.info("Conservative mode activated: %s", reason)
 
     def deactivate_conservative_mode(self, reason: str) -> None:
         """
@@ -538,7 +538,7 @@ class EmergencyControls:
 
         self.conservative_mode = ConservativeMode.DISABLED
 
-        self.logger.info(f"Conservative mode deactivated: {reason}")
+        self.logger.info("Conservative mode deactivated: %s", reason)
 
     def get_conservative_adjustments(self) -> dict[str, float]:
         """
@@ -573,9 +573,9 @@ class EmergencyControls:
         alert = self.active_alerts[alert_id]
         alert.acknowledged = True
         alert.acknowledged_by = acknowledged_by
-        alert.acknowledged_at = datetime.now()
+        alert.acknowledged_at = datetime.now(UTC)
 
-        self.logger.info(f"Alert acknowledged by {acknowledged_by}: {alert_id}")
+        self.logger.info("Alert acknowledged by %s: %s", acknowledged_by, alert_id)
 
         return True
 
@@ -594,12 +594,12 @@ class EmergencyControls:
 
         alert = self.active_alerts[alert_id]
         alert.resolved = True
-        alert.resolved_at = datetime.now()
+        alert.resolved_at = datetime.now(UTC)
 
         # Remove from active alerts (already in history from when it was triggered)
         del self.active_alerts[alert_id]
 
-        self.logger.info(f"Alert resolved: {alert_id}")
+        self.logger.info("Alert resolved: %s", alert_id)
 
         return True
 
@@ -644,20 +644,22 @@ class EmergencyControls:
 
     def _trigger_alert(
         self, alert_type: AlertType, level: EmergencyLevel, strategy_id: str, message: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Trigger an emergency alert"""
         # Check cooldown
         cooldown_key = f"{alert_type.value}_{strategy_id}"
         if cooldown_key in self.alert_cooldowns:
             last_alert = self.alert_cooldowns[cooldown_key]
-            if datetime.now() - last_alert < timedelta(minutes=self.config.alert_cooldown_minutes):
+            if datetime.now(UTC) - last_alert < timedelta(
+                minutes=self.config.alert_cooldown_minutes
+            ):
                 return None  # Still in cooldown
 
         # Check rate limiting
         recent_alerts = [
             alert
             for alert in self.alert_history
-            if alert.triggered_at > datetime.now() - timedelta(hours=1)
+            if alert.triggered_at > datetime.now(UTC) - timedelta(hours=1)
         ]
         if len(recent_alerts) >= self.config.max_alerts_per_hour:
             self.logger.warning("Alert rate limit exceeded, suppressing alert")
@@ -665,12 +667,12 @@ class EmergencyControls:
 
         # Create alert
         alert = EmergencyAlert(
-            alert_id=f"alert_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}",
+            alert_id=f"alert_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S_%f')}",
             alert_type=alert_type,
             level=level,
             strategy_id=strategy_id,
             message=message,
-            triggered_at=datetime.now(),
+            triggered_at=datetime.now(UTC),
         )
 
         # Add to active alerts
@@ -680,18 +682,20 @@ class EmergencyControls:
         self.alert_history.append(alert)
 
         # Update cooldown
-        self.alert_cooldowns[cooldown_key] = datetime.now()
+        self.alert_cooldowns[cooldown_key] = datetime.now(UTC)
 
         # Notify callbacks
         for i, callback in enumerate(self.alert_callbacks):
             try:
                 execute_with_timeout(callback, 10, alert)  # 10 second timeout for alert callbacks
-            except TimeoutError as error:
-                self.logger.error(f"Alert callback #{i} timed out: {error}")
-            except Exception as error:
-                self.logger.error(f"Alert callback #{i} error: {error}")
+            except ExecutionTimeoutError as error:
+                self.logger.warning("Alert callback #%d timed out: %s", i, error)
+            except Exception:
+                # Catch all exceptions from user-provided callbacks to prevent
+                # third-party failures from disrupting alert processing
+                self.logger.exception("Alert callback #%d error", i)
 
-        self.logger.warning(f"Alert triggered: {alert.alert_type.value} - {message}")
+        self.logger.warning("Alert triggered: %s - %s", alert.alert_type.value, message)
 
         return alert.alert_id
 
@@ -707,7 +711,7 @@ class EmergencyControls:
             self.performance_snapshots[strategy_id] = []
 
         snapshot = {
-            "timestamp": datetime.now().timestamp(),
+            "timestamp": datetime.now(UTC).timestamp(),
             "sharpe_ratio": current_metrics.sharpe_ratio,
             "win_rate": current_metrics.win_rate,
             "max_drawdown": current_metrics.max_drawdown,
@@ -717,15 +721,15 @@ class EmergencyControls:
         self.performance_snapshots[strategy_id].append(snapshot)
 
         # Keep only recent snapshots (last 24 hours)
-        cutoff_time = datetime.now().timestamp() - (24 * 3600)
+        cutoff_time = datetime.now(UTC).timestamp() - (24 * 3600)
         self.performance_snapshots[strategy_id] = [
             s for s in self.performance_snapshots[strategy_id] if s["timestamp"] > cutoff_time
         ]
 
         # Periodic cleanup of inactive strategies (every hour)
-        if (datetime.now() - self.last_cleanup_time).total_seconds() > 3600:
+        if (datetime.now(UTC) - self.last_cleanup_time).total_seconds() > 3600:
             self._cleanup_inactive_strategies()
-            self.last_cleanup_time = datetime.now()
+            self.last_cleanup_time = datetime.now(UTC)
 
         # Need at least 2 snapshots to detect degradation
         if len(self.performance_snapshots[strategy_id]) < 2:
@@ -784,7 +788,7 @@ class EmergencyControls:
         """Clean up performance snapshots for inactive strategies"""
         # Find strategies with snapshots but not seen recently
         inactive_strategies = []
-        cutoff_time = datetime.now().timestamp() - (48 * 3600)  # 48 hours
+        cutoff_time = datetime.now(UTC).timestamp() - (48 * 3600)  # 48 hours
 
         for strategy_id in list(self.performance_snapshots.keys()):
             if strategy_id not in self.active_strategies:
@@ -801,14 +805,14 @@ class EmergencyControls:
         # Remove inactive strategy snapshots
         for strategy_id in inactive_strategies:
             del self.performance_snapshots[strategy_id]
-            self.logger.debug(f"Cleaned up snapshots for inactive strategy: {strategy_id}")
+            self.logger.debug("Cleaned up snapshots for inactive strategy: %s", strategy_id)
 
         # Clear active strategies set for next tracking period
         self.active_strategies.clear()
 
     def cleanup_expired_requests(self) -> None:
         """Clean up expired approval requests"""
-        now = datetime.now()
+        now = datetime.now(UTC)
         expired_requests = []
 
         for request_id, request in self.pending_approvals.items():
@@ -820,12 +824,12 @@ class EmergencyControls:
             request = self.pending_approvals[request_id]
             self.approval_history.append(request)
             del self.pending_approvals[request_id]
-            self.logger.info(f"Approval request expired: {request_id}")
+            self.logger.info("Approval request expired: %s", request_id)
 
     def update_monitoring(
         self,
         strategy_performance: dict[str, PerformanceTracker],
-        current_regime: Optional[RegimeContext] = None,
+        current_regime: RegimeContext | None = None,
     ) -> None:
         """
         Update monitoring checks for all strategies
@@ -834,7 +838,7 @@ class EmergencyControls:
             strategy_performance: Dictionary of strategy performance trackers
             current_regime: Current market regime
         """
-        now = datetime.now()
+        now = datetime.now(UTC)
 
         # Check if it's time for performance monitoring
         if self.last_performance_check is None or now - self.last_performance_check >= timedelta(

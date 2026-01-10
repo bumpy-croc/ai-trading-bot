@@ -6,7 +6,7 @@ parent-child relationships, branching/merging, evolution visualization,
 and change impact analysis.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
@@ -26,7 +26,7 @@ class TestChangeRecord:
 
     def test_change_record_creation(self):
         """Test ChangeRecord creation"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         change = ChangeRecord(
             change_id="change_123",
             change_type=ChangeType.PARAMETER_CHANGE,
@@ -47,7 +47,7 @@ class TestChangeRecord:
 
     def test_change_record_serialization(self):
         """Test ChangeRecord serialization and deserialization"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         change = ChangeRecord(
             change_id="change_456",
             change_type=ChangeType.BUG_FIX,
@@ -78,7 +78,7 @@ class TestEvolutionBranch:
 
     def test_evolution_branch_creation(self):
         """Test EvolutionBranch creation"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         branch = EvolutionBranch(
             branch_id="branch_123",
             branch_name="experimental_features",
@@ -97,7 +97,7 @@ class TestEvolutionBranch:
 
     def test_evolution_branch_serialization(self):
         """Test EvolutionBranch serialization"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         branch = EvolutionBranch(
             branch_id="branch_456",
             branch_name="performance_optimization",

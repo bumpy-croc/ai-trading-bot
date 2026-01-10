@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.risk.risk_manager import RiskManager as CoreRiskManager
+from src.risk.risk_manager import PortfolioRiskManager
 from src.risk.risk_manager import RiskParameters
 
 from .policies import (
@@ -31,17 +32,17 @@ class PortfolioStateHooks:
 
 
 class CoreRiskAdapter(RiskManager):
-    """Wraps :class:`src.risk.risk_manager.RiskManager` for component usage."""
+    """Wraps :class:`src.risk.risk_manager.PortfolioRiskManager` for component usage."""
 
     def __init__(
         self,
-        core_manager: CoreRiskManager | None = None,
+        core_manager: PortfolioRiskManager | None = None,
         *,
         parameters: RiskParameters | None = None,
         dynamic_risk: DynamicRiskDescriptor | None = None,
     ) -> None:
         super().__init__("core_risk_adapter")
-        self._core_manager = core_manager or CoreRiskManager(parameters)
+        self._core_manager = core_manager or PortfolioRiskManager(parameters)
         self._strategy_overrides: dict[str, Any] = {}
         self._dynamic_risk_descriptor = dynamic_risk
         self._hooks: PortfolioStateHooks | None = None
@@ -49,8 +50,8 @@ class CoreRiskAdapter(RiskManager):
     # ------------------------------------------------------------------
     # Binding helpers
     # ------------------------------------------------------------------
-    def bind_core_manager(self, manager: CoreRiskManager) -> None:
-        """Attach the canonical engine risk manager instance."""
+    def bind_core_manager(self, manager: PortfolioRiskManager) -> None:
+        """Attach the canonical engine portfolio risk manager instance."""
 
         self._core_manager = manager
 
@@ -162,10 +163,16 @@ class CoreRiskAdapter(RiskManager):
 
         if position.side == "long":
             pnl_pct = (price - entry_price) / entry_price
+            # Force exit if PnL calculation is invalid (safety-first for stop-loss)
+            if not math.isfinite(pnl_pct):
+                return True
             threshold = -float(params.max_risk_per_trade)
             return pnl_pct <= threshold
         if position.side == "short":
             pnl_pct = (entry_price - price) / entry_price
+            # Force exit if PnL calculation is invalid (safety-first for stop-loss)
+            if not math.isfinite(pnl_pct):
+                return True
             threshold = -float(params.max_risk_per_trade)
             return pnl_pct <= threshold
         return False
@@ -270,9 +277,9 @@ class CoreRiskAdapter(RiskManager):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _require_core_manager(self) -> CoreRiskManager:
+    def _require_core_manager(self) -> PortfolioRiskManager:
         if self._core_manager is None:
-            raise RuntimeError("CoreRiskAdapter is not bound to an engine RiskManager")
+            raise RuntimeError("CoreRiskAdapter is not bound to an engine PortfolioRiskManager")
         return self._core_manager
 
     def _resolve_overrides(self, context: dict[str, Any]) -> dict[str, Any]:

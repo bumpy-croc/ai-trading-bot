@@ -1,7 +1,7 @@
 import hashlib
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
@@ -74,6 +74,24 @@ class CachedDataProvider(DataProvider):
                 # Disable caching by setting cache_dir to None
                 self.cache_dir = None
 
+    @staticmethod
+    def _normalize_datetime(value: datetime | None) -> datetime | None:
+        """Normalize datetimes to timezone-aware UTC for comparisons."""
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _ensure_utc_index(data: pd.DataFrame) -> pd.DataFrame:
+        """Ensure DataFrame datetime index is timezone-aware UTC."""
+        if isinstance(data.index, pd.DatetimeIndex):
+            if data.index.tz is None:
+                return data.tz_localize(UTC)
+            return data.tz_convert(UTC)
+        return data
+
     def _generate_year_cache_key(self, symbol: str, timeframe: str, year: int) -> str:
         """
         Generate a cache key for a specific year of data.
@@ -114,13 +132,19 @@ class CachedDataProvider(DataProvider):
 
         # For fully historical years, treat cache as permanently valid
         if year is not None:
-            current_year = datetime.now().year
+            current_year = datetime.now(UTC).year
             if year < current_year:
                 return True
 
         # Check if cache is expired
-        file_time = datetime.fromtimestamp(os.path.getmtime(cache_path))
-        current_time = datetime.now()
+        try:
+            file_time = datetime.fromtimestamp(os.path.getmtime(cache_path), tz=UTC)
+        except OSError:
+            # File deleted or inaccessible between existence check and getmtime call (TOCTOU race)
+            # Return False to trigger re-fetch from provider
+            return False
+
+        current_time = datetime.now(UTC)
         age_hours = (current_time - file_time).total_seconds() / 3600
 
         return age_hours < self.cache_ttl_hours
@@ -155,7 +179,10 @@ class CachedDataProvider(DataProvider):
 
     def _save_to_cache(self, cache_path: str | None, data: pd.DataFrame):
         """
-        Save data to cache file.
+        Save data to cache file using atomic write operation.
+
+        Uses temp file + atomic rename to prevent cache corruption from
+        process crashes during write (OOM, SIGKILL, disk full).
 
         Args:
             cache_path: Path to the cache file (None if caching is disabled)
@@ -164,11 +191,39 @@ class CachedDataProvider(DataProvider):
         if cache_path is None:
             return
 
+        temp_path = None
         try:
-            data.to_parquet(cache_path, index=True)
+            # Write to temporary file first (atomic operation pattern)
+            temp_path = f"{cache_path}.tmp.{os.getpid()}"
+            data.to_parquet(temp_path, index=True)
+
+            # Verify temp file is readable before atomic rename
+            # This catches corrupted writes early, preventing corrupt cache
+            try:
+                pd.read_parquet(temp_path)
+            except Exception as verify_error:
+                logger.error(
+                    "Cache file verification failed after write - file corrupted: %s. "
+                    "Discarding corrupt cache to prevent infinite crash loop.",
+                    verify_error,
+                )
+                # Remove corrupt temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return  # Don't rename corrupt file
+
+            # Atomic rename (POSIX guarantee: old file replaced atomically)
+            os.replace(temp_path, cache_path)
+
             logger.debug(f"Saved data to cache: {cache_path}")
         except Exception as e:
             logger.warning(f"Failed to save cache to {cache_path}: {e}")
+            # Clean up temporary file on error
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass  # Best effort cleanup
 
     def _get_year_ranges(
         self, start: datetime, end: datetime
@@ -188,11 +243,11 @@ class CachedDataProvider(DataProvider):
 
         while current <= end:
             year = current.year
-            year_start = max(current, datetime(year, 1, 1))
-            year_end = min(end, datetime(year + 1, 1, 1) - timedelta(seconds=1))
+            year_start = max(current, datetime(year, 1, 1, tzinfo=UTC))
+            year_end = min(end, datetime(year + 1, 1, 1, tzinfo=UTC) - timedelta(seconds=1))
 
             ranges.append((year, year_start, year_end))
-            current = datetime(year + 1, 1, 1)
+            current = datetime(year + 1, 1, 1, tzinfo=UTC)
 
         return ranges
 
@@ -237,7 +292,7 @@ class CachedDataProvider(DataProvider):
             DataFrame for the year or None if failed
         """
         # Check if we're trying to fetch future data
-        current_year = datetime.now().year
+        current_year = datetime.now(UTC).year
         if year > current_year:
             logger.warning(
                 f"Cannot fetch data for future year {year} (current year: {current_year})"
@@ -251,6 +306,7 @@ class CachedDataProvider(DataProvider):
         if cache_path and self._is_cache_valid(cache_path, year):
             cached_data = self._load_from_cache(cache_path)
             if cached_data is not None and not cached_data.empty:
+                cached_data = self._ensure_utc_index(cached_data)
                 logger.debug(f"Loaded {year} data from cache for {symbol} {timeframe}")
 
                 # Check if cached data covers the requested range
@@ -284,11 +340,11 @@ class CachedDataProvider(DataProvider):
         logger.info(f"Fetching {year} data for {symbol} {timeframe}")
 
         # Fetch the entire year to maximize cache efficiency
-        fetch_start = datetime(year, 1, 1)
-        fetch_end = datetime(year + 1, 1, 1) - timedelta(seconds=1)
+        fetch_start = datetime(year, 1, 1, tzinfo=UTC)
+        fetch_end = datetime(year + 1, 1, 1, tzinfo=UTC) - timedelta(seconds=1)
 
         # Don't fetch beyond current time
-        current_time = datetime.now()
+        current_time = datetime.now(UTC)
         if fetch_end > current_time:
             fetch_end = current_time
 
@@ -298,6 +354,7 @@ class CachedDataProvider(DataProvider):
             )
 
             if not year_data.empty:
+                year_data = self._ensure_utc_index(year_data)
                 # Cache the entire year's data
                 self._save_to_cache(cache_path, year_data)
 
@@ -312,7 +369,7 @@ class CachedDataProvider(DataProvider):
                 return year_data
             else:
                 # Check if this is expected (future data) or an actual error
-                current_time = datetime.now()
+                current_time = datetime.now(UTC)
                 if fetch_end > current_time - timedelta(hours=1):  # Within last hour
                     logger.info(
                         f"No recent data available for {symbol} {timeframe} in {year} (fetch_end: {fetch_end}, current_time: {current_time})"
@@ -349,14 +406,18 @@ class CachedDataProvider(DataProvider):
         # Detect if caller swapped parameters (timeframe passed as datetime)
         if isinstance(timeframe, datetime):
             # Shift parameters
-            end = start if end is not None else datetime.now()
+            end = start if end is not None else datetime.now(UTC)
             start = timeframe
             timeframe = "1d"  # default to daily
         if end is None:
-            end = datetime.now()
+            end = datetime.now(UTC)
+        start = self._normalize_datetime(start)
+        end = self._normalize_datetime(end)
 
         # Don't fetch future data
-        current_time = datetime.now()
+        current_time = datetime.now(UTC)
+        if end is None:
+            end = current_time
         if end > current_time:
             logger.info(f"Adjusting end time from {end} to {current_time} to avoid future data")
             end = current_time
@@ -470,8 +531,15 @@ class CachedDataProvider(DataProvider):
         if not os.path.exists(self.cache_dir):
             return
 
+        # List cache directory with error handling
+        try:
+            filenames = os.listdir(self.cache_dir)
+        except OSError as e:
+            logger.warning(f"Cannot list cache directory {self.cache_dir}: {e}")
+            return
+
         cleared_count = 0
-        for filename in os.listdir(self.cache_dir):
+        for filename in filenames:
             if filename.endswith(CACHE_FILE_EXTENSION):
                 file_path = os.path.join(self.cache_dir, filename)
                 should_delete = True
@@ -524,8 +592,26 @@ class CachedDataProvider(DataProvider):
                 "years_cached": [],
             }
 
-        files = [f for f in os.listdir(self.cache_dir) if f.endswith(CACHE_FILE_EXTENSION)]
-        total_size = sum(os.path.getsize(os.path.join(self.cache_dir, f)) for f in files)
+        # List cache files with error handling
+        try:
+            files = [f for f in os.listdir(self.cache_dir) if f.endswith(CACHE_FILE_EXTENSION)]
+        except OSError as e:
+            logger.warning(f"Cannot list cache directory: {e}")
+            return {
+                "total_files": 0,
+                "total_size_mb": 0,
+                "oldest_file": None,
+                "newest_file": None,
+                "years_cached": [],
+            }
+
+        # Calculate total size with error handling for inaccessible files
+        total_size = 0
+        for f in files:
+            try:
+                total_size += os.path.getsize(os.path.join(self.cache_dir, f))
+            except OSError:
+                continue  # Skip inaccessible files
 
         if not files:
             return {
@@ -539,9 +625,23 @@ class CachedDataProvider(DataProvider):
         file_times = []
         for f in files:
             file_path = os.path.join(self.cache_dir, f)
-            file_times.append((f, os.path.getmtime(file_path)))
+            try:
+                mtime = os.path.getmtime(file_path)
+                file_times.append((f, mtime))
+            except OSError:
+                continue  # Skip inaccessible files
 
         file_times.sort(key=lambda x: x[1])
+
+        # Handle case where all files were inaccessible
+        if not file_times:
+            return {
+                "total_files": len(files),
+                "total_size_mb": round(total_size / (1024 * 1024), 2),
+                "oldest_file": None,
+                "newest_file": None,
+                "cache_strategy": "year-based",
+            }
 
         return {
             "total_files": len(files),

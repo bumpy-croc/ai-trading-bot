@@ -78,8 +78,8 @@ atb live ml_basic --symbol BTCUSDT --paper-trading
 # Live trading (requires explicit confirmation)
 atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
-# Live trading + health endpoint
-atb live-health --port 8000 -- ml_basic --paper-trading
+# Live trading + health endpoint (set PORT or HEALTH_CHECK_PORT to override)
+PORT=8000 atb live-health -- ml_basic --paper-trading
 ```
 
 6) Utilities
@@ -144,40 +144,41 @@ bandit -c pyproject.toml -r src
 
 ```text
 src/
-  backtesting/       # Vectorised simulation engine
-  config/            # Typed configuration loader + constants + feature flags  
-  dashboards/        # Web-based monitoring and analysis dashboards
-  data_providers/    # Market & sentiment providers (+ caching wrapper)
-  database/          # SQLAlchemy models + DatabaseManager + Flask-Admin UI
-  indicators/        # Technical indicators (pure functions)
-  infrastructure/    # Cross-cutting logging/config/runtime helpers
-  live/              # Live trading engine
-  ml/                # Trained models (.onnx/.keras) + metadata
-  optimizer/         # Parameter optimization and strategy tuning
-  performance/       # Performance metrics utilities
-  position_management/  # Position sizing and portfolio management
-  prediction/        # Centralized model registry, ONNX runtime, caching
-  regime/            # Market regime detection and analysis
-  risk/              # Risk parameters and position sizing utilities
-  sentiment/         # Sentiment adapters
-  strategies/        # Built-in strategies (ML basic, sentiment, adaptive, bull/bear)
-  tech/              # Shared indicator math, adapters, and feature builders
-  trading/           # Core trading interfaces and shared functionality
+  config/               # Typed configuration loader, constants, feature flags
+  dashboards/           # Monitoring, backtesting, and prediction dashboards
+  data_providers/       # Market, sentiment, and cache-aware data sources
+  database/             # SQLAlchemy models, DatabaseManager, admin UI
+  engines/              # Trading engines (backtest + live) + shared logic
+    backtest/           # Vectorised historical simulation engine
+    live/               # Live trading engine and runners
+    shared/             # Shared engine logic (fees, policies, parity helpers)
+  infrastructure/       # Logging config, runtime helpers, cache/secret tooling
+  ml/                   # Training pipeline plus versioned model registry artifacts
+  optimizer/            # Parameter optimization and analyzer tooling
+  performance/          # Shared performance and diagnostics helpers
+  position_management/  # Partial exits, trailing stops, dynamic risk policies
+  prediction/           # Prediction engine, feature pipeline, ONNX runners
+  regime/               # Market regime detection and analysis
+  risk/                 # Global risk manager, exposure controls
+  sentiment/            # Sentiment adapters and data mergers
+  strategies/           # Component-based strategies and factories
+  tech/                 # Indicator math, feature builders, adapters
+  trading/              # Trading interfaces plus symbol utilities
 ```
 
 ---
 
 ## Key components
 
-- Data providers: `data_providers.BinanceProvider`, `CoinbaseProvider`, `CachedDataProvider`
-- ML prediction: `prediction.models.registry.PredictionModelRegistry` (ONNX), caching in `prediction.utils.caching`
-- Strategies: `strategies.ml_basic`
-- Backtesting: `backtesting.engine.Backtester` (CLI: `atb backtest`)
-- Live engine: `live.trading_engine.LiveTradingEngine` (CLI: `atb live`, `atb live-health`)
-- Risk: `risk.risk_manager.RiskManager`
-- Database: `database.manager.DatabaseManager` (PostgreSQL)
-- Monitoring: `dashboards.monitoring.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
-- Admin UI: `database.admin_ui.app` (Flask-Admin), run `python src/database/admin_ui/app.py`
+- Data providers: `src.data_providers.binance_provider.BinanceProvider`, `src.data_providers.coinbase_provider.CoinbaseProvider`, `src.data_providers.cached_data_provider.CachedDataProvider`
+- ML prediction: `src.prediction.models.registry.PredictionModelRegistry` (ONNX), caching in `src.prediction.utils.caching`
+- Strategies: `src.strategies.ml_basic`
+- Backtesting: `src.engines.backtest.engine.Backtester` (CLI: `atb backtest`)
+- Live engine: `src.engines.live.trading_engine.LiveTradingEngine` (CLI: `atb live`, `atb live-health`)
+- Risk: `src.risk.risk_manager.RiskManager`
+- Database: `src.database.manager.DatabaseManager` (PostgreSQL)
+- Monitoring dashboard: `src.dashboards.monitoring.dashboard.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
+- Admin UI: `src.database.admin_ui.app:create_app` (Flask-Admin), run `python src/database/admin_ui/app.py`
 
 ---
 
@@ -253,4 +254,3 @@ Sentiment data and ML training are supported. Pretrained models live in `src/ml`
 ## Disclaimer
 
 This project is for educational purposes only. Trading cryptocurrencies involves significant risk. Use paper trading, test thoroughly, and never risk funds you cannot afford to lose.
-<!-- chore: trigger CI test -->

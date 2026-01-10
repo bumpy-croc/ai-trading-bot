@@ -5,12 +5,18 @@ This module defines the abstract SignalGenerator interface and related data mode
 for generating trading signals in the component-based strategy architecture.
 """
 
+import logging
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional
 
 import pandas as pd
+
+from src.infrastructure.circuit_breaker import CircuitBreaker, CircuitBreakerError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
@@ -49,9 +55,7 @@ class Signal:
     def _validate_signal(self):
         """Validate signal parameters are within acceptable bounds"""
         if not isinstance(self.direction, SignalDirection):
-            raise ValueError(
-                f"direction must be a SignalDirection enum, got {type(self.direction)}"
-            )
+            raise TypeError(f"direction must be a SignalDirection enum, got {type(self.direction)}")
 
         if not 0.0 <= self.strength <= 1.0:
             raise ValueError(f"strength must be between 0.0 and 1.0, got {self.strength}")
@@ -60,7 +64,7 @@ class Signal:
             raise ValueError(f"confidence must be between 0.0 and 1.0, got {self.confidence}")
 
         if not isinstance(self.metadata, dict):
-            raise ValueError(f"metadata must be a dictionary, got {type(self.metadata)}")
+            raise TypeError(f"metadata must be a dictionary, got {type(self.metadata)}")
 
 
 class SignalGenerator(ABC):
@@ -100,7 +104,6 @@ class SignalGenerator(ABC):
             ValueError: If input parameters are invalid
             IndexError: If index is out of bounds
         """
-        pass
 
     @abstractmethod
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
@@ -118,7 +121,6 @@ class SignalGenerator(ABC):
             ValueError: If input parameters are invalid
             IndexError: If index is out of bounds
         """
-        pass
 
     def validate_inputs(self, df: pd.DataFrame, index: int) -> None:
         """
@@ -205,7 +207,7 @@ class RandomSignalGenerator(SignalGenerator):
     Generates random signals with configurable probabilities
     """
 
-    def __init__(self, buy_prob: float = 0.3, sell_prob: float = 0.3, seed: Optional[int] = None):
+    def __init__(self, buy_prob: float = 0.3, sell_prob: float = 0.3, seed: int | None = None):
         """
         Initialize random signal generator
 
@@ -341,9 +343,9 @@ class WeightedVotingSignalGenerator(SignalGenerator):
                 signal = generator.generate_signal(df, index, regime)
                 if signal.confidence >= self.min_confidence:
                     signals.append((signal, weight))
-            except Exception as e:
+            except (ValueError, KeyError, IndexError) as e:
                 # Log error but continue with other generators
-                print(f"Warning: Generator {generator.name} failed: {e}")
+                logger.warning("Generator %s failed: %s", generator.name, e, exc_info=False)
                 continue
 
         if not signals:
@@ -438,13 +440,21 @@ class WeightedVotingSignalGenerator(SignalGenerator):
                 if confidence >= self.min_confidence:
                     confidences.append(confidence * weight)
                     total_weight += weight
-            except Exception:
+            except (ValueError, IndexError, KeyError):
+                # Generator failed - skip and continue with others
                 continue
 
         if not confidences or total_weight == 0:
             return 0.0
 
         return sum(confidences) / total_weight
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the maximum warmup period required by any child generator."""
+        if not self.generators:
+            return 0
+        return max(gen.warmup_period for gen in self.generators)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get weighted voting parameters"""
@@ -508,7 +518,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
         # Get primary signal
         try:
             primary_signal = self.primary_generator.generate_signal(df, index, regime)
-        except Exception as e:
+        except (ValueError, KeyError, IndexError) as e:
             # Primary failed, use secondary as fallback
             try:
                 secondary_signal = self.secondary_generator.generate_signal(df, index, regime)
@@ -520,7 +530,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
                     }
                 )
                 return secondary_signal
-            except Exception as e2:
+            except (ValueError, KeyError, IndexError) as e2:
                 # Both failed, return HOLD
                 return Signal(
                     direction=SignalDirection.HOLD,
@@ -548,7 +558,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
                     }
                 )
                 return secondary_signal
-            except Exception:
+            except (ValueError, IndexError, KeyError):
                 # Secondary failed, return low-confidence primary
                 primary_signal.metadata.update(
                     {
@@ -570,7 +580,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
         # Confirmation mode: get secondary signal for confirmation
         try:
             secondary_signal = self.secondary_generator.generate_signal(df, index, regime)
-        except Exception:
+        except (ValueError, IndexError, KeyError):
             # Secondary failed, return primary anyway
             primary_signal.metadata.update(
                 {
@@ -601,40 +611,37 @@ class HierarchicalSignalGenerator(SignalGenerator):
                     "secondary_strength": secondary_signal.strength,
                 },
             )
-        else:
-            # Not confirmed: return HOLD or weaker signal based on confidence
-            if primary_signal.confidence > secondary_signal.confidence * 1.5:
-                # Primary much stronger, use it but reduce confidence
-                return Signal(
-                    direction=primary_signal.direction,
-                    strength=primary_signal.strength
-                    * 0.7,  # Reduce strength due to lack of confirmation
-                    confidence=primary_signal.confidence * 0.8,  # Reduce confidence
-                    metadata={
-                        "generator": self.name,
-                        "index": index,
-                        "mode": "unconfirmed_primary",
-                        "primary_confidence": primary_signal.confidence,
-                        "secondary_confidence": secondary_signal.confidence,
-                    },
-                )
-            else:
-                # Conflicting signals, return HOLD
-                return Signal(
-                    direction=SignalDirection.HOLD,
-                    strength=0.0,
-                    confidence=(primary_signal.confidence + secondary_signal.confidence)
-                    / 4,  # Low confidence
-                    metadata={
-                        "generator": self.name,
-                        "index": index,
-                        "mode": "conflicting_signals",
-                        "primary_direction": primary_signal.direction.value,
-                        "secondary_direction": secondary_signal.direction.value,
-                        "primary_confidence": primary_signal.confidence,
-                        "secondary_confidence": secondary_signal.confidence,
-                    },
-                )
+        if primary_signal.confidence > secondary_signal.confidence * 1.5:
+            # Not confirmed but primary much stronger, use it with reduced confidence
+            return Signal(
+                direction=primary_signal.direction,
+                strength=primary_signal.strength
+                * 0.7,  # Reduce strength due to lack of confirmation
+                confidence=primary_signal.confidence * 0.8,  # Reduce confidence
+                metadata={
+                    "generator": self.name,
+                    "index": index,
+                    "mode": "unconfirmed_primary",
+                    "primary_confidence": primary_signal.confidence,
+                    "secondary_confidence": secondary_signal.confidence,
+                },
+            )
+        # Conflicting signals, return HOLD
+        return Signal(
+            direction=SignalDirection.HOLD,
+            strength=0.0,
+            confidence=(primary_signal.confidence + secondary_signal.confidence)
+            / 4,  # Low confidence
+            metadata={
+                "generator": self.name,
+                "index": index,
+                "mode": "conflicting_signals",
+                "primary_direction": primary_signal.direction.value,
+                "secondary_direction": secondary_signal.direction.value,
+                "primary_confidence": primary_signal.confidence,
+                "secondary_confidence": secondary_signal.confidence,
+            },
+        )
 
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
         """Get confidence based on primary generator with secondary fallback"""
@@ -644,14 +651,21 @@ class HierarchicalSignalGenerator(SignalGenerator):
             primary_confidence = self.primary_generator.get_confidence(df, index)
             if primary_confidence >= self.min_primary_confidence:
                 return primary_confidence
-        except Exception:
+        except (ValueError, IndexError, KeyError):
+            # Primary generator failed - fall through to secondary generator
             pass
 
         # Primary failed or low confidence, try secondary
         try:
             return self.secondary_generator.get_confidence(df, index)
-        except Exception:
+        except (ValueError, IndexError, KeyError):
+            # Both generators failed - return zero confidence
             return 0.0
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the maximum warmup period required by primary or secondary generator."""
+        return max(self.primary_generator.warmup_period, self.secondary_generator.warmup_period)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get hierarchical signal generator parameters"""
@@ -712,7 +726,7 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
 
         try:
             signal = generator.generate_signal(df, index, regime)
-        except Exception as e:
+        except (ValueError, KeyError, IndexError) as e:
             # Selected generator failed, try default
             try:
                 signal = self.default_generator.generate_signal(df, index, regime)
@@ -724,7 +738,7 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
                         "error": str(e),
                     }
                 )
-            except Exception as e2:
+            except (ValueError, KeyError, IndexError) as e2:
                 # Default also failed, return HOLD
                 return Signal(
                     direction=SignalDirection.HOLD,
@@ -764,7 +778,8 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
         # Without regime context, use default generator
         try:
             return self.default_generator.get_confidence(df, index)
-        except Exception:
+        except (ValueError, IndexError, KeyError):
+            # Generator failed - return zero confidence
             return 0.0
 
     def _select_generator(self, regime: Optional["RegimeContext"]) -> SignalGenerator:
@@ -808,12 +823,17 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
 
         if regime_conf > 0.8:
             return 1.1  # Boost confidence in high-confidence regimes
-        elif regime_conf > 0.6:
+        if regime_conf > 0.6:
             return 1.0  # Normal confidence
-        elif regime_conf > 0.4:
+        if regime_conf > 0.4:
             return 0.9  # Slight reduction
-        else:
-            return 0.7  # Significant reduction in low-confidence regimes
+        return 0.7  # Significant reduction in low-confidence regimes
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the maximum warmup period required by any regime generator or default."""
+        all_generators = [*self.regime_generators.values(), self.default_generator]
+        return max(gen.warmup_period for gen in all_generators)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive signal generator parameters"""
@@ -827,3 +847,140 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
             }
         )
         return params
+
+
+class CircuitBreakerSignalGenerator(SignalGenerator):
+    """
+    Signal generator wrapper with circuit breaker protection.
+
+    Protects against repeated failures in signal generation by implementing
+    the circuit breaker pattern. After N consecutive failures, the circuit
+    opens and returns safe fallback signals until recovery timeout.
+
+    This prevents cascading failures and ensures the trading loop remains
+    responsive even when a signal generator is experiencing persistent issues.
+    """
+
+    def __init__(
+        self,
+        wrapped_generator: SignalGenerator,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        fallback_generator: SignalGenerator | None = None,
+    ):
+        """Initialize circuit breaker wrapper.
+
+        Args:
+            wrapped_generator: Signal generator to protect.
+            failure_threshold: Failures before opening circuit (default: 5).
+            recovery_timeout: Seconds before testing recovery (default: 60s).
+            fallback_generator: Optional fallback when circuit is open
+                               (defaults to HoldSignalGenerator).
+        """
+        super().__init__(f"circuit_breaker_{wrapped_generator.name}")
+
+        if wrapped_generator is None:
+            raise ValueError("wrapped_generator cannot be None")
+
+        self.wrapped_generator = wrapped_generator
+        self.fallback_generator = fallback_generator or HoldSignalGenerator()
+
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=failure_threshold,
+            recovery_timeout=recovery_timeout,
+            expected_exception=Exception,  # Catch all exceptions
+            name=f"signal_gen_{wrapped_generator.name}",
+        )
+
+    def generate_signal(
+        self, df: pd.DataFrame, index: int, regime: Optional["RegimeContext"] = None
+    ) -> Signal:
+        """Generate signal with circuit breaker protection.
+
+        Returns:
+            Signal from wrapped generator if circuit is closed,
+            or fallback signal if circuit is open.
+        """
+        self.validate_inputs(df, index)
+
+        try:
+            # Try to call wrapped generator through circuit breaker
+            return self.circuit_breaker.call(
+                self.wrapped_generator.generate_signal, df, index, regime
+            )
+        except CircuitBreakerError as e:
+            # Circuit is open, use fallback
+            logger.warning(
+                "Circuit breaker open for %s, using fallback: %s",
+                self.wrapped_generator.name,
+                str(e),
+            )
+            fallback_signal = self.fallback_generator.generate_signal(df, index, regime)
+            fallback_signal.metadata.update(
+                {
+                    "circuit_breaker": "open",
+                    "wrapped_generator": self.wrapped_generator.name,
+                    "circuit_stats": self.circuit_breaker.get_stats(),
+                }
+            )
+            return fallback_signal
+        except Exception as e:
+            # Unexpected error in fallback path
+            logger.exception(
+                "Error in circuit breaker signal generation for %s",
+                self.wrapped_generator.name,
+            )
+            # Return safe HOLD signal
+            return Signal(
+                direction=SignalDirection.HOLD,
+                strength=0.0,
+                confidence=0.0,
+                metadata={
+                    "generator": self.name,
+                    "index": index,
+                    "error": str(e),
+                    "reason": "circuit_breaker_fallback_failed",
+                },
+            )
+
+    def get_confidence(self, df: pd.DataFrame, index: int) -> float:
+        """Get confidence with circuit breaker protection."""
+        self.validate_inputs(df, index)
+
+        try:
+            return self.circuit_breaker.call(self.wrapped_generator.get_confidence, df, index)
+        except CircuitBreakerError:
+            # Circuit is open, use fallback confidence
+            return self.fallback_generator.get_confidence(df, index)
+        except (ValueError, IndexError, KeyError):
+            # Generator calculation failed - return zero confidence
+            return 0.0
+
+    def reset_circuit(self) -> None:
+        """Manually reset the circuit breaker to CLOSED state."""
+        self.circuit_breaker.reset()
+
+    def get_circuit_stats(self) -> dict[str, Any]:
+        """Get current circuit breaker statistics."""
+        return self.circuit_breaker.get_stats()
+
+    def get_parameters(self) -> dict[str, Any]:
+        """Get circuit breaker signal generator parameters."""
+        params = super().get_parameters()
+        params.update(
+            {
+                "wrapped_generator": self.wrapped_generator.name,
+                "fallback_generator": self.fallback_generator.name,
+                "circuit_breaker_stats": self.circuit_breaker.get_stats(),
+            }
+        )
+        return params
+
+    @property
+    def warmup_period(self) -> int:
+        """Return warmup period from wrapped generator."""
+        return self.wrapped_generator.warmup_period
+
+    def get_feature_generators(self) -> Sequence["FeatureGeneratorSpec"]:
+        """Return feature generators from wrapped generator."""
+        return self.wrapped_generator.get_feature_generators()

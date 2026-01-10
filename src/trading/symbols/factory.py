@@ -28,12 +28,18 @@ class SymbolFactory:
         if exchange == "binance":
             # Convert 'BTC-USD' or 'BTC/USD' to 'BTCUSDT'
             if "-" in symbol:
-                base, quote = symbol.split("-")
+                parts = symbol.split("-")
+                if len(parts) != 2:
+                    raise ValueError(f"Invalid symbol format '{symbol}': expected 'BASE-QUOTE'")
+                base, quote = parts
                 if quote == "USD":
                     quote = "USDT"  # Binance uses USDT
                 return f"{base}{quote}"
             if "/" in symbol:
-                base, quote = symbol.split("/")
+                parts = symbol.split("/")
+                if len(parts) != 2:
+                    raise ValueError(f"Invalid symbol format '{symbol}': expected 'BASE/QUOTE'")
+                base, quote = parts
                 if quote == "USD":
                     quote = "USDT"
                 return f"{base}{quote}"
@@ -48,7 +54,10 @@ class SymbolFactory:
                 base = symbol[:-3]
                 return f"{base}-USD"
             if "/" in symbol:
-                base, quote = symbol.split("/")
+                parts = symbol.split("/")
+                if len(parts) != 2:
+                    raise ValueError(f"Invalid symbol format '{symbol}': expected 'BASE/QUOTE'")
+                base, quote = parts
                 return f"{base}-{quote}"
             if "-" in symbol:
                 return symbol
