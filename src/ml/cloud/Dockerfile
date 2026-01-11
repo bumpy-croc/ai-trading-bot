@@ -1,8 +1,9 @@
 # SageMaker Training Container for AI Trading Bot
 # Uses official TensorFlow GPU image as base
 
-# Base image: TensorFlow 2.15 GPU with Python 3.11
-FROM tensorflow/tensorflow:2.15.0-gpu
+# Base image: TensorFlow 2.15 CPU with Python 3.11
+# CPU version is more stable for SageMaker training
+FROM tensorflow/tensorflow:2.15.0
 
 # Metadata
 LABEL maintainer="AI Trading Bot"
@@ -18,20 +19,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy requirements and install Python dependencies
 COPY src/ml/cloud/requirements-cloud.txt /opt/ml/code/
-RUN pip install --no-cache-dir -r requirements-cloud.txt
+# Ignore blinker (pre-installed in TensorFlow image as distutils)
+RUN pip install --no-cache-dir --ignore-installed blinker -r requirements-cloud.txt
 
 # Copy source code
 # We copy the entire src/ directory to maintain imports
 COPY src/ /opt/ml/code/src/
+
+# Copy CLI directory (needed by training pipeline)
+COPY cli/ /opt/ml/code/cli/
 COPY pyproject.toml /opt/ml/code/
 
-# Install the package in development mode
-# Use --ignore-installed to avoid conflicts with base image packages
-RUN pip install --no-cache-dir --ignore-installed blinker -e .
+# NOTE: Skip installing ai-trading-bot package to avoid numpy ABI incompatibility
+# The source code is available via PYTHONPATH
+# RUN pip install --no-cache-dir --ignore-installed blinker .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/opt/ml/code:$PYTHONPATH \
+    PYTHONPATH=/opt/ml/code:/opt/ml/code/cli \
     # Disable TensorFlow warnings
     TF_CPP_MIN_LOG_LEVEL=2 \
     # Enable GPU memory growth

@@ -76,6 +76,7 @@ class CloudTrainingConfig:
         job_name_prefix: Prefix for job names (helps with filtering in console)
         auto_sync_artifacts: Automatically sync artifacts to local registry on completion
         docker_image_uri: ECR image URI for training container (provider-specific)
+        input_data_s3_uri: Optional S3 URI for pre-downloaded training data (avoids API blocking)
     """
 
     training_config: TrainingConfig
@@ -85,6 +86,7 @@ class CloudTrainingConfig:
     job_name_prefix: str = "atb-training"
     auto_sync_artifacts: bool = True
     docker_image_uri: str | None = None
+    input_data_s3_uri: str | None = None
 
     @classmethod
     def from_env(cls, training_config: TrainingConfig) -> CloudTrainingConfig:

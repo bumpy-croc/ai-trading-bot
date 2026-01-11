@@ -32,6 +32,7 @@ class TrainingJobSpec:
         use_spot_instances: Use spot/preemptible instances for cost savings
         max_runtime_seconds: Maximum job runtime before timeout
         output_s3_path: S3 path for model output artifacts
+        input_data_s3_uri: Optional S3 URI for pre-downloaded training data
         hyperparameters: Additional hyperparameters to pass to training script
     """
 
@@ -46,6 +47,7 @@ class TrainingJobSpec:
     use_spot_instances: bool
     max_runtime_seconds: int
     output_s3_path: str
+    input_data_s3_uri: str | None = None
     hyperparameters: dict[str, Any] = field(default_factory=dict)
 
     def to_hyperparameters(self) -> dict[str, str]:

@@ -233,6 +233,7 @@ class CloudTrainingOrchestrator:
             use_spot_instances=ic.use_spot_instances,
             max_runtime_seconds=self.config.max_runtime_seconds,
             output_s3_path=sc.model_uri,
+            input_data_s3_uri=self.config.input_data_s3_uri,
             hyperparameters={
                 "force_sentiment": str(tc.force_sentiment).lower(),
                 "force_price_only": str(tc.force_price_only).lower(),

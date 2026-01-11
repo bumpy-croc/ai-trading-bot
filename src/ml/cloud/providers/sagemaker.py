@@ -305,6 +305,21 @@ class SageMakerProvider(CloudTrainingProvider):
             },
         }
 
+        # Add input data configuration if S3 URI provided
+        if spec.input_data_s3_uri:
+            params["InputDataConfig"] = [
+                {
+                    "ChannelName": "training",
+                    "DataSource": {
+                        "S3DataSource": {
+                            "S3DataType": "S3Prefix",
+                            "S3Uri": spec.input_data_s3_uri,
+                            "S3DataDistributionType": "FullyReplicated",
+                        }
+                    },
+                }
+            ]
+
         # Enable managed spot training for cost savings
         if spec.use_spot_instances:
             params["EnableManagedSpotTraining"] = True

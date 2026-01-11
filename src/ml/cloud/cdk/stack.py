@@ -40,6 +40,11 @@ ACTION_SETS = {
         "ecr:ListImages",
         "ecr:BatchDeleteImage",
     ],
+    "ecr_pull": [
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:BatchCheckLayerAvailability",
+    ],
 }
 
 
@@ -95,6 +100,20 @@ class MlCloudTrainingStack(Stack):
             iam.PolicyStatement(
                 actions=ACTION_SETS["logs"],
                 resources=[self._sagemaker_log_group_arn()],
+            )
+        )
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["ecr:GetAuthorizationToken"],
+                resources=["*"],
+            )
+        )
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=ACTION_SETS["ecr_pull"],
+                resources=[
+                    f"arn:aws:ecr:{self.region}:{self.account}:repository/ai-trading-bot-training"
+                ],
             )
         )
 
