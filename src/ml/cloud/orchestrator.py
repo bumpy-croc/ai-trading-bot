@@ -6,7 +6,9 @@ upload data → submit job → wait → download artifacts → sync to registry.
 
 from __future__ import annotations
 
+import argparse
 import logging
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,6 +105,63 @@ class CloudTrainingOrchestrator:
             duration_seconds=perf_counter() - start_time,
         )
 
+    def _prepare_training_data(self) -> str | None:
+        """Download training data locally and upload to S3.
+
+        This step is required because Binance API blocks requests from AWS IP addresses.
+        Data is downloaded fresh from Binance (no cache) and uploaded to S3
+        for SageMaker to use as input channel.
+
+        Returns:
+            S3 URI of uploaded data, or None if input_data_s3_uri was already set
+
+        Raises:
+            RuntimeError: If data download or upload fails
+        """
+        # Skip if S3 URI already provided by user
+        if self.config.input_data_s3_uri:
+            logger.info(f"Using provided S3 data URI: {self.config.input_data_s3_uri}")
+            return None
+
+        from cli.commands.data import _download
+
+        tc = self.config.training_config
+
+        logger.info(f"Downloading {tc.symbol} data from Binance (fresh, no cache)...")
+
+        # Create temp directory for downloads
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Download data from Binance using existing CLI function
+            args = argparse.Namespace(
+                symbol=tc.symbol,
+                timeframe=tc.timeframe,
+                start_date=tc.start_date.strftime("%Y-%m-%d"),
+                end_date=tc.end_date.strftime("%Y-%m-%d"),
+                output_dir=tmpdir,
+                format="csv",
+            )
+
+            if _download(args) != 0:
+                raise RuntimeError("Failed to download training data from Binance")
+
+            # Find downloaded file
+            data_files = list(Path(tmpdir).glob("*.csv"))
+            if not data_files:
+                raise RuntimeError("No data files found after download")
+
+            logger.info(f"Downloaded {len(data_files)} file(s)")
+
+            # Upload to S3 using existing artifact manager
+            logger.info(f"Uploading training data to S3 bucket {self.config.storage_config.s3_bucket}...")
+            s3_uri = self.s3_manager.upload_training_data(
+                symbol=tc.symbol,
+                timeframe=tc.timeframe,
+                data_files=data_files,
+            )
+
+            logger.info(f"Training data uploaded to {s3_uri}")
+            return s3_uri
+
     def run_training(self, wait: bool = True) -> CloudTrainingResult:
         """Execute complete cloud training workflow.
 
@@ -116,12 +175,19 @@ class CloudTrainingOrchestrator:
         start_time = perf_counter()
 
         try:
+            # Step 0: Download training data and upload to S3
+            # This is required because Binance API blocks AWS IP addresses
+            logger.info("Step 0/5: Preparing training data...")
+            s3_uri = self._prepare_training_data()
+            if s3_uri:
+                self.config.input_data_s3_uri = s3_uri
+
             # Step 1: Build job specification
-            logger.info("Step 1/4: Building training job specification...")
+            logger.info("Step 1/5: Building training job specification...")
             job_spec = self._build_job_spec()
 
             # Step 2: Submit training job
-            logger.info(f"Step 2/4: Submitting job to {self.provider.provider_name}...")
+            logger.info(f"Step 2/5: Submitting job to {self.provider.provider_name}...")
             job_id = self.provider.submit_training_job(job_spec)
             logger.info(f"Job submitted: {job_id}")
 
@@ -136,7 +202,7 @@ class CloudTrainingOrchestrator:
                 )
 
             # Step 3: Wait for completion
-            logger.info("Step 3/4: Waiting for job completion...")
+            logger.info("Step 3/5: Waiting for job completion...")
             status = self._wait_for_completion(job_id)
 
             if not status.is_successful:
@@ -145,7 +211,7 @@ class CloudTrainingOrchestrator:
                 )
 
             # Step 4: Sync artifacts to local registry
-            logger.info("Step 4/4: Syncing artifacts to local registry...")
+            logger.info("Step 4/5: Syncing artifacts to local registry...")
             artifact_path = self._sync_artifacts(job_id, status.output_s3_path)
 
             duration = perf_counter() - start_time
