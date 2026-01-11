@@ -386,8 +386,13 @@ class CloudTrainingOrchestrator:
             # Download from provider (S3 for cloud, local path for local provider)
             artifact_path = self.provider.download_artifacts(job_id, temp_dir)
 
-            # Determine version ID from metadata
-            metadata_path = artifact_path / "metadata.json"
+            # SageMaker training creates nested structure: SYMBOL/TYPE/VERSION/*
+            # Find the actual model artifacts directory
+            actual_artifact_path = self._find_artifacts_root(artifact_path)
+            logger.info(f"Found artifacts at: {actual_artifact_path}")
+
+            # Determine version ID and model type from metadata
+            metadata_path = actual_artifact_path / "metadata.json"
             if metadata_path.exists():
                 import json
 
@@ -405,24 +410,15 @@ class CloudTrainingOrchestrator:
             local_registry = get_project_root() / "src" / "ml" / "models"
             symbol = self.config.training_config.symbol.upper()
 
-            # For local provider, artifacts are already on the filesystem
-            if self.provider.provider_name == "local":
-                final_path = self._sync_local_artifacts(
-                    artifact_path=artifact_path,
-                    local_registry=local_registry,
-                    symbol=symbol,
-                    model_type=model_type,
-                    version_id=version_id,
-                )
-            else:
-                final_path = self.s3_manager.sync_to_local_registry(
-                    s3_uri=s3_output_path,
-                    local_registry=local_registry,
-                    symbol=symbol,
-                    model_type=model_type,
-                    version_id=version_id,
-                    update_latest=True,
-                )
+            # Artifacts are already extracted locally by provider.download_artifacts()
+            # Use _sync_local_artifacts for both local and cloud providers
+            final_path = self._sync_local_artifacts(
+                artifact_path=actual_artifact_path,
+                local_registry=local_registry,
+                symbol=symbol,
+                model_type=model_type,
+                version_id=version_id,
+            )
 
             return final_path
 
@@ -433,6 +429,35 @@ class CloudTrainingOrchestrator:
 
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def _find_artifacts_root(self, artifact_path: Path) -> Path:
+        """Find the actual model artifacts directory.
+
+        SageMaker training creates a nested structure: SYMBOL/TYPE/VERSION/*
+        This method finds the directory containing the actual model files.
+
+        Args:
+            artifact_path: Extracted artifacts path (may be nested)
+
+        Returns:
+            Path to the directory containing model files
+        """
+        # Check if metadata.json exists at the root (local provider or flat structure)
+        if (artifact_path / "metadata.json").exists():
+            return artifact_path
+
+        # Look for nested structure: SYMBOL/TYPE/VERSION/*
+        # This happens when SageMaker saves with full registry path
+        for candidate in artifact_path.rglob("metadata.json"):
+            # Find the parent directory that contains model files
+            parent = candidate.parent
+            if (parent / "model.keras").exists() or (parent / "model.onnx").exists():
+                logger.info(f"Found nested artifacts at: {parent}")
+                return parent
+
+        # No valid structure found, return as-is
+        logger.warning(f"Could not find metadata.json in artifacts, using root: {artifact_path}")
+        return artifact_path
+
     def _sync_local_artifacts(
         self,
         artifact_path: Path,
@@ -441,9 +466,10 @@ class CloudTrainingOrchestrator:
         model_type: str,
         version_id: str,
     ) -> Path:
-        """Sync locally trained artifacts to model registry.
+        """Sync downloaded artifacts to model registry.
 
-        Used when training on local provider (no S3 needed).
+        Used for both local and cloud providers after artifacts are downloaded
+        and extracted to a local directory (by provider.download_artifacts()).
 
         Args:
             artifact_path: Local path to trained artifacts
