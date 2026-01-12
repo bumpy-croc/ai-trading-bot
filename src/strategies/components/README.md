@@ -492,6 +492,8 @@ Comprehensive performance tracking and analysis system.
 
 **Usage**:
 ```python
+from datetime import UTC, datetime
+
 from src.strategies.components import PerformanceTracker
 
 # Create performance tracker

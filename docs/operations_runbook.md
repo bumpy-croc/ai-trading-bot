@@ -1,6 +1,6 @@
 # Operations Runbook
 
-**Last Updated:** 2025-11-21
+**Last Updated:** 2026-01-12
 **Version:** 1.0
 
 This runbook provides operational procedures, troubleshooting guides, and recovery strategies for the AI Trading Bot in production environments.
@@ -108,11 +108,13 @@ atb db verify
 
 **Test exchange connectivity:**
 ```bash
-# Smoke test Binance download (writes a small CSV under ./data by default)
+# Smoke test download (uses CCXT). Note that Binance may block this endpoint from
+# restricted locations.
 atb tests download
 
-# Optional: direct download helper (Binance / USDT pairs only)
-atb data download BTCUSDT --timeframe 1h --start_date 2024-01-01T00:00:00Z --end_date 2024-01-02T00:00:00Z --format csv
+# If CCXT download fails (for example due to regional restrictions), prefer a
+# cache warmup through `BinanceProvider` (geo-aware endpoint selection):
+atb data prefill-cache --symbols BTCUSDT --timeframes 1d --start 2025-12-20 --end 2025-12-25
 
 # Optional: basic external connectivity probes
 curl -I https://api.binance.com/api/v3/ping
@@ -352,7 +354,7 @@ grep "stop_loss" logs/trading.log | tail -50
 **Diagnosis:**
 ```bash
 # Check account history
-psql "$DATABASE_URL" -c "SELECT * FROM account_balances ORDER BY timestamp DESC LIMIT 20;"
+psql "$DATABASE_URL" -c "SELECT total_balance, available_balance, reserved_balance, last_updated FROM account_balances ORDER BY last_updated DESC LIMIT 20;"
 
 # Check trade history
 psql "$DATABASE_URL" -c "SELECT * FROM trades ORDER BY exit_time DESC LIMIT 20;"
@@ -405,7 +407,7 @@ grep "LiveTradingEngine" logs/trading.log | tail -50
 
 #### Step 3: Verify System Health
 - [ ] Database connectivity (`atb db verify`)
-- [ ] API connectivity (`atb tests download` or `atb data download ...`)
+- [ ] API connectivity (`atb tests download` or `atb data prefill-cache ...`)
 - [ ] Disk space (`df -h`)
 - [ ] Memory usage (`free -h`)
 - [ ] Network connectivity (`ping api.binance.com`)
@@ -585,8 +587,8 @@ psql "$DATABASE_URL" -c "SELECT query, mean_exec_time FROM pg_stat_statements OR
 ### Cache Optimization
 
 ```bash
-# Clear old cache entries
-atb data cache-manager clear-old --hours 48
+# Clear cached market data (default cache dir: cache/market_data)
+rm -f cache/market_data/*.parquet
 
 # Prefill cache for faster backtests
 atb data prefill-cache --symbols BTCUSDT ETHUSDT --timeframes 1h 4h --years 2
@@ -719,7 +721,8 @@ if ! atb db verify > /dev/null 2>&1; then
 fi
 
 # Check drawdown
-DRAWDOWN=$(psql "$DATABASE_URL" -t -A -c "SELECT (peak_balance - current_balance) / NULLIF(peak_balance, 0) FROM trading_sessions ORDER BY start_time DESC LIMIT 1;")
+# Uses the latest persisted `account_history.drawdown` snapshot for the most recent session.
+DRAWDOWN=$(psql "$DATABASE_URL" -t -A -c "SELECT COALESCE((SELECT drawdown FROM account_history WHERE session_id = (SELECT id FROM trading_sessions ORDER BY start_time DESC LIMIT 1) ORDER BY timestamp DESC LIMIT 1), 0);")
 if (( $(echo "$DRAWDOWN > 0.15" | bc -l) )); then
     echo "WARNING: High drawdown detected: $DRAWDOWN" | mail -s "Trading Alert" admin@example.com
 fi
@@ -840,8 +843,7 @@ ORDER BY trade_date DESC;
 - Review documentation
 
 **Tier 2 - Community:**
-- GitHub Issues: https://github.com/bumpy-croc/ai-trading-bot/issues
-- Discord/Slack community
+- GitHub Issues: `https://github.com/bumpy-croc/ai-trading-bot/issues`
 
 **Tier 3 - Emergency:**
 - For critical production issues
