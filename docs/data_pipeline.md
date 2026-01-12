@@ -1,6 +1,6 @@
 # Data pipeline
 
-> **Last Updated**: 2025-11-18  
+> **Last Updated**: 2026-01-12  
 > **Related Documentation**: [Backtesting](backtesting.md), [Configuration](configuration.md)
 
 Market, sentiment, and cached data access lives under `src/data_providers`. The system exposes a consistent `DataProvider`
@@ -24,14 +24,14 @@ and the live trading engine accept an optional `SentimentDataProvider` to enrich
 
 ## Cached access
 
-`CachedDataProvider` wraps any market provider and persists yearly partitions as zipped Parquet files (see
+`CachedDataProvider` wraps any market provider and persists yearly partitions as `.parquet` files (see
 `src/data_providers/cached_data_provider.py`). Each partition uses a deterministic hash-based filename so the CLI cache tools can
 identify duplicates quickly even when multiple processes are warming the cache. Cached entries remain valid forever for completed
 calendar years and respect a configurable TTL (24 hours by default) for the current year. If the default cache directory cannot be
 created, the helper falls back to a project-local temporary directory instead of silently disabling caching.
 
 ```python
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
@@ -49,14 +49,19 @@ Cache metadata (file count, disk usage, entry age) is exposed through `get_cache
 The `atb data` command family in `cli/commands/data.py` covers the most common workflows:
 
 - `atb data download BTCUSDT --timeframe 1h --start_date 2024-01-01 --end_date 2024-03-01` – export a CSV/Feather dataset via CCXT without
-  touching the cache (both `--start_date` and `--end_date` are optional; omit `--end_date` to pull through “now”).
+  touching the cache (both `--start_date` and `--end_date` are optional; omit `--end_date` to pull through “now”). Note that Binance
+  may block the CCXT endpoint from restricted locations; if this command fails, use `prefill-cache`/`preload-offline` instead because
+  those flows go through `BinanceProvider` and select a geo-appropriate endpoint automatically.
 - `atb data prefill-cache --symbols BTCUSDT ETHUSDT --timeframes 1h 4h --years 3` – eagerly fetches year chunks so backtests can
   run offline.
 - `atb data preload-offline --symbols BTCUSDT --timeframes 1h --years-back 10 --test-offline` – ensures the cache contains enough
   history for air-gapped environments, optionally forcing refreshes with `--force-refresh`, and verifies offline reads when
   `--test-offline` is set.
 - `atb data cache-manager info|list|clear|clear-old` – inspect, reset, or prune cached files. The commands reuse
-  `CachedDataProvider` instrumentation and normalise output sizes/timestamps for easier monitoring.
+  `CachedDataProvider` instrumentation and normalise output sizes/timestamps for easier monitoring. Note that `info` reflects the
+  current `.parquet` cache format; `list`/`clear`/`clear-old` may not show `.parquet` files in all environments, so deleting
+  `cache/market_data/*.parquet` (or passing `--cache-dir` and deleting that directory’s `.parquet` files) is the most reliable
+  cleanup option today.
 - `atb data populate-dummy --trades 100 --confirm` – write deterministic mock trades/positions into PostgreSQL so dashboards have
   data even before the first real session runs.
 

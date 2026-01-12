@@ -1,6 +1,6 @@
 # System Architecture
 
-> **Last Updated**: 2025-12-26
+> **Last Updated**: 2026-01-12
 > **Maintainer Note**: This is a living document. Update after major architectural changes or new component additions. Use the `/update-docs` command to keep this in sync.
 
 ---
@@ -388,6 +388,8 @@ The performance tracking system follows a clean three-layer architecture:
 
 **Usage Example:**
 ```python
+from datetime import UTC, datetime
+
 from src.performance.tracker import PerformanceTracker
 
 # Initialize
@@ -418,7 +420,7 @@ print(f"Win Rate: {metrics.win_rate * 100:.1f}%")
 | `account_history` | Balance snapshots |
 | `performance_metrics` | Aggregated metrics (Sharpe, drawdown) |
 
-**Migrations:** Managed via Alembic (`alembic upgrade head`)
+**Migrations:** Managed via Alembic (CLI: `atb db migrate`)
 
 ---
 

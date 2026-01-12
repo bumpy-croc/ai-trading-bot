@@ -49,8 +49,8 @@ export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_
 - Verify:
 ```bash
 atb db verify
-# optional migrations (tables are auto-created if missing)
-alembic upgrade head
+# Apply migrations (recommended when running against an existing DB)
+atb db migrate
 ```
 
 3) Backtest
@@ -87,8 +87,9 @@ PORT=8000 atb live-health -- ml_basic --paper-trading
 ```bash
 # Cache tools
 atb data cache-manager info
-atb data cache-manager list --detailed
-atb data cache-manager clear-old --hours 24
+# Cache files are stored under `cache/market_data/` by default.
+# To remove cached market data, delete the `.parquet` files:
+rm -f cache/market_data/*.parquet
 
 # Prefill cache for faster backtests
 atb data prefill-cache --symbols BTCUSDT ETHUSDT --timeframes 1h 4h --years 4
