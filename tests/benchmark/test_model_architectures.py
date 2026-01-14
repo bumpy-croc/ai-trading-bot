@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import pytest
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,6 @@ logger = logging.getLogger(__name__)
 pytest.importorskip("tensorflow")
 
 from src.ml.training_pipeline.datasets import build_tf_datasets, create_sequences, split_sequences
-from src.ml.training_pipeline.features import create_robust_features
 from src.ml.training_pipeline.models import create_model, get_model_callbacks
 
 
@@ -113,13 +111,16 @@ def calculate_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_pred: Predicted values
 
     Returns:
-        MAPE as percentage
+        MAPE as percentage. Returns infinity if all true values are zero.
     """
     y_true = y_true.flatten()
     y_pred = y_pred.flatten()
 
     # Avoid division by zero
     mask = y_true != 0
+    if not np.any(mask):
+        # All true values are zero - return maximum error
+        return float("inf")
     mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
     return mape
@@ -316,7 +317,7 @@ def test_cnn_lstm_baseline(benchmark_data, benchmark_config):
         "cnn_lstm", "default", X_train, y_train, X_val, y_val, benchmark_config
     )
 
-    logger.info(f"CNN-LSTM Baseline Results:")
+    logger.info("CNN-LSTM Baseline Results:")
     logger.info(f"  Train time: {result.train_time_seconds:.2f}s")
     logger.info(f"  Inference: {result.inference_time_ms:.2f}ms")
     logger.info(f"  RMSE: {result.rmse:.4f}")
@@ -338,7 +339,7 @@ def test_attention_lstm_performance(benchmark_data, benchmark_config):
         "attention_lstm", "default", X_train, y_train, X_val, y_val, benchmark_config
     )
 
-    logger.info(f"Attention-LSTM Results:")
+    logger.info("Attention-LSTM Results:")
     logger.info(f"  Train time: {result.train_time_seconds:.2f}s")
     logger.info(f"  Inference: {result.inference_time_ms:.2f}ms")
     logger.info(f"  RMSE: {result.rmse:.4f}")
@@ -357,7 +358,7 @@ def test_tcn_performance(benchmark_data, benchmark_config):
     X_train, y_train, X_val, y_val = benchmark_data
     result = benchmark_model("tcn", "default", X_train, y_train, X_val, y_val, benchmark_config)
 
-    logger.info(f"TCN Results:")
+    logger.info("TCN Results:")
     logger.info(f"  Train time: {result.train_time_seconds:.2f}s")
     logger.info(f"  Inference: {result.inference_time_ms:.2f}ms")
     logger.info(f"  RMSE: {result.rmse:.4f}")
@@ -394,15 +395,21 @@ def test_attention_lstm_vs_baseline(benchmark_data, benchmark_config):
     rmse_improvement = ((baseline_result.rmse - attention_result.rmse) / baseline_result.rmse) * 100
     da_improvement = attention_result.directional_accuracy - baseline_result.directional_accuracy
 
-    logger.info(f"\n=== Attention-LSTM vs CNN-LSTM Comparison ===")
+    logger.info("\n=== Attention-LSTM vs CNN-LSTM Comparison ===")
     logger.info(f"MAE Improvement: {mae_improvement:+.2f}%")
     logger.info(f"RMSE Improvement: {rmse_improvement:+.2f}%")
     logger.info(f"Directional Accuracy Improvement: {da_improvement:+.2f}%")
-    logger.info(f"Training Time Ratio: {attention_result.train_time_seconds / baseline_result.train_time_seconds:.2f}x")
+    logger.info(
+        f"Training Time Ratio: {attention_result.train_time_seconds / baseline_result.train_time_seconds:.2f}x"
+    )
 
     # Log detailed comparison
-    logger.info(f"\nBaseline (CNN-LSTM): MAE={baseline_result.mae:.4f}, RMSE={baseline_result.rmse:.4f}")
-    logger.info(f"Attention-LSTM:      MAE={attention_result.mae:.4f}, RMSE={attention_result.rmse:.4f}")
+    logger.info(
+        f"\nBaseline (CNN-LSTM): MAE={baseline_result.mae:.4f}, RMSE={baseline_result.rmse:.4f}"
+    )
+    logger.info(
+        f"Attention-LSTM:      MAE={attention_result.mae:.4f}, RMSE={attention_result.rmse:.4f}"
+    )
 
 
 @pytest.mark.benchmark
@@ -419,8 +426,10 @@ def test_model_variants_comparison(benchmark_data, benchmark_config):
         results.append(result)
 
     # Create comparison table
-    logger.info(f"\n=== Attention-LSTM Variants Comparison ===")
-    logger.info(f"{'Variant':<12} {'Params':>10} {'Size(MB)':>10} {'Train(s)':>10} {'Infer(ms)':>10} {'RMSE':>10} {'MAE':>10}")
+    logger.info("\n=== Attention-LSTM Variants Comparison ===")
+    logger.info(
+        f"{'Variant':<12} {'Params':>10} {'Size(MB)':>10} {'Train(s)':>10} {'Infer(ms)':>10} {'RMSE':>10} {'MAE':>10}"
+    )
     logger.info("-" * 82)
 
     for result in results:
@@ -455,8 +464,10 @@ def test_comprehensive_model_comparison(benchmark_data, benchmark_config):
             logger.warning(f"Failed to benchmark {model_type} ({variant}): {e}")
 
     # Create comprehensive comparison table
-    logger.info(f"\n=== Comprehensive Model Architecture Comparison ===")
-    logger.info(f"{'Model':<18} {'Train(s)':>10} {'Infer(ms)':>10} {'RMSE':>10} {'MAE':>10} {'MAPE%':>10} {'DA%':>10}")
+    logger.info("\n=== Comprehensive Model Architecture Comparison ===")
+    logger.info(
+        f"{'Model':<18} {'Train(s)':>10} {'Infer(ms)':>10} {'RMSE':>10} {'MAE':>10} {'MAPE%':>10} {'DA%':>10}"
+    )
     logger.info("-" * 88)
 
     for result in results:
@@ -472,12 +483,18 @@ def test_comprehensive_model_comparison(benchmark_data, benchmark_config):
     fastest_train = min(results, key=lambda r: r.train_time_seconds)
     fastest_inference = min(results, key=lambda r: r.inference_time_ms)
 
-    logger.info(f"\n=== Best Performers ===")
+    logger.info("\n=== Best Performers ===")
     logger.info(f"Best RMSE: {best_rmse.model_type} ({best_rmse.rmse:.4f})")
     logger.info(f"Best MAE: {best_mae.model_type} ({best_mae.mae:.4f})")
-    logger.info(f"Best Directional Accuracy: {best_da.model_type} ({best_da.directional_accuracy:.2f}%)")
-    logger.info(f"Fastest Training: {fastest_train.model_type} ({fastest_train.train_time_seconds:.2f}s)")
-    logger.info(f"Fastest Inference: {fastest_inference.model_type} ({fastest_inference.inference_time_ms:.2f}ms)")
+    logger.info(
+        f"Best Directional Accuracy: {best_da.model_type} ({best_da.directional_accuracy:.2f}%)"
+    )
+    logger.info(
+        f"Fastest Training: {fastest_train.model_type} ({fastest_train.train_time_seconds:.2f}s)"
+    )
+    logger.info(
+        f"Fastest Inference: {fastest_inference.model_type} ({fastest_inference.inference_time_ms:.2f}ms)"
+    )
 
 
 @pytest.mark.benchmark
@@ -496,7 +513,7 @@ def test_inference_speed_benchmark(benchmark_data):
         ("tcn", "default"),
     ]
 
-    logger.info(f"\n=== Inference Speed Benchmark (Target: <100ms) ===")
+    logger.info("\n=== Inference Speed Benchmark (Target: <100ms) ===")
     logger.info(f"{'Model':<25} {'Avg(ms)':>10} {'Min(ms)':>10} {'Max(ms)':>10} {'✓/✗':>5}")
     logger.info("-" * 60)
 
@@ -518,14 +535,15 @@ def test_inference_speed_benchmark(benchmark_data):
         max_time = np.max(times)
         passes = "✓" if avg_time < 100 else "✗"
 
-        logger.info(f"{model_type}_{variant:<20} {avg_time:>10.2f} {min_time:>10.2f} {max_time:>10.2f} {passes:>5}")
+        logger.info(
+            f"{model_type}_{variant:<20} {avg_time:>10.2f} {min_time:>10.2f} {max_time:>10.2f} {passes:>5}"
+        )
 
         assert avg_time < 1000, f"{model_type} too slow for production: {avg_time:.2f}ms"
 
 
 if __name__ == "__main__":
     # Run benchmarks manually
-    import sys
 
     logging.basicConfig(level=logging.INFO)
 
