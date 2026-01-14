@@ -1,6 +1,6 @@
 # Backtesting
 
-> **Last Updated**: 2025-12-26
+> **Last Updated**: 2026-01-12
 > **Related Documentation**: [Live trading](live_trading.md), [Data pipeline](data_pipeline.md)
 
 The vectorised backtesting engine in `src/engines/backtest/` replays historical candles, applies the strategy lifecycle, and
@@ -188,7 +188,7 @@ candle index so you can inspect the raw data or adjust risk parameters (`--risk-
 Backtests can also run from Python modules or notebooks:
 
 ```python
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from src.engines.backtest.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
