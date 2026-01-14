@@ -215,7 +215,7 @@ def create_model(
             raise ImportError(
                 "Attention-LSTM model requires models_attention_lstm module. "
                 "Ensure the file exists in src/ml/training_pipeline/"
-            )
+            ) from None
 
         if variant == "lightweight":
             return create_lightweight_attention_lstm(input_shape)
@@ -236,7 +236,7 @@ def create_model(
             raise ImportError(
                 "TCN model requires models_tcn module. "
                 "Ensure the file exists in src/ml/training_pipeline/"
-            )
+            ) from None
 
         if variant == "lightweight":
             return create_lightweight_tcn(input_shape)
@@ -253,7 +253,7 @@ def create_model(
             raise ImportError(
                 "TCN with attention requires models_tcn module. "
                 "Ensure the file exists in src/ml/training_pipeline/"
-            )
+            ) from None
 
         return create_tcn_with_attention(input_shape, **kwargs)
 
@@ -335,4 +335,4 @@ def build_price_only_model(sequence_length: int, num_features: int) -> Any:
     Returns:
         Compiled Keras model
     """
-    return create_model((sequence_length, num_features), has_sentiment=False)
+    return create_model("cnn_lstm", (sequence_length, num_features), has_sentiment=False)

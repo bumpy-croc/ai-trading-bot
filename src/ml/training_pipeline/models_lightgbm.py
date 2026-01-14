@@ -32,7 +32,7 @@ References:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -60,7 +60,7 @@ def _ensure_lightgbm_available() -> None:
 def create_lag_features(
     df: pd.DataFrame,
     target_col: str = "close",
-    lags: list[int] = [1, 2, 3, 5, 10, 20],
+    lags: list[int] | None = None,
 ) -> pd.DataFrame:
     """Create lag features for time series prediction.
 
@@ -79,6 +79,9 @@ def create_lag_features(
         >>> df_with_lags = create_lag_features(df, lags=[1, 2, 5, 10])
         >>> # Creates: close_lag_1, close_lag_2, close_lag_5, close_lag_10
     """
+    if lags is None:
+        lags = [1, 2, 3, 5, 10, 20]
+
     result = df.copy()
 
     for lag in lags:
@@ -90,8 +93,8 @@ def create_lag_features(
 def create_rolling_features(
     df: pd.DataFrame,
     target_col: str = "close",
-    windows: list[int] = [5, 10, 20, 50],
-    features: list[str] = ["mean", "std", "min", "max"],
+    windows: list[int] | None = None,
+    features: list[str] | None = None,
 ) -> pd.DataFrame:
     """Create rolling window features.
 
@@ -110,6 +113,11 @@ def create_rolling_features(
         >>> df_with_rolling = create_rolling_features(df, windows=[5, 10, 20])
         >>> # Creates: close_rolling_mean_5, close_rolling_std_5, etc.
     """
+    if windows is None:
+        windows = [5, 10, 20, 50]
+    if features is None:
+        features = ["mean", "std", "min", "max"]
+
     result = df.copy()
 
     for window in windows:
@@ -339,9 +347,7 @@ def train_lightgbm_with_early_stopping(
     ]
 
     # Train with validation set
-    model.fit(
-        X_train, y_train, eval_set=[(X_val, y_val)], eval_metric="rmse", callbacks=callbacks
-    )
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], eval_metric="rmse", callbacks=callbacks)
 
     logger.info(f"Best iteration: {model.best_iteration_}")
     logger.info(f"Best score: {model.best_score_}")
@@ -370,9 +376,9 @@ def get_feature_importance(
     _ensure_lightgbm_available()
 
     importance = model.feature_importances_
-    importance_df = pd.DataFrame(
-        {"feature": feature_names, "importance": importance}
-    ).sort_values(by="importance", ascending=False)
+    importance_df = pd.DataFrame({"feature": feature_names, "importance": importance}).sort_values(
+        by="importance", ascending=False
+    )
 
     return importance_df.head(top_n)
 

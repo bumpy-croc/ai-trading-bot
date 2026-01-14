@@ -62,6 +62,12 @@ class TrainingConfig:
     model_type: str = "cnn_lstm"  # cnn_lstm, attention_lstm, tcn, tcn_attention, lstm
     model_variant: str = "default"  # default, lightweight, deep
 
+    # Valid model types and variants for validation
+    _VALID_MODEL_TYPES = frozenset(
+        {"cnn_lstm", "adaptive", "default", "attention_lstm", "tcn", "tcn_attention", "lstm"}
+    )
+    _VALID_MODEL_VARIANTS = frozenset({"default", "lightweight", "deep"})
+
     def __post_init__(self):
         """Validate training configuration parameters for fail-fast behavior."""
         if self.epochs <= 0:
@@ -77,6 +83,18 @@ class TrainingConfig:
         if self.early_stopping_patience <= 0:
             raise ValueError(
                 f"early_stopping_patience must be positive, got {self.early_stopping_patience}"
+            )
+        # Validate model_type
+        if self.model_type not in self._VALID_MODEL_TYPES:
+            raise ValueError(
+                f"model_type must be one of {sorted(self._VALID_MODEL_TYPES)}, "
+                f"got '{self.model_type}'"
+            )
+        # Validate model_variant
+        if self.model_variant not in self._VALID_MODEL_VARIANTS:
+            raise ValueError(
+                f"model_variant must be one of {sorted(self._VALID_MODEL_VARIANTS)}, "
+                f"got '{self.model_variant}'"
             )
 
     def days_requested(self) -> int:
