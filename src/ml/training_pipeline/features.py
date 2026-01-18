@@ -270,7 +270,9 @@ def _validate_and_clean_data(data: pd.DataFrame) -> pd.DataFrame:
     rows_before = len(data)
     nan_counts = data.isna().sum()
     # Avoid reassigning function parameter (CODE.md line 77)
-    cleaned_data = data.dropna()
+    # Use .copy() to ensure we own the data and avoid SettingWithCopyWarning
+    # when downstream functions modify the DataFrame
+    cleaned_data = data.dropna().copy()
     rows_dropped = rows_before - len(cleaned_data)
 
     if rows_dropped > 0:
