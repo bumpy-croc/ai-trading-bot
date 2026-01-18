@@ -430,7 +430,7 @@ def _cache_manager(ns: argparse.Namespace) -> int:
         for filename in files:
             path = os.path.join(cache_dir, filename)
             try:
-                mtime = datetime.fromtimestamp(os.path.getmtime(path))
+                mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=UTC)
                 age_h = (now - mtime).total_seconds() / 3600
                 if age_h > ns.hours:
                     size = os.path.getsize(path)

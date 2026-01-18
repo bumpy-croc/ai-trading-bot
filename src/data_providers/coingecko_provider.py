@@ -16,6 +16,8 @@ from typing import Any
 import pandas as pd
 import requests
 
+from src.config import get_config
+from src.config.constants import DEFAULT_DATA_FETCH_TIMEOUT
 from src.infrastructure.network_retry import with_network_retry
 
 from .data_provider import DataProvider
@@ -32,6 +34,10 @@ class CoinGeckoProvider(DataProvider):
     """
 
     BASE_URL = "https://api.coingecko.com/api/v3"
+
+    # Rate limiting: free tier allows 30 calls/minute = 1 call per 2 seconds
+    # Use 2.5 seconds to be safe and prevent 429 errors
+    RATE_LIMIT_DELAY_SECONDS = 2.5
 
     # Mapping of standard symbols to CoinGecko coin IDs
     SYMBOL_MAPPING = {
@@ -85,6 +91,12 @@ class CoinGeckoProvider(DataProvider):
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": "ai-trading-bot/1.0"})
         self._last_request_time = 0.0  # Track last request for rate limiting
+
+        # Configurable timeout via DATA_FETCH_TIMEOUT_SECONDS env var
+        config = get_config()
+        self._timeout = float(
+            config.get("DATA_FETCH_TIMEOUT_SECONDS", DEFAULT_DATA_FETCH_TIMEOUT)
+        )
 
         if self.api_key:
             self._session.headers.update({"x-cg-pro-api-key": self.api_key})
@@ -142,29 +154,20 @@ class CoinGeckoProvider(DataProvider):
         Raises:
             requests.HTTPError: If request fails after retries
         """
-        # Rate limiting: free tier allows 30 calls/minute = 1 call per 2 seconds
-        # Add a 2.5 second delay to be safe
+        # Rate limiting: free tier requires delay between requests
         if not self.api_key:
             current_time = time.time()
             time_since_last = current_time - self._last_request_time
-            if time_since_last < 2.5:
-                sleep_time = 2.5 - time_since_last
-                logger.debug(f"Rate limiting: sleeping {sleep_time:.1f}s")
+            if time_since_last < self.RATE_LIMIT_DELAY_SECONDS:
+                sleep_time = self.RATE_LIMIT_DELAY_SECONDS - time_since_last
+                logger.debug("Rate limiting: sleeping %.1fs", sleep_time)
                 time.sleep(sleep_time)
             self._last_request_time = time.time()
 
         url = f"{self.BASE_URL}{endpoint}"
-        response = self._session.get(url, params=params or {}, timeout=15)
+        response = self._session.get(url, params=params or {}, timeout=self._timeout)
 
-        # Handle rate limiting
-        if response.status_code == 429:
-            retry_after = int(response.headers.get("Retry-After", 60))
-            logger.warning(f"Rate limited by CoinGecko. Waiting {retry_after}s before retry...")
-            time.sleep(retry_after)
-            # Now retry the request
-            response = self._session.get(url, params=params or {}, timeout=15)
-            response.raise_for_status()
-
+        # Raise for status - network_retry decorator will handle 429 and other errors
         response.raise_for_status()
         return response.json()
 
@@ -194,7 +197,7 @@ class CoinGeckoProvider(DataProvider):
             days_diff = max(1, (end - start).days)
 
             # Fetch OHLC data
-            logger.info(f"Fetching {coin_id} OHLC data for {days_diff} days")
+            logger.info("Fetching %s OHLC data for %d days", coin_id, days_diff)
             ohlc_data = self._request(
                 f"/coins/{coin_id}/ohlc", params={"vs_currency": "usd", "days": days_diff}
             )
@@ -209,7 +212,7 @@ class CoinGeckoProvider(DataProvider):
 
             # Process OHLC data
             if not ohlc_data:
-                logger.warning(f"No OHLC data returned for {coin_id}")
+                logger.warning("No OHLC data returned for %s", coin_id)
                 return pd.DataFrame()
 
             # Convert OHLC format: [timestamp_ms, open, high, low, close]
@@ -222,7 +225,7 @@ class CoinGeckoProvider(DataProvider):
                     logger.warning(f"Skipping malformed OHLC row (expected 5+ elements, got {len(row) if isinstance(row, (list, tuple)) else 'non-sequence'}): {row}")
 
             if not validated_rows:
-                logger.warning(f"No valid OHLC data after validation for {coin_id}")
+                logger.warning("No valid OHLC data after validation for %s", coin_id)
                 return pd.DataFrame()
 
             df = self._process_ohlcv(validated_rows, timestamp_unit="ms")
@@ -233,6 +236,15 @@ class CoinGeckoProvider(DataProvider):
                     market_data["total_volumes"], columns=["timestamp", "volume"]
                 )
                 volume_df["timestamp"] = pd.to_datetime(volume_df["timestamp"], unit="ms", utc=True)
+
+                # Validate volume data - drop invalid (NaN/Infinity/negative) values
+                volume_df["volume"] = pd.to_numeric(volume_df["volume"], errors="coerce")
+                invalid_mask = volume_df["volume"].isna() | (volume_df["volume"] < 0) | volume_df["volume"].isin([float('inf'), float('-inf')])
+                if invalid_mask.any():
+                    invalid_count = invalid_mask.sum()
+                    logger.warning("Dropping %d invalid volume values (NaN/Infinity/negative) from CoinGecko data", invalid_count)
+                    volume_df = volume_df[~invalid_mask].copy()
+
                 volume_df.set_index("timestamp", inplace=True)
 
                 # Align volume with OHLC timestamps (use nearest match)
@@ -269,12 +281,12 @@ class CoinGeckoProvider(DataProvider):
                     f"Fetched {len(df)} candles for {coin_id} from {df.index.min()} to {df.index.max()}"
                 )
             else:
-                logger.warning(f"No data returned for {coin_id} from {start} to {end}")
+                logger.warning("No data returned for %s from %s to %s", coin_id, start, end)
 
             return df
 
         except Exception as e:
-            logger.error(f"Error fetching historical data for {symbol}: {e}")
+            logger.error("Error fetching historical data for %s: %s", symbol, e)
             raise
 
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
@@ -312,7 +324,7 @@ class CoinGeckoProvider(DataProvider):
             return df
 
         except Exception as e:
-            logger.error(f"Error fetching live data for {symbol}: {e}")
+            logger.error("Error fetching live data for %s: %s", symbol, e)
             raise
 
     def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -344,7 +356,7 @@ class CoinGeckoProvider(DataProvider):
             return self.data
 
         except Exception as e:
-            logger.error(f"Error updating live data for {symbol}: {e}")
+            logger.error("Error updating live data for %s: %s", symbol, e)
             raise
 
     def get_current_price(self, symbol: str) -> float:
@@ -378,7 +390,7 @@ class CoinGeckoProvider(DataProvider):
             return price
 
         except Exception as e:
-            logger.error(f"Error fetching current price for {symbol}: {e}")
+            logger.error("Error fetching current price for %s: %s", symbol, e)
             raise RuntimeError(f"Failed to fetch current price for {symbol}: {e}") from e
 
 

@@ -74,9 +74,13 @@ class FallbackProvider(DataProvider):
         Returns:
             True if exception indicates 403/access denied
         """
+        # Maximum depth to traverse exception chain (prevent infinite loops)
+        MAX_EXCEPTION_DEPTH = 10
+
         # Check for HTTP status code in exception chain
         current_exception = exception
-        while current_exception is not None:
+        depth = 0
+        while current_exception is not None and depth < MAX_EXCEPTION_DEPTH:
             # Check for requests.HTTPError with status code
             if hasattr(current_exception, "response") and hasattr(
                 current_exception.response, "status_code"
@@ -93,6 +97,7 @@ class FallbackProvider(DataProvider):
             current_exception = (
                 current_exception.__cause__ if current_exception.__cause__ else current_exception.__context__
             )
+            depth += 1
 
         # Fall back to string matching as last resort
         error_msg = str(exception).lower()
@@ -140,7 +145,7 @@ class FallbackProvider(DataProvider):
         if not binance_failed:
             try:
                 binance_symbol = self._normalize_symbol(symbol, "binance")
-                logger.debug(f"Trying Binance provider for {binance_symbol} {timeframe}")
+                logger.debug("Trying Binance provider for %s %s", binance_symbol, timeframe)
 
                 df = self.primary_provider.get_historical_data(
                     binance_symbol, timeframe, start, end
@@ -149,13 +154,13 @@ class FallbackProvider(DataProvider):
                 if df is not None and not df.empty:
                     with self._lock:
                         self.current_provider = "binance"
-                    self.data = df
+                        self.data = df
                     logger.info(
                         f"✓ Binance: Fetched {len(df)} candles for {binance_symbol} {timeframe}"
                     )
                     return df
                 else:
-                    logger.warning(f"Binance returned empty data for {binance_symbol}")
+                    logger.warning("Binance returned empty data for %s", binance_symbol)
                     raise ValueError("Empty data from Binance")
 
             except Exception as e:
@@ -167,19 +172,19 @@ class FallbackProvider(DataProvider):
                     with self._lock:
                         self._binance_failed = True
                 else:
-                    logger.warning(f"Binance failed: {e}")
+                    logger.warning("Binance failed: %s", e)
 
         # Fall back to CoinGecko
         try:
             coingecko_symbol = self._normalize_symbol(symbol, "coingecko")
-            logger.info(f"Falling back to CoinGecko for {coingecko_symbol} {timeframe}")
+            logger.info("Falling back to CoinGecko for %s %s", coingecko_symbol, timeframe)
 
             df = self.fallback_provider.get_historical_data(coingecko_symbol, timeframe, start, end)
 
             if df is not None and not df.empty:
                 with self._lock:
                     self.current_provider = "coingecko"
-                self.data = df
+                    self.data = df
                 logger.info(
                     f"✓ CoinGecko: Fetched {len(df)} candles for {coingecko_symbol} {timeframe}"
                 )
@@ -188,7 +193,7 @@ class FallbackProvider(DataProvider):
                 raise ValueError("Empty data from CoinGecko")
 
         except Exception as e:
-            logger.error(f"Both Binance and CoinGecko failed for {symbol}: {e}")
+            logger.error("Both Binance and CoinGecko failed for %s: %s", symbol, e)
             raise RuntimeError(
                 f"Failed to fetch data from both Binance and CoinGecko: {e}"
             ) from e
@@ -212,14 +217,14 @@ class FallbackProvider(DataProvider):
         if not binance_failed:
             try:
                 binance_symbol = self._normalize_symbol(symbol, "binance")
-                logger.debug(f"Trying Binance for live data: {binance_symbol} {timeframe}")
+                logger.debug("Trying Binance for live data: %s %s", binance_symbol, timeframe)
 
                 df = self.primary_provider.get_live_data(binance_symbol, timeframe, limit)
 
                 if df is not None and not df.empty:
                     with self._lock:
                         self.current_provider = "binance"
-                    self.data = df
+                        self.data = df
                     return df
                 else:
                     raise ValueError("Empty data from Binance")
@@ -231,25 +236,25 @@ class FallbackProvider(DataProvider):
                     with self._lock:
                         self._binance_failed = True
                 else:
-                    logger.warning(f"Binance failed: {e}")
+                    logger.warning("Binance failed: %s", e)
 
         # Fall back to CoinGecko
         try:
             coingecko_symbol = self._normalize_symbol(symbol, "coingecko")
-            logger.info(f"Using CoinGecko for live data: {coingecko_symbol} {timeframe}")
+            logger.info("Using CoinGecko for live data: %s %s", coingecko_symbol, timeframe)
 
             df = self.fallback_provider.get_live_data(coingecko_symbol, timeframe, limit)
 
             if df is not None and not df.empty:
                 with self._lock:
                     self.current_provider = "coingecko"
-                self.data = df
+                    self.data = df
                 return df
             else:
                 raise ValueError("Empty data from CoinGecko")
 
         except Exception as e:
-            logger.error(f"Both providers failed for {symbol}: {e}")
+            logger.error("Both providers failed for %s: %s", symbol, e)
             raise RuntimeError(f"Failed to fetch live data from both providers: {e}") from e
 
     def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -274,13 +279,14 @@ class FallbackProvider(DataProvider):
                 df = self.primary_provider.update_live_data(binance_symbol, timeframe)
 
                 if df is not None and not df.empty:
-                    self.data = df
+                    with self._lock:
+                        self.data = df
                     return df
                 else:
                     raise ValueError("Empty data from Binance")
 
             except Exception as e:
-                logger.warning(f"Binance update failed, switching to CoinGecko: {e}")
+                logger.warning("Binance update failed, switching to CoinGecko: %s", e)
                 with self._lock:
                     self._binance_failed = True
 
@@ -292,13 +298,13 @@ class FallbackProvider(DataProvider):
             if df is not None and not df.empty:
                 with self._lock:
                     self.current_provider = "coingecko"
-                self.data = df
+                    self.data = df
                 return df
             else:
                 raise ValueError("Empty data from CoinGecko")
 
         except Exception as e:
-            logger.error(f"Both providers failed for update: {e}")
+            logger.error("Both providers failed for update: %s", e)
             raise RuntimeError(f"Failed to update data from both providers: {e}") from e
 
     def get_current_price(self, symbol: str) -> float:
@@ -336,7 +342,7 @@ class FallbackProvider(DataProvider):
                     with self._lock:
                         self._binance_failed = True
                 else:
-                    logger.warning(f"Binance price fetch failed: {e}")
+                    logger.warning("Binance price fetch failed: %s", e)
 
         # Fall back to CoinGecko
         try:
@@ -350,7 +356,7 @@ class FallbackProvider(DataProvider):
                 raise ValueError(f"Invalid price from CoinGecko: {price}")
 
         except Exception as e:
-            logger.error(f"Both providers failed to get price for {symbol}: {e}")
+            logger.error("Both providers failed to get price for %s: %s", symbol, e)
             raise RuntimeError(f"Failed to fetch price from both providers: {e}") from e
 
     def close(self) -> None:
@@ -358,14 +364,14 @@ class FallbackProvider(DataProvider):
         try:
             self.fallback_provider.close()
         except Exception as e:
-            logger.warning(f"Error closing CoinGecko provider: {e}")
+            logger.warning("Error closing CoinGecko provider: %s", e)
 
         # BinanceProvider doesn't have close() method, but we can clean up if needed
         try:
             if hasattr(self.primary_provider, "close"):
                 self.primary_provider.close()
         except Exception as e:
-            logger.warning(f"Error closing Binance provider: {e}")
+            logger.warning("Error closing Binance provider: %s", e)
 
     def __del__(self) -> None:
         """Destructor to ensure connections are closed."""
