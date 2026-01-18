@@ -54,10 +54,10 @@ def _load_strategy(strategy_name: str):
 
 def _get_date_range(args):
     if args.start and args.end:
-        start_date = datetime.strptime(args.start, "%Y-%m-%d")
-        end_date = datetime.strptime(args.end, "%Y-%m-%d")
+        start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
+        end_date = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
     elif args.start:
-        start_date = datetime.strptime(args.start, "%Y-%m-%d")
+        start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
         end_date = datetime.now(UTC)
     elif args.days:
         end_date = datetime.now(UTC)
@@ -125,11 +125,14 @@ def _handle(ns: argparse.Namespace) -> int:
             log_to_database=enable_db_logging,
         )
 
-        trading_symbol = (
-            SymbolFactory.to_exchange_symbol(ns.symbol, ns.provider)
-            if ns.symbol != "BTC-USD"
-            else strategy.get_trading_pair()
-        )
+        # Map provider types to exchange names for symbol conversion
+        # "auto" uses Binance first, "coingecko" handles conversion internally
+        provider_for_symbol = {
+            "auto": "binance",  # Auto tries Binance first
+            "coingecko": "binance",  # Use Binance format, CoinGecko converts internally
+        }.get(ns.provider, ns.provider)
+
+        trading_symbol = SymbolFactory.to_exchange_symbol(ns.symbol, provider_for_symbol)
 
         results = backtester.run(
             symbol=trading_symbol, timeframe=ns.timeframe, start=start_date, end=end_date

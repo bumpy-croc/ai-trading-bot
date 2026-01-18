@@ -7,6 +7,8 @@ if Binance is unavailable or blocked.
 """
 
 import logging
+import math
+import threading
 from datetime import datetime
 
 import pandas as pd
@@ -56,8 +58,45 @@ class FallbackProvider(DataProvider):
 
         self.current_provider = "binance"  # Track which provider is active
         self._binance_failed = False  # Flag to skip Binance if it's consistently failing
+        self._lock = threading.Lock()  # Protect mutable shared state
 
         logger.info("FallbackProvider initialized (Binance → CoinGecko failover)")
+
+    def _is_access_denied_error(self, exception: Exception) -> bool:
+        """
+        Check if an exception indicates access denied (403 Forbidden).
+
+        Checks HTTP status codes first, falls back to string matching.
+
+        Args:
+            exception: The exception to check
+
+        Returns:
+            True if exception indicates 403/access denied
+        """
+        # Check for HTTP status code in exception chain
+        current_exception = exception
+        while current_exception is not None:
+            # Check for requests.HTTPError with status code
+            if hasattr(current_exception, "response") and hasattr(
+                current_exception.response, "status_code"
+            ):
+                if current_exception.response.status_code == 403:
+                    return True
+
+            # Check for BinanceAPIException with status code
+            if hasattr(current_exception, "status_code"):
+                if current_exception.status_code == 403:
+                    return True
+
+            # Move to next exception in chain
+            current_exception = (
+                current_exception.__cause__ if current_exception.__cause__ else current_exception.__context__
+            )
+
+        # Fall back to string matching as last resort
+        error_msg = str(exception).lower()
+        return "403" in error_msg or "forbidden" in error_msg or "access denied" in error_msg
 
     def _normalize_symbol(self, symbol: str, target_provider: str) -> str:
         """
@@ -95,7 +134,10 @@ class FallbackProvider(DataProvider):
             DataFrame with OHLCV data from either provider
         """
         # Try Binance first (unless it's already failed)
-        if not self._binance_failed:
+        with self._lock:
+            binance_failed = self._binance_failed
+
+        if not binance_failed:
             try:
                 binance_symbol = self._normalize_symbol(symbol, "binance")
                 logger.debug(f"Trying Binance provider for {binance_symbol} {timeframe}")
@@ -105,7 +147,8 @@ class FallbackProvider(DataProvider):
                 )
 
                 if df is not None and not df.empty:
-                    self.current_provider = "binance"
+                    with self._lock:
+                        self.current_provider = "binance"
                     self.data = df
                     logger.info(
                         f"✓ Binance: Fetched {len(df)} candles for {binance_symbol} {timeframe}"
@@ -116,13 +159,13 @@ class FallbackProvider(DataProvider):
                     raise ValueError("Empty data from Binance")
 
             except Exception as e:
-                error_msg = str(e).lower()
-                # Check if it's a 403/blocking error
-                if "403" in error_msg or "forbidden" in error_msg or "access denied" in error_msg:
+                # Check if it's a 403/blocking error using HTTP status codes
+                if self._is_access_denied_error(e):
                     logger.warning(
                         f"Binance blocked (403 Forbidden) - will use CoinGecko for future requests"
                     )
-                    self._binance_failed = True
+                    with self._lock:
+                        self._binance_failed = True
                 else:
                     logger.warning(f"Binance failed: {e}")
 
@@ -134,7 +177,8 @@ class FallbackProvider(DataProvider):
             df = self.fallback_provider.get_historical_data(coingecko_symbol, timeframe, start, end)
 
             if df is not None and not df.empty:
-                self.current_provider = "coingecko"
+                with self._lock:
+                    self.current_provider = "coingecko"
                 self.data = df
                 logger.info(
                     f"✓ CoinGecko: Fetched {len(df)} candles for {coingecko_symbol} {timeframe}"
@@ -162,7 +206,10 @@ class FallbackProvider(DataProvider):
             DataFrame with recent OHLCV data
         """
         # Try Binance first (unless it's already failed)
-        if not self._binance_failed:
+        with self._lock:
+            binance_failed = self._binance_failed
+
+        if not binance_failed:
             try:
                 binance_symbol = self._normalize_symbol(symbol, "binance")
                 logger.debug(f"Trying Binance for live data: {binance_symbol} {timeframe}")
@@ -170,17 +217,19 @@ class FallbackProvider(DataProvider):
                 df = self.primary_provider.get_live_data(binance_symbol, timeframe, limit)
 
                 if df is not None and not df.empty:
-                    self.current_provider = "binance"
+                    with self._lock:
+                        self.current_provider = "binance"
                     self.data = df
                     return df
                 else:
                     raise ValueError("Empty data from Binance")
 
             except Exception as e:
-                error_msg = str(e).lower()
-                if "403" in error_msg or "forbidden" in error_msg or "access denied" in error_msg:
+                # Check if it's a 403/blocking error using HTTP status codes
+                if self._is_access_denied_error(e):
                     logger.warning(f"Binance blocked - using CoinGecko")
-                    self._binance_failed = True
+                    with self._lock:
+                        self._binance_failed = True
                 else:
                     logger.warning(f"Binance failed: {e}")
 
@@ -192,7 +241,8 @@ class FallbackProvider(DataProvider):
             df = self.fallback_provider.get_live_data(coingecko_symbol, timeframe, limit)
 
             if df is not None and not df.empty:
-                self.current_provider = "coingecko"
+                with self._lock:
+                    self.current_provider = "coingecko"
                 self.data = df
                 return df
             else:
@@ -214,7 +264,11 @@ class FallbackProvider(DataProvider):
             Updated DataFrame
         """
         # Use whichever provider is currently active
-        if self.current_provider == "binance" and not self._binance_failed:
+        with self._lock:
+            current_provider = self.current_provider
+            binance_failed = self._binance_failed
+
+        if current_provider == "binance" and not binance_failed:
             try:
                 binance_symbol = self._normalize_symbol(symbol, "binance")
                 df = self.primary_provider.update_live_data(binance_symbol, timeframe)
@@ -227,7 +281,8 @@ class FallbackProvider(DataProvider):
 
             except Exception as e:
                 logger.warning(f"Binance update failed, switching to CoinGecko: {e}")
-                self._binance_failed = True
+                with self._lock:
+                    self._binance_failed = True
 
         # Use CoinGecko
         try:
@@ -235,7 +290,8 @@ class FallbackProvider(DataProvider):
             df = self.fallback_provider.update_live_data(coingecko_symbol, timeframe)
 
             if df is not None and not df.empty:
-                self.current_provider = "coingecko"
+                with self._lock:
+                    self.current_provider = "coingecko"
                 self.data = df
                 return df
             else:
@@ -259,21 +315,26 @@ class FallbackProvider(DataProvider):
             RuntimeError: If both providers fail
         """
         # Try Binance first (unless it's already failed)
-        if not self._binance_failed:
+        with self._lock:
+            binance_failed = self._binance_failed
+
+        if not binance_failed:
             try:
                 binance_symbol = self._normalize_symbol(symbol, "binance")
                 price = self.primary_provider.get_current_price(binance_symbol)
 
-                if price > 0:
+                # Validate price is positive and finite (reject NaN/Infinity)
+                if math.isfinite(price) and price > 0:
                     return price
                 else:
-                    raise ValueError("Invalid price from Binance")
+                    raise ValueError(f"Invalid price from Binance: {price}")
 
             except Exception as e:
-                error_msg = str(e).lower()
-                if "403" in error_msg or "forbidden" in error_msg or "access denied" in error_msg:
+                # Check if it's a 403/blocking error using HTTP status codes
+                if self._is_access_denied_error(e):
                     logger.warning(f"Binance blocked - using CoinGecko for prices")
-                    self._binance_failed = True
+                    with self._lock:
+                        self._binance_failed = True
                 else:
                     logger.warning(f"Binance price fetch failed: {e}")
 
@@ -282,10 +343,11 @@ class FallbackProvider(DataProvider):
             coingecko_symbol = self._normalize_symbol(symbol, "coingecko")
             price = self.fallback_provider.get_current_price(coingecko_symbol)
 
-            if price > 0:
+            # Validate price is positive and finite (reject NaN/Infinity)
+            if math.isfinite(price) and price > 0:
                 return price
             else:
-                raise ValueError("Invalid price from CoinGecko")
+                raise ValueError(f"Invalid price from CoinGecko: {price}")
 
         except Exception as e:
             logger.error(f"Both providers failed to get price for {symbol}: {e}")

@@ -8,6 +8,7 @@ API Documentation: https://docs.coingecko.com/reference/introduction
 """
 
 import logging
+import math
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -96,8 +97,8 @@ class CoinGeckoProvider(DataProvider):
         if hasattr(self, "_session") and self._session is not None:
             try:
                 self._session.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error closing session: %s", e)
             self._session = None
 
     def __del__(self) -> None:
@@ -189,8 +190,8 @@ class CoinGeckoProvider(DataProvider):
             coin_id = self._convert_symbol(symbol)
             end = end or datetime.now(UTC)
 
-            # Calculate days parameter for CoinGecko
-            days_diff = (end - start).days
+            # Calculate days parameter for CoinGecko (minimum 1 day)
+            days_diff = max(1, (end - start).days)
 
             # Fetch OHLC data
             logger.info(f"Fetching {coin_id} OHLC data for {days_diff} days")
@@ -212,10 +213,19 @@ class CoinGeckoProvider(DataProvider):
                 return pd.DataFrame()
 
             # Convert OHLC format: [timestamp_ms, open, high, low, close]
-            df = self._process_ohlcv(
-                [[row[0], row[1], row[2], row[3], row[4], 0] for row in ohlc_data],
-                timestamp_unit="ms",
-            )
+            # Validate each row has at least 5 elements before processing
+            validated_rows = []
+            for row in ohlc_data:
+                if isinstance(row, (list, tuple)) and len(row) >= 5:
+                    validated_rows.append([row[0], row[1], row[2], row[3], row[4], 0])
+                else:
+                    logger.warning(f"Skipping malformed OHLC row (expected 5+ elements, got {len(row) if isinstance(row, (list, tuple)) else 'non-sequence'}): {row}")
+
+            if not validated_rows:
+                logger.warning(f"No valid OHLC data after validation for {coin_id}")
+                return pd.DataFrame()
+
+            df = self._process_ohlcv(validated_rows, timestamp_unit="ms")
 
             # Merge volume data from market_chart
             if market_data and "total_volumes" in market_data:
@@ -361,9 +371,9 @@ class CoinGeckoProvider(DataProvider):
 
             price = float(data[coin_id]["usd"])
 
-            # Validate price is positive
-            if price <= 0:
-                raise ValueError(f"Invalid price {price} <= 0 for {symbol}")
+            # Validate price is positive and finite (reject NaN/Infinity)
+            if not math.isfinite(price) or price <= 0:
+                raise ValueError(f"Invalid price {price} for {symbol} (must be positive and finite)")
 
             return price
 
