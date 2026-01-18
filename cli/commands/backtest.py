@@ -81,15 +81,10 @@ def _handle(ns: argparse.Namespace) -> int:
         strategy = _load_strategy(ns.strategy)
         logger.info(f"Loaded strategy: {strategy.name}")
 
-        # Provider
-        if ns.provider == "coinbase":
-            from src.data_providers.coinbase_provider import CoinbaseProvider
+        # Provider - use factory for automatic failover support
+        from src.data_providers.provider_factory import create_data_provider
 
-            provider = CoinbaseProvider()
-        else:
-            from src.data_providers.binance_provider import BinanceProvider
-
-            provider = BinanceProvider()
+        provider = create_data_provider(provider_type=ns.provider)
         if ns.no_cache:
             data_provider = provider
             logger.info("Data caching disabled")
@@ -269,9 +264,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--provider",
-        choices=["coinbase", "binance"],
-        default="binance",
-        help="Exchange provider to use - default: binance",
+        choices=["auto", "binance", "coinbase", "coingecko"],
+        default="auto",
+        help="Data provider: auto=Binance→CoinGecko failover (recommended), binance=Binance only, coinbase=Coinbase only, coingecko=CoinGecko only - default: auto",
     )
     p.add_argument(
         "--max-drawdown",

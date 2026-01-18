@@ -74,8 +74,8 @@ def _prefill(ns: argparse.Namespace) -> int:
     from datetime import UTC, datetime
 
     from src.config.paths import get_cache_dir
-    from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
+    from src.data_providers.provider_factory import create_data_provider
 
     def _normalize_symbols(raw):
         normalized = []
@@ -113,8 +113,9 @@ def _prefill(ns: argparse.Namespace) -> int:
     symbols = _normalize_symbols(ns.symbols)
     timeframes = [tf.strip() for tf in ns.timeframes]
     cache_dir = ns.cache_dir or str(get_cache_dir())
+    # Use auto provider (Binance → CoinGecko failover)
     provider = CachedDataProvider(
-        BinanceProvider(), cache_dir=cache_dir, cache_ttl_hours=ns.cache_ttl_hours
+        create_data_provider(provider_type="auto"), cache_dir=cache_dir, cache_ttl_hours=ns.cache_ttl_hours
     )
     print(
         f"Prefilling cache dir={cache_dir} symbols={symbols} timeframes={timeframes} range={start.date()}..{end.date()}"
@@ -144,8 +145,8 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     from tqdm import tqdm
 
     from src.config.paths import ensure_dir_exists, get_cache_dir
-    from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
+    from src.data_providers.provider_factory import create_data_provider
     from src.infrastructure.logging.config import configure_logging
 
     # Setup logging
@@ -177,10 +178,11 @@ def _preload_offline(ns: argparse.Namespace) -> int:
 
     # Create providers with extended TTL for offline preloading
     # Use very long TTL (10 years) to treat preloaded data as permanently valid
+    # Use auto provider (Binance → CoinGecko failover)
     try:
-        binance_provider = BinanceProvider()
+        data_provider = create_data_provider(provider_type="auto")
         cached_provider = CachedDataProvider(
-            binance_provider,
+            data_provider,
             cache_dir=cache_dir,
             cache_ttl_hours=87600,  # 10 years = 10 * 365 * 24 hours
         )
