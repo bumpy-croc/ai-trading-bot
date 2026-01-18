@@ -4,6 +4,36 @@
 
 The **CoinGeckoProvider** is a fully-compatible alternative to the Binance data provider that works reliably from Claude Code web servers and other environments where Binance API access may be blocked.
 
+## 🎯 Automatic Failover (Recommended)
+
+**NEW:** The system now includes **automatic Binance → CoinGecko failover**! This is now the default behavior - no code changes needed!
+
+```bash
+# Automatic failover (default - recommended)
+atb backtest ml_basic --symbol BTCUSDT --timeframe 4h --days 30
+
+# The system will:
+# 1. Try Binance first (best granularity for 1h, 1m data)
+# 2. Automatically fall back to CoinGecko if Binance is blocked
+# 3. Remember which provider works for future requests
+```
+
+**How it works:**
+- Uses `FallbackProvider` which wraps both Binance and CoinGecko
+- Tries Binance first (preferred for granular timeframes)
+- Falls back to CoinGecko automatically on any Binance error (403, timeout, etc.)
+- Caches provider choice after first failure to avoid retries
+- Completely transparent - returns identical data format
+
+**Explicit provider selection** (if needed):
+```bash
+# Use only CoinGecko (skip Binance entirely)
+atb backtest ml_basic --provider coingecko --symbol BTC-USD --timeframe 4h --days 30
+
+# Use only Binance (will fail if blocked)
+atb backtest ml_basic --provider binance --symbol BTCUSDT --timeframe 1h --days 30
+```
+
 ## Why CoinGecko?
 
 When running on Claude Code web servers or in certain geographic regions:
