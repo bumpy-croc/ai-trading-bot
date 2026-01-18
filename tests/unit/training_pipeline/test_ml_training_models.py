@@ -1,8 +1,16 @@
 """Unit tests for ML training pipeline model factories module."""
 
 import pytest
-import tensorflow as tf
-from tensorflow.keras import callbacks
+
+try:
+    import tensorflow as tf
+    from tensorflow.keras import callbacks
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
+    callbacks = None  # type: ignore
 
 from src.ml.training_pipeline.models import (
     build_price_only_model,
@@ -12,6 +20,7 @@ from src.ml.training_pipeline.models import (
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestCreateAdaptiveModel:
     """Test create_model function."""
 
@@ -139,6 +148,7 @@ class TestCreateAdaptiveModel:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestBuildPriceOnlyModel:
     """Test build_price_only_model function."""
 
@@ -261,6 +271,7 @@ class TestBuildPriceOnlyModel:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestDefaultCallbacks:
     """Test default_callbacks function."""
 

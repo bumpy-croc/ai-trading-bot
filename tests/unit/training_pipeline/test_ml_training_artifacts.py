@@ -8,6 +8,14 @@ import matplotlib
 import numpy as np
 import pytest
 
+try:
+    import tensorflow as tf
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
+
 # Use non-interactive backend for tests
 matplotlib.use("Agg")
 
@@ -70,6 +78,7 @@ class TestArtifactPaths:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestCreateTrainingPlots:
     """Test create_training_plots function."""
 
@@ -162,6 +171,7 @@ class TestCreateTrainingPlots:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestValidateModelRobustness:
     """Test validate_model_robustness function."""
 
@@ -254,6 +264,7 @@ class TestValidateModelRobustness:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestEvaluateModelPerformance:
     """Test evaluate_model_performance function."""
 
@@ -347,6 +358,7 @@ class TestEvaluateModelPerformance:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestConvertToOnnx:
     """Test convert_to_onnx function."""
 
@@ -418,6 +430,7 @@ class TestConvertToOnnx:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestSaveArtifacts:
     """Test save_artifacts function."""
 
