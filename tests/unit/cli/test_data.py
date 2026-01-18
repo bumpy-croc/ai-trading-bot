@@ -25,23 +25,28 @@ class TestDataDownload:
             format="csv",
         )
 
-        mock_ohlcv = [
-            [1704067200000, 40000, 40100, 39900, 40050, 100],
-            [1704070800000, 40050, 40150, 39950, 40100, 150],
-        ]
+        # Create mock data with proper index
+        mock_df = pd.DataFrame({
+            "open": [40000, 40050],
+            "high": [40100, 40150],
+            "low": [39900, 39950],
+            "close": [40050, 40100],
+            "volume": [100, 150],
+        }, index=pd.DatetimeIndex([
+            datetime(2024, 1, 1, tzinfo=UTC),
+            datetime(2024, 1, 1, 1, 0, tzinfo=UTC),
+        ], name="timestamp"))
 
         # Act
         with (
-            patch("cli.commands.data.ccxt") as mock_ccxt,
+            patch("src.data_providers.provider_factory.create_data_provider") as mock_create_provider,
             patch("cli.commands.data.Path") as mock_path,
-            patch("cli.commands.data.SymbolFactory.to_exchange_symbol") as mock_symbol_factory,
         ):
 
-            mock_symbol_factory.return_value = "BTCUSDT"
-
-            mock_binance = Mock()
-            mock_binance.fetch_ohlcv.return_value = mock_ohlcv
-            mock_ccxt.binance.return_value = mock_binance
+            mock_provider = Mock()
+            mock_provider.get_historical_data.return_value = mock_df
+            mock_provider.close.return_value = None
+            mock_create_provider.return_value = mock_provider
 
             mock_path_instance = Mock()
             mock_path_instance.mkdir.return_value = None
@@ -53,6 +58,9 @@ class TestDataDownload:
 
             # Assert
             assert result == 0
+            mock_create_provider.assert_called_once_with(provider_type="auto")
+            mock_provider.get_historical_data.assert_called_once()
+            mock_provider.close.assert_called_once()
 
     def test_returns_error_when_no_data_fetched(self):
         """Test that error is returned when no data is fetched."""
@@ -89,22 +97,27 @@ class TestDataDownload:
             format="feather",
         )
 
-        mock_ohlcv = [
-            [1704067200000, 40000, 40100, 39900, 40050, 100],
-        ]
+        # Create mock data with proper index
+        mock_df = pd.DataFrame({
+            "open": [40000],
+            "high": [40100],
+            "low": [39900],
+            "close": [40050],
+            "volume": [100],
+        }, index=pd.DatetimeIndex([
+            datetime(2024, 1, 1, tzinfo=UTC),
+        ], name="timestamp"))
 
         # Act
         with (
-            patch("cli.commands.data.ccxt") as mock_ccxt,
+            patch("src.data_providers.provider_factory.create_data_provider") as mock_create_provider,
             patch("cli.commands.data.Path") as mock_path,
-            patch("cli.commands.data.SymbolFactory.to_exchange_symbol") as mock_symbol_factory,
         ):
 
-            mock_symbol_factory.return_value = "BTCUSDT"
-
-            mock_binance = Mock()
-            mock_binance.fetch_ohlcv.return_value = mock_ohlcv
-            mock_ccxt.binance.return_value = mock_binance
+            mock_provider = Mock()
+            mock_provider.get_historical_data.return_value = mock_df
+            mock_provider.close.return_value = None
+            mock_create_provider.return_value = mock_provider
 
             mock_path_instance = Mock()
             mock_path_instance.mkdir.return_value = None
