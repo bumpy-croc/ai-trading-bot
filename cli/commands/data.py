@@ -25,14 +25,14 @@ from src.trading.symbols.factory import SymbolFactory
 
 def _download(ns: argparse.Namespace) -> int:
     """Download historical price data using automatic Binance → CoinGecko failover."""
+    from datetime import datetime
+
+    from src.data_providers.provider_factory import create_data_provider
+
+    # Use auto provider (Binance → CoinGecko failover)
+    provider = create_data_provider(provider_type="auto")
+
     try:
-        from datetime import datetime
-
-        from src.data_providers.provider_factory import create_data_provider
-
-        # Use auto provider (Binance → CoinGecko failover)
-        provider = create_data_provider(provider_type="auto")
-
         # Parse dates (UTC-aware to match provider expectations)
         start_date = datetime.strptime(ns.start_date, "%Y-%m-%d").replace(tzinfo=UTC) if ns.start_date else None
         end_date = datetime.strptime(ns.end_date, "%Y-%m-%d").replace(tzinfo=UTC) if ns.end_date else None
@@ -65,7 +65,6 @@ def _download(ns: argparse.Namespace) -> int:
             df.reset_index().to_feather(out, compression="zstd")
 
         print(f"✓ Saved {len(df)} candles to {out}")
-        provider.close()
         return 0
 
     except Exception as e:
@@ -73,6 +72,10 @@ def _download(ns: argparse.Namespace) -> int:
         import traceback
         traceback.print_exc()
         return 1
+
+    finally:
+        # Ensure provider resources are always cleaned up
+        provider.close()
 
 
 def _prefill(ns: argparse.Namespace) -> int:

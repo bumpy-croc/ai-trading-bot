@@ -134,8 +134,8 @@ class CoinGeckoProvider(DataProvider):
 
         # Fallback: assume symbol is the coin name
         logger.warning(
-            f"Symbol {symbol} not in mapping, using as-is. "
-            f"This may fail if not a valid CoinGecko ID."
+            "Symbol %s not in mapping, using as-is. This may fail if not a valid CoinGecko ID.",
+            symbol
         )
         return symbol.lower()
 
@@ -279,7 +279,8 @@ class CoinGeckoProvider(DataProvider):
 
             if len(df) > 0:
                 logger.info(
-                    f"Fetched {len(df)} candles for {coin_id} from {df.index.min()} to {df.index.max()}"
+                    "Fetched %d candles for %s from %s to %s",
+                    len(df), coin_id, df.index.min(), df.index.max()
                 )
             else:
                 logger.warning("No data returned for %s from %s to %s", coin_id, start, end)

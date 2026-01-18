@@ -156,7 +156,8 @@ class FallbackProvider(DataProvider):
                         self.current_provider = "binance"
                         self.data = df
                     logger.info(
-                        f"✓ Binance: Fetched {len(df)} candles for {binance_symbol} {timeframe}"
+                        "✓ Binance: Fetched %d candles for %s %s",
+                        len(df), binance_symbol, timeframe
                     )
                     return df
                 else:
@@ -167,7 +168,7 @@ class FallbackProvider(DataProvider):
                 # Check if it's a 403/blocking error using HTTP status codes
                 if self._is_access_denied_error(e):
                     logger.warning(
-                        f"Binance blocked (403 Forbidden) - will use CoinGecko for future requests"
+                        "Binance blocked (403 Forbidden) - will use CoinGecko for future requests"
                     )
                     with self._lock:
                         self._binance_failed = True
@@ -186,7 +187,8 @@ class FallbackProvider(DataProvider):
                     self.current_provider = "coingecko"
                     self.data = df
                 logger.info(
-                    f"✓ CoinGecko: Fetched {len(df)} candles for {coingecko_symbol} {timeframe}"
+                    "✓ CoinGecko: Fetched %d candles for %s %s",
+                    len(df), coingecko_symbol, timeframe
                 )
                 return df
             else:
