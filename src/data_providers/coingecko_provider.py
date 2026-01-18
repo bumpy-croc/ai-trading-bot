@@ -222,7 +222,8 @@ class CoinGeckoProvider(DataProvider):
                 if isinstance(row, (list, tuple)) and len(row) >= 5:
                     validated_rows.append([row[0], row[1], row[2], row[3], row[4], 0])
                 else:
-                    logger.warning(f"Skipping malformed OHLC row (expected 5+ elements, got {len(row) if isinstance(row, (list, tuple)) else 'non-sequence'}): {row}")
+                    row_len = len(row) if isinstance(row, (list, tuple)) else 'non-sequence'
+                    logger.warning("Skipping malformed OHLC row (expected 5+ elements, got %s): %s", row_len, row)
 
             if not validated_rows:
                 logger.warning("No valid OHLC data after validation for %s", coin_id)

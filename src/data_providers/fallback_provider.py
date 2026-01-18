@@ -232,7 +232,7 @@ class FallbackProvider(DataProvider):
             except Exception as e:
                 # Check if it's a 403/blocking error using HTTP status codes
                 if self._is_access_denied_error(e):
-                    logger.warning(f"Binance blocked - using CoinGecko")
+                    logger.warning("Binance blocked - using CoinGecko")
                     with self._lock:
                         self._binance_failed = True
                 else:
@@ -338,7 +338,7 @@ class FallbackProvider(DataProvider):
             except Exception as e:
                 # Check if it's a 403/blocking error using HTTP status codes
                 if self._is_access_denied_error(e):
-                    logger.warning(f"Binance blocked - using CoinGecko for prices")
+                    logger.warning("Binance blocked - using CoinGecko for prices")
                     with self._lock:
                         self._binance_failed = True
                 else:

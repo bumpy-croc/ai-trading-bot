@@ -33,9 +33,9 @@ def _download(ns: argparse.Namespace) -> int:
         # Use auto provider (Binance → CoinGecko failover)
         provider = create_data_provider(provider_type="auto")
 
-        # Parse dates
-        start_date = datetime.strptime(ns.start_date, "%Y-%m-%d") if ns.start_date else None
-        end_date = datetime.strptime(ns.end_date, "%Y-%m-%d") if ns.end_date else None
+        # Parse dates (UTC-aware to match provider expectations)
+        start_date = datetime.strptime(ns.start_date, "%Y-%m-%d").replace(tzinfo=UTC) if ns.start_date else None
+        end_date = datetime.strptime(ns.end_date, "%Y-%m-%d").replace(tzinfo=UTC) if ns.end_date else None
 
         if not start_date or not end_date:
             print("Both --start-date and --end-date are required")
