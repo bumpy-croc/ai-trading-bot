@@ -24,49 +24,54 @@ from src.trading.symbols.factory import SymbolFactory
 
 
 def _download(ns: argparse.Namespace) -> int:
+    """Download historical price data using automatic Binance → CoinGecko failover."""
     try:
-        symbol = SymbolFactory.to_exchange_symbol(ns.symbol, "binance")
-        if not symbol.endswith("USDT"):
-            print("Only USDT pairs are supported (e.g., ETH-USD, BTC-USD, ETHUSDT, BTCUSDT)")
+        from datetime import datetime
+
+        from src.data_providers.provider_factory import create_data_provider
+
+        # Use auto provider (Binance → CoinGecko failover)
+        provider = create_data_provider(provider_type="auto")
+
+        # Parse dates
+        start_date = datetime.strptime(ns.start_date, "%Y-%m-%d") if ns.start_date else None
+        end_date = datetime.strptime(ns.end_date, "%Y-%m-%d") if ns.end_date else None
+
+        if not start_date or not end_date:
+            print("Both --start-date and --end-date are required")
             return 1
-        symbol = symbol.replace("USDT", "/USDT")
-        binance = ccxt.binance()
-        since = int(pd.Timestamp(ns.start_date).timestamp() * 1000) if ns.start_date else None
-        end = int(pd.Timestamp(ns.end_date).timestamp() * 1000) if ns.end_date else None
-        all_ohlcv = []
-        limit = 1000
-        fetch_since = since
-        while True:
-            ohlcv = binance.fetch_ohlcv(symbol, ns.timeframe, since=fetch_since, limit=limit)
-            if not ohlcv:
-                break
-            all_ohlcv += ohlcv
-            if len(ohlcv) < limit:
-                break
-            fetch_since = ohlcv[-1][0] + 1
-            if end and fetch_since > end:
-                break
-        if not all_ohlcv:
+
+        # Fetch data using provider
+        print(f"Fetching {ns.symbol} {ns.timeframe} data from {start_date.date()} to {end_date.date()}...")
+        df = provider.get_historical_data(ns.symbol, ns.timeframe, start_date, end_date)
+
+        if df is None or df.empty:
             print("No data fetched for the given parameters.")
             return 1
-        df = pd.DataFrame(
-            all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
-        )
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.set_index("timestamp", inplace=True)
+
+        # Save to file
         out_dir = Path(ns.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        stem = f"{symbol.replace('/', '')}_{ns.timeframe}_{ns.start_date}_{ns.end_date}"
+
+        # Normalize symbol for filename
+        symbol_normalized = ns.symbol.replace("-", "").replace("/", "")
+        stem = f"{symbol_normalized}_{ns.timeframe}_{ns.start_date}_{ns.end_date}"
+
         if ns.format == "csv":
             out = out_dir / f"{stem}.csv"
             df.to_csv(out, index=True)
         else:
             out = out_dir / f"{stem}.feather"
             df.reset_index().to_feather(out, compression="zstd")
-        print(f"Saved to {out}")
+
+        print(f"✓ Saved {len(df)} candles to {out}")
+        provider.close()
         return 0
+
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
