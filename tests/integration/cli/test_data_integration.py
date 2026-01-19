@@ -2,9 +2,11 @@
 
 import argparse
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pandas as pd
 import pytest
 
 from cli.commands.data import _download
@@ -27,15 +29,24 @@ class TestDataIntegration:
                 format="csv",
             )
 
-            mock_ohlcv = [
-                [1704067200000, 40000, 40100, 39900, 40050, 100],
-            ]
+            # Create mock data
+            mock_df = pd.DataFrame(
+                {
+                    "open": [40000.0],
+                    "high": [40100.0],
+                    "low": [39900.0],
+                    "close": [40050.0],
+                    "volume": [100.0],
+                },
+                index=pd.DatetimeIndex([datetime(2024, 10, 1)], name="timestamp"),
+            )
 
-            # Act
-            with patch("cli.commands.data.ccxt") as mock_ccxt:
-                mock_binance = Mock()
-                mock_binance.fetch_ohlcv.return_value = mock_ohlcv
-                mock_ccxt.binance.return_value = mock_binance
+            # Act - Mock the provider factory to return a provider that returns our mock data
+            with patch("src.data_providers.provider_factory.create_data_provider") as mock_create:
+                mock_provider = Mock()
+                mock_provider.get_historical_data.return_value = mock_df
+                mock_provider.close.return_value = None
+                mock_create.return_value = mock_provider
 
                 result = _download(args)
 

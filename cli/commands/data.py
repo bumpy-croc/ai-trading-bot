@@ -24,58 +24,66 @@ from src.trading.symbols.factory import SymbolFactory
 
 
 def _download(ns: argparse.Namespace) -> int:
+    """Download historical price data using automatic Binance → CoinGecko failover."""
+    from datetime import datetime
+
+    from src.data_providers.provider_factory import create_data_provider
+
+    # Use auto provider (Binance → CoinGecko failover)
+    provider = create_data_provider(provider_type="auto")
+
     try:
-        symbol = SymbolFactory.to_exchange_symbol(ns.symbol, "binance")
-        if not symbol.endswith("USDT"):
-            print("Only USDT pairs are supported (e.g., ETH-USD, BTC-USD, ETHUSDT, BTCUSDT)")
+        # Parse dates (UTC-aware to match provider expectations)
+        start_date = datetime.strptime(ns.start_date, "%Y-%m-%d").replace(tzinfo=UTC) if ns.start_date else None
+        end_date = datetime.strptime(ns.end_date, "%Y-%m-%d").replace(tzinfo=UTC) if ns.end_date else None
+
+        if not start_date or not end_date:
+            print("Both --start-date and --end-date are required")
             return 1
-        symbol = symbol.replace("USDT", "/USDT")
-        binance = ccxt.binance()
-        since = int(pd.Timestamp(ns.start_date).timestamp() * 1000) if ns.start_date else None
-        end = int(pd.Timestamp(ns.end_date).timestamp() * 1000) if ns.end_date else None
-        all_ohlcv = []
-        limit = 1000
-        fetch_since = since
-        while True:
-            ohlcv = binance.fetch_ohlcv(symbol, ns.timeframe, since=fetch_since, limit=limit)
-            if not ohlcv:
-                break
-            all_ohlcv += ohlcv
-            if len(ohlcv) < limit:
-                break
-            fetch_since = ohlcv[-1][0] + 1
-            if end and fetch_since > end:
-                break
-        if not all_ohlcv:
+
+        # Fetch data using provider
+        print(f"Fetching {ns.symbol} {ns.timeframe} data from {start_date.date()} to {end_date.date()}...")
+        df = provider.get_historical_data(ns.symbol, ns.timeframe, start_date, end_date)
+
+        if df is None or df.empty:
             print("No data fetched for the given parameters.")
             return 1
-        df = pd.DataFrame(
-            all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
-        )
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.set_index("timestamp", inplace=True)
+
+        # Save to file
         out_dir = Path(ns.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        stem = f"{symbol.replace('/', '')}_{ns.timeframe}_{ns.start_date}_{ns.end_date}"
+
+        # Normalize symbol for filename
+        symbol_normalized = ns.symbol.replace("-", "").replace("/", "")
+        stem = f"{symbol_normalized}_{ns.timeframe}_{ns.start_date}_{ns.end_date}"
+
         if ns.format == "csv":
             out = out_dir / f"{stem}.csv"
             df.to_csv(out, index=True)
         else:
             out = out_dir / f"{stem}.feather"
             df.reset_index().to_feather(out, compression="zstd")
-        print(f"Saved to {out}")
+
+        print(f"✓ Saved {len(df)} candles to {out}")
         return 0
+
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
+
+    finally:
+        # Ensure provider resources are always cleaned up
+        provider.close()
 
 
 def _prefill(ns: argparse.Namespace) -> int:
     from datetime import UTC, datetime
 
     from src.config.paths import get_cache_dir
-    from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
+    from src.data_providers.provider_factory import create_data_provider
 
     def _normalize_symbols(raw):
         normalized = []
@@ -113,8 +121,9 @@ def _prefill(ns: argparse.Namespace) -> int:
     symbols = _normalize_symbols(ns.symbols)
     timeframes = [tf.strip() for tf in ns.timeframes]
     cache_dir = ns.cache_dir or str(get_cache_dir())
+    # Use auto provider (Binance → CoinGecko failover)
     provider = CachedDataProvider(
-        BinanceProvider(), cache_dir=cache_dir, cache_ttl_hours=ns.cache_ttl_hours
+        create_data_provider(provider_type="auto"), cache_dir=cache_dir, cache_ttl_hours=ns.cache_ttl_hours
     )
     print(
         f"Prefilling cache dir={cache_dir} symbols={symbols} timeframes={timeframes} range={start.date()}..{end.date()}"
@@ -144,8 +153,8 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     from tqdm import tqdm
 
     from src.config.paths import ensure_dir_exists, get_cache_dir
-    from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
+    from src.data_providers.provider_factory import create_data_provider
     from src.infrastructure.logging.config import configure_logging
 
     # Setup logging
@@ -177,10 +186,11 @@ def _preload_offline(ns: argparse.Namespace) -> int:
 
     # Create providers with extended TTL for offline preloading
     # Use very long TTL (10 years) to treat preloaded data as permanently valid
+    # Use auto provider (Binance → CoinGecko failover)
     try:
-        binance_provider = BinanceProvider()
+        data_provider = create_data_provider(provider_type="auto")
         cached_provider = CachedDataProvider(
-            binance_provider,
+            data_provider,
             cache_dir=cache_dir,
             cache_ttl_hours=87600,  # 10 years = 10 * 365 * 24 hours
         )
@@ -423,7 +433,7 @@ def _cache_manager(ns: argparse.Namespace) -> int:
         for filename in files:
             path = os.path.join(cache_dir, filename)
             try:
-                mtime = datetime.fromtimestamp(os.path.getmtime(path))
+                mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=UTC)
                 age_h = (now - mtime).total_seconds() / 3600
                 if age_h > ns.hours:
                     size = os.path.getsize(path)

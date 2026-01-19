@@ -7,6 +7,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
+try:
+    import tensorflow
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+
 from src.ml.training_pipeline.config import TrainingConfig, TrainingContext, TrainingPaths
 from src.ml.training_pipeline.pipeline import (
     TrainingResult,
@@ -127,6 +134,7 @@ class TestGenerateVersionId:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestEnableMixedPrecision:
     """Test enable_mixed_precision function."""
 
@@ -186,9 +194,11 @@ class TestEnableMixedPrecision:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestRunTrainingPipeline:
     """Test run_training_pipeline function."""
 
+    @patch("src.ml.training_pipeline.pipeline.configure_gpu")
     @patch("src.ml.training_pipeline.pipeline.download_price_data")
     @patch("src.ml.training_pipeline.pipeline.load_sentiment_data")
     @patch("src.ml.training_pipeline.pipeline.assess_sentiment_data_quality")
@@ -211,6 +221,7 @@ class TestRunTrainingPipeline:
         mock_assess,
         mock_load_sentiment,
         mock_download_price,
+        mock_configure_gpu,
         tmp_path,
     ):
         # Arrange
@@ -231,6 +242,9 @@ class TestRunTrainingPipeline:
         paths.data_dir.mkdir(parents=True, exist_ok=True)
         paths.models_dir.mkdir(parents=True, exist_ok=True)
         ctx = TrainingContext(config=config, paths=paths)
+
+        # Mock GPU configuration
+        mock_configure_gpu.return_value = None  # CPU mode
 
         # Mock data
         price_df = pd.DataFrame(
