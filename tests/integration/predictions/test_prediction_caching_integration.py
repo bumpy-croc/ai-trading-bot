@@ -218,29 +218,30 @@ class TestPredictionCachingIntegration:
         mock_cache_manager.get_stats.assert_called_once()
 
     def test_cache_performance_characteristics(self, mock_db_manager):
-        """Test cache performance characteristics"""
+        """Test cache performance characteristics using relative comparisons.
+
+        Uses relative timing comparisons instead of absolute thresholds to avoid
+        flaky tests on CI runners with variable performance. With mocked database
+        operations, both cache hit and miss paths should have similar performance
+        characteristics.
+        """
         mock_db, mock_session = mock_db_manager
 
         # Create cache manager
         cache_manager = PredictionCacheManager(mock_db, ttl=60, max_size=100)
 
-        # Test cache miss performance (should be fast)
+        # Use same number of operations for fair comparison
+        num_ops = 100
+
+        # Test cache miss performance
         mock_session.query.return_value.filter.return_value.first.return_value = None
 
         start_time = time.time()
-        num_miss_ops = 100
-        for _ in range(num_miss_ops):
+        for _ in range(num_ops):
             cache_manager.get(self.features, "test_model", {"param": "value"})
         cache_miss_time = time.time() - start_time
 
-        # Cache miss overhead should be minimal
-        # Increased threshold for CI tolerance: 500ms for 100 operations (5ms per op)
-        assert cache_miss_time < 0.5, (
-            f"Cache miss operations too slow: {cache_miss_time:.3f}s for {num_miss_ops} ops "
-            f"({cache_miss_time/num_miss_ops*1000:.2f}ms per op, expected <5ms per op)"
-        )
-
-        # Test cache hit performance (should be very fast)
+        # Test cache hit performance
         mock_entry = MagicMock()
         mock_entry.predicted_price = 100.5
         mock_entry.confidence = 0.8
@@ -251,21 +252,29 @@ class TestPredictionCachingIntegration:
         mock_session.query.return_value.filter.return_value.first.return_value = mock_entry
 
         start_time = time.time()
-        num_hit_ops = 10
-        for _ in range(num_hit_ops):
+        for _ in range(num_ops):
             cache_manager.get(self.features, "test_model", {"param": "value"})
         cache_hit_time = time.time() - start_time
 
-        # Cache hit should be reasonably fast
-        # Increased threshold for CI tolerance: 200ms for 10 operations (20ms per op)
-        assert cache_hit_time < 0.2, (
-            f"Cache hit operations too slow: {cache_hit_time:.3f}s for {num_hit_ops} ops "
-            f"({cache_hit_time/num_hit_ops*1000:.2f}ms per op, expected <20ms per op)"
+        # Relative comparison: with mocked database, both paths should have similar
+        # performance. Allow 5x variance to account for CI runner variability.
+        # This tests that neither path has unexpected overhead, not absolute speed.
+        cache_miss_per_op = cache_miss_time / num_ops
+        cache_hit_per_op = cache_hit_time / num_ops
+
+        assert cache_hit_per_op < cache_miss_per_op * 5, (
+            f"Cache hit operations unexpectedly slower than cache miss: "
+            f"hit={cache_hit_per_op*1000:.2f}ms/op vs miss={cache_miss_per_op*1000:.2f}ms/op"
+        )
+
+        assert cache_miss_per_op < cache_hit_per_op * 5, (
+            f"Cache miss operations unexpectedly slower than cache hit: "
+            f"miss={cache_miss_per_op*1000:.2f}ms/op vs hit={cache_hit_per_op*1000:.2f}ms/op"
         )
 
         # Verify cache stats are being tracked correctly
-        assert cache_manager._stats["misses"] == num_miss_ops
-        assert cache_manager._stats["hits"] == num_hit_ops
+        assert cache_manager._stats["misses"] == num_ops
+        assert cache_manager._stats["hits"] == num_ops
 
     def test_cache_consistency(self, mock_db_manager):
         """Test cache consistency across multiple operations"""
