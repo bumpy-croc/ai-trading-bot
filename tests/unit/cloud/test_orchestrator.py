@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -343,3 +343,204 @@ class TestCheckStatus:
         assert result.success is False
         assert result.job_status == "Unknown"
         assert "Connection failed" in result.error
+
+
+class TestPrepareTrainingData:
+    """Tests for _prepare_training_data method."""
+
+    @pytest.fixture
+    def cloud_config(self) -> CloudTrainingConfig:
+        """Create cloud config for testing."""
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            epochs=50,
+        )
+        return CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+
+    def test_skips_when_s3_uri_already_set(self, cloud_config: CloudTrainingConfig) -> None:
+        """Verify _prepare_training_data returns None when input_data_s3_uri is set."""
+        cloud_config.input_data_s3_uri = "s3://existing-bucket/data"
+        mock_provider = MagicMock()
+        mock_provider.provider_name = "local"
+
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+        result = orchestrator._prepare_training_data()
+
+        assert result is None
+
+    def test_successful_download_and_upload(
+        self, cloud_config: CloudTrainingConfig, tmp_path: Path
+    ) -> None:
+        """Verify successful download from Binance and upload to S3."""
+        mock_provider = MagicMock()
+        mock_provider.provider_name = "local"
+        mock_s3_manager = MagicMock()
+        mock_s3_manager.upload_training_data.return_value = "s3://test-bucket/data/BTCUSDT"
+
+        orchestrator = CloudTrainingOrchestrator(
+            cloud_config, mock_provider, s3_manager=mock_s3_manager
+        )
+
+        # Create a mock download function that creates a CSV file in the temp dir
+        def mock_download_func(args: MagicMock) -> int:
+            # Create a CSV file in the output directory
+            csv_path = Path(args.output_dir) / "BTCUSDT_1h_2024.csv"
+            csv_path.write_text("timestamp,open,high,low,close,volume\n2024-01-01,100,101,99,100,1000")
+            return 0
+
+        with patch("cli.commands.data._download", side_effect=mock_download_func):
+            result = orchestrator._prepare_training_data()
+
+        assert result == "s3://test-bucket/data/BTCUSDT"
+        mock_s3_manager.upload_training_data.assert_called_once()
+        # Verify the upload was called with correct symbol and timeframe
+        call_kwargs = mock_s3_manager.upload_training_data.call_args
+        assert call_kwargs.kwargs["symbol"] == "BTCUSDT"
+        assert call_kwargs.kwargs["timeframe"] == "1h"
+
+    def test_raises_error_when_download_fails(self, cloud_config: CloudTrainingConfig) -> None:
+        """Verify RuntimeError raised when Binance download fails."""
+        mock_provider = MagicMock()
+        mock_provider.provider_name = "local"
+
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+
+        with patch("cli.commands.data._download", return_value=1):
+            with pytest.raises(RuntimeError, match="Failed to download training data"):
+                orchestrator._prepare_training_data()
+
+    def test_raises_error_when_no_data_files_found(
+        self, cloud_config: CloudTrainingConfig
+    ) -> None:
+        """Verify RuntimeError raised when no CSV files found after download."""
+        mock_provider = MagicMock()
+        mock_provider.provider_name = "local"
+
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+
+        with patch("cli.commands.data._download", return_value=0):
+            with patch("pathlib.Path.glob", return_value=[]):
+                with pytest.raises(RuntimeError, match="No data files found"):
+                    orchestrator._prepare_training_data()
+
+
+class TestFindArtifactsRoot:
+    """Tests for _find_artifacts_root method."""
+
+    @pytest.fixture
+    def cloud_config(self) -> CloudTrainingConfig:
+        """Create cloud config for testing."""
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            epochs=50,
+        )
+        return CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+
+    def test_returns_root_when_metadata_at_root(
+        self, cloud_config: CloudTrainingConfig, tmp_path: Path
+    ) -> None:
+        """Verify returns artifact_path when metadata.json exists at root."""
+        # Create flat structure with metadata at root
+        (tmp_path / "metadata.json").write_text('{"version": "1.0"}')
+        (tmp_path / "model.keras").write_text("model data")
+
+        mock_provider = MagicMock()
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+
+        result = orchestrator._find_artifacts_root(tmp_path)
+
+        assert result == tmp_path
+
+    def test_finds_nested_structure(
+        self, cloud_config: CloudTrainingConfig, tmp_path: Path
+    ) -> None:
+        """Verify finds artifacts in nested SYMBOL/TYPE/VERSION structure."""
+        # Create nested structure: BTCUSDT/basic/2024-01-01_v1/
+        nested_dir = tmp_path / "BTCUSDT" / "basic" / "2024-01-01_v1"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "metadata.json").write_text('{"version": "1.0"}')
+        (nested_dir / "model.keras").write_text("model data")
+
+        mock_provider = MagicMock()
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+
+        result = orchestrator._find_artifacts_root(tmp_path)
+
+        assert result == nested_dir
+
+    def test_returns_root_when_no_metadata_found(
+        self, cloud_config: CloudTrainingConfig, tmp_path: Path
+    ) -> None:
+        """Verify returns artifact_path when no metadata.json found anywhere."""
+        # Create directory with no metadata.json
+        (tmp_path / "some_file.txt").write_text("data")
+
+        mock_provider = MagicMock()
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+
+        result = orchestrator._find_artifacts_root(tmp_path)
+
+        assert result == tmp_path
+
+    def test_requires_model_file_alongside_metadata(
+        self, cloud_config: CloudTrainingConfig, tmp_path: Path
+    ) -> None:
+        """Verify requires model.keras or model.onnx alongside metadata.json."""
+        # Create nested structure with metadata but no model file
+        nested_dir = tmp_path / "BTCUSDT" / "basic" / "2024-01-01_v1"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "metadata.json").write_text('{"version": "1.0"}')
+        # No model.keras or model.onnx
+
+        mock_provider = MagicMock()
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+
+        result = orchestrator._find_artifacts_root(tmp_path)
+
+        # Should return root since no valid artifacts found
+        assert result == tmp_path
+
+    def test_finds_onnx_model(
+        self, cloud_config: CloudTrainingConfig, tmp_path: Path
+    ) -> None:
+        """Verify finds artifacts with model.onnx instead of model.keras."""
+        nested_dir = tmp_path / "BTCUSDT" / "basic" / "2024-01-01_v1"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "metadata.json").write_text('{"version": "1.0"}')
+        (nested_dir / "model.onnx").write_text("onnx model data")
+
+        mock_provider = MagicMock()
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+
+        result = orchestrator._find_artifacts_root(tmp_path)
+
+        assert result == nested_dir
+
+    def test_handles_deeply_nested_paths(
+        self, cloud_config: CloudTrainingConfig, tmp_path: Path
+    ) -> None:
+        """Verify handles deeply nested paths within depth limit."""
+        # Create nested structure within depth limit (10)
+        nested_dir = tmp_path / "a" / "b" / "c" / "d" / "e"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "metadata.json").write_text('{"version": "1.0"}')
+        (nested_dir / "model.keras").write_text("model data")
+
+        mock_provider = MagicMock()
+        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
+
+        result = orchestrator._find_artifacts_root(tmp_path)
+
+        assert result == nested_dir
