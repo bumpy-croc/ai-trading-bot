@@ -7,7 +7,11 @@ upload data → submit job → wait → download artifacts → sync to registry.
 from __future__ import annotations
 
 import argparse
+import itertools
+import json
 import logging
+import re
+import shutil
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -41,6 +45,10 @@ SPOT_WAIT_TIME_MULTIPLIER = 2
 # Maximum length for job ID suffix used in temporary directory naming
 # Prevents excessively long paths while allowing for timestamp-based job IDs
 MAX_JOB_SUFFIX_LENGTH = 100
+
+# Maximum number of files to search when looking for nested metadata.json
+# Prevents slow searches on deeply nested directories or large artifact trees
+MAX_METADATA_SEARCH_DEPTH = 100
 
 
 class CloudTrainingOrchestrator:
@@ -365,9 +373,6 @@ class CloudTrainingOrchestrator:
             raise ArtifactSyncError("No output path found for job")
 
         # Extract and validate job_id suffix for temp directory naming
-        import re
-        import tempfile
-
         job_suffix = job_id.split("/")[-1] if job_id else ""
         # Validate: alphanumeric/hyphens/underscores only, reasonable length
         # Note: regex ^[\w\-]+$ already excludes path separators (/, \)
@@ -394,8 +399,6 @@ class CloudTrainingOrchestrator:
             # Determine version ID and model type from metadata
             metadata_path = actual_artifact_path / "metadata.json"
             if metadata_path.exists():
-                import json
-
                 with open(metadata_path) as f:
                     metadata = json.load(f)
                 version_id = metadata.get(
@@ -425,8 +428,6 @@ class CloudTrainingOrchestrator:
         finally:
             # Clean up temp directory
             if temp_dir is not None and temp_dir.exists():
-                import shutil
-
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _find_artifacts_root(self, artifact_path: Path) -> Path:
@@ -447,7 +448,8 @@ class CloudTrainingOrchestrator:
 
         # Look for nested structure: SYMBOL/TYPE/VERSION/*
         # This happens when SageMaker saves with full registry path
-        for candidate in artifact_path.rglob("metadata.json"):
+        # Limit search depth to prevent slow searches on deep directories
+        for candidate in itertools.islice(artifact_path.rglob("metadata.json"), MAX_METADATA_SEARCH_DEPTH):
             # Find the parent directory that contains model files
             parent = candidate.parent
             if (parent / "model.keras").exists() or (parent / "model.onnx").exists():
@@ -481,8 +483,6 @@ class CloudTrainingOrchestrator:
         Returns:
             Path to synced model directory
         """
-        import shutil
-
         # Create expected registry directory path
         version_dir = local_registry / symbol / model_type / version_id
 

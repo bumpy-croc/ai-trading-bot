@@ -90,10 +90,11 @@ def _validate_data_coverage(df: pd.DataFrame, ctx: TrainingContext, file_path: P
         raise ValueError(f"Data file is empty: {file_path}")
 
     # Cast to Timestamp for type safety - index should be DatetimeIndex
-    data_start = pd.Timestamp(df.index.min())
-    data_end = pd.Timestamp(df.index.max())
-    expected_start = pd.Timestamp(ctx.config.start_date)
-    expected_end = pd.Timestamp(ctx.config.end_date)
+    # Normalize timezone awareness to prevent comparison errors
+    data_start = pd.Timestamp(df.index.min()).tz_localize(None)
+    data_end = pd.Timestamp(df.index.max()).tz_localize(None)
+    expected_start = pd.Timestamp(ctx.config.start_date).tz_localize(None)
+    expected_end = pd.Timestamp(ctx.config.end_date).tz_localize(None)
 
     # Check date range coverage
     if data_start > expected_start:
