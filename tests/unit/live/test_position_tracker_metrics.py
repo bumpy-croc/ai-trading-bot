@@ -80,7 +80,9 @@ def test_close_position_invalid_price_retains_position() -> None:
 
     # Assert - close failed but position is still tracked
     assert result is None
-    assert tracker.has_position(order_id), "Position should remain in tracker after validation failure"
+    assert tracker.has_position(
+        order_id
+    ), "Position should remain in tracker after validation failure"
     assert tracker.get_position(order_id) is not None
 
 

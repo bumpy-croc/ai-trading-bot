@@ -1,16 +1,16 @@
 {
   "version": "48.0.0",
   "files": {
-    "1534e42c3df7b7b025d06d21daf30f0d5ce0850f9cf1a0f7410e81f356b275a9": {
+    "80ec7b3c4d897465ddf3cad00061d00f68f06e3c04a2872daf1744d6243bd50b": {
       "displayName": "MlCloudTrainingStack Template",
       "source": {
         "path": "MlCloudTrainingStack.template.json",
         "packaging": "file"
       },
       "destinations": {
-        "current_account-current_region-4be1a104": {
+        "current_account-current_region-f168fc28": {
           "bucketName": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}",
-          "objectKey": "1534e42c3df7b7b025d06d21daf30f0d5ce0850f9cf1a0f7410e81f356b275a9.json",
+          "objectKey": "80ec7b3c4d897465ddf3cad00061d00f68f06e3c04a2872daf1744d6243bd50b.json",
           "assumeRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-file-publishing-role-${AWS::AccountId}-${AWS::Region}"
         }
       }

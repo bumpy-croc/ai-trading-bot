@@ -1,0 +1,45 @@
+{
+  "sequence_length": 120,
+  "features": [
+    {
+      "name": "open_scaled",
+      "required": true
+    },
+    {
+      "name": "high_scaled",
+      "required": true
+    },
+    {
+      "name": "low_scaled",
+      "required": true
+    },
+    {
+      "name": "close_scaled",
+      "required": true
+    },
+    {
+      "name": "volume_scaled",
+      "required": true
+    },
+    {
+      "name": "sma_7_scaled",
+      "required": true
+    },
+    {
+      "name": "sma_14_scaled",
+      "required": true
+    },
+    {
+      "name": "sma_30_scaled",
+      "required": true
+    },
+    {
+      "name": "rsi_scaled",
+      "required": true
+    },
+    {
+      "name": "sentiment_momentum_scaled",
+      "required": true
+    }
+  ]
+}

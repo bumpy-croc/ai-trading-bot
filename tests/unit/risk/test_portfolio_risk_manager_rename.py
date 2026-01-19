@@ -11,7 +11,7 @@ class TestPortfolioRiskManagerRename:
     def test_new_class_name_imports(self):
         """Test that PortfolioRiskManager can be imported directly."""
         assert PortfolioRiskManager is not None
-        assert hasattr(PortfolioRiskManager, '__init__')
+        assert hasattr(PortfolioRiskManager, "__init__")
 
     def test_backward_compatibility_alias(self):
         """Test that RiskManager alias still works for backward compatibility."""
@@ -57,24 +57,24 @@ class TestPortfolioRiskManagerRename:
 
     def test_class_name_attribute(self):
         """Test that the class __name__ attribute is correct."""
-        assert PortfolioRiskManager.__name__ == 'PortfolioRiskManager'
+        assert PortfolioRiskManager.__name__ == "PortfolioRiskManager"
 
         # Alias should point to same class, so same __name__
-        assert RiskManager.__name__ == 'PortfolioRiskManager'
+        assert RiskManager.__name__ == "PortfolioRiskManager"
 
     def test_exports_in_init(self):
         """Test that __all__ exports both names."""
         from src.risk import __all__
 
-        assert 'PortfolioRiskManager' in __all__
-        assert 'RiskManager' in __all__
-        assert 'RiskParameters' in __all__
+        assert "PortfolioRiskManager" in __all__
+        assert "RiskManager" in __all__
+        assert "RiskParameters" in __all__
 
     def test_docstring_updated(self):
         """Test that class docstring mentions portfolio management."""
         doc = PortfolioRiskManager.__doc__
         assert doc is not None
-        assert 'portfolio' in doc.lower() or 'Portfolio' in doc
+        assert "portfolio" in doc.lower() or "Portfolio" in doc
 
     def test_functionality_unchanged(self):
         """Test that core functionality still works after rename."""
@@ -87,14 +87,14 @@ class TestPortfolioRiskManagerRename:
         assert mgr.get_max_concurrent_positions() == 3  # default
 
         # Test position tracking still works
-        mgr.update_position('BTCUSDT', 'long', 0.05, 50000.0)
-        assert 'BTCUSDT' in mgr.positions
+        mgr.update_position("BTCUSDT", "long", 0.05, 50000.0)
+        assert "BTCUSDT" in mgr.positions
         assert mgr.daily_risk_used == 0.05
 
-        mgr.close_position('BTCUSDT')
-        assert 'BTCUSDT' not in mgr.positions
+        mgr.close_position("BTCUSDT")
+        assert "BTCUSDT" not in mgr.positions
         assert mgr.daily_risk_used == 0.0
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

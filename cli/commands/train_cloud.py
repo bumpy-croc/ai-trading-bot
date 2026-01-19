@@ -94,6 +94,13 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         action="store_true",
         help="Don't sync artifacts to local registry after completion",
     )
+    parser.add_argument(
+        "--input-data-s3",
+        type=str,
+        metavar="S3_URI",
+        help="S3 URI of pre-downloaded training data (e.g., s3://bucket/training-data/BTCUSDT_1h.csv). "
+        "Required when Binance API blocks cloud IPs.",
+    )
 
     args = parser.parse_args(ns.args or [])
 
@@ -152,6 +159,7 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
     cloud_config = CloudTrainingConfig.from_env(training_config)
     cloud_config.instance_config = instance_config
     cloud_config.auto_sync_artifacts = not args.no_sync
+    cloud_config.input_data_s3_uri = args.input_data_s3
 
     # Print job summary
     print("=" * 60)
