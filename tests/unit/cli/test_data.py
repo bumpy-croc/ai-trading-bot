@@ -74,16 +74,18 @@ class TestDataDownload:
             format="csv",
         )
 
-        # Act
-        with patch("cli.commands.data.ccxt") as mock_ccxt:
-            mock_binance = Mock()
-            mock_binance.fetch_ohlcv.return_value = []
-            mock_ccxt.binance.return_value = mock_binance
+        # Act - Mock provider to return None (no data)
+        with patch("src.data_providers.provider_factory.create_data_provider") as mock_create_provider:
+            mock_provider = Mock()
+            mock_provider.get_historical_data.return_value = None
+            mock_provider.close.return_value = None
+            mock_create_provider.return_value = mock_provider
 
             result = _download(args)
 
             # Assert
             assert result == 1
+            mock_provider.close.assert_called_once()
 
     def test_supports_feather_format(self):
         """Test that feather format is supported."""
