@@ -172,6 +172,8 @@ class TestRunTrainingNoWait:
         return CloudTrainingConfig(
             training_config=training_config,
             storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+            # Provide pre-existing S3 URI to skip data preparation step
+            input_data_s3_uri="s3://test-bucket/training-data/BTCUSDT",
         )
 
     def test_run_training_no_wait_returns_immediately(
