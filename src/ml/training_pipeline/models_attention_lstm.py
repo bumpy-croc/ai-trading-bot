@@ -37,8 +37,8 @@ except ImportError:
     layers = None  # type: ignore
 
 if TYPE_CHECKING:
-    from tensorflow.keras.models import Model as ModelType
     from tensorflow.keras import callbacks as CallbacksType
+    from tensorflow.keras.models import Model as ModelType
 else:
     ModelType = Any  # type: ignore
     CallbacksType = Any  # type: ignore
@@ -122,7 +122,7 @@ class AttentionLayer(layers.Layer):
 
 def create_attention_lstm_model(
     input_shape: tuple[int, int],
-    lstm_units: list[int] = [128, 64],
+    lstm_units: list[int] | None = None,
     num_attention_heads: int = 4,
     attention_key_dim: int = 64,
     dense_units: int = 64,
@@ -155,12 +155,14 @@ def create_attention_lstm_model(
     """
     _ensure_tensorflow_available()
 
+    if lstm_units is None:
+        lstm_units = [128, 64]
+
     inputs = layers.Input(shape=input_shape, name="sequence_input")
 
     # Stacked LSTM layers with return_sequences=True for attention
     x = inputs
     for i, units in enumerate(lstm_units):
-        return_sequences = i < len(lstm_units) - 1  # All except last return sequences
         x = layers.LSTM(
             units,
             return_sequences=True,  # Always return sequences for attention
@@ -282,14 +284,6 @@ def attention_lstm_callbacks(patience: int = 20, min_delta: float = 1e-4) -> lis
             min_lr=1e-6,
             verbose=1,
         ),
-        # Model checkpoint (save best model)
-        # Note: Use this in training pipeline with proper path
-        # callbacks.ModelCheckpoint(
-        #     'best_attention_lstm.keras',
-        #     monitor='val_loss',
-        #     save_best_only=True,
-        #     verbose=1
-        # )
     ]
 
 

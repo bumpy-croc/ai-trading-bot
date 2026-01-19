@@ -54,10 +54,10 @@ def _load_strategy(strategy_name: str):
 
 def _get_date_range(args):
     if args.start and args.end:
-        start_date = datetime.strptime(args.start, "%Y-%m-%d")
-        end_date = datetime.strptime(args.end, "%Y-%m-%d")
+        start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
+        end_date = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
     elif args.start:
-        start_date = datetime.strptime(args.start, "%Y-%m-%d")
+        start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
         end_date = datetime.now(UTC)
     elif args.days:
         end_date = datetime.now(UTC)
@@ -81,15 +81,10 @@ def _handle(ns: argparse.Namespace) -> int:
         strategy = _load_strategy(ns.strategy)
         logger.info(f"Loaded strategy: {strategy.name}")
 
-        # Provider
-        if ns.provider == "coinbase":
-            from src.data_providers.coinbase_provider import CoinbaseProvider
+        # Provider - use factory for automatic failover support
+        from src.data_providers.provider_factory import create_data_provider
 
-            provider = CoinbaseProvider()
-        else:
-            from src.data_providers.binance_provider import BinanceProvider
-
-            provider = BinanceProvider()
+        provider = create_data_provider(provider_type=ns.provider)
         if ns.no_cache:
             data_provider = provider
             logger.info("Data caching disabled")
@@ -130,11 +125,14 @@ def _handle(ns: argparse.Namespace) -> int:
             log_to_database=enable_db_logging,
         )
 
-        trading_symbol = (
-            SymbolFactory.to_exchange_symbol(ns.symbol, ns.provider)
-            if ns.symbol != "BTC-USD"
-            else strategy.get_trading_pair()
-        )
+        # Map provider types to exchange names for symbol conversion
+        # "auto" uses Binance first, "coingecko" handles conversion internally
+        provider_for_symbol = {
+            "auto": "binance",  # Auto tries Binance first
+            "coingecko": "binance",  # Use Binance format, CoinGecko converts internally
+        }.get(ns.provider, ns.provider)
+
+        trading_symbol = SymbolFactory.to_exchange_symbol(ns.symbol, provider_for_symbol)
 
         results = backtester.run(
             symbol=trading_symbol, timeframe=ns.timeframe, start=start_date, end=end_date
@@ -269,9 +267,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--provider",
-        choices=["coinbase", "binance"],
-        default="binance",
-        help="Exchange provider to use - default: binance",
+        choices=["auto", "binance", "coinbase", "coingecko"],
+        default="auto",
+        help="Data provider: auto=Binance→CoinGecko failover (recommended), binance=Binance only, coinbase=Coinbase only, coingecko=CoinGecko only - default: auto",
     )
     p.add_argument(
         "--max-drawdown",

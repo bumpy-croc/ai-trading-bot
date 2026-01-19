@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
+import logging
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 class DataProvider(ABC):
@@ -47,18 +50,18 @@ class DataProvider(ABC):
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        # Validate that critical price columns contain valid finite values
-        # NaN/Infinity in price data would corrupt position sizing and P&L calculations
+        # Validate that critical price columns contain valid finite positive values
+        # NaN/Infinity/zero/negative prices would corrupt position sizing and P&L calculations
         # For production resilience, we drop invalid rows and log a warning instead of failing
         original_length = len(df)
         for col in ["open", "high", "low", "close"]:
-            # Check for invalid values
-            invalid_mask = df[col].isna() | np.isinf(df[col])
+            # Check for invalid values (NaN, Infinity, zero, negative)
+            invalid_mask = df[col].isna() | np.isinf(df[col]) | (df[col] <= 0)
             invalid_count = invalid_mask.sum()
 
             if invalid_count > 0:
                 logger.warning(
-                    "Dropping %d rows with invalid %s values (NaN/Infinity) "
+                    "Dropping %d rows with invalid %s values (NaN/Infinity/non-positive) "
                     "from exchange data. This may indicate temporary exchange issues "
                     "or network problems. Remaining rows: %d/%d",
                     invalid_count,

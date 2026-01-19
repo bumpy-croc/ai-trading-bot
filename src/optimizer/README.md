@@ -44,7 +44,7 @@ atb optimizer --strategy ml_basic --no-validate
 ## Programmatic Usage
 
 ```python
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from src.optimizer.runner import ExperimentRunner
 from src.optimizer.schemas import ExperimentConfig, ParameterSet
 from src.optimizer.analyzer import PerformanceAnalyzer

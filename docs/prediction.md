@@ -1,6 +1,6 @@
 # Prediction & models
 
-> **Last Updated**: 2025-11-18  
+> **Last Updated**: 2026-01-12  
 > **Related Documentation**: [Backtesting](backtesting.md), [Live trading](live_trading.md)
 
 Machine-learning inference and model lifecycle management live under `src/prediction` and `src/ml`. The goal is to keep training
@@ -19,7 +19,7 @@ isolated from live execution while still exposing predictions to strategies in a
 Usage example:
 
 ```python
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from src.data_providers.binance_provider import BinanceProvider
 from src.prediction.config import PredictionConfig
@@ -42,7 +42,7 @@ The registry (`src/prediction/models/registry.py`) loads model bundles from the 
 Each bundle contains:
 
 - `model.onnx` – the ONNX runtime artifact used by inference-heavy workflows.
-- `model.keras` plus the `saved_model/` export – retained for retracing or fine-tuning.
+- `model.keras` and (optionally) a `saved_model/` export – retained for retracing or fine-tuning.
 - `metadata.json` – training parameters, evaluation summaries, and lineage (symbol, timeframe, model type).
 - `feature_schema.json` – canonical schema describing the features the model expects at inference time.
 - `metrics.json` (optional) – lightweight rollups surfaced by the CLI compare command.

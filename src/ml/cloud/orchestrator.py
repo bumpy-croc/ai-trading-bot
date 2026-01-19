@@ -6,7 +6,13 @@ upload data → submit job → wait → download artifacts → sync to registry.
 
 from __future__ import annotations
 
+import argparse
+import itertools
+import json
 import logging
+import re
+import shutil
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +45,10 @@ SPOT_WAIT_TIME_MULTIPLIER = 2
 # Maximum length for job ID suffix used in temporary directory naming
 # Prevents excessively long paths while allowing for timestamp-based job IDs
 MAX_JOB_SUFFIX_LENGTH = 100
+
+# Maximum number of files to search when looking for nested metadata.json
+# Prevents slow searches on deeply nested directories or large artifact trees
+MAX_METADATA_SEARCH_DEPTH = 100
 
 
 class CloudTrainingOrchestrator:
@@ -103,6 +113,63 @@ class CloudTrainingOrchestrator:
             duration_seconds=perf_counter() - start_time,
         )
 
+    def _prepare_training_data(self) -> str | None:
+        """Download training data locally and upload to S3.
+
+        This step is required because Binance API blocks requests from AWS IP addresses.
+        Data is downloaded fresh from Binance (no cache) and uploaded to S3
+        for SageMaker to use as input channel.
+
+        Returns:
+            S3 URI of uploaded data, or None if input_data_s3_uri was already set
+
+        Raises:
+            RuntimeError: If data download or upload fails
+        """
+        # Skip if S3 URI already provided by user
+        if self.config.input_data_s3_uri:
+            logger.info(f"Using provided S3 data URI: {self.config.input_data_s3_uri}")
+            return None
+
+        from cli.commands.data import _download
+
+        tc = self.config.training_config
+
+        logger.info(f"Downloading {tc.symbol} data from Binance (fresh, no cache)...")
+
+        # Create temp directory for downloads
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Download data from Binance using existing CLI function
+            args = argparse.Namespace(
+                symbol=tc.symbol,
+                timeframe=tc.timeframe,
+                start_date=tc.start_date.strftime("%Y-%m-%d"),
+                end_date=tc.end_date.strftime("%Y-%m-%d"),
+                output_dir=tmpdir,
+                format="csv",
+            )
+
+            if _download(args) != 0:
+                raise RuntimeError("Failed to download training data from Binance")
+
+            # Find downloaded file
+            data_files = list(Path(tmpdir).glob("*.csv"))
+            if not data_files:
+                raise RuntimeError("No data files found after download")
+
+            logger.info(f"Downloaded {len(data_files)} file(s)")
+
+            # Upload to S3 using existing artifact manager
+            logger.info(f"Uploading training data to S3 bucket {self.config.storage_config.s3_bucket}...")
+            s3_uri = self.s3_manager.upload_training_data(
+                symbol=tc.symbol,
+                timeframe=tc.timeframe,
+                data_files=data_files,
+            )
+
+            logger.info(f"Training data uploaded to {s3_uri}")
+            return s3_uri
+
     def run_training(self, wait: bool = True) -> CloudTrainingResult:
         """Execute complete cloud training workflow.
 
@@ -116,12 +183,19 @@ class CloudTrainingOrchestrator:
         start_time = perf_counter()
 
         try:
+            # Step 0: Download training data and upload to S3
+            # This is required because Binance API blocks AWS IP addresses
+            logger.info("Step 0/5: Preparing training data...")
+            s3_uri = self._prepare_training_data()
+            if s3_uri:
+                self.config.input_data_s3_uri = s3_uri
+
             # Step 1: Build job specification
-            logger.info("Step 1/4: Building training job specification...")
+            logger.info("Step 1/5: Building training job specification...")
             job_spec = self._build_job_spec()
 
             # Step 2: Submit training job
-            logger.info(f"Step 2/4: Submitting job to {self.provider.provider_name}...")
+            logger.info(f"Step 2/5: Submitting job to {self.provider.provider_name}...")
             job_id = self.provider.submit_training_job(job_spec)
             logger.info(f"Job submitted: {job_id}")
 
@@ -136,7 +210,7 @@ class CloudTrainingOrchestrator:
                 )
 
             # Step 3: Wait for completion
-            logger.info("Step 3/4: Waiting for job completion...")
+            logger.info("Step 3/5: Waiting for job completion...")
             status = self._wait_for_completion(job_id)
 
             if not status.is_successful:
@@ -145,7 +219,7 @@ class CloudTrainingOrchestrator:
                 )
 
             # Step 4: Sync artifacts to local registry
-            logger.info("Step 4/4: Syncing artifacts to local registry...")
+            logger.info("Step 4/5: Syncing artifacts to local registry...")
             artifact_path = self._sync_artifacts(job_id, status.output_s3_path)
 
             duration = perf_counter() - start_time
@@ -233,6 +307,7 @@ class CloudTrainingOrchestrator:
             use_spot_instances=ic.use_spot_instances,
             max_runtime_seconds=self.config.max_runtime_seconds,
             output_s3_path=sc.model_uri,
+            input_data_s3_uri=self.config.input_data_s3_uri,
             hyperparameters={
                 "force_sentiment": str(tc.force_sentiment).lower(),
                 "force_price_only": str(tc.force_price_only).lower(),
@@ -298,9 +373,6 @@ class CloudTrainingOrchestrator:
             raise ArtifactSyncError("No output path found for job")
 
         # Extract and validate job_id suffix for temp directory naming
-        import re
-        import tempfile
-
         job_suffix = job_id.split("/")[-1] if job_id else ""
         # Validate: alphanumeric/hyphens/underscores only, reasonable length
         # Note: regex ^[\w\-]+$ already excludes path separators (/, \)
@@ -319,11 +391,14 @@ class CloudTrainingOrchestrator:
             # Download from provider (S3 for cloud, local path for local provider)
             artifact_path = self.provider.download_artifacts(job_id, temp_dir)
 
-            # Determine version ID from metadata
-            metadata_path = artifact_path / "metadata.json"
-            if metadata_path.exists():
-                import json
+            # SageMaker training creates nested structure: SYMBOL/TYPE/VERSION/*
+            # Find the actual model artifacts directory
+            actual_artifact_path = self._find_artifacts_root(artifact_path)
+            logger.info(f"Found artifacts at: {actual_artifact_path}")
 
+            # Determine version ID and model type from metadata
+            metadata_path = actual_artifact_path / "metadata.json"
+            if metadata_path.exists():
                 with open(metadata_path) as f:
                     metadata = json.load(f)
                 version_id = metadata.get(
@@ -338,33 +413,52 @@ class CloudTrainingOrchestrator:
             local_registry = get_project_root() / "src" / "ml" / "models"
             symbol = self.config.training_config.symbol.upper()
 
-            # For local provider, artifacts are already on the filesystem
-            if self.provider.provider_name == "local":
-                final_path = self._sync_local_artifacts(
-                    artifact_path=artifact_path,
-                    local_registry=local_registry,
-                    symbol=symbol,
-                    model_type=model_type,
-                    version_id=version_id,
-                )
-            else:
-                final_path = self.s3_manager.sync_to_local_registry(
-                    s3_uri=s3_output_path,
-                    local_registry=local_registry,
-                    symbol=symbol,
-                    model_type=model_type,
-                    version_id=version_id,
-                    update_latest=True,
-                )
+            # Artifacts are already extracted locally by provider.download_artifacts()
+            # Use _sync_local_artifacts for both local and cloud providers
+            final_path = self._sync_local_artifacts(
+                artifact_path=actual_artifact_path,
+                local_registry=local_registry,
+                symbol=symbol,
+                model_type=model_type,
+                version_id=version_id,
+            )
 
             return final_path
 
         finally:
             # Clean up temp directory
             if temp_dir is not None and temp_dir.exists():
-                import shutil
-
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _find_artifacts_root(self, artifact_path: Path) -> Path:
+        """Find the actual model artifacts directory.
+
+        SageMaker training creates a nested structure: SYMBOL/TYPE/VERSION/*
+        This method finds the directory containing the actual model files.
+
+        Args:
+            artifact_path: Extracted artifacts path (may be nested)
+
+        Returns:
+            Path to the directory containing model files
+        """
+        # Check if metadata.json exists at the root (local provider or flat structure)
+        if (artifact_path / "metadata.json").exists():
+            return artifact_path
+
+        # Look for nested structure: SYMBOL/TYPE/VERSION/*
+        # This happens when SageMaker saves with full registry path
+        # Limit search depth to prevent slow searches on deep directories
+        for candidate in itertools.islice(artifact_path.rglob("metadata.json"), MAX_METADATA_SEARCH_DEPTH):
+            # Find the parent directory that contains model files
+            parent = candidate.parent
+            if (parent / "model.keras").exists() or (parent / "model.onnx").exists():
+                logger.info(f"Found nested artifacts at: {parent}")
+                return parent
+
+        # No valid structure found, return as-is
+        logger.warning(f"Could not find metadata.json in artifacts, using root: {artifact_path}")
+        return artifact_path
 
     def _sync_local_artifacts(
         self,
@@ -374,9 +468,10 @@ class CloudTrainingOrchestrator:
         model_type: str,
         version_id: str,
     ) -> Path:
-        """Sync locally trained artifacts to model registry.
+        """Sync downloaded artifacts to model registry.
 
-        Used when training on local provider (no S3 needed).
+        Used for both local and cloud providers after artifacts are downloaded
+        and extracted to a local directory (by provider.download_artifacts()).
 
         Args:
             artifact_path: Local path to trained artifacts
@@ -388,8 +483,6 @@ class CloudTrainingOrchestrator:
         Returns:
             Path to synced model directory
         """
-        import shutil
-
         # Create expected registry directory path
         version_dir = local_registry / symbol / model_type / version_id
 

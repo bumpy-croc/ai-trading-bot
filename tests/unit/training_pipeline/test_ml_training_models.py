@@ -1,8 +1,16 @@
 """Unit tests for ML training pipeline model factories module."""
 
 import pytest
-import tensorflow as tf
-from tensorflow.keras import callbacks
+
+try:
+    import tensorflow as tf
+    from tensorflow.keras import callbacks
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
+    callbacks = None  # type: ignore
 
 from src.ml.training_pipeline.models import (
     build_price_only_model,
@@ -12,15 +20,17 @@ from src.ml.training_pipeline.models import (
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestCreateAdaptiveModel:
-    """Test create_model function."""
+    """Test create_model function with the new factory API."""
 
     def test_creates_model_with_sentiment(self):
         # Arrange
+        model_type = "cnn_lstm"  # Baseline model
         input_shape = (120, 15)  # sequence_length=120, num_features=15
 
         # Act
-        model = create_model(input_shape, has_sentiment=True)
+        model = create_model(model_type, input_shape, has_sentiment=True)
 
         # Assert
         assert isinstance(model, tf.keras.Model)
@@ -29,10 +39,11 @@ class TestCreateAdaptiveModel:
 
     def test_creates_model_without_sentiment(self):
         # Arrange
+        model_type = "cnn_lstm"
         input_shape = (120, 10)  # sequence_length=120, num_features=10
 
         # Act
-        model = create_model(input_shape, has_sentiment=False)
+        model = create_model(model_type, input_shape, has_sentiment=False)
 
         # Assert
         assert isinstance(model, tf.keras.Model)
@@ -41,10 +52,11 @@ class TestCreateAdaptiveModel:
 
     def test_model_is_compiled(self):
         # Arrange
+        model_type = "cnn_lstm"
         input_shape = (120, 15)
 
         # Act
-        model = create_model(input_shape)
+        model = create_model(model_type, input_shape)
 
         # Assert
         assert model.optimizer is not None
@@ -53,20 +65,22 @@ class TestCreateAdaptiveModel:
 
     def test_model_has_adam_optimizer(self):
         # Arrange
+        model_type = "cnn_lstm"
         input_shape = (120, 15)
 
         # Act
-        model = create_model(input_shape)
+        model = create_model(model_type, input_shape)
 
         # Assert
         assert isinstance(model.optimizer, tf.keras.optimizers.Adam)
 
     def test_model_has_mse_loss(self):
         # Arrange
+        model_type = "cnn_lstm"
         input_shape = (120, 15)
 
         # Act
-        model = create_model(input_shape)
+        model = create_model(model_type, input_shape)
 
         # Assert
         # TensorFlow converts loss functions to their canonical form
@@ -74,10 +88,11 @@ class TestCreateAdaptiveModel:
 
     def test_model_has_rmse_metric(self):
         # Arrange
+        model_type = "cnn_lstm"
         input_shape = (120, 15)
 
         # Act
-        model = create_model(input_shape)
+        model = create_model(model_type, input_shape)
 
         # Assert - model should be compiled with at least one metric besides loss
         # In Keras 3, metrics are configured differently so we just check they exist
@@ -92,10 +107,11 @@ class TestCreateAdaptiveModel:
 
     def test_model_architecture_has_conv_layers(self):
         # Arrange
+        model_type = "cnn_lstm"
         input_shape = (120, 15)
 
         # Act
-        model = create_model(input_shape)
+        model = create_model(model_type, input_shape)
 
         # Assert - check for Conv1D layers
         layer_types = [type(layer).__name__ for layer in model.layers]
@@ -103,10 +119,11 @@ class TestCreateAdaptiveModel:
 
     def test_model_architecture_has_gru_layers(self):
         # Arrange
+        model_type = "cnn_lstm"
         input_shape = (120, 15)
 
         # Act
-        model = create_model(input_shape)
+        model = create_model(model_type, input_shape)
 
         # Assert - check for GRU layers (balanced model uses GRU)
         layer_types = [type(layer).__name__ for layer in model.layers]
@@ -114,10 +131,11 @@ class TestCreateAdaptiveModel:
 
     def test_model_architecture_has_dropout_layers(self):
         # Arrange
+        model_type = "cnn_lstm"
         input_shape = (120, 15)
 
         # Act
-        model = create_model(input_shape)
+        model = create_model(model_type, input_shape)
 
         # Assert - check for Dropout layers
         layer_types = [type(layer).__name__ for layer in model.layers]
@@ -127,8 +145,9 @@ class TestCreateAdaptiveModel:
         # Arrange
         import numpy as np
 
+        model_type = "cnn_lstm"
         input_shape = (120, 15)
-        model = create_model(input_shape)
+        model = create_model(model_type, input_shape)
         test_input = np.random.rand(1, 120, 15).astype(np.float32)
 
         # Act
@@ -139,6 +158,7 @@ class TestCreateAdaptiveModel:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestBuildPriceOnlyModel:
     """Test build_price_only_model function."""
 
@@ -261,6 +281,7 @@ class TestBuildPriceOnlyModel:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestDefaultCallbacks:
     """Test default_callbacks function."""
 

@@ -8,9 +8,10 @@ Usage:
     python scripts/validate_models.py
 """
 
-import numpy as np
 import sys
 from pathlib import Path
+
+import numpy as np
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -18,12 +19,13 @@ sys.path.insert(0, str(project_root))
 
 try:
     import tensorflow as tf
+
     print("✓ TensorFlow available:", tf.__version__)
 except ImportError:
     print("✗ TensorFlow not available - install with: pip install tensorflow")
     sys.exit(1)
 
-from src.ml.training_pipeline.models import create_model, AVAILABLE_MODELS, MODEL_VARIANTS
+from src.ml.training_pipeline.models import create_model
 
 
 def generate_synthetic_data(num_samples=100, sequence_length=60, num_features=15):
@@ -45,7 +47,7 @@ def test_model(model_type, variant="default"):
         X_val, y_val = generate_synthetic_data(num_samples=20)
 
         # Create model
-        print(f"  Creating model...")
+        print("  Creating model...")
         model = create_model(model_type, input_shape=(60, 15), variant=variant)
 
         # Check model
@@ -54,19 +56,14 @@ def test_model(model_type, variant="default"):
         print(f"  Total parameters: {model.count_params():,}")
 
         # Train for 1 epoch
-        print(f"  Training for 1 epoch...")
-        history = model.fit(
-            X_train, y_train,
-            validation_data=(X_val, y_val),
-            epochs=1,
-            verbose=0
-        )
+        print("  Training for 1 epoch...")
+        history = model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=1, verbose=0)
 
         # Inference
-        print(f"  Testing inference...")
+        print("  Testing inference...")
         predictions = model.predict(X_val[:5], verbose=0)
 
-        print(f"  ✓ Model works correctly!")
+        print("  ✓ Model works correctly!")
         print(f"    - Loss: {history.history['loss'][0]:.4f}")
         print(f"    - Val Loss: {history.history['val_loss'][0]:.4f}")
         print(f"    - Predictions shape: {predictions.shape}")
@@ -76,15 +73,16 @@ def test_model(model_type, variant="default"):
     except Exception as e:
         print(f"  ✗ Model failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def main():
     """Run validation for all models."""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("ML MODEL ARCHITECTURE VALIDATION")
-    print("="*60)
+    print("=" * 60)
     print("\nTesting all implemented model architectures...")
 
     results = {}
@@ -106,9 +104,9 @@ def main():
             results[f"{model_type}_deep"] = success
 
     # Summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("VALIDATION SUMMARY")
-    print("="*60)
+    print("=" * 60)
 
     total = len(results)
     passed = sum(results.values())
@@ -124,7 +122,7 @@ def main():
             if not success:
                 print(f"  - {name}")
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
 
     if failed == 0:
         print("✓ ALL MODELS VALIDATED SUCCESSFULLY!")

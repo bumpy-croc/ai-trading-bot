@@ -336,6 +336,8 @@ class BacktestEngine:
 
 **Live Engine:**
 ```python
+from datetime import UTC, datetime
+
 class LiveTradingEngine:
     def __init__(self, ...):
         self.performance_tracker = PerformanceTracker(initial_balance)
@@ -545,6 +547,8 @@ class LiveTradingEngine:
 
 4. ✅ Update `_close_position()` to use tracker:
    ```python
+   from datetime import UTC, datetime
+
    self.performance_tracker.record_trade(trade, fee, slippage)
    self.performance_tracker.update_balance(self.current_balance, datetime.now(UTC))
 
@@ -555,6 +559,8 @@ class LiveTradingEngine:
 
 5. ✅ Update `_update_performance_metrics()`:
    ```python
+   from datetime import UTC, datetime
+
    def _update_performance_metrics(self):
        """Update performance tracking and persist to database."""
        self.performance_tracker.update_balance(self.current_balance, datetime.now(UTC))

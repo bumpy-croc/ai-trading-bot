@@ -50,7 +50,7 @@ Run architecture-reviewer and code-reviewer agents on the current branch changes
 6. **Run quality checks**
    - After all fixes are applied, run:
      ```bash
-     atb dev quality
+     atb dev quality --changed
      ```
 
 7. **Generate summary report**

@@ -1,0 +1,37 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Add ECR pull permissions to SageMaker execution role for ai-trading-bot-training repository'
+
+Parameters:
+  SageMakerExecutionRoleName:
+    Type: String
+    Default: MlCloudTrainingStack-SageMakerExecutionRole7843F3B8-3ng298a0RVn9
+    Description: The name of the SageMaker execution role
+
+Resources:
+  SageMakerECRPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: SageMakerECRPullPolicy
+      Roles:
+        - !Ref SageMakerExecutionRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ECRGetAuthToken
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: ECRPullFromTrainingRepository
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+            Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/ai-trading-bot-training'
+
+Outputs:
+  PolicyArn:
+    Description: The ARN of the created policy
+    Value: !Ref SageMakerECRPolicy

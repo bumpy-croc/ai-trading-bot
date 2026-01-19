@@ -322,6 +322,8 @@ handler = DynamicRiskHandler(dynamic_risk_manager=dynamic_mgr)
 
 **Usage in Entry Handler**:
 ```python
+from datetime import UTC, datetime
+
 # Original position size from portfolio risk manager
 original_size = 0.05  # 5% of balance
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from argparse import Namespace
 from pathlib import Path
 
@@ -14,6 +15,58 @@ from src.ml.training_pipeline.config import TrainingContext
 
 logger = logging.getLogger(__name__)
 
+# SageMaker S3 data channel path
+SAGEMAKER_INPUT_DATA_PATH = Path("/opt/ml/input/data/training")
+
+
+def _download_from_s3(s3_uri: str, local_path: Path) -> Path:
+    """Download training data from S3.
+
+    Args:
+        s3_uri: S3 URI (e.g., s3://bucket/path/data.csv)
+        local_path: Local directory to download to
+
+    Returns:
+        Path to downloaded file
+
+    Raises:
+        RuntimeError: If download fails
+    """
+    try:
+        import boto3
+        from botocore.config import Config
+
+        config = Config(
+            connect_timeout=10,
+            read_timeout=60,
+            retries={"max_attempts": 3, "mode": "standard"},
+        )
+        s3_client = boto3.client(
+            "s3", region_name=os.getenv("AWS_REGION", "us-east-1"), config=config
+        )
+    except ImportError as exc:
+        raise RuntimeError("boto3 required for S3 download") from exc
+
+    # Parse S3 URI
+    if not s3_uri.startswith("s3://"):
+        raise ValueError(f"Invalid S3 URI: {s3_uri}")
+    path = s3_uri[5:]
+    bucket, _, key = path.partition("/")
+
+    # Validate bucket and key are non-empty to prevent cryptic boto3 errors
+    if not bucket:
+        raise ValueError(f"S3 URI missing bucket name: {s3_uri}")
+    if not key:
+        raise ValueError(f"S3 URI missing object key: {s3_uri}")
+
+    local_path.mkdir(parents=True, exist_ok=True)
+    local_file = local_path / Path(key).name
+
+    logger.info(f"Downloading training data from s3://{bucket}/{key}")
+    s3_client.download_file(bucket, key, str(local_file))
+    logger.info(f"Downloaded to {local_file}")
+    return local_file
+
 
 def _resolve_latest_file(pattern: str, directory: Path) -> Path:
     matches = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -22,9 +75,85 @@ def _resolve_latest_file(pattern: str, directory: Path) -> Path:
     return matches[0]
 
 
-def download_price_data(ctx: TrainingContext) -> pd.DataFrame:
-    """Download OHLCV data for the requested symbol and date range."""
+def _validate_data_coverage(df: pd.DataFrame, ctx: TrainingContext, file_path: Path) -> None:
+    """Validate that loaded data covers the expected date range.
 
+    Args:
+        df: Loaded price DataFrame with timestamp index
+        ctx: Training context with config
+        file_path: Path to data file (for logging)
+
+    Raises:
+        ValueError: If data does not cover the requested date range
+    """
+    if df.empty:
+        raise ValueError(f"Data file is empty: {file_path}")
+
+    # Cast to Timestamp for type safety - index should be DatetimeIndex
+    # Normalize timezone awareness to prevent comparison errors
+    data_start = pd.Timestamp(df.index.min()).tz_localize(None)
+    data_end = pd.Timestamp(df.index.max()).tz_localize(None)
+    expected_start = pd.Timestamp(ctx.config.start_date).tz_localize(None)
+    expected_end = pd.Timestamp(ctx.config.end_date).tz_localize(None)
+
+    # Check date range coverage
+    if data_start > expected_start:
+        raise ValueError(
+            f"Data starts at {data_start.date()} but training expects data from "
+            f"{expected_start.date()}. Check S3 input channel configuration."
+        )
+    if data_end < expected_end:
+        raise ValueError(
+            f"Data ends at {data_end.date()} but training expects data through "
+            f"{expected_end.date()}. Check S3 input channel configuration."
+        )
+
+    # Warn if filename doesn't match expected symbol (best-effort check)
+    filename = file_path.name.upper()
+    expected_symbol = ctx.config.symbol.upper()
+    if expected_symbol not in filename:
+        logger.warning(
+            f"Data file '{file_path.name}' may not match expected symbol '{ctx.config.symbol}'. "
+            "Verify S3 input channel contains correct data."
+        )
+
+    logger.info(
+        f"Data validation passed: covers {data_start.date()} to {data_end.date()} "
+        f"({len(df)} rows)"
+    )
+
+
+def download_price_data(ctx: TrainingContext, s3_data_uri: str | None = None) -> pd.DataFrame:
+    """Download OHLCV data for the requested symbol and date range.
+
+    Args:
+        ctx: Training context with config and paths
+        s3_data_uri: Optional S3 URI for pre-downloaded training data
+
+    Returns:
+        DataFrame with price data indexed by timestamp
+    """
+    # Priority 1: SageMaker input channel (S3 data mounted by SageMaker)
+    if SAGEMAKER_INPUT_DATA_PATH.exists():
+        logger.info(f"Using SageMaker input data from {SAGEMAKER_INPUT_DATA_PATH}")
+        data_files = list(SAGEMAKER_INPUT_DATA_PATH.glob("*.csv")) + list(
+            SAGEMAKER_INPUT_DATA_PATH.glob("*.feather")
+        )
+        if data_files:
+            latest_file = data_files[0]  # SageMaker mounts single file
+            logger.info(f"Found input data file: {latest_file}")
+            df = _load_price_data_file(latest_file)
+            _validate_data_coverage(df, ctx, latest_file)
+            return df
+        logger.warning("SageMaker input path exists but contains no data files")
+
+    # Priority 2: S3 URI passed directly
+    if s3_data_uri:
+        logger.info(f"Downloading training data from S3: {s3_data_uri}")
+        downloaded_file = _download_from_s3(s3_data_uri, ctx.paths.data_dir)
+        return _load_price_data_file(downloaded_file)
+
+    # Priority 3: Download from exchange API
     ns = Namespace(
         symbol=ctx.symbol_exchange,
         timeframe=ctx.config.timeframe,
@@ -48,10 +177,23 @@ def download_price_data(ctx: TrainingContext) -> pd.DataFrame:
 
     latest_file = _resolve_latest_file(ctx.price_data_glob, ctx.paths.data_dir)
     logger.debug("Using price data file %s", latest_file)
-    if latest_file.suffix == ".feather":
-        df = pd.read_feather(latest_file)
+    return _load_price_data_file(latest_file)
+
+
+def _load_price_data_file(file_path: Path) -> pd.DataFrame:
+    """Load price data from CSV or feather file.
+
+    Args:
+        file_path: Path to data file
+
+    Returns:
+        DataFrame with price data indexed by timestamp
+    """
+    logger.debug(f"Loading price data from {file_path}")
+    if file_path.suffix == ".feather":
+        df = pd.read_feather(file_path)
     else:
-        df = pd.read_csv(latest_file, encoding="utf-8")
+        df = pd.read_csv(file_path, encoding="utf-8")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.set_index("timestamp")
     return df.sort_index()
@@ -72,9 +214,14 @@ def load_sentiment_data(ctx: TrainingContext) -> pd.DataFrame | None:
         logger.info("Loaded %d sentiment points", len(df))
         return df
     except (
-        Exception
-    ) as exc:  # noqa: BLE001 - Catch all provider errors (network, API changes, parsing)
+        ConnectionError,
+        TimeoutError,
+        ValueError,
+        KeyError,
+        pd.errors.EmptyDataError,
+        RuntimeError,
+    ) as exc:
         # Sentiment data is optional - allow training to continue with price-only features
-        # if sentiment download fails for any reason
+        # if sentiment download fails for expected reasons (network, parsing, API changes)
         logger.warning("Sentiment download failed: %s", exc)
         return None

@@ -1,4 +1,13 @@
 import numpy as np
+import pytest
+
+try:
+    import tensorflow as tf
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
 
 from src.ml.training_pipeline.datasets import build_tf_datasets, create_sequences, split_sequences
 
@@ -23,6 +32,7 @@ def test_create_sequences_matches_manual_loop():
     np.testing.assert_allclose(targets, manual_targets)
 
 
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 def test_build_tf_datasets_batches_correctly():
     features = np.random.random((20, 5, 3)).astype(np.float32)
     targets = np.random.random(20).astype(np.float32)

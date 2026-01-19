@@ -2,7 +2,14 @@
 
 import numpy as np
 import pytest
-import tensorflow as tf
+
+try:
+    import tensorflow as tf
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
 
 from src.ml.training_pipeline.datasets import (
     DEFAULT_SHUFFLE_BUFFER_SIZE,
@@ -264,6 +271,7 @@ class TestSplitSequences:
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestBuildTfDatasets:
     """Test build_tf_datasets function."""
 

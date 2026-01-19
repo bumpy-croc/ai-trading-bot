@@ -1,7 +1,7 @@
 """Tests for atb backtest command."""
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -67,8 +67,8 @@ class TestGetDateRange:
         start_date, end_date = _get_date_range(args)
 
         # Assert
-        assert start_date == datetime(2024, 1, 1)
-        assert end_date == datetime(2024, 12, 31)
+        assert start_date == datetime(2024, 1, 1, tzinfo=UTC)
+        assert end_date == datetime(2024, 12, 31, tzinfo=UTC)
 
     def test_uses_start_and_now_when_only_start_provided(self):
         """Test that start date and current date are used when only start provided."""
@@ -77,14 +77,14 @@ class TestGetDateRange:
 
         # Act
         with patch("cli.commands.backtest.datetime") as mock_datetime:
-            mock_now = datetime(2024, 10, 29)
+            mock_now = datetime(2024, 10, 29, tzinfo=UTC)
             mock_datetime.now.return_value = mock_now
             mock_datetime.strptime = datetime.strptime
 
             start_date, end_date = _get_date_range(args)
 
             # Assert
-            assert start_date == datetime(2024, 1, 1)
+            assert start_date == datetime(2024, 1, 1, tzinfo=UTC)
             assert end_date == mock_now
 
     def test_uses_days_parameter_when_provided(self):
@@ -294,8 +294,8 @@ class TestHandleBacktest:
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
             patch(
-                "src.data_providers.coinbase_provider.CoinbaseProvider"
-            ) as mock_coinbase_provider,
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
             patch(
                 "src.data_providers.cached_data_provider.CachedDataProvider"
             ) as mock_cached_provider,
@@ -309,7 +309,7 @@ class TestHandleBacktest:
             mock_load_strategy.return_value = mock_strategy
 
             mock_provider = Mock()
-            mock_coinbase_provider.return_value = mock_provider
+            mock_create_provider.return_value = mock_provider
 
             mock_data_provider = Mock()
             mock_data_provider.get_cache_info.return_value = {
@@ -323,7 +323,7 @@ class TestHandleBacktest:
 
             # Assert
             assert result == 0
-            mock_coinbase_provider.assert_called_once()
+            mock_create_provider.assert_called_once_with(provider_type="coinbase")
 
     def test_returns_error_on_invalid_strategy(self, default_args):
         """Test that error is returned when strategy loading fails."""

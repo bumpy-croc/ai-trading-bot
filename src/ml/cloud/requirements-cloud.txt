@@ -1,32 +1,59 @@
 # Cloud Training Dependencies
-# Minimal set of packages needed for SageMaker training jobs
+# All dependencies needed for SageMaker training jobs
+# TensorFlow 2.15 has strict dependency requirements that must be respected
 
-# Core ML
-tensorflow>=2.15.0,<2.17.0
+# Core ML - TensorFlow 2.15 has strict dependency requirements
+tensorflow==2.15.0
 scikit-learn>=1.3.2
 pandas>=2.1.4
-numpy>=1.24.0
+numpy<2.0.0,>=1.23.5
 
-# Model export
+# Model export - TensorFlow 2.15 requires protobuf<5
 onnx>=1.15.0
 onnxruntime>=1.17.0
 tf2onnx>=1.16.0
+protobuf<5.0.0,>=3.20.3
 
 # Data providers (for downloading training data)
 python-binance>=1.0.19
 requests>=2.31.0
 python-dotenv>=1.0.0
+ccxt>=4.4.85
+
+# NLP (for sentiment analysis)
+textblob>=0.17.1
+nltk>=3.9.0
 
 # Database (for logging training metrics)
+sqlalchemy>=2.0.23
 psycopg2-binary>=2.9.9
-SQLAlchemy>=2.0.23
+alembic>=1.13.1
+
+# System monitoring
+psutil>=5.9.6
+
+# Progress bars
+tqdm>=4.66.1
 
 # Technical indicators
 ta>=0.11.0
 
+# Plotting
+matplotlib>=3.7.0
+
 # Utilities
 python-dateutil>=2.8.2
 pytz>=2023.3
+
+# Flask (may be needed by some modules)
+Flask>=2.3.3
+Flask-SocketIO>=5.3.6
+Flask-Admin>=1.6.1
+Flask-Limiter>=3.7.0
+Flask-Login>=0.6.3
+Flask-WTF>=1.2.1
+gevent>=25.8.2
+gevent-websocket>=0.10.1
 
 # AWS SDK (for S3 operations)
 boto3>=1.34.0
