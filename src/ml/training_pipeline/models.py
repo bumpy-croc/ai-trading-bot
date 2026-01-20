@@ -261,7 +261,9 @@ def create_model(
                 "Ensure the file exists in src/ml/training_pipeline/"
             ) from None
 
-        return create_tcn_with_attention(input_shape, **kwargs)
+        # Filter out kwargs not accepted by TCN attention models
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k != "has_sentiment"}
+        return create_tcn_with_attention(input_shape, **filtered_kwargs)
 
     # Price-only LSTM (simple baseline)
     elif model_type_lower == "lstm":
