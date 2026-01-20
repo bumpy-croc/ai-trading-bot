@@ -1,7 +1,7 @@
 {
   "symbol": "ETHUSDT",
-  "model_type": "sentiment",
-  "training_date": "2026-01-20T08:54:02.612709+00:00",
+  "model_type": "tcn",
+  "training_date": "2026-01-20T10:14:25.576428+00:00",
   "feature_names": [
     "open_scaled",
     "high_scaled",
@@ -36,35 +36,36 @@
   },
   "robustness_results": {
     "base_performance": {
-      "mse": 90302.5546875,
-      "rmse": 300.50384521484375
+      "mse": 247238.296875,
+      "rmse": 497.2306213378906
     },
     "no_sentiment_performance": {
-      "mse": 91041.6953125,
-      "rmse": 301.7311706542969,
-      "degradation_pct": 0.8185157552361488
+      "mse": 267837.21875,
+      "rmse": 517.5299072265625,
+      "degradation_pct": 8.331606537103653
     }
   },
   "training_params": {
     "epochs": 300,
     "batch_size": 32,
     "timeframe": "1h",
-    "start_date": "2017-11-03T07:09:56.927382+00:00",
-    "end_date": "2026-01-20T07:09:56.927382+00:00",
-    "architecture": "attention_lstm",
+    "start_date": "2017-11-03T08:55:53.577495+00:00",
+    "end_date": "2026-01-20T08:55:53.577495+00:00",
+    "architecture": "tcn",
     "architecture_variant": "default"
   },
   "evaluation_results": {
-    "train_loss": 43777.4609375,
-    "test_loss": 90302.578125,
-    "train_rmse": 209.2306365966797,
-    "test_rmse": 300.5038757324219,
-    "mape": 6.5502142906188965
+    "train_loss": 86576.3046875,
+    "test_loss": 247238.3125,
+    "train_rmse": 294.238525390625,
+    "test_rmse": 497.23065185546875,
+    "mape": 15.870004653930664
   },
   "diagnostics": {
     "plots": false,
     "robustness": true,
     "onnx": true
   },
-  "version_id": "2026-01-20_08h_v1"
+  "version_id": "2026-01-20_10h_v1",
+  "timeframe": "1h"
 }

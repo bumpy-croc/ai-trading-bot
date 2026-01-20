@@ -25,7 +25,6 @@ from src.config.constants import (
     DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_STRATEGY_BASE_FRACTION,
-    DEFAULT_STRATEGY_MIN_CONFIDENCE,
     DEFAULT_TAKE_PROFIT_PCT,
 )
 from src.risk.risk_manager import RiskManager as EngineRiskManager
@@ -50,7 +49,10 @@ def create_ml_basic_strategy(
     model_name: str | None = None,
     model_type: str | None = None,
     timeframe: str | None = None,
+    symbol: str | None = None,
     fast_mode: bool = False,
+    min_confidence: float | None = None,
+    base_fraction: float | None = None,
 ) -> Strategy:
     """
     Create ML Basic strategy using component composition.
@@ -59,13 +61,22 @@ def create_ml_basic_strategy(
         name: Strategy name
         sequence_length: Number of candles for sequence prediction
         model_name: Model name for prediction engine
-        model_type: Model type (e.g., "basic")
+        model_type: Model type (e.g., "basic", "attention_lstm", "cnn_lstm", "tcn")
         timeframe: Model timeframe (e.g., "1h")
+        symbol: Trading symbol for model registry selection (e.g., "BTCUSDT")
         fast_mode: Enable fast mode for testing (disables ML)
+        min_confidence: Minimum confidence threshold for position sizing (default: 0.1).
+            Lower values allow more trades with smaller predicted returns.
+        base_fraction: Base fraction of balance for position sizing (default: 0.2).
 
     Returns:
         Configured Strategy instance
     """
+    # Use more aggressive defaults for ML strategies - allow trades with smaller predictions
+    if min_confidence is None:
+        min_confidence = 0.1  # Allows trades with ~0.83% predicted moves (vs 2.5% with 0.3)
+    if base_fraction is None:
+        base_fraction = DEFAULT_STRATEGY_BASE_FRACTION
     risk_parameters = RiskParameters(
         base_risk_per_trade=DEFAULT_BASE_RISK_PER_TRADE,
         default_take_profit_pct=DEFAULT_TAKE_PROFIT_PCT,
@@ -113,15 +124,17 @@ def create_ml_basic_strategy(
             model_name=model_name,
             model_type=model_type,
             timeframe=timeframe,
+            symbol=symbol,
         )
 
         risk_manager = CoreRiskAdapter(core_risk_manager)
         risk_manager.set_strategy_overrides(risk_overrides)
 
         # Create position sizer with confidence weighting
+        # Lower min_confidence allows more trades with smaller predicted returns
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
-            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
+            base_fraction=base_fraction,
+            min_confidence=min_confidence,
         )
         regime_detector = EnhancedRegimeDetector()
 

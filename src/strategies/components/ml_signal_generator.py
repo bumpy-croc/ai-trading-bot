@@ -406,7 +406,7 @@ class MLBasicSignalGenerator(SignalGenerator):
 
     # Configuration constants
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
-    CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
+    DEFAULT_CONFIDENCE_MULTIPLIER = 20  # Default multiplier for confidence calculation
 
     # Default symbol used for registry selection when none specified
     DEFAULT_SYMBOL = "BTCUSDT"
@@ -419,6 +419,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         model_type: str | None = None,
         timeframe: str | None = None,
         symbol: str | None = None,
+        confidence_multiplier: float | None = None,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -430,10 +431,17 @@ class MLBasicSignalGenerator(SignalGenerator):
             model_type: Model type for registry selection (optional)
             timeframe: Timeframe for registry selection (optional)
             symbol: Trading symbol for registry selection (optional, defaults to BTCUSDT)
+            confidence_multiplier: Multiplier for confidence calculation (default: 20).
+                Higher values produce higher confidence from smaller predicted returns.
         """
         super().__init__(name)
 
         self.sequence_length = sequence_length
+        self.confidence_multiplier = (
+            confidence_multiplier
+            if confidence_multiplier is not None
+            else self.DEFAULT_CONFIDENCE_MULTIPLIER
+        )
 
         # Registry model selection preferences
         self.model_type = model_type or "basic"
@@ -711,7 +719,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         Returns:
             Confidence score between 0.0 and 1.0
         """
-        confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
+        confidence = min(1.0, abs(predicted_return) * self.confidence_multiplier)
         return max(0.0, confidence)
 
     @property
@@ -730,7 +738,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                 "model_timeframe": self.model_timeframe,
                 "symbol": self.symbol,
                 "short_entry_threshold": self.SHORT_ENTRY_THRESHOLD,
-                "confidence_multiplier": self.CONFIDENCE_MULTIPLIER,
+                "confidence_multiplier": self.confidence_multiplier,
             }
         )
         return params

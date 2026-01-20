@@ -1,7 +1,7 @@
 {
-  "symbol": "ETHUSDT",
-  "model_type": "sentiment",
-  "training_date": "2026-01-20T04:49:59.870660+00:00",
+  "symbol": "BTCUSDT",
+  "model_type": "attention_lstm",
+  "training_date": "2026-01-20T14:21:31.633616+00:00",
   "feature_names": [
     "open_scaled",
     "high_scaled",
@@ -36,35 +36,36 @@
   },
   "robustness_results": {
     "base_performance": {
-      "mse": 1650.1712646484375,
-      "rmse": 40.62229919433594
+      "mse": 417931808.0,
+      "rmse": 20443.380859375
     },
     "no_sentiment_performance": {
-      "mse": 3001.400634765625,
-      "rmse": 54.78504180908203,
-      "degradation_pct": 81.88418745994568
+      "mse": 419695168.0,
+      "rmse": 20486.462890625,
+      "degradation_pct": 0.4219253081828356
     }
   },
   "training_params": {
     "epochs": 300,
     "batch_size": 32,
     "timeframe": "1h",
-    "start_date": "2017-11-03T03:44:07.631079+00:00",
-    "end_date": "2026-01-20T03:44:07.631079+00:00",
-    "architecture": "cnn_lstm",
+    "start_date": "2017-11-03T12:26:50.902386+00:00",
+    "end_date": "2026-01-20T12:26:50.902386+00:00",
+    "architecture": "attention_lstm",
     "architecture_variant": "default"
   },
   "evaluation_results": {
-    "train_loss": 1867.54541015625,
-    "test_loss": 1650.1717529296875,
-    "train_rmse": 43.21510696411133,
-    "test_rmse": 40.62230682373047,
-    "mape": 0.9723716974258423
+    "train_loss": 17661482.0,
+    "test_loss": 417931584.0,
+    "train_rmse": 4202.556640625,
+    "test_rmse": 20443.375,
+    "mape": 17.525686264038086
   },
   "diagnostics": {
     "plots": false,
     "robustness": true,
     "onnx": true
   },
-  "version_id": "2026-01-20_04h_v1"
+  "version_id": "2026-01-20_14h_v1",
+  "timeframe": "1h"
 }
