@@ -312,6 +312,8 @@ class CloudTrainingOrchestrator:
                 "force_sentiment": str(tc.force_sentiment).lower(),
                 "force_price_only": str(tc.force_price_only).lower(),
                 "mixed_precision": str(tc.mixed_precision).lower(),
+                "model_type": tc.model_type,
+                "model_variant": tc.model_variant,
             },
         )
 

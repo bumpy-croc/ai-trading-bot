@@ -72,6 +72,8 @@ def parse_hyperparameters(params: dict) -> dict:
         "force_sentiment": params.get("force_sentiment", "false").lower() == "true",
         "force_price_only": params.get("force_price_only", "false").lower() == "true",
         "mixed_precision": params.get("mixed_precision", "true").lower() == "true",
+        "model_type": params.get("model_type", "cnn_lstm"),
+        "model_variant": params.get("model_variant", "default"),
     }
 
 
@@ -116,6 +118,8 @@ def run_training(parsed_params: dict) -> int:
             force_sentiment=parsed_params["force_sentiment"],
             force_price_only=parsed_params["force_price_only"],
             mixed_precision=parsed_params["mixed_precision"],
+            model_type=parsed_params["model_type"],
+            model_variant=parsed_params["model_variant"],
             diagnostics=DiagnosticsOptions(
                 generate_plots=False,  # No display in container
                 evaluate_robustness=True,
@@ -133,6 +137,7 @@ def run_training(parsed_params: dict) -> int:
         ctx = TrainingContext(config=config, paths=paths)
 
         logger.info(f"Starting training for {config.symbol}")
+        logger.info(f"Model: {config.model_type} ({config.model_variant})")
         logger.info(f"Data range: {start_date} to {end_date}")
         logger.info(f"Epochs: {config.epochs}, Batch size: {config.batch_size}")
 

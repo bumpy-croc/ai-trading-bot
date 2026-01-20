@@ -217,12 +217,15 @@ def create_model(
                 "Ensure the file exists in src/ml/training_pipeline/"
             ) from None
 
+        # Filter out kwargs not accepted by attention_lstm models
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k != "has_sentiment"}
+
         if variant == "lightweight":
             return create_lightweight_attention_lstm(input_shape)
         elif variant == "deep":
             return create_deep_attention_lstm(input_shape)
         else:
-            return create_attention_lstm_model(input_shape, **kwargs)
+            return create_attention_lstm_model(input_shape, **filtered_kwargs)
 
     # Temporal Convolutional Network
     elif model_type_lower == "tcn":
@@ -238,12 +241,15 @@ def create_model(
                 "Ensure the file exists in src/ml/training_pipeline/"
             ) from None
 
+        # Filter out kwargs not accepted by TCN models
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k != "has_sentiment"}
+
         if variant == "lightweight":
             return create_lightweight_tcn(input_shape)
         elif variant == "deep":
             return create_deep_tcn(input_shape)
         else:
-            return create_tcn_model(input_shape, **kwargs)
+            return create_tcn_model(input_shape, **filtered_kwargs)
 
     # TCN with Attention
     elif model_type_lower == "tcn_attention":

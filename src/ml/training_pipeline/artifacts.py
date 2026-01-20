@@ -210,8 +210,25 @@ def evaluate_model_performance(
             "tensorflow is required for model performance evaluation but is not installed. "
             "Install it with: pip install tensorflow"
         )
-    train_loss, train_rmse = model.evaluate(X_train, y_train, verbose=0)
-    test_loss, test_rmse = model.evaluate(X_test, y_test, verbose=0)
+    # Handle models that return different numbers of metrics
+    train_metrics = model.evaluate(X_train, y_train, verbose=0)
+    test_metrics = model.evaluate(X_test, y_test, verbose=0)
+
+    # model.evaluate returns [loss, metric1, metric2, ...] based on compiled metrics
+    # Extract loss and first metric (typically rmse)
+    if isinstance(train_metrics, (list, tuple)):
+        train_loss = train_metrics[0]
+        train_rmse = train_metrics[1] if len(train_metrics) > 1 else 0.0
+    else:
+        train_loss = train_metrics
+        train_rmse = 0.0
+
+    if isinstance(test_metrics, (list, tuple)):
+        test_loss = test_metrics[0]
+        test_rmse = test_metrics[1] if len(test_metrics) > 1 else 0.0
+    else:
+        test_loss = test_metrics
+        test_rmse = 0.0
     test_predictions = model.predict(X_test, verbose=0)
 
     if close_scaler is not None:

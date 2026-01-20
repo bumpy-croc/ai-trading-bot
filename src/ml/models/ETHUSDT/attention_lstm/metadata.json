@@ -1,0 +1,70 @@
+{
+  "symbol": "ETHUSDT",
+  "model_type": "sentiment",
+  "training_date": "2026-01-20T08:54:02.612709+00:00",
+  "feature_names": [
+    "open_scaled",
+    "high_scaled",
+    "low_scaled",
+    "close_scaled",
+    "volume_scaled",
+    "sma_7_scaled",
+    "sma_14_scaled",
+    "sma_30_scaled",
+    "rsi_scaled",
+    "sentiment_momentum_scaled"
+  ],
+  "sequence_length": 120,
+  "has_sentiment": true,
+  "sentiment_assessment": {
+    "total_sentiment_points": 2907,
+    "total_price_points": 71927,
+    "coverage_ratio": 0.9693537641572285,
+    "data_freshness_days": 0,
+    "missing_periods": [
+      [
+        "2018-04-14 00:00:00+00:00",
+        "2018-04-16 00:00:00+00:00"
+      ],
+      [
+        "2024-10-26 00:00:00+00:00",
+        "2024-10-26 00:00:00+00:00"
+      ]
+    ],
+    "quality_score": 1.0,
+    "recommendation": "full_sentiment"
+  },
+  "robustness_results": {
+    "base_performance": {
+      "mse": 90302.5546875,
+      "rmse": 300.50384521484375
+    },
+    "no_sentiment_performance": {
+      "mse": 91041.6953125,
+      "rmse": 301.7311706542969,
+      "degradation_pct": 0.8185157552361488
+    }
+  },
+  "training_params": {
+    "epochs": 300,
+    "batch_size": 32,
+    "timeframe": "1h",
+    "start_date": "2017-11-03T07:09:56.927382+00:00",
+    "end_date": "2026-01-20T07:09:56.927382+00:00",
+    "architecture": "attention_lstm",
+    "architecture_variant": "default"
+  },
+  "evaluation_results": {
+    "train_loss": 43777.4609375,
+    "test_loss": 90302.578125,
+    "train_rmse": 209.2306365966797,
+    "test_rmse": 300.5038757324219,
+    "mape": 6.5502142906188965
+  },
+  "diagnostics": {
+    "plots": false,
+    "robustness": true,
+    "onnx": true
+  },
+  "version_id": "2026-01-20_08h_v1"
+}

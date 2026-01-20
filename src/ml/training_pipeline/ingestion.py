@@ -96,13 +96,14 @@ def _validate_data_coverage(df: pd.DataFrame, ctx: TrainingContext, file_path: P
     expected_start = pd.Timestamp(ctx.config.start_date).tz_localize(None)
     expected_end = pd.Timestamp(ctx.config.end_date).tz_localize(None)
 
-    # Check date range coverage
-    if data_start > expected_start:
+    # Check date range coverage (compare at date level since intraday data
+    # ending at midnight should be considered as covering that day)
+    if data_start.date() > expected_start.date():
         raise ValueError(
             f"Data starts at {data_start.date()} but training expects data from "
             f"{expected_start.date()}. Check S3 input channel configuration."
         )
-    if data_end < expected_end:
+    if data_end.date() < expected_end.date():
         raise ValueError(
             f"Data ends at {data_end.date()} but training expects data through "
             f"{expected_end.date()}. Check S3 input channel configuration."
