@@ -1,9 +1,88 @@
 from __future__ import annotations
 
+import hashlib
+from functools import wraps
+from typing import Any, Callable
+
 import numpy as np
 import pandas as pd
 
 from src.config.constants import DEFAULT_ATR_PERIOD
+
+# Global cache for indicator calculations
+_INDICATOR_CACHE: dict[str, Any] = {}
+_CACHE_MAX_SIZE = 1000  # Limit cache size to prevent memory issues
+
+
+def _make_cache_key(df: pd.DataFrame, func_name: str, **kwargs) -> str | None:
+    """
+    Create a cache key from DataFrame properties and function parameters.
+
+    Uses last timestamp, row count, function name, and sorted parameters.
+    Returns None for empty DataFrames (skip caching).
+    """
+    if df.empty:
+        return None
+
+    # Get last timestamp (assuming index is datetime)
+    last_ts = str(df.index[-1]) if hasattr(df.index, "__getitem__") else str(len(df))
+    num_rows = len(df)
+
+    # Sort parameters for consistent hashing
+    param_str = "_".join(f"{k}={v}" for k, v in sorted(kwargs.items()))
+
+    # Create composite key and hash for shorter keys
+    key_str = "|".join([func_name, last_ts, str(num_rows), param_str])
+    return hashlib.md5(key_str.encode()).hexdigest()
+
+
+def cached_indicator(func: Callable) -> Callable:
+    """
+    Decorator to cache indicator calculations based on DataFrame properties.
+
+    Caches results using a composite key of function name, last timestamp,
+    row count, and all function parameters. Cache is cleared when it exceeds
+    _CACHE_MAX_SIZE entries.
+    """
+
+    @wraps(func)
+    def wrapper(df: pd.DataFrame, *args, **kwargs):
+        # Build cache key
+        cache_key = _make_cache_key(df, func.__name__, **kwargs)
+
+        if cache_key is None:
+            # Empty DataFrame, skip caching
+            return func(df, *args, **kwargs)
+
+        # Check cache
+        if cache_key in _INDICATOR_CACHE:
+            cached = _INDICATOR_CACHE[cache_key]
+            # Return copy to prevent mutation
+            return cached.copy() if isinstance(cached, pd.DataFrame) else cached
+
+        # Calculate indicator
+        result = func(df, *args, **kwargs)
+
+        # Store in cache
+        _INDICATOR_CACHE[cache_key] = (
+            result.copy() if isinstance(result, pd.DataFrame) else result
+        )
+
+        # Limit cache size (remove oldest 20% when exceeded)
+        if len(_INDICATOR_CACHE) > _CACHE_MAX_SIZE:
+            keys_to_remove = list(_INDICATOR_CACHE.keys())[: int(_CACHE_MAX_SIZE * 0.2)]
+            for key in keys_to_remove:
+                del _INDICATOR_CACHE[key]
+
+        return result
+
+    return wrapper
+
+
+def clear_indicator_cache() -> None:
+    """Clear the global indicator cache. Useful for testing or memory management."""
+    global _INDICATOR_CACHE
+    _INDICATOR_CACHE = {}
 
 # Constants for division protection and regime detection
 EPSILON = 1e-10  # Prevents division by zero in all calculations
@@ -14,6 +93,7 @@ VOLATILITY_RATIO_THRESHOLD = 1.3  # Threshold for detecting volatile market cond
 TREND_STRENGTH_MULTIPLIER = 0.5  # Multiplier for determining trending vs ranging markets
 
 
+@cached_indicator
 def calculate_moving_averages(df: pd.DataFrame, periods: list[int]) -> pd.DataFrame:
     """
     Calculate simple moving averages for multiple periods.
@@ -84,6 +164,7 @@ def calculate_rsi(data: pd.DataFrame | pd.Series, period: int = 14) -> pd.Series
     return rsi
 
 
+@cached_indicator
 def calculate_atr(df: pd.DataFrame, period: int = DEFAULT_ATR_PERIOD) -> pd.DataFrame:
     """
     Calculate Average True Range (ATR) volatility indicator.
@@ -116,6 +197,7 @@ def calculate_atr(df: pd.DataFrame, period: int = DEFAULT_ATR_PERIOD) -> pd.Data
     return df
 
 
+@cached_indicator
 def calculate_bollinger_bands(
     df: pd.DataFrame, period: int = 20, std_dev: float = 2.0
 ) -> pd.DataFrame:
@@ -151,6 +233,7 @@ def calculate_bollinger_bands(
     return df
 
 
+@cached_indicator
 def calculate_macd(
     df: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9
 ) -> pd.DataFrame:
