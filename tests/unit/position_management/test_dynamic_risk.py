@@ -744,8 +744,8 @@ class TestCorrelationAdjustment:
         """Test correlation adjustment with normal exposure levels"""
         # 2 positions with 5% each = 10% total (at max correlated risk)
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": 0.05},
-            {"symbol": "ETHUSDT", "size_fraction": 0.05},
+            {"symbol": "BTCUSDT", "size": 0.05},
+            {"symbol": "ETHUSDT", "size": 0.05},
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
@@ -759,9 +759,9 @@ class TestCorrelationAdjustment:
         """Test correlation adjustment with excessive total exposure"""
         # 3 positions with 8% each = 24% total (exceeds 10% max)
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": 0.08},
-            {"symbol": "ETHUSDT", "size_fraction": 0.08},
-            {"symbol": "BNBUSDT", "size_fraction": 0.08},
+            {"symbol": "BTCUSDT", "size": 0.08},
+            {"symbol": "ETHUSDT", "size": 0.08},
+            {"symbol": "BNBUSDT", "size": 0.08},
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
@@ -778,8 +778,8 @@ class TestCorrelationAdjustment:
         # 2 positions with 8% and 9% = 17% total
         # Note: 17% exceeds max_correlated_risk (10%), so triggers high_total_exposure first
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": 0.08},
-            {"symbol": "ETHUSDT", "size_fraction": 0.09},
+            {"symbol": "BTCUSDT", "size": 0.08},
+            {"symbol": "ETHUSDT", "size": 0.09},
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
@@ -796,7 +796,7 @@ class TestCorrelationAdjustment:
         # 1 position with 25% (exceeds 20% max single exposure)
         # Note: 25% also exceeds max_correlated_risk (10%), so triggers high_total_exposure first
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": 0.25},
+            {"symbol": "BTCUSDT", "size": 0.25},
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
@@ -809,11 +809,11 @@ class TestCorrelationAdjustment:
         """Test correlation adjustment with well-diversified portfolio"""
         # 5 positions with 2% each = 10% total (balanced)
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": 0.02},
-            {"symbol": "ETHUSDT", "size_fraction": 0.02},
-            {"symbol": "BNBUSDT", "size_fraction": 0.02},
-            {"symbol": "ADAUSDT", "size_fraction": 0.02},
-            {"symbol": "SOLUSDT", "size_fraction": 0.02},
+            {"symbol": "BTCUSDT", "size": 0.02},
+            {"symbol": "ETHUSDT", "size": 0.02},
+            {"symbol": "BNBUSDT", "size": 0.02},
+            {"symbol": "ADAUSDT", "size": 0.02},
+            {"symbol": "SOLUSDT", "size": 0.02},
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
@@ -828,8 +828,8 @@ class TestCorrelationAdjustment:
         """Test correlation adjustment with short positions"""
         # Mixed long/short positions
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": 0.08},  # Long
-            {"symbol": "ETHUSDT", "size_fraction": -0.08},  # Short
+            {"symbol": "BTCUSDT", "size": 0.08},  # Long
+            {"symbol": "ETHUSDT", "size": -0.08},  # Short
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
@@ -840,10 +840,10 @@ class TestCorrelationAdjustment:
         assert adjustments.primary_reason == "high_total_exposure"
 
     def test_none_size_fraction(self):
-        """Test handling of None size_fraction values"""
+        """Test handling of None size values"""
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": None},
-            {"symbol": "ETHUSDT", "size_fraction": 0.05},
+            {"symbol": "BTCUSDT", "size": None},
+            {"symbol": "ETHUSDT", "size": 0.05},
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
@@ -867,9 +867,9 @@ class TestCorrelationAdjustment:
 
         # 3 positions with 8% each = 24% total (exceeds 20% max)
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": 0.08},
-            {"symbol": "ETHUSDT", "size_fraction": 0.08},
-            {"symbol": "BNBUSDT", "size_fraction": 0.08},
+            {"symbol": "BTCUSDT", "size": 0.08},
+            {"symbol": "ETHUSDT", "size": 0.08},
+            {"symbol": "BNBUSDT", "size": 0.08},
         ]
 
         adjustments = manager._calculate_correlation_adjustment(session_id=1)
@@ -890,8 +890,8 @@ class TestCorrelationAdjustment:
 
         # High exposure positions
         self.db_manager.get_active_positions.return_value = [
-            {"symbol": "BTCUSDT", "size_fraction": 0.15},
-            {"symbol": "ETHUSDT", "size_fraction": 0.15},
+            {"symbol": "BTCUSDT", "size": 0.15},
+            {"symbol": "ETHUSDT", "size": 0.15},
         ]
 
         adjustments = self.manager.calculate_dynamic_risk_adjustments(
