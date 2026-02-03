@@ -519,8 +519,8 @@ class DynamicRiskManager:
             num_positions = len(positions)
 
             for pos in positions:
-                # Extract size (fraction of balance)
-                size = pos.get("size", 0.0)
+                # Extract size (fraction of balance) using current_size after partial exits.
+                size = pos.get("current_size", pos.get("size", 0.0))
                 if size is None:
                     size = 0.0
                 size = float(size)
