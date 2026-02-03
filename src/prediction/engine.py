@@ -269,9 +269,20 @@ class PredictionEngine:
                         )
                         continue
 
-                    denormalized_price = self._apply_rolling_denormalization(
-                        raw_prediction.price, ensemble_bundle, data
-                    )
+                    # Skip this ensemble member if denormalization fails (e.g., NaN/Inf predictions)
+                    # to prevent one bad model from nullifying the entire ensemble
+                    try:
+                        denormalized_price = self._apply_rolling_denormalization(
+                            raw_prediction.price, ensemble_bundle, data
+                        )
+                    except ModelInferenceError as denorm_err:
+                        logger.warning(
+                            "Ensemble model %s produced non-finite prediction, skipping: %s",
+                            ensemble_bundle.key,
+                            str(denorm_err),
+                        )
+                        continue
+
                     preds.append(
                         ModelPrediction(
                             price=denormalized_price,

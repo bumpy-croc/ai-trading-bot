@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import pickle  # nosec B403: used for internal caching; no untrusted inputs
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -62,6 +63,7 @@ class FeatureCache:
         self.default_ttl = default_ttl
         self._cache: dict[str, CacheEntry] = {}
         self._quick_hash_cache: dict[str, str] = {}  # Quick hash to full hash mapping
+        self._lock = threading.RLock()  # Reentrant lock for thread-safe operations
         self._stats = {
             "hits": 0,
             "misses": 0,
@@ -208,23 +210,24 @@ class FeatureCache:
         Returns:
             Cached DataFrame if available and valid, None otherwise
         """
-        # Try quick hash first for performance
-        result = self._find_by_quick_hash(data, extractor_name, config)
-        if result is None:
-            self._stats["misses"] += 1
-            return None
+        with self._lock:
+            # Try quick hash first for performance
+            result = self._find_by_quick_hash(data, extractor_name, config)
+            if result is None:
+                self._stats["misses"] += 1
+                return None
 
-        cache_key, entry = result
+            cache_key, entry = result
 
-        # Check TTL using entry's own TTL value
-        if not entry.is_valid():
-            del self._cache[cache_key]
-            self._stats["evictions"] += 1
-            self._stats["misses"] += 1
-            return None
+            # Check TTL using entry's own TTL value
+            if not entry.is_valid():
+                del self._cache[cache_key]
+                self._stats["evictions"] += 1
+                self._stats["misses"] += 1
+                return None
 
-        self._stats["hits"] += 1
-        return entry.data.copy() if copy else entry.data
+            self._stats["hits"] += 1
+            return entry.data.copy() if copy else entry.data
 
     def set(
         self,
@@ -244,21 +247,22 @@ class FeatureCache:
             result: Feature extraction result to cache
             ttl: Time-to-live for this entry (uses default if None)
         """
-        quick_key = self._generate_cache_key(data, extractor_name, config, use_quick_hash=True)
-        full_hash = self._generate_full_data_hash(data)
-        quick_hash = self._generate_quick_hash(data)
-        ttl = ttl or self.default_ttl
+        with self._lock:
+            quick_key = self._generate_cache_key(data, extractor_name, config, use_quick_hash=True)
+            full_hash = self._generate_full_data_hash(data)
+            quick_hash = self._generate_quick_hash(data)
+            ttl = ttl or self.default_ttl
 
-        entry = CacheEntry(
-            data=result.copy(),
-            timestamp=time.time(),
-            ttl=ttl,
-            data_hash=full_hash,
-            quick_hash=quick_hash,
-        )
+            entry = CacheEntry(
+                data=result.copy(),
+                timestamp=time.time(),
+                ttl=ttl,
+                data_hash=full_hash,
+                quick_hash=quick_hash,
+            )
 
-        self._cache[quick_key] = entry
-        self._stats["sets"] += 1
+            self._cache[quick_key] = entry
+            self._stats["sets"] += 1
 
     def has(self, data: pd.DataFrame, extractor_name: str, config: dict[str, Any]) -> bool:
         """
@@ -276,35 +280,39 @@ class FeatureCache:
 
     def clear(self) -> None:
         """Clear all cached entries."""
-        self._cache.clear()
-        self._quick_hash_cache.clear()
-        self._stats = {
-            "hits": 0,
-            "misses": 0,
-            "evictions": 0,
-            "sets": 0,
-            "quick_hash_matches": 0,
-            "full_hash_verifications": 0,
-        }
+        with self._lock:
+            self._cache.clear()
+            self._quick_hash_cache.clear()
+            self._stats = {
+                "hits": 0,
+                "misses": 0,
+                "evictions": 0,
+                "sets": 0,
+                "quick_hash_matches": 0,
+                "full_hash_verifications": 0,
+            }
 
     def cleanup_expired(self) -> int:
         """
         Remove expired cache entries.
 
+        Thread-safe: Acquires lock to prevent concurrent modifications during iteration.
+
         Returns:
             Number of entries removed
         """
-        expired_keys = []
+        with self._lock:
+            expired_keys = []
 
-        for key, entry in self._cache.items():
-            if entry.is_expired():
-                expired_keys.append(key)
+            for key, entry in self._cache.items():
+                if entry.is_expired():
+                    expired_keys.append(key)
 
-        for key in expired_keys:
-            del self._cache[key]
-            self._stats["evictions"] += 1
+            for key in expired_keys:
+                del self._cache[key]
+                self._stats["evictions"] += 1
 
-        return len(expired_keys)
+            return len(expired_keys)
 
     def get_stats(self) -> dict[str, Any]:
         """
