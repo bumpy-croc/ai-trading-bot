@@ -177,7 +177,7 @@ class LiveTradingEngine:
         time_exit_policy: TimeExitPolicy | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
-        enable_partial_operations: bool = False,
+        enable_partial_operations: bool = True,  # Enable by default for better profit capture
         # Execution realism parameters (parity with backtest engine)
         fee_rate: float = DEFAULT_FEE_RATE,
         slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
