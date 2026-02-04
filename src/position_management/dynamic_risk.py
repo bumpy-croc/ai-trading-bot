@@ -12,13 +12,21 @@ from src.config.constants import (
     DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT,
     DEFAULT_DRAWDOWN_THRESHOLDS,
     DEFAULT_EPSILON,
+    DEFAULT_CORRELATED_EXPOSURE_MIN_FACTOR,
     DEFAULT_GOOD_PERF_DAILY_RISK_FACTOR,
     DEFAULT_GOOD_PERF_POSITION_FACTOR,
     DEFAULT_GOOD_PERF_STOP_TIGHTENING,
     DEFAULT_HIGH_VOL_STOP_TIGHTENING,
     DEFAULT_HIGH_VOLATILITY_THRESHOLD,
+    DEFAULT_LARGE_SINGLE_POSITION_SIZE_FACTOR,
+    DEFAULT_LARGE_SINGLE_POSITION_STOP_MULTIPLIER,
+    DEFAULT_LARGE_SINGLE_POSITION_THRESHOLD,
+    DEFAULT_LOW_DIVERSIFICATION_EXPOSURE_THRESHOLD,
+    DEFAULT_LOW_DIVERSIFICATION_POSITION_COUNT,
+    DEFAULT_LOW_DIVERSIFICATION_SIZE_FACTOR,
     DEFAULT_LOW_VOL_STOP_TIGHTENING,
     DEFAULT_LOW_VOLATILITY_THRESHOLD,
+    DEFAULT_MAX_CORRELATED_POSITIONS_FOR_CAP,
     DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT,
     DEFAULT_PERFORMANCE_GOOD_THRESHOLD,
     DEFAULT_PERFORMANCE_POOR_THRESHOLD,
@@ -542,6 +550,13 @@ class DynamicRiskManager:
                 if size is None:
                     size = 0.0
                 size = float(size)
+                if not math.isfinite(size):
+                    logger.warning(
+                        "Invalid position size for %s: %s",
+                        pos.get("symbol", "unknown"),
+                        size,
+                    )
+                    size = 0.0
                 # Normalize sizes that arrive as raw quantities (exchange sync).
                 if size > 1.0:
                     entry_balance = pos.get("entry_balance")
@@ -565,26 +580,32 @@ class DynamicRiskManager:
 
             # Check 1: Correlated exposure cap (proxy via low position count).
             # Treat small baskets as likely correlated and enforce cap on total exposure.
-            max_correlated_positions = 4
+            max_correlated_positions = DEFAULT_MAX_CORRELATED_POSITIONS_FOR_CAP
             if num_positions <= max_correlated_positions and total_exposure > self.max_correlated_risk:
                 excess_ratio = total_exposure / self.max_correlated_risk
                 position_size_factor = 1.0 / excess_ratio
-                position_size_factor = max(0.5, min(1.0, position_size_factor))
+                position_size_factor = max(
+                    DEFAULT_CORRELATED_EXPOSURE_MIN_FACTOR,
+                    min(1.0, position_size_factor),
+                )
                 primary_reason = "high_correlated_exposure"
                 details["excess_ratio"] = round(excess_ratio, 2)
                 details["correlated_positions_cap"] = max_correlated_positions
 
             # Check 2: Low diversification (too few positions with high exposure)
-            elif num_positions <= 2 and total_exposure > 0.15:  # > 15% in 1-2 positions
+            elif (
+                num_positions <= DEFAULT_LOW_DIVERSIFICATION_POSITION_COUNT
+                and total_exposure > DEFAULT_LOW_DIVERSIFICATION_EXPOSURE_THRESHOLD
+            ):
                 # Reduce new position sizing to encourage diversification
-                position_size_factor = 0.8
+                position_size_factor = DEFAULT_LOW_DIVERSIFICATION_SIZE_FACTOR
                 primary_reason = "low_diversification"
 
             # Check 3: Single position too large
-            elif max_single_exposure > 0.20:  # Any position > 20%
+            elif max_single_exposure > DEFAULT_LARGE_SINGLE_POSITION_THRESHOLD:
                 # Widen stop distance on new positions
-                stop_loss_factor = 1.2  # 20% wider stops
-                position_size_factor = 0.9  # Slight size reduction
+                stop_loss_factor = DEFAULT_LARGE_SINGLE_POSITION_STOP_MULTIPLIER
+                position_size_factor = DEFAULT_LARGE_SINGLE_POSITION_SIZE_FACTOR
                 primary_reason = "large_single_position"
 
             return RiskAdjustments(
@@ -596,7 +617,11 @@ class DynamicRiskManager:
             )
 
         except Exception as exc:
-            logger.warning("Failed to calculate correlation adjustment: %s", exc)
+            logger.warning(
+                "Failed to calculate correlation adjustment: %s",
+                exc,
+                exc_info=True,
+            )
             return RiskAdjustments(primary_reason="correlation_error")
 
     def _determine_primary_reason(

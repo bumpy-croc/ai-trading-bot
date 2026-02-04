@@ -190,6 +190,14 @@ DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 # Dynamic Risk Performance Adjustment Constants
 DEFAULT_RECOVERY_SCALING_FACTOR = 2.0  # Scale factor for recovery from drawdown
 DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT = 0.2  # Stop-loss distance multiplier per threshold
+DEFAULT_MAX_CORRELATED_POSITIONS_FOR_CAP = 4  # Treat <=4 positions as likely correlated basket
+DEFAULT_CORRELATED_EXPOSURE_MIN_FACTOR = 0.5  # Cap size reduction to 50% to avoid over-throttling
+DEFAULT_LOW_DIVERSIFICATION_POSITION_COUNT = 2  # <=2 positions indicates concentrated exposure
+DEFAULT_LOW_DIVERSIFICATION_EXPOSURE_THRESHOLD = 0.15  # 15% exposure triggers diversification guardrail
+DEFAULT_LOW_DIVERSIFICATION_SIZE_FACTOR = 0.8  # 20% trim nudges diversification without halting trading
+DEFAULT_LARGE_SINGLE_POSITION_THRESHOLD = 0.20  # 20% single-position cap for concentration risk
+DEFAULT_LARGE_SINGLE_POSITION_STOP_MULTIPLIER = 1.2  # Widen stops to reduce churn on oversized trades
+DEFAULT_LARGE_SINGLE_POSITION_SIZE_FACTOR = 0.9  # Modest size trim to lower concentration risk
 
 # Performance Score Calculation
 DEFAULT_PERFORMANCE_WIN_RATE_WEIGHT = 0.6  # Weight for win rate in score
