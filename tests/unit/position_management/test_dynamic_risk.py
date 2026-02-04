@@ -761,7 +761,7 @@ class TestCorrelationAdjustment:
         assert adjustments.adjustment_details["num_positions"] == 2
 
     def test_high_total_exposure(self):
-        """Test correlation adjustment with excessive total exposure"""
+        """Test correlation adjustment with excessive correlated exposure"""
         # 3 positions with 8% each = 24% total (exceeds 10% max)
         self.db_manager.get_active_positions.return_value = [
             {"symbol": "BTCUSDT", "size": 0.08},
@@ -771,7 +771,7 @@ class TestCorrelationAdjustment:
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
 
-        assert adjustments.primary_reason == "high_total_exposure"
+        assert adjustments.primary_reason == "high_correlated_exposure"
         # Excess ratio = 0.24 / 0.10 = 2.4, reduction factor = 1/2.4 = 0.417
         # Capped at max 50% reduction -> 0.5
         assert adjustments.position_size_factor == 0.5
@@ -781,7 +781,7 @@ class TestCorrelationAdjustment:
     def test_low_diversification(self):
         """Test correlation adjustment with low diversification"""
         # 2 positions with 8% and 9% = 17% total
-        # Note: 17% exceeds max_correlated_risk (10%), so triggers high_total_exposure first
+        # Note: 17% exceeds max_correlated_risk (10%), so triggers cap first
         self.db_manager.get_active_positions.return_value = [
             {"symbol": "BTCUSDT", "size": 0.08},
             {"symbol": "ETHUSDT", "size": 0.09},
@@ -789,8 +789,8 @@ class TestCorrelationAdjustment:
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
 
-        # High total exposure takes priority over low diversification
-        assert adjustments.primary_reason == "high_total_exposure"
+        # Correlated exposure cap takes priority over low diversification
+        assert adjustments.primary_reason == "high_correlated_exposure"
         # Excess ratio = 0.17 / 0.10 = 1.7, reduction = 1/1.7 = 0.588
         assert 0.58 <= adjustments.position_size_factor <= 0.59
         assert adjustments.adjustment_details["num_positions"] == 2
@@ -799,15 +799,15 @@ class TestCorrelationAdjustment:
     def test_large_single_position(self):
         """Test correlation adjustment with a single large position"""
         # 1 position with 25% (exceeds 20% max single exposure)
-        # Note: 25% also exceeds max_correlated_risk (10%), so triggers high_total_exposure first
+        # Note: 25% also exceeds max_correlated_risk (10%), so triggers cap first
         self.db_manager.get_active_positions.return_value = [
             {"symbol": "BTCUSDT", "size": 0.25},
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
 
-        # High total exposure takes priority (25% > 10% max)
-        assert adjustments.primary_reason == "high_total_exposure"
+        # Correlated exposure cap takes priority (25% > 10% max)
+        assert adjustments.primary_reason == "high_correlated_exposure"
         assert adjustments.position_size_factor == 0.5  # Capped at 50% reduction
 
     def test_balanced_portfolio(self):
@@ -841,8 +841,8 @@ class TestCorrelationAdjustment:
 
         # Total exposure counts absolute values: 8% + 8% = 16%
         assert adjustments.adjustment_details["total_exposure"] == 0.16
-        # 16% > 10% max_correlated_risk -> high_total_exposure
-        assert adjustments.primary_reason == "high_total_exposure"
+        # 16% > 10% max_correlated_risk -> high_correlated_exposure
+        assert adjustments.primary_reason == "high_correlated_exposure"
 
     def test_none_size_fraction(self):
         """Test handling of None size values"""
@@ -880,9 +880,27 @@ class TestCorrelationAdjustment:
         adjustments = manager._calculate_correlation_adjustment(session_id=1)
 
         # Excess ratio = 0.24 / 0.20 = 1.2, reduction factor = 1/1.2 = 0.833
-        assert adjustments.primary_reason == "high_total_exposure"
+        assert adjustments.primary_reason == "high_correlated_exposure"
         assert 0.83 <= adjustments.position_size_factor <= 0.84
         assert adjustments.adjustment_details["total_exposure"] == 0.24
+
+    def test_in_memory_positions_fallback(self):
+        """Test correlation adjustment uses in-memory positions when DB is unavailable"""
+        positions_provider = lambda: {
+            "BTCUSDT": {"size": 0.12},
+            "ETHUSDT": {"size": 0.12},
+        }
+        manager = DynamicRiskManager(
+            self.config,
+            db_manager=None,
+            max_correlated_risk=0.10,
+            positions_provider=positions_provider,
+        )
+
+        adjustments = manager._calculate_correlation_adjustment(session_id=None)
+
+        assert adjustments.primary_reason == "high_correlated_exposure"
+        assert adjustments.position_size_factor < 1.0
 
     def test_integration_with_dynamic_risk_adjustments(self):
         """Test correlation adjustment is properly integrated into full calculation"""

@@ -3,7 +3,7 @@ import math
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -92,10 +92,11 @@ class DynamicRiskConfig:
 
 @dataclass
 class RiskAdjustments:
-    """Container for calculated risk adjustments"""
+    """Container for calculated risk adjustments."""
 
     position_size_factor: float = 1.0  # Multiplier for position sizing
-    stop_loss_tightening: float = 1.0  # Multiplier for stop-loss distances
+    # Multiplier for stop-loss distance (ATR). >1 widens stops, <1 tightens.
+    stop_loss_tightening: float = 1.0
     daily_risk_factor: float = 1.0  # Multiplier for daily risk limits
 
     # Metadata
@@ -120,10 +121,18 @@ class DynamicRiskManager:
         config: DynamicRiskConfig | None = None,
         db_manager: Optional["DatabaseManager"] = None,
         max_correlated_risk: Optional[float] = None,
+        risk_parameters: RiskParameters | None = None,
+        positions_provider: Callable[[], dict[str, dict[str, Any]]] | None = None,
     ):
         self.config = config or DynamicRiskConfig()
         self.db_manager = db_manager
-        self.max_correlated_risk = max_correlated_risk or 0.10  # 10% default
+        self._positions_provider = positions_provider
+        if max_correlated_risk is not None:
+            self.max_correlated_risk = max_correlated_risk
+        elif risk_parameters is not None:
+            self.max_correlated_risk = risk_parameters.max_correlated_risk
+        else:
+            self.max_correlated_risk = 0.10  # 10% default
 
         # Cache for performance calculations with thread safety
         self._performance_cache: dict[str, Any] = {}
@@ -416,7 +425,7 @@ class DynamicRiskManager:
             if current_drawdown >= threshold:
                 position_factor = self.config.risk_reduction_factors[i]
                 daily_risk_factor = self.config.risk_reduction_factors[i]
-                # Tighten stops progressively based on drawdown level
+                # Widen stop distance progressively based on drawdown level
                 stop_loss_factor = 1.0 + (DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT * i)
 
         reason = f"drawdown_{current_drawdown:.1%}"
@@ -504,12 +513,19 @@ class DynamicRiskManager:
         Note: Symbol-level correlation is handled by CorrelationEngine at the engine level.
         This provides portfolio-level concentration risk management.
         """
-        if not self.db_manager or not session_id:
+        if self.db_manager is None and self._positions_provider is None:
             return RiskAdjustments(primary_reason="correlation_no_data")
 
         try:
-            # Get active positions from database
-            positions = self.db_manager.get_active_positions(session_id=session_id)
+            # Get active positions from database when available; otherwise use in-memory snapshot
+            if self.db_manager:
+                positions = self.db_manager.get_active_positions(session_id=session_id)
+            else:
+                positions_snapshot = self._positions_provider() if self._positions_provider else {}
+                positions = [
+                    {"symbol": symbol, **(pos or {})}
+                    for symbol, pos in positions_snapshot.items()
+                ]
             if not positions:
                 return RiskAdjustments(primary_reason="correlation_no_positions")
 
@@ -519,11 +535,20 @@ class DynamicRiskManager:
             num_positions = len(positions)
 
             for pos in positions:
-                # Extract size (fraction of balance) using current_size after partial exits.
-                size = pos.get("current_size", pos.get("size", 0.0))
+                # Extract size as fraction of balance using current_size after partial exits.
+                size = pos.get("current_size")
+                if size is None:
+                    size = pos.get("size", 0.0)
                 if size is None:
                     size = 0.0
                 size = float(size)
+                # Normalize sizes that arrive as raw quantities (exchange sync).
+                if size > 1.0:
+                    entry_balance = pos.get("entry_balance")
+                    entry_price = pos.get("entry_price")
+                    quantity = pos.get("quantity")
+                    if entry_balance and entry_price and quantity:
+                        size = float(quantity) * float(entry_price) / float(entry_balance)
 
                 total_exposure += abs(size)  # Count both long and short
                 max_single_exposure = max(max_single_exposure, abs(size))
@@ -538,14 +563,16 @@ class DynamicRiskManager:
                 "max_single_exposure": round(max_single_exposure, 4),
             }
 
-            # Check 1: Total exposure exceeds max correlated risk
-            if total_exposure > self.max_correlated_risk:
-                # Reduce position sizing proportionally
+            # Check 1: Correlated exposure cap (proxy via low position count).
+            # Treat small baskets as likely correlated and enforce cap on total exposure.
+            max_correlated_positions = 4
+            if num_positions <= max_correlated_positions and total_exposure > self.max_correlated_risk:
                 excess_ratio = total_exposure / self.max_correlated_risk
-                position_size_factor = 1.0 / excess_ratio  # Scale down to bring within limits
-                position_size_factor = max(0.5, min(1.0, position_size_factor))  # Cap at 50% reduction
-                primary_reason = "high_total_exposure"
+                position_size_factor = 1.0 / excess_ratio
+                position_size_factor = max(0.5, min(1.0, position_size_factor))
+                primary_reason = "high_correlated_exposure"
                 details["excess_ratio"] = round(excess_ratio, 2)
+                details["correlated_positions_cap"] = max_correlated_positions
 
             # Check 2: Low diversification (too few positions with high exposure)
             elif num_positions <= 2 and total_exposure > 0.15:  # > 15% in 1-2 positions
@@ -555,8 +582,8 @@ class DynamicRiskManager:
 
             # Check 3: Single position too large
             elif max_single_exposure > 0.20:  # Any position > 20%
-                # Tighten stops on new positions
-                stop_loss_factor = 1.2  # 20% tighter stops
+                # Widen stop distance on new positions
+                stop_loss_factor = 1.2  # 20% wider stops
                 position_size_factor = 0.9  # Slight size reduction
                 primary_reason = "large_single_position"
 

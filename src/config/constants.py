@@ -189,7 +189,7 @@ DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 
 # Dynamic Risk Performance Adjustment Constants
 DEFAULT_RECOVERY_SCALING_FACTOR = 2.0  # Scale factor for recovery from drawdown
-DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT = 0.2  # Progressive stop loss tightening per threshold
+DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT = 0.2  # Stop-loss distance multiplier per threshold
 
 # Performance Score Calculation
 DEFAULT_PERFORMANCE_WIN_RATE_WEIGHT = 0.6  # Weight for win rate in score
