@@ -172,7 +172,21 @@ class PositionTracker:
             basis_balance=float(basis_balance),
         )
 
-        # Update position state
+        # Validate P&L BEFORE mutating position state. If we reduce current_size
+        # first and then discover the P&L is NaN/infinity, the position shrinks
+        # but balance is never updated - creating a balance/position mismatch.
+        if not math.isfinite(result.net_pnl):
+            logger.critical(
+                "Partial exit produced non-finite net_pnl=%.8f for %s (entry=%.2f exit=%.2f). "
+                "Position state not mutated to preserve consistency.",
+                result.net_pnl,
+                self.current_trade.symbol,
+                self.current_trade.entry_price,
+                current_price,
+            )
+            return 0.0
+
+        # Update position state only after P&L validation passes
         self.current_trade.current_size = max(0.0, self.current_trade.current_size - exit_fraction)
         self.current_trade.partial_exits_taken += 1
 

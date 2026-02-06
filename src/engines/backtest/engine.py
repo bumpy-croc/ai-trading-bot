@@ -911,7 +911,12 @@ class Backtester:
             current_price = float(candle["close"])
             open_price = float(candle["open"])
 
-            # Process pending entry from previous candle
+            # Process pending entry from previous candle.
+            # Track whether entry occurred this candle to prevent unrealistic
+            # same-candle exit. In live trading there is always a time gap
+            # between entry and SL/TP evaluation; backtesting must model this
+            # by skipping exit checks on the entry candle.
+            entered_this_candle = False
             if self.execution_engine.has_pending_entry and not self.position_tracker.has_position:
                 entry_result = self.entry_handler.process_pending_entry(
                     symbol=symbol,
@@ -921,6 +926,7 @@ class Backtester:
                     candle=candle,
                 )
                 if entry_result.executed:
+                    entered_this_candle = True
                     self._deduct_entry_fee(entry_result.entry_fee)
 
                     # Final validation: ensure balance is still positive
@@ -972,8 +978,12 @@ class Backtester:
                 if switched and new_strategy:
                     self._switch_strategy(new_strategy, df)
 
-            # Position exit path
-            if self.position_tracker.has_position:
+            # Position exit path - skip on the same candle as entry to model
+            # the realistic time gap between opening a position and the first
+            # SL/TP evaluation. Without this guard, a pending entry filled at
+            # open can immediately exit at the same candle's high/low, creating
+            # unrealistic trades that inflate backtest performance.
+            if self.position_tracker.has_position and not entered_this_candle:
                 exit_occurred, trade_result = self._process_position_exit(
                     runtime_decision=runtime_decision,
                     candle=candle,

@@ -487,12 +487,6 @@ class LiveExitHandler:
                 error=f"Invalid filled_price: {filled_price}",
             )
 
-        if filled_price <= 0 or not math.isfinite(filled_price):
-            return LiveExitResult(
-                success=False,
-                error=f"Invalid filled price: {filled_price}",
-            )
-
         # Validate filled price against entry price for flash crash detection
         if position.entry_price > 0:
             price_change = abs(filled_price - position.entry_price) / position.entry_price

@@ -305,60 +305,64 @@ class LivePositionTracker:
         Returns:
             PositionCloseResult with realized P&L and metrics, or None if not found.
         """
-        # Capture position data atomically - keeps in dict until all validation passes
+        # Validate exit_price before acquiring lock (independent of position state)
+        if exit_price <= 0 or not math.isfinite(exit_price):
+            logger.error(
+                "Invalid exit_price %.8f for order %s - close aborted",
+                exit_price,
+                order_id,
+            )
+            return None
+
+        # Atomically snapshot all position data AND remove from tracker in a
+        # single lock acquisition. The previous two-phase approach (read under
+        # lock, validate, then re-acquire lock to pop) had a TOCTOU race where
+        # concurrent partial exits or scale-ins could modify current_size
+        # between the snapshot and the pop, causing P&L to be computed with
+        # stale fraction values.
+        exit_time = datetime.now(UTC)
         with self._positions_lock:
             position = self._positions.get(order_id)
             if position is None:
                 logger.warning("No position found with order_id: %s", order_id)
                 return None
 
-        # Validate prices BEFORE removing from tracker to preserve recoverability
-        if position.entry_price <= 0 or not math.isfinite(position.entry_price):
-            logger.error(
-                "Invalid entry_price %.8f for position %s - close aborted, position retained",
-                position.entry_price,
-                position.symbol,
-            )
-            return None
-        if exit_price <= 0 or not math.isfinite(exit_price):
-            logger.error(
-                "Invalid exit_price %.8f for position %s - close aborted, position retained",
-                exit_price,
-                position.symbol,
-            )
-            return None
+            # Validate position data under lock (state cannot change while held)
+            if position.entry_price <= 0 or not math.isfinite(position.entry_price):
+                logger.error(
+                    "Invalid entry_price %.8f for position %s - close aborted, position retained",
+                    position.entry_price,
+                    position.symbol,
+                )
+                return None
 
-        # Pre-validate inputs for P&L calculation BEFORE popping position
-        exit_time = datetime.now(UTC)
-        fraction = float(
-            position.current_size if position.current_size is not None else position.size
-        )
-        # Allow fraction == 0 for fully-exited positions (after partial exits complete)
-        # Reject only non-finite or negative values
-        if not math.isfinite(fraction) or fraction < 0:
-            logger.error(
-                "Invalid fraction %.8f for position %s - close aborted, position retained",
-                fraction,
-                position.symbol,
+            # Snapshot fraction under lock to prevent stale reads from
+            # concurrent partial exits modifying current_size
+            fraction = float(
+                position.current_size if position.current_size is not None else position.size
             )
-            return None
+            if not math.isfinite(fraction) or fraction < 0:
+                logger.error(
+                    "Invalid fraction %.8f for position %s - close aborted, position retained",
+                    fraction,
+                    position.symbol,
+                )
+                return None
 
-        # Determine and validate balance basis BEFORE popping
-        entry_balance = position.entry_balance
-        if entry_balance is not None and entry_balance > 0:
-            actual_basis = float(entry_balance)
-        else:
-            actual_basis = float(basis_balance)
-        if not math.isfinite(actual_basis) or actual_basis < 0:
-            logger.error(
-                "Invalid basis_balance %.8f for position %s - close aborted, position retained",
-                actual_basis,
-                position.symbol,
-            )
-            return None
+            entry_balance = position.entry_balance
+            if entry_balance is not None and entry_balance > 0:
+                actual_basis = float(entry_balance)
+            else:
+                actual_basis = float(basis_balance)
+            if not math.isfinite(actual_basis) or actual_basis < 0:
+                logger.error(
+                    "Invalid basis_balance %.8f for position %s - close aborted, position retained",
+                    actual_basis,
+                    position.symbol,
+                )
+                return None
 
-        # All validations passed - atomically remove from tracker to prevent double-close
-        with self._positions_lock:
+            # All validations passed - atomically remove to prevent double-close
             position = self._positions.pop(order_id, None)
             self._position_db_ids.pop(order_id, None)
             if position is None:

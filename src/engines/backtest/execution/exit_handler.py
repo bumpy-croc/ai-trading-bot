@@ -413,10 +413,16 @@ class ExitHandler:
             runtime_decision, symbol, candle, current_price, component_strategy
         )
 
-        # Get high/low for stop checks
+        # Get high/low for stop checks. Fall back to close price if high/low
+        # are NaN (e.g., missing OHLCV data) to prevent NaN comparisons that
+        # silently disable stop loss / take profit checks.
         if self.use_high_low_for_stops:
             candle_high = float(candle["high"])
             candle_low = float(candle["low"])
+            if not math.isfinite(candle_high):
+                candle_high = current_price
+            if not math.isfinite(candle_low):
+                candle_low = current_price
         else:
             candle_high = current_price
             candle_low = current_price

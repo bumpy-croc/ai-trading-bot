@@ -469,6 +469,15 @@ class EntryHandler:
                 self.execution_engine.clear_pending_entry()
                 return EntryExecutionResult(executed=False, pending=False)
 
+        # Validate balance before execution (matches execute_entry() validation).
+        # Balance may have changed between signal time and execution time.
+        if balance <= 0:
+            logger.error(
+                "Cannot execute pending entry with balance <= 0: %.2f", balance
+            )
+            self.execution_engine.clear_pending_entry()
+            return EntryExecutionResult(executed=False, reasons=["invalid_balance"])
+
         try:
             order_side = self._map_order_side(pending["side"])
         except ValueError as exc:
