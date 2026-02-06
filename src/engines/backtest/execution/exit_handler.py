@@ -7,6 +7,7 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -291,8 +292,6 @@ class ExitHandler:
                 if exit_size_of_current is None:
                     break
 
-                iteration_count += 1
-
                 # Get basis balance for PnL calculation
                 entry_balance = getattr(trade, "entry_balance", None)
                 basis_balance = (
@@ -324,6 +323,9 @@ class ExitHandler:
                     )
                 except Exception:
                     pass
+
+                # Increment after execution to match live engine behavior
+                iteration_count += 1
 
             # Check scale-in opportunity
             scale_result = self.partial_manager.check_scale_in(
@@ -573,6 +575,11 @@ class ExitHandler:
             raise ValueError(
                 f"Invalid entry_price {trade.entry_price} - cannot calculate exit fees"
             )
+        # Validate exit prices to prevent NaN/Infinity propagation into P&L
+        if exit_price <= 0 or not math.isfinite(exit_price):
+            raise ValueError(f"Invalid exit_price: {exit_price}")
+        if current_price <= 0 or not math.isfinite(current_price):
+            raise ValueError(f"Invalid current_price: {current_price}")
 
         order_side = self._map_exit_order_side(trade)
         snapshot = self._build_snapshot(

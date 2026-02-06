@@ -27,6 +27,15 @@ class TrackedOrder:
     symbol: str
     last_filled_qty: float
     added_at: datetime
+    # Counts consecutive invalid-data poll responses (NaN, negative prices).
+    # After MAX_INVALID_DATA_RETRIES, the order is force-removed to prevent
+    # permanent tracking when the exchange returns persistently corrupt data.
+    invalid_data_count: int = 0
+
+
+# Maximum polls with invalid data before force-removing a tracked order.
+# Prevents permanent tracking when exchange returns corrupt fill data.
+MAX_INVALID_DATA_RETRIES = 10
 
 
 class OrderTracker:
@@ -189,13 +198,27 @@ class OrderTracker:
                 or math.isnan(float(avg_price))
                 or avg_price <= 0
             ):
+                tracked.invalid_data_count += 1
+                if tracked.invalid_data_count >= MAX_INVALID_DATA_RETRIES:
+                    logger.critical(
+                        "CRITICAL: Order %s on %s returned invalid avg_price %s for %d "
+                        "consecutive polls. Force-removing to prevent permanent tracking. "
+                        "MANUAL RECONCILIATION REQUIRED.",
+                        order_id,
+                        tracked.symbol,
+                        avg_price,
+                        tracked.invalid_data_count,
+                    )
+                    self.stop_tracking(order_id)
+                    return
                 logger.error(
-                    "Invalid average price %s (NaN or <= 0) for filled order %s - "
-                    "skipping fill callback to prevent corrupt P&L",
+                    "Invalid average price %s (NaN or <= 0) for filled order %s "
+                    "(attempt %d/%d) - retrying on next poll",
                     avg_price,
                     order_id,
+                    tracked.invalid_data_count,
+                    MAX_INVALID_DATA_RETRIES,
                 )
-                # Don't stop tracking - keep polling until we get valid price
                 return
 
             # Validate filled_qty to prevent division by zero and corrupt position tracking
@@ -205,26 +228,58 @@ class OrderTracker:
                 or math.isnan(float(filled_qty))
                 or filled_qty <= 0
             ):
+                tracked.invalid_data_count += 1
+                if tracked.invalid_data_count >= MAX_INVALID_DATA_RETRIES:
+                    logger.critical(
+                        "CRITICAL: Order %s on %s returned invalid filled_qty %s for %d "
+                        "consecutive polls. Force-removing to prevent permanent tracking. "
+                        "MANUAL RECONCILIATION REQUIRED.",
+                        order_id,
+                        tracked.symbol,
+                        filled_qty,
+                        tracked.invalid_data_count,
+                    )
+                    self.stop_tracking(order_id)
+                    return
                 logger.error(
-                    "Invalid filled quantity %s (NaN or <= 0) for order %s - "
-                    "skipping fill callback to prevent corrupt position tracking",
+                    "Invalid filled quantity %s (NaN or <= 0) for order %s "
+                    "(attempt %d/%d) - retrying on next poll",
                     filled_qty,
                     order_id,
                 )
                 # Don't stop tracking - keep polling until we get valid quantity
                 return
 
+            # Reset invalid data counter on successful validation
+            tracked.invalid_data_count = 0
             logger.info(
                 "Order filled: %s %s qty=%s @ %s", order_id, tracked.symbol, filled_qty, avg_price
             )
-            # Call callback outside any lock to prevent deadlock
+            # Call callback outside any lock to prevent deadlock.
+            # Only stop tracking after a SUCCESSFUL callback. If the callback
+            # fails, the engine never processes the fill, leaving an orphaned
+            # position on the exchange. Keeping the order tracked lets the
+            # next poll cycle retry the callback.
+            callback_succeeded = False
             if self.on_fill:
                 try:
                     self.on_fill(order_id, tracked.symbol, filled_qty, avg_price)
+                    callback_succeeded = True
                 except Exception as e:
-                    logger.error("Fill callback failed for %s: %s", order_id, e)
-            # Stop tracking even if callback fails
-            self.stop_tracking(order_id)
+                    logger.critical(
+                        "CRITICAL: Fill callback failed for order %s on %s: %s. "
+                        "Order remains tracked for retry on next poll cycle. "
+                        "Position may be orphaned on exchange if retries exhaust.",
+                        order_id,
+                        tracked.symbol,
+                        e,
+                        exc_info=True,
+                    )
+            else:
+                callback_succeeded = True
+
+            if callback_succeeded:
+                self.stop_tracking(order_id)
 
         elif status == OrderStatus.PARTIALLY_FILLED:
             # Validate avg_price for partial fills to prevent corrupt P&L calculations
@@ -317,6 +372,12 @@ class OrderTracker:
                 try:
                     self.on_cancel(order_id, tracked.symbol)
                 except Exception as e:
-                    logger.error("Cancel callback failed for %s: %s", order_id, e)
-            # Stop tracking even if callback fails to prevent memory leaks
+                    logger.warning(
+                        "Cancel callback failed for %s: %s. "
+                        "Stopping tracking to prevent memory leak.",
+                        order_id,
+                        e,
+                    )
+            # Stop tracking even if callback fails - cancelled orders won't
+            # re-appear on exchange so keeping them tracked is a memory leak.
             self.stop_tracking(order_id)
