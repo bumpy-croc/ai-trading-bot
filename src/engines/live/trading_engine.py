@@ -2768,11 +2768,10 @@ class LiveTradingEngine:
             order_id=order_id,
             symbol=symbol,
         )
-        # Check if this was an entry order for a position we thought we had
-        # Use atomic pop() for thread safety (called from OrderTracker background thread)
-        removed_position = self.live_position_tracker.get_position(order_id)
-        if removed_position:
-            self.live_position_tracker.remove_position(order_id)
+        # Check if this was an entry order for a position we thought we had.
+        # Use atomic pop_position() for thread safety - combines get + remove
+        # in a single lock acquisition (called from OrderTracker background thread).
+        removed_position = self.live_position_tracker.pop_position(order_id)
         if removed_position is not None:
             logger.error("Entry order %s was cancelled - removing phantom position", order_id)
             # Refund the entry fee that was deducted from balance when position was

@@ -727,6 +727,23 @@ class Backtester:
             self._runtime_dataset = None
             self._runtime_warmup = 0
 
+    def _reset_run_state(self) -> None:
+        """Reset all mutable state so a reused Backtester produces isolated results.
+
+        Without this, trades, fees, performance metrics, and early-stop flags
+        accumulate across consecutive ``run()`` calls on the same instance.
+        """
+        self.balance = self.initial_balance
+        self.peak_balance = self.initial_balance
+        self.trades.clear()
+        self.dynamic_risk_adjustments.clear()
+        self.early_stop_reason = None
+        self.early_stop_date = None
+        self.early_stop_candle_index = None
+        self.execution_engine.reset()
+        self.position_tracker.reset()
+        self.performance_tracker.reset(self.initial_balance)
+
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> dict:
@@ -742,6 +759,10 @@ class Backtester:
             Dictionary with backtest results including metrics and trades.
         """
         try:
+            # Reset all mutable state from any previous run so that reusing
+            # a Backtester instance produces correct, isolated results.
+            self._reset_run_state()
+
             # Set logging context
             set_context(
                 component="backtester",

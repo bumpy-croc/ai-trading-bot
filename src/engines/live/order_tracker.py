@@ -282,35 +282,69 @@ class OrderTracker:
                 self.stop_tracking(order_id)
 
         elif status == OrderStatus.PARTIALLY_FILLED:
-            # Validate avg_price for partial fills to prevent corrupt P&L calculations
-            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            # Validate avg_price for partial fills to prevent corrupt P&L calculations.
+            # Increment invalid_data_count so persistent bad data is force-removed
+            # (matching the FILLED path), preventing infinite ghost-order polling.
             if (
                 not isinstance(avg_price, int | float)
                 or math.isnan(float(avg_price))
                 or avg_price <= 0
             ):
+                tracked.invalid_data_count += 1
+                if tracked.invalid_data_count >= MAX_INVALID_DATA_RETRIES:
+                    logger.critical(
+                        "CRITICAL: Partial fill %s on %s returned invalid avg_price %s "
+                        "for %d consecutive polls. Force-removing to prevent permanent "
+                        "tracking. MANUAL RECONCILIATION REQUIRED.",
+                        order_id,
+                        tracked.symbol,
+                        avg_price,
+                        tracked.invalid_data_count,
+                    )
+                    self.stop_tracking(order_id)
+                    return
                 logger.error(
-                    "Invalid average price %s (NaN or <= 0) for partial fill order %s - "
-                    "skipping partial fill callback to prevent corrupt P&L",
+                    "Invalid average price %s (NaN or <= 0) for partial fill order %s "
+                    "(attempt %d/%d) - skipping callback, retrying on next poll",
                     avg_price,
                     order_id,
+                    tracked.invalid_data_count,
+                    MAX_INVALID_DATA_RETRIES,
                 )
                 return
 
-            # Validate filled_qty for partial fills to prevent corrupt position tracking
-            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            # Validate filled_qty for partial fills to prevent corrupt position tracking.
+            # Same counter logic as avg_price validation above.
             if (
                 not isinstance(filled_qty, int | float)
                 or math.isnan(float(filled_qty))
                 or filled_qty <= 0
             ):
+                tracked.invalid_data_count += 1
+                if tracked.invalid_data_count >= MAX_INVALID_DATA_RETRIES:
+                    logger.critical(
+                        "CRITICAL: Partial fill %s on %s returned invalid filled_qty %s "
+                        "for %d consecutive polls. Force-removing to prevent permanent "
+                        "tracking. MANUAL RECONCILIATION REQUIRED.",
+                        order_id,
+                        tracked.symbol,
+                        filled_qty,
+                        tracked.invalid_data_count,
+                    )
+                    self.stop_tracking(order_id)
+                    return
                 logger.error(
-                    "Invalid filled quantity %s (NaN or <= 0) for partial fill %s - "
-                    "skipping partial fill callback",
+                    "Invalid filled quantity %s (NaN or <= 0) for partial fill %s "
+                    "(attempt %d/%d) - skipping callback, retrying on next poll",
                     filled_qty,
                     order_id,
+                    tracked.invalid_data_count,
+                    MAX_INVALID_DATA_RETRIES,
                 )
                 return
+
+            # Reset counter on successful validation (matching FILLED path)
+            tracked.invalid_data_count = 0
 
             new_filled = filled_qty - tracked.last_filled_qty
 
@@ -368,16 +402,31 @@ class OrderTracker:
         ):
             logger.warning("Order %s: %s %s", status.value, order_id, tracked.symbol)
             # Call callback outside any lock to prevent deadlock
+            callback_ok = True
             if self.on_cancel:
                 try:
                     self.on_cancel(order_id, tracked.symbol)
                 except Exception as e:
-                    logger.warning(
-                        "Cancel callback failed for %s: %s. "
-                        "Stopping tracking to prevent memory leak.",
+                    callback_ok = False
+                    # Escalate to CRITICAL: the position may still exist in the
+                    # tracker with no exchange order backing it. The order won't
+                    # reappear, so we must stop tracking, but a phantom position
+                    # remains until the next reconciliation cycle.
+                    logger.critical(
+                        "CRITICAL: Cancel callback failed for order %s on %s: %s. "
+                        "Position may be orphaned in tracker. "
+                        "MANUAL RECONCILIATION REQUIRED.",
                         order_id,
+                        tracked.symbol,
                         e,
                     )
             # Stop tracking even if callback fails - cancelled orders won't
             # re-appear on exchange so keeping them tracked is a memory leak.
             self.stop_tracking(order_id)
+            if not callback_ok:
+                logger.critical(
+                    "Order %s stopped tracking after failed cancel callback. "
+                    "Check position tracker for orphaned position on %s.",
+                    order_id,
+                    tracked.symbol,
+                )

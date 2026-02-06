@@ -283,6 +283,19 @@ class LivePositionTracker:
                 del self._positions[order_id]
             self._position_db_ids.pop(order_id, None)
 
+    def pop_position(self, order_id: str) -> LivePosition | None:
+        """Atomically remove and return a position, or None if absent.
+
+        Combines get + remove into a single lock acquisition to prevent
+        TOCTOU races between checking and removing.
+        """
+        with self._positions_lock:
+            position = self._positions.pop(order_id, None)
+            if position is not None:
+                self.mfe_mae_tracker.clear(order_id)
+            self._position_db_ids.pop(order_id, None)
+            return position
+
     def close_position(
         self,
         order_id: str,
