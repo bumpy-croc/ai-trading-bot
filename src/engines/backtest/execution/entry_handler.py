@@ -16,6 +16,8 @@ import pandas as pd
 from src.config.constants import (
     DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_MAX_STOP_LOSS_PCT,
+    DEFAULT_MIN_STOP_LOSS_PCT,
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
 )
@@ -569,6 +571,10 @@ class EntryHandler:
     ) -> tuple[float, float]:
         """Calculate stop loss and take profit percentages.
 
+        Uses the same parameters as the live engine to ensure backtest-live
+        parity. Both engines must produce identical SL/TP values for the
+        same inputs.
+
         Args:
             current_price: Current market price.
             entry_side: 'long' or 'short'.
@@ -584,8 +590,9 @@ class EntryHandler:
             component_strategy=self.component_strategy,
             default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
             default_take_profit_pct=self.default_take_profit_pct,
+            min_stop_loss_pct=DEFAULT_MIN_STOP_LOSS_PCT,
+            max_stop_loss_pct=DEFAULT_MAX_STOP_LOSS_PCT,
             use_strategy_take_profit=True,
-            stop_loss_exceptions=(Exception,),
         )
 
     def _apply_dynamic_risk(

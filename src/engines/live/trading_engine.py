@@ -21,8 +21,8 @@ from src.config.constants import (
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
-    DEFAULT_EXECUTION_FILL_POLICY,
     DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_EXECUTION_FILL_POLICY,
     DEFAULT_FEE_RATE,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
@@ -62,14 +62,13 @@ from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
 from src.engines.shared.models import (
     BaseTrade,
     PositionSide,
 )
-from src.performance.metrics import Side, pnl_percent
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
-from src.engines.shared.execution.execution_model import ExecutionModel
-from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
@@ -82,6 +81,7 @@ from src.infrastructure.logging.events import (
     log_order_event,
     log_risk_event,
 )
+from src.performance.metrics import Side, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.partial_manager import PartialExitPolicy
@@ -1576,7 +1576,7 @@ class LiveTradingEngine:
                                 short_position_size = short_fraction
                             else:
                                 # All strategies should be component-based
-                                self.logger.error(
+                                logger.error(
                                     "Strategy %s does not support component-based position sizing",
                                     self.strategy.name,
                                 )
@@ -1612,7 +1612,7 @@ class LiveTradingEngine:
                                         )
                                 else:
                                     # All strategies should be component-based
-                                    self.logger.error(
+                                    logger.error(
                                         f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                                     )
                                     short_stop_loss = current_price * (
@@ -2055,11 +2055,11 @@ class LiveTradingEngine:
                     runtime_strength = decision.signal.strength
                     runtime_confidence = decision.signal.confidence
             except Exception as e:
-                self.logger.warning("Component strategy decision failed: %s", e)
+                logger.warning("Component strategy decision failed: %s", e)
                 entry_signal = False
         else:
             # All strategies should be component-based
-            self.logger.error("Strategy %s is not a component-based strategy", self.strategy.name)
+            logger.error("Strategy %s is not a component-based strategy", self.strategy.name)
             entry_signal = False
 
         if entry_signal and not use_runtime:
@@ -2182,7 +2182,7 @@ class LiveTradingEngine:
                     float(current_price), signal, None  # regime context
                 )
             except Exception as e:
-                self.logger.debug("Component stop loss calculation failed: %s", e)
+                logger.debug("Component stop loss calculation failed: %s", e)
                 stop_loss = float(current_price) * (
                     (1 - DEFAULT_STOP_LOSS_PCT)
                     if entry_side == PositionSide.LONG
@@ -2218,7 +2218,7 @@ class LiveTradingEngine:
                     )
             else:
                 # All strategies should be component-based
-                self.logger.error(
+                logger.error(
                     "Strategy %s does not support component-based stop loss calculation",
                     self.strategy.name,
                 )
@@ -2588,22 +2588,33 @@ class LiveTradingEngine:
                         self.order_tracker.track_order(sl_order_id, symbol)
                 else:
                     logger.critical(
-                        "CRITICAL: Failed to place stop-loss after %s attempts for %s - closing position",
+                        "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
+                        "closing position on exchange to prevent unprotected exposure",
                         max_retries,
                         symbol,
                     )
                     self._send_alert(
                         f"⚠️ EMERGENCY: Closing {symbol} position - stop-loss placement failed"
                     )
+                    # Fetch current market price for accurate exit pricing.
+                    # The position is still open on the exchange without a stop loss,
+                    # so we MUST close it via live order (skip_live_close=False).
+                    # Using skip_live_close=True would only remove it from local
+                    # tracking while leaving the unprotected position open on the
+                    # exchange - a critical fund loss risk.
+                    try:
+                        emergency_price = self.data_provider.get_current_price(symbol)
+                    except Exception:
+                        emergency_price = price
                     self._execute_exit(
                         position,
-                        "Stop-loss placement failed",
+                        "Stop-loss placement failed - emergency close",
                         None,
-                        price,
+                        emergency_price,
                         None,
                         None,
                         None,
-                        skip_live_close=True,
+                        skip_live_close=False,
                     )
 
         except Exception as e:
@@ -2646,8 +2657,10 @@ class LiveTradingEngine:
             average_price=avg_price,
         )
 
-        # Check if this is a stop-loss order fill - need to close the position
-        # Find matching position under lock, then close outside lock to avoid deadlock
+        # Check if this is a stop-loss order fill - need to close the position.
+        # positions property returns a thread-safe copy. _execute_exit has its
+        # own defensive has_position() check to handle the race where another
+        # thread closes the position between our lookup and the exit call.
         position_to_close: Position | None = None
         for pos_order_id, position in self.live_position_tracker.positions.items():
             if position.stop_loss_order_id == order_id:
@@ -2660,23 +2673,18 @@ class LiveTradingEngine:
                 )
                 break
         if position_to_close:
-            if self.live_position_tracker.has_position(position_to_close.order_id):
-                # Close position using the actual SL fill price (outside lock)
-                self._execute_exit(
-                    position_to_close,
-                    reason="stop_loss",
-                    limit_price=avg_price,
-                    current_price=float(avg_price),
-                    candle_high=None,
-                    candle_low=None,
-                    candle=None,
-                    skip_live_close=True,
-                )
-            else:
-                logger.info(
-                    "Stop-loss fill received for already closed position %s",
-                    position_to_close.order_id,
-                )
+            # _execute_exit re-verifies the position still exists under the
+            # tracker lock before proceeding, preventing double-close races.
+            self._execute_exit(
+                position_to_close,
+                reason="stop_loss",
+                limit_price=avg_price,
+                current_price=float(avg_price),
+                candle_high=None,
+                candle_low=None,
+                candle=None,
+                skip_live_close=True,
+            )
 
     def _handle_partial_fill(
         self, order_id: str, symbol: str, new_filled_qty: float, avg_price: float
@@ -2709,7 +2717,7 @@ class LiveTradingEngine:
             if position.stop_loss_order_id == order_id:
                 logger.critical(
                     "PARTIAL STOP-LOSS FILL: Position %s SL order %s partially filled (%.4f @ $%.2f). "
-                    "Remaining position may be unprotected - manual intervention recommended.",
+                    "Remaining position may be unprotected. Attempting emergency close.",
                     pos_order_id,
                     order_id,
                     new_filled_qty,
@@ -2723,15 +2731,36 @@ class LiveTradingEngine:
                     filled_quantity=new_filled_qty,
                     average_price=avg_price,
                 )
+                self._send_alert(
+                    f"⚠️ PARTIAL SL FILL: {symbol} position {pos_order_id} "
+                    f"partially filled ({new_filled_qty} @ ${avg_price:.2f}). "
+                    f"Closing remaining position to prevent unprotected exposure."
+                )
+                # Close the entire remaining position at market to prevent
+                # unprotected exposure. The partial SL fill already covered
+                # part of the position; closing the rest ensures no orphan.
+                if self.live_position_tracker.has_position(pos_order_id):
+                    self._execute_exit(
+                        position,
+                        reason="partial_stop_loss_fill_emergency_close",
+                        limit_price=None,
+                        current_price=float(avg_price),
+                        candle_high=None,
+                        candle_low=None,
+                        candle=None,
+                        skip_live_close=False,
+                    )
                 return
 
     def _handle_order_cancel(self, order_id: str, symbol: str) -> None:
-        """
-        Handle an order cancellation/rejection notification from OrderTracker.
+        """Handle an order cancellation/rejection notification from OrderTracker.
+
+        Refunds the entry fee that was deducted when the position was created,
+        since the order never executed on the exchange.
 
         Args:
-            order_id: The cancelled/rejected order ID
-            symbol: Trading symbol
+            order_id: The cancelled/rejected order ID.
+            symbol: Trading symbol.
         """
         logger.warning("Order cancelled/rejected: %s %s", order_id, symbol)
         log_order_event(
@@ -2746,6 +2775,36 @@ class LiveTradingEngine:
             self.live_position_tracker.remove_position(order_id)
         if removed_position is not None:
             logger.error("Entry order %s was cancelled - removing phantom position", order_id)
+            # Refund the entry fee that was deducted from balance when position was
+            # created. Without this refund, cancelled orders permanently leak fees.
+            entry_fee = float(removed_position.metadata.get("entry_fee", 0.0))
+            if entry_fee > 0:
+                if self.trading_session_id is not None:
+                    try:
+                        with self.db_manager.atomic_balance_update(
+                            balance_change=entry_fee,
+                            reason=f"refund_entry_fee_{symbol}_order_cancelled",
+                            updated_by="live_engine",
+                            correlation_id=order_id,
+                        ) as balance_result:
+                            self.current_balance = balance_result["new_balance"]
+                        logger.info(
+                            "Refunded entry fee %.6f for cancelled order %s on %s",
+                            entry_fee,
+                            order_id,
+                            symbol,
+                        )
+                    except Exception as refund_err:
+                        logger.critical(
+                            "CRITICAL: Failed to refund entry fee %.6f for cancelled "
+                            "order %s on %s. MANUAL RECONCILIATION REQUIRED. Error: %s",
+                            entry_fee,
+                            order_id,
+                            symbol,
+                            refund_err,
+                        )
+                else:
+                    self.current_balance += entry_fee
 
     def _execute_exit(
         self,
