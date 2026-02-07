@@ -148,6 +148,7 @@ class Strategy:
 
         # Runtime configuration
         self._warmup_override: int | None = None
+        self._max_position_pct: float = 0.25
         self._last_signal: Signal | None = None
         self._additional_risk_context_provider: (
             Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None
@@ -785,8 +786,8 @@ class Strategy:
         if signal.direction == SignalDirection.HOLD:
             return 0.0
 
-        # Apply reasonable bounds
-        max_position = balance * 0.25  # Maximum 25% of balance
+        # Apply reasonable bounds (configurable via _max_position_pct, default 25%)
+        max_position = balance * self._max_position_pct
         min_position = balance * 0.001  # Minimum 0.1% of balance
 
         # Respect zero position (no trade decision)

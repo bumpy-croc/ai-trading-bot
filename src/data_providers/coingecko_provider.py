@@ -4,15 +4,21 @@ CoinGecko Data Provider
 Provides historical and live cryptocurrency price data from CoinGecko API.
 Works reliably from Claude Code web servers where Binance may be blocked.
 
+For historical data beyond the CoinGecko free tier limit (365 days),
+falls back to Binance public data archives at data.binance.vision.
+
 API Documentation: https://docs.coingecko.com/reference/introduction
 """
 
+import io
 import logging
 import math
 import time
+import zipfile
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -38,6 +44,12 @@ class CoinGeckoProvider(DataProvider):
     # Rate limiting: free tier allows 30 calls/minute = 1 call per 2 seconds
     # Use 2.5 seconds to be safe and prevent 429 errors
     RATE_LIMIT_DELAY_SECONDS = 2.5
+
+    # CoinGecko OHLC endpoint only accepts these specific day values
+    VALID_OHLC_DAYS = [1, 7, 14, 30, 90, 180, 365]
+
+    # Chunk size for market_chart/range: <90 days gives hourly granularity
+    MARKET_CHART_CHUNK_DAYS = 85
 
     # Mapping of standard symbols to CoinGecko coin IDs
     SYMBOL_MAPPING = {
@@ -171,18 +183,43 @@ class CoinGeckoProvider(DataProvider):
         response.raise_for_status()
         return response.json()
 
+    # Maximum days supported by CoinGecko free tier market_chart endpoint
+    COINGECKO_FREE_MAX_DAYS = 365
+
+    # Binance public data archives URL
+    BINANCE_DATA_URL = "https://data.binance.vision/data/spot/monthly/klines"
+
+    # Mapping from our symbol format to Binance symbol format
+    BINANCE_SYMBOL_MAPPING = {
+        "bitcoin": "BTCUSDT",
+        "ethereum": "ETHUSDT",
+        "binancecoin": "BNBUSDT",
+        "ripple": "XRPUSDT",
+        "cardano": "ADAUSDT",
+        "solana": "SOLUSDT",
+        "dogecoin": "DOGEUSDT",
+    }
+
+    # Binance timeframe mapping
+    BINANCE_TIMEFRAME_MAPPING = {
+        "1h": "1h",
+        "4h": "4h",
+        "1d": "1d",
+    }
+
     def get_historical_data(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> pd.DataFrame:
         """
-        Fetch historical OHLCV data from CoinGecko.
+        Fetch historical OHLCV data.
 
-        Note: CoinGecko OHLC endpoint returns [timestamp, open, high, low, close]
-        without volume. We use market_chart/range for volume data.
+        For recent data (within 365 days of now), uses CoinGecko market_chart API.
+        For older historical data, falls back to Binance public data archives
+        (data.binance.vision) which provides accurate OHLCV data without API keys.
 
         Args:
             symbol: Trading symbol (e.g., 'BTC-USD', 'BTCUSDT')
-            timeframe: Timeframe (4h, 1d supported; others limited by CoinGecko)
+            timeframe: Timeframe (1h, 4h, 1d supported)
             start: Start datetime
             end: End datetime (defaults to now)
 
@@ -192,104 +229,306 @@ class CoinGeckoProvider(DataProvider):
         try:
             coin_id = self._convert_symbol(symbol)
             end = end or datetime.now(UTC)
-
-            # Calculate days parameter for CoinGecko (minimum 1 day)
             days_diff = max(1, (end - start).days)
 
-            # Fetch OHLC data
-            logger.info("Fetching %s OHLC data for %d days", coin_id, days_diff)
-            ohlc_data = self._request(
-                f"/coins/{coin_id}/ohlc", params={"vs_currency": "usd", "days": days_diff}
-            )
+            now = datetime.now(UTC)
+            days_from_now = max(1, (now - start).days)
 
-            # Fetch volume data from market_chart/range
-            from_ts = int(start.timestamp())
-            to_ts = int(end.timestamp())
-            market_data = self._request(
-                f"/coins/{coin_id}/market_chart/range",
-                params={"vs_currency": "usd", "from": from_ts, "to": to_ts},
-            )
-
-            # Process OHLC data
-            if not ohlc_data:
-                logger.warning("No OHLC data returned for %s", coin_id)
-                return pd.DataFrame()
-
-            # Convert OHLC format: [timestamp_ms, open, high, low, close]
-            # Validate each row has at least 5 elements before processing
-            validated_rows = []
-            for row in ohlc_data:
-                if isinstance(row, (list, tuple)) and len(row) >= 5:
-                    validated_rows.append([row[0], row[1], row[2], row[3], row[4], 0])
-                else:
-                    row_len = len(row) if isinstance(row, (list, tuple)) else 'non-sequence'
-                    logger.warning("Skipping malformed OHLC row (expected 5+ elements, got %s): %s", row_len, row)
-
-            if not validated_rows:
-                logger.warning("No valid OHLC data after validation for %s", coin_id)
-                return pd.DataFrame()
-
-            df = self._process_ohlcv(validated_rows, timestamp_unit="ms")
-
-            # Merge volume data from market_chart
-            if market_data and "total_volumes" in market_data:
-                volume_df = pd.DataFrame(
-                    market_data["total_volumes"], columns=["timestamp", "volume"]
+            # Determine data source based on how far back we need to go
+            if days_from_now <= self.COINGECKO_FREE_MAX_DAYS:
+                # Recent data: use CoinGecko market_chart
+                logger.info(
+                    "Fetching %s data for %d days (%s to %s) via CoinGecko market_chart",
+                    coin_id, days_diff, start.date(), end.date(),
                 )
-                volume_df["timestamp"] = pd.to_datetime(volume_df["timestamp"], unit="ms", utc=True)
-
-                # Validate volume data - drop invalid (NaN/Infinity/negative) values
-                volume_df["volume"] = pd.to_numeric(volume_df["volume"], errors="coerce")
-                invalid_mask = volume_df["volume"].isna() | (volume_df["volume"] < 0) | volume_df["volume"].isin([float('inf'), float('-inf')])
-                if invalid_mask.any():
-                    invalid_count = invalid_mask.sum()
-                    logger.warning("Dropping %d invalid volume values (NaN/Infinity/negative) from CoinGecko data", invalid_count)
-                    volume_df = volume_df[~invalid_mask].copy()
-
-                volume_df.set_index("timestamp", inplace=True)
-
-                # Align volume with OHLC timestamps (use nearest match)
-                if len(volume_df) > 0:
-                    # Use merge_asof for efficient nearest-match joining
-                    # Both must be timezone-aware for compatibility
-                    df_for_merge = df.reset_index()
-                    volume_for_merge = volume_df.reset_index()
-
-                    # Ensure timestamp columns have same dtype (both UTC-aware)
-                    if df_for_merge["timestamp"].dt.tz is None:
-                        df_for_merge["timestamp"] = df_for_merge["timestamp"].dt.tz_localize(UTC)
-
-                    df_merged = pd.merge_asof(
-                        df_for_merge.sort_values("timestamp"),
-                        volume_for_merge.sort_values("timestamp"),
-                        on="timestamp",
-                        direction="nearest",
-                        suffixes=("", "_vol"),
+                df = self._fetch_via_coingecko_market_chart(coin_id, start, end, timeframe)
+            else:
+                # Historical data: use Binance public archives
+                binance_symbol = self.BINANCE_SYMBOL_MAPPING.get(coin_id)
+                if binance_symbol:
+                    logger.info(
+                        "Fetching %s data for %d days (%s to %s) via Binance public archives",
+                        binance_symbol, days_diff, start.date(), end.date(),
                     )
-                    df_merged.set_index("timestamp", inplace=True)
+                    df = self._fetch_via_binance_archive(
+                        binance_symbol, start, end, timeframe
+                    )
+                else:
+                    # Fallback to CoinGecko for unsupported symbols
+                    logger.info(
+                        "Fetching %s data for %d days (%s to %s) via CoinGecko market_chart",
+                        coin_id, days_diff, start.date(), end.date(),
+                    )
+                    df = self._fetch_via_coingecko_market_chart(
+                        coin_id, start, end, timeframe
+                    )
 
-                    # Update volume column
-                    if "volume_vol" in df_merged.columns:
-                        df_merged["volume"] = df_merged["volume_vol"]
-                        df_merged.drop(columns=["volume_vol"], inplace=True)
-
-                    df = df_merged
-
-            self.data = df
-
-            if len(df) > 0:
+            if df is not None and len(df) > 0:
+                self.data = df
                 logger.info(
                     "Fetched %d candles for %s from %s to %s",
-                    len(df), coin_id, df.index.min(), df.index.max()
+                    len(df), coin_id, df.index.min(), df.index.max(),
                 )
             else:
-                logger.warning("No data returned for %s from %s to %s", coin_id, start, end)
+                logger.warning(
+                    "No data returned for %s from %s to %s", coin_id, start, end
+                )
+                return pd.DataFrame()
 
             return df
 
         except Exception as e:
             logger.error("Error fetching historical data for %s: %s", symbol, e)
             raise
+
+    def _fetch_via_coingecko_market_chart(
+        self, coin_id: str, start: datetime, end: datetime, timeframe: str
+    ) -> pd.DataFrame:
+        """
+        Fetch data via CoinGecko /market_chart endpoint (relative days from now).
+
+        For <=90 days, returns hourly data which is resampled to target timeframe.
+        For >90 days, returns daily data points.
+
+        Args:
+            coin_id: CoinGecko coin ID (e.g., 'bitcoin')
+            start: Start datetime
+            end: End datetime
+            timeframe: Target timeframe (1h, 4h, 1d)
+
+        Returns:
+            DataFrame with OHLCV data
+        """
+        now = datetime.now(UTC)
+        days_from_now = max(1, min((now - start).days + 1, self.COINGECKO_FREE_MAX_DAYS))
+
+        data = self._request(
+            f"/coins/{coin_id}/market_chart",
+            params={"vs_currency": "usd", "days": days_from_now},
+        )
+
+        if not data or "prices" not in data or not data["prices"]:
+            logger.warning("No price data from CoinGecko market_chart for %s", coin_id)
+            return pd.DataFrame()
+
+        logger.info(
+            "CoinGecko market_chart returned %d price points", len(data["prices"])
+        )
+
+        # Build price DataFrame
+        price_df = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
+        price_df["timestamp"] = pd.to_datetime(
+            price_df["timestamp"], unit="ms", utc=True
+        )
+        price_df.set_index("timestamp", inplace=True)
+        price_df = price_df[~price_df.index.duplicated(keep="last")]
+        price_df.sort_index(inplace=True)
+
+        # Validate prices
+        price_df["price"] = pd.to_numeric(price_df["price"], errors="coerce")
+        price_df = price_df[price_df["price"].notna() & (price_df["price"] > 0)]
+
+        # Add volume data
+        if "total_volumes" in data and data["total_volumes"]:
+            vol_df = pd.DataFrame(
+                data["total_volumes"], columns=["timestamp", "volume"]
+            )
+            vol_df["timestamp"] = pd.to_datetime(
+                vol_df["timestamp"], unit="ms", utc=True
+            )
+            vol_df.set_index("timestamp", inplace=True)
+            vol_df = vol_df[~vol_df.index.duplicated(keep="last")]
+            vol_df["volume"] = pd.to_numeric(
+                vol_df["volume"], errors="coerce"
+            ).fillna(0)
+            vol_df.loc[vol_df["volume"] < 0, "volume"] = 0
+            price_df = price_df.join(vol_df, how="left")
+            price_df["volume"] = price_df["volume"].fillna(0)
+        else:
+            price_df["volume"] = 0.0
+
+        if price_df.empty:
+            return pd.DataFrame()
+
+        # Filter to requested date range
+        price_df = price_df[(price_df.index >= start) & (price_df.index <= end)]
+
+        # Resample to target timeframe
+        return self._resample_to_ohlcv(price_df, timeframe)
+
+    def _fetch_via_binance_archive(
+        self, binance_symbol: str, start: datetime, end: datetime, timeframe: str
+    ) -> pd.DataFrame:
+        """
+        Fetch historical OHLCV data from Binance public data archives.
+
+        Downloads monthly zip files from data.binance.vision which contain
+        accurate OHLCV data. No API key is required.
+
+        Args:
+            binance_symbol: Binance symbol (e.g., 'BTCUSDT')
+            start: Start datetime
+            end: End datetime
+            timeframe: Target timeframe (1h, 4h, 1d)
+
+        Returns:
+            DataFrame with OHLCV data
+        """
+        binance_tf = self.BINANCE_TIMEFRAME_MAPPING.get(timeframe, "1d")
+        all_dfs: list[pd.DataFrame] = []
+
+        # Generate list of year-month pairs to fetch
+        current = start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        while current <= end:
+            year_month = current.strftime("%Y-%m")
+            url = (
+                f"{self.BINANCE_DATA_URL}/{binance_symbol}/{binance_tf}/"
+                f"{binance_symbol}-{binance_tf}-{year_month}.zip"
+            )
+
+            try:
+                response = self._session.get(url, timeout=self._timeout)
+                if response.status_code == 200:
+                    df_month = self._parse_binance_zip(response.content)
+                    if df_month is not None and not df_month.empty:
+                        all_dfs.append(df_month)
+                        logger.debug(
+                            "Downloaded %d candles for %s %s",
+                            len(df_month), binance_symbol, year_month,
+                        )
+                elif response.status_code == 404:
+                    logger.debug(
+                        "No data available for %s %s (404)", binance_symbol, year_month
+                    )
+                else:
+                    logger.warning(
+                        "Failed to fetch %s %s: HTTP %d",
+                        binance_symbol, year_month, response.status_code,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Error fetching %s %s: %s", binance_symbol, year_month, e
+                )
+
+            # Advance to next month
+            if current.month == 12:
+                current = current.replace(year=current.year + 1, month=1)
+            else:
+                current = current.replace(month=current.month + 1)
+
+        if not all_dfs:
+            logger.warning("No data from Binance archives for %s", binance_symbol)
+            return pd.DataFrame()
+
+        # Combine all monthly DataFrames
+        combined = pd.concat(all_dfs, ignore_index=False)
+        combined = combined[~combined.index.duplicated(keep="last")]
+        combined.sort_index(inplace=True)
+
+        # Filter to requested date range
+        combined = combined[
+            (combined.index >= start) & (combined.index <= end)
+        ]
+
+        logger.info(
+            "Binance archives: %d candles for %s (%s to %s)",
+            len(combined), binance_symbol,
+            combined.index.min() if len(combined) > 0 else "N/A",
+            combined.index.max() if len(combined) > 0 else "N/A",
+        )
+
+        self.data = combined
+        return combined
+
+    @staticmethod
+    def _parse_binance_zip(content: bytes) -> pd.DataFrame | None:
+        """
+        Parse a Binance kline zip archive into a DataFrame.
+
+        Binance CSV format:
+        open_time, open, high, low, close, volume, close_time,
+        quote_volume, trades, taker_buy_base, taker_buy_quote, ignore
+
+        Args:
+            content: Raw zip file bytes
+
+        Returns:
+            DataFrame with OHLCV data indexed by timestamp, or None on error
+        """
+        try:
+            z = zipfile.ZipFile(io.BytesIO(content))
+            csv_names = [n for n in z.namelist() if n.endswith(".csv")]
+            if not csv_names:
+                return None
+
+            with z.open(csv_names[0]) as f:
+                df = pd.read_csv(
+                    f,
+                    header=None,
+                    usecols=[0, 1, 2, 3, 4, 5],
+                    names=["timestamp", "open", "high", "low", "close", "volume"],
+                )
+
+            # Convert timestamp from milliseconds to UTC datetime
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            df.set_index("timestamp", inplace=True)
+
+            # Convert to numeric
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+            # Drop invalid rows
+            df = df.dropna(subset=["open", "high", "low", "close"])
+            for col in ["open", "high", "low", "close"]:
+                df = df[df[col] > 0]
+
+            df["volume"] = df["volume"].fillna(0)
+
+            return df
+
+        except Exception as e:
+            logger.warning("Error parsing Binance zip archive: %s", e)
+            return None
+
+    def _resample_to_ohlcv(self, df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+        """
+        Resample hourly price/volume data into OHLCV candles at the target timeframe.
+
+        Args:
+            df: DataFrame with 'price' and 'volume' columns, indexed by UTC datetime
+            timeframe: Target timeframe (1h, 4h, 1d)
+
+        Returns:
+            DataFrame with open, high, low, close, volume columns
+        """
+        resample_freq_map = {
+            "1h": "1h",
+            "4h": "4h",
+            "1d": "1D",
+            "1w": "1W",
+        }
+        freq = resample_freq_map.get(timeframe, "1D")
+
+        resampled = df.resample(freq).agg(
+            {"price": ["first", "max", "min", "last"], "volume": "sum"}
+        )
+        resampled.columns = ["open", "high", "low", "close", "volume"]
+
+        # Drop rows where we have no price data (gaps)
+        resampled = resampled.dropna(subset=["open", "close"])
+
+        # Validate all price columns are positive
+        for col in ["open", "high", "low", "close"]:
+            resampled = resampled[resampled[col] > 0]
+
+        resampled.index.name = "timestamp"
+
+        logger.info(
+            "Resampled %d raw points to %d %s candles",
+            len(df), len(resampled), timeframe,
+        )
+
+        return resampled
 
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         """

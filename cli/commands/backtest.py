@@ -18,6 +18,7 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 
 from src.infrastructure.logging.config import configure_logging
 from src.strategies import (
+    create_adaptive_trend_strategy,
     create_ensemble_weighted_strategy,
     create_ml_adaptive_strategy,
     create_ml_basic_strategy,
@@ -37,6 +38,7 @@ def _load_strategy(strategy_name: str):
         "ml_adaptive": create_ml_adaptive_strategy,
         "ensemble_weighted": create_ensemble_weighted_strategy,
         "momentum_leverage": create_momentum_leverage_strategy,
+        "adaptive_trend": create_adaptive_trend_strategy,
     }
 
     try:
@@ -107,14 +109,31 @@ def _handle(ns: argparse.Namespace) -> int:
             sentiment_provider = FearGreedProvider()
             logger.info("Using sentiment analysis in backtest")
 
-        risk_params = RiskParameters(
-            base_risk_per_trade=ns.risk_per_trade,
-            max_risk_per_trade=ns.max_risk_per_trade,
-            max_drawdown=ns.max_drawdown,
-        )
+        risk_params_kwargs = {
+            "base_risk_per_trade": ns.risk_per_trade,
+            "max_risk_per_trade": ns.max_risk_per_trade,
+            "max_drawdown": ns.max_drawdown,
+        }
+        if ns.max_position_size is not None:
+            risk_params_kwargs["max_position_size"] = ns.max_position_size
+        elif hasattr(strategy, "get_risk_overrides"):
+            # Honor strategy-level max_fraction (e.g., trend-following uses 95%
+            # allocation instead of the default 10% cap)
+            overrides = strategy.get_risk_overrides()
+            if overrides and "max_fraction" in overrides:
+                risk_params_kwargs["max_position_size"] = overrides["max_fraction"]
+        risk_params = RiskParameters(**risk_params_kwargs)
 
         # Default to no database logging for performance, unless explicitly enabled
         enable_db_logging = ns.log_to_db
+
+        # Determine engine risk exit behavior
+        enable_engine_risk_exits = not ns.disable_engine_sl
+
+        # Disable dynamic risk management for strategies that manage their own risk
+        # via signal timing (e.g., adaptive_trend). Dynamic risk reduces position
+        # sizes after losses, which undermines fully-invested trend-following.
+        enable_dynamic_risk = ns.strategy not in ("adaptive_trend",)
 
         backtester = Backtester(
             strategy=strategy,
@@ -123,6 +142,8 @@ def _handle(ns: argparse.Namespace) -> int:
             risk_parameters=risk_params,
             initial_balance=ns.initial_balance,
             log_to_database=enable_db_logging,
+            enable_engine_risk_exits=enable_engine_risk_exits,
+            enable_dynamic_risk=enable_dynamic_risk,
         )
 
         # Map provider types to exchange names for symbol conversion
@@ -276,5 +297,16 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=0.5,
         help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
+    )
+    p.add_argument(
+        "--max-position-size",
+        type=float,
+        default=None,
+        help="Maximum position size as fraction of balance (0.1 = 10 percent) - default: 0.1",
+    )
+    p.add_argument(
+        "--disable-engine-sl",
+        action="store_true",
+        help="Disable engine-level stop loss and take profit checks (strategy signals only)",
     )
     p.set_defaults(func=_handle)
