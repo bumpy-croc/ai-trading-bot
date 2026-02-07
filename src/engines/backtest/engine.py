@@ -753,7 +753,7 @@ class Backtester:
 
         # Restore initial strategy if regime switching changed it
         if self.strategy is not self._initial_strategy:
-            self.strategy = self._initial_strategy
+            self._configure_strategy(self._initial_strategy)
         if self.regime_handler is not None:
             self.regime_handler.regime_history.clear()
             self.regime_handler.strategy_switches.clear()
@@ -1047,9 +1047,13 @@ class Backtester:
                         logger.warning("Maximum drawdown exceeded. Stopping backtest.")
                         break
 
-            # Entry path - only evaluate when no position is open to prevent
-            # queuing new entries on the same candle as an existing trade
-            elif not self.position_tracker.has_position and self._is_runtime_strategy():
+            # Entry path - only evaluate when no position is open and no entry
+            # occurred this candle to prevent queuing stale signals
+            elif (
+                not self.position_tracker.has_position
+                and not entered_this_candle
+                and self._is_runtime_strategy()
+            ):
                 self._process_entry_signal(
                     runtime_decision=runtime_decision,
                     df=df,

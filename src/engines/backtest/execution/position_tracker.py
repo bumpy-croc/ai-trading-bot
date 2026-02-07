@@ -175,11 +175,11 @@ class PositionTracker:
         # Validate P&L BEFORE mutating position state. If we reduce current_size
         # first and then discover the P&L is NaN/infinity, the position shrinks
         # but balance is never updated - creating a balance/position mismatch.
-        if not math.isfinite(result.net_pnl):
+        if not math.isfinite(result.realized_pnl):
             logger.critical(
-                "Partial exit produced non-finite net_pnl=%.8f for %s (entry=%.2f exit=%.2f). "
+                "Partial exit produced non-finite realized_pnl=%.8f for %s (entry=%.2f exit=%.2f). "
                 "Position state not mutated to preserve consistency.",
-                result.net_pnl,
+                result.realized_pnl,
                 self.current_trade.symbol,
                 self.current_trade.entry_price,
                 current_price,
