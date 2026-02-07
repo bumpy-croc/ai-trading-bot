@@ -209,13 +209,13 @@ class TrendFollowingPositionSizer(PositionSizer):
 
 def create_adaptive_trend_strategy(
     name: str = "AdaptiveTrend",
-    trend_ema_period: int = 80,
+    trend_ema_period: int = 90,
     entry_confirmation_days: int = 2,
-    exit_confirmation_days: int = 30,
+    exit_confirmation_days: int = 18,
     entry_buffer_pct: float = 0.005,
-    exit_buffer_pct: float = 0.10,
+    exit_buffer_pct: float = 0.08,
     exit_ratio_threshold: float = 0.65,
-    ema_slope_lookback: int = 40,
+    ema_slope_lookback: int = 35,
     target_allocation: float = 0.95,
     max_position_pct: float = 0.95,
     stop_loss_pct: float = 0.40,
