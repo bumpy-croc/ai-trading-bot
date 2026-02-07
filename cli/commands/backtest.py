@@ -120,8 +120,10 @@ def _handle(ns: argparse.Namespace) -> int:
             # Honor strategy-level max_fraction (e.g., trend-following uses 95%
             # allocation instead of the default 10% cap)
             overrides = strategy.get_risk_overrides()
-            if overrides and "max_fraction" in overrides:
-                risk_params_kwargs["max_position_size"] = overrides["max_fraction"]
+            if isinstance(overrides, dict) and "max_fraction" in overrides:
+                max_frac = overrides["max_fraction"]
+                if isinstance(max_frac, (int, float)) and 0 < max_frac <= 1:
+                    risk_params_kwargs["max_position_size"] = max_frac
         risk_params = RiskParameters(**risk_params_kwargs)
 
         # Default to no database logging for performance, unless explicitly enabled

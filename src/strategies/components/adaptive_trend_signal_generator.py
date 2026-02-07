@@ -15,7 +15,7 @@ Core approach:
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -110,7 +110,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         return self.trend_ema_period + 5
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """Generate a trend-following signal based on price vs EMA.
 
@@ -246,17 +246,19 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
     def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters."""
         params = super().get_parameters()
-        params.update({
-            "trend_ema_period": self.trend_ema_period,
-            "entry_confirmation_days": self.entry_confirmation_days,
-            "exit_confirmation_days": self.exit_confirmation_days,
-            "entry_buffer_pct": self.entry_buffer_pct,
-            "exit_buffer_pct": self.exit_buffer_pct,
-            "exit_ratio_threshold": self.exit_ratio_threshold,
-            "ema_slope_lookback": self.ema_slope_lookback,
-            "momentum_lookback": self.momentum_lookback,
-            "atr_period": self.atr_period,
-        })
+        params.update(
+            {
+                "trend_ema_period": self.trend_ema_period,
+                "entry_confirmation_days": self.entry_confirmation_days,
+                "exit_confirmation_days": self.exit_confirmation_days,
+                "entry_buffer_pct": self.entry_buffer_pct,
+                "exit_buffer_pct": self.exit_buffer_pct,
+                "exit_ratio_threshold": self.exit_ratio_threshold,
+                "ema_slope_lookback": self.ema_slope_lookback,
+                "momentum_lookback": self.momentum_lookback,
+                "atr_period": self.atr_period,
+            }
+        )
         return params
 
     def _compute_ema_series(self, close: np.ndarray, max_index: int) -> np.ndarray:
@@ -410,7 +412,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         momentum: float,
         days_above: int,
         atr_pct: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> float:
         """Calculate confidence for BUY signal."""
         confidence = 0.50  # Base confidence for confirmed trend
@@ -446,7 +448,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         price_vs_ema_pct: float,
         momentum: float,
         below_ratio: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> float:
         """Calculate confidence for SELL signal.
 
@@ -483,7 +485,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         return max(0.5, min(1.0, confidence))
 
     def _hold_signal(
-        self, index: int, reason: str, metadata: Optional[dict[str, Any]] = None
+        self, index: int, reason: str, metadata: dict[str, Any] | None = None
     ) -> Signal:
         """Create a HOLD signal."""
         meta = metadata.copy() if metadata else {}

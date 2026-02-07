@@ -17,7 +17,7 @@ predicting short-term moves. Even partial crash avoidance (e.g., dodging
 multiple market cycles.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from src.strategies.components import (
     EnhancedRegimeDetector,
@@ -27,7 +27,7 @@ from src.strategies.components.adaptive_trend_signal_generator import (
     AdaptiveTrendSignalGenerator,
 )
 from src.strategies.components.position_sizer import PositionSizer
-from src.strategies.components.regime_context import RegimeContext, TrendLabel
+from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.risk_manager import MarketData, Position, RiskManager
 from src.strategies.components.signal_generator import Signal, SignalDirection
 
@@ -59,9 +59,7 @@ class TrendFollowingRiskManager(RiskManager):
                 f"target_allocation must be between 0.01 and 0.99, got {target_allocation}"
             )
         if not 0.01 <= stop_loss_pct <= 0.50:
-            raise ValueError(
-                f"stop_loss_pct must be between 0.01 and 0.50, got {stop_loss_pct}"
-            )
+            raise ValueError(f"stop_loss_pct must be between 0.01 and 0.50, got {stop_loss_pct}")
 
         self.target_allocation = target_allocation
         self.stop_loss_pct = stop_loss_pct
@@ -70,7 +68,7 @@ class TrendFollowingRiskManager(RiskManager):
         self,
         signal: Signal,
         balance: float,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> float:
         """Calculate position size as a fixed fraction of balance.
@@ -101,7 +99,7 @@ class TrendFollowingRiskManager(RiskManager):
         self,
         position: Position,
         current_data: MarketData,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> bool:
         """Determine exit based on stop loss.
@@ -121,7 +119,7 @@ class TrendFollowingRiskManager(RiskManager):
         self,
         entry_price: float,
         signal: Signal,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> float:
         """Calculate stop loss level.
@@ -146,10 +144,12 @@ class TrendFollowingRiskManager(RiskManager):
     def get_parameters(self) -> dict[str, Any]:
         """Get risk manager parameters."""
         params = super().get_parameters()
-        params.update({
-            "target_allocation": self.target_allocation,
-            "stop_loss_pct": self.stop_loss_pct,
-        })
+        params.update(
+            {
+                "target_allocation": self.target_allocation,
+                "stop_loss_pct": self.stop_loss_pct,
+            }
+        )
         return params
 
 
@@ -175,7 +175,7 @@ class TrendFollowingPositionSizer(PositionSizer):
         signal: "Signal",
         balance: float,
         risk_amount: float,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
     ) -> float:
         """Pass through the risk manager's allocation with minimal adjustment.
 
@@ -288,13 +288,15 @@ def create_adaptive_trend_strategy(
     # No trailing stop: trailing stops with tight distances cause premature exits
     # during normal bull market corrections (20-30% dips are common for BTC).
     # Risk is managed at the strategy level via EMA trend detection.
-    strategy.set_risk_overrides({
-        "position_sizer": "trend_following",
-        "base_fraction": target_allocation,
-        "min_fraction": 0.50,
-        "max_fraction": max_position_pct,
-        "stop_loss_pct": stop_loss_pct,
-        "take_profit_pct": take_profit_pct,
-    })
+    strategy.set_risk_overrides(
+        {
+            "position_sizer": "trend_following",
+            "base_fraction": target_allocation,
+            "min_fraction": 0.50,
+            "max_fraction": max_position_pct,
+            "stop_loss_pct": stop_loss_pct,
+            "take_profit_pct": take_profit_pct,
+        }
+    )
 
     return strategy
