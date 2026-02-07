@@ -216,8 +216,8 @@ def create_adaptive_trend_strategy(
     exit_buffer_pct: float = 0.08,
     exit_ratio_threshold: float = 0.65,
     ema_slope_lookback: int = 35,
-    target_allocation: float = 0.95,
-    max_position_pct: float = 0.95,
+    target_allocation: float = 0.99,
+    max_position_pct: float = 0.99,
     stop_loss_pct: float = 0.40,
     take_profit_pct: float = 10.0,
 ) -> Strategy:
