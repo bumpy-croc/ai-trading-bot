@@ -216,6 +216,7 @@ class Backtester:
         self._runtime_dataset = None
         self._runtime_warmup = 0
         self._configure_strategy(strategy)
+        self._initial_strategy = self.strategy  # Preserved for reset after regime switches
 
         name_source = strategy if isinstance(strategy, StrategyRuntime) else self.strategy
         self.initial_strategy_name = getattr(name_source, "name", name_source.__class__.__name__)
@@ -730,8 +731,9 @@ class Backtester:
     def _reset_run_state(self) -> None:
         """Reset all mutable state so a reused Backtester produces isolated results.
 
-        Without this, trades, fees, performance metrics, and early-stop flags
-        accumulate across consecutive ``run()`` calls on the same instance.
+        Without this, trades, fees, performance metrics, early-stop flags,
+        risk counters, and regime state accumulate across consecutive ``run()``
+        calls on the same instance.
         """
         self.balance = self.initial_balance
         self.peak_balance = self.initial_balance
@@ -740,9 +742,22 @@ class Backtester:
         self.early_stop_reason = None
         self.early_stop_date = None
         self.early_stop_candle_index = None
+        self.trading_session_id = None
         self.execution_engine.reset()
         self.position_tracker.reset()
         self.performance_tracker.reset(self.initial_balance)
+
+        # Reset risk manager exposure tracking from previous run
+        self.risk_manager.reset_daily_risk()
+        self.risk_manager.positions.clear()
+
+        # Restore initial strategy if regime switching changed it
+        if self.strategy is not self._initial_strategy:
+            self.strategy = self._initial_strategy
+        if self.regime_handler is not None:
+            self.regime_handler.regime_history.clear()
+            self.regime_handler.strategy_switches.clear()
+            self.regime_handler._current_strategy_name = self.initial_strategy_name
 
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
@@ -1032,8 +1047,9 @@ class Backtester:
                         logger.warning("Maximum drawdown exceeded. Stopping backtest.")
                         break
 
-            # Entry path
-            elif self._is_runtime_strategy():
+            # Entry path - only evaluate when no position is open to prevent
+            # queuing new entries on the same candle as an existing trade
+            elif not self.position_tracker.has_position and self._is_runtime_strategy():
                 self._process_entry_signal(
                     runtime_decision=runtime_decision,
                     df=df,

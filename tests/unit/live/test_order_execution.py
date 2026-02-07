@@ -493,7 +493,12 @@ class TestHandlePartialFill:
     def test_handle_partial_fill_logs_critical_for_sl(
         self, engine_with_exchange, sample_position, caplog
     ):
-        """Partial fill of stop-loss logs critical warning and triggers emergency close."""
+        """Partial fill of stop-loss logs critical warning without auto-closing.
+
+        Auto-closing was removed because it would place a market order for the
+        FULL position.quantity, over-selling the portion already filled by the
+        partial SL. The remaining SL order stays active on the exchange.
+        """
         sample_position.stop_loss_order_id = "sl_order_456"
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
@@ -502,11 +507,9 @@ class TestHandlePartialFill:
         import logging
 
         with caplog.at_level(logging.CRITICAL):
-            with patch.object(engine_with_exchange, "_execute_exit") as mock_exit:
-                engine_with_exchange._handle_partial_fill("sl_order_456", "BTCUSDT", 0.01, 48000.0)
+            engine_with_exchange._handle_partial_fill("sl_order_456", "BTCUSDT", 0.01, 48000.0)
 
         assert "PARTIAL STOP-LOSS FILL" in caplog.text
-        mock_exit.assert_called_once()
 
     def test_handle_partial_fill_logs_sl_warning_event(self, engine_with_exchange, sample_position):
         """Partial fill warning logs event details."""
@@ -516,8 +519,7 @@ class TestHandlePartialFill:
         )
 
         with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
-            with patch.object(engine_with_exchange, "_execute_exit"):
-                engine_with_exchange._handle_partial_fill("sl_order_456", "BTCUSDT", 0.01, 48000.0)
+            engine_with_exchange._handle_partial_fill("sl_order_456", "BTCUSDT", 0.01, 48000.0)
 
             mock_log.assert_any_call(
                 "partial_sl_fill_warning",
@@ -567,6 +569,23 @@ class TestHandleOrderCancel:
 
         engine_with_exchange._handle_order_cancel("entry_order_123", "BTCUSDT")
 
+        assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
+
+    def test_handle_cancel_refunds_entry_fee(self, engine_with_exchange, sample_position):
+        """Cancel callback refunds entry fee to prevent permanent fee leakage."""
+        # Arrange - set entry fee in metadata and initial balance
+        sample_position.metadata["entry_fee"] = 5.0
+        engine_with_exchange.current_balance = 9995.0  # 10000 - 5.0 entry fee
+        engine_with_exchange.trading_session_id = None  # Paper trading mode
+        engine_with_exchange.live_position_tracker.track_recovered_position(
+            sample_position, db_id=None
+        )
+
+        # Act
+        engine_with_exchange._handle_order_cancel("entry_order_123", "BTCUSDT")
+
+        # Assert - fee refunded, position removed
+        assert engine_with_exchange.current_balance == 10000.0
         assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
 
     def test_handle_cancel_no_phantom_position(self, engine_with_exchange):

@@ -293,7 +293,7 @@ class LivePositionTracker:
             position = self._positions.pop(order_id, None)
             if position is not None:
                 self.mfe_mae_tracker.clear(order_id)
-            self._position_db_ids.pop(order_id, None)
+                self._position_db_ids.pop(order_id, None)
             return position
 
     def close_position(

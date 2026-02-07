@@ -31,11 +31,23 @@ class TrackedOrder:
     # After MAX_INVALID_DATA_RETRIES, the order is force-removed to prevent
     # permanent tracking when the exchange returns persistently corrupt data.
     invalid_data_count: int = 0
+    # Counts consecutive fill callback failures (on_fill raises).
+    # After MAX_CALLBACK_RETRIES the order is force-removed to prevent an
+    # unbounded retry loop when the callback fails deterministically.
+    callback_failure_count: int = 0
 
 
 # Maximum polls with invalid data before force-removing a tracked order.
-# Prevents permanent tracking when exchange returns corrupt fill data.
+# Set to 10 to tolerate transient exchange issues (typically 1-3 polls) while
+# preventing permanent ghost-order tracking from persistent corrupt data.
+# At a typical 5-second poll interval, this gives ~50 seconds of tolerance.
 MAX_INVALID_DATA_RETRIES = 10
+
+# Maximum fill-callback failures before force-removing a tracked order.
+# Set to 5 (fewer than data retries) because callback failures are typically
+# deterministic bugs rather than transient issues. At a 5-second poll interval
+# this gives ~25 seconds before the order is force-removed with a CRITICAL alert.
+MAX_CALLBACK_RETRIES = 5
 
 
 class OrderTracker:
@@ -268,12 +280,27 @@ class OrderTracker:
                     self.on_fill(order_id, tracked.symbol, filled_qty, avg_price)
                     callback_succeeded = True
                 except Exception as e:
+                    tracked.callback_failure_count += 1
+                    if tracked.callback_failure_count >= MAX_CALLBACK_RETRIES:
+                        logger.critical(
+                            "CRITICAL: Fill callback failed %d times for order %s on %s: %s. "
+                            "Force-removing to prevent unbounded retry loop. "
+                            "POSITION IS ORPHANED ON EXCHANGE - MANUAL RECONCILIATION REQUIRED.",
+                            tracked.callback_failure_count,
+                            order_id,
+                            tracked.symbol,
+                            e,
+                            exc_info=True,
+                        )
+                        self.stop_tracking(order_id)
+                        return
                     logger.critical(
-                        "CRITICAL: Fill callback failed for order %s on %s: %s. "
-                        "Order remains tracked for retry on next poll cycle. "
-                        "Position may be orphaned on exchange if retries exhaust.",
+                        "CRITICAL: Fill callback failed for order %s on %s (attempt %d/%d): %s. "
+                        "Order remains tracked for retry on next poll cycle.",
                         order_id,
                         tracked.symbol,
+                        tracked.callback_failure_count,
+                        MAX_CALLBACK_RETRIES,
                         e,
                         exc_info=True,
                     )
@@ -404,19 +431,17 @@ class OrderTracker:
         ):
             logger.warning("Order %s: %s %s", status.value, order_id, tracked.symbol)
             # Call callback outside any lock to prevent deadlock
-            callback_ok = True
             if self.on_cancel:
                 try:
                     self.on_cancel(order_id, tracked.symbol)
                 except Exception as e:
-                    callback_ok = False
                     # Escalate to CRITICAL: the position may still exist in the
                     # tracker with no exchange order backing it. The order won't
                     # reappear, so we must stop tracking, but a phantom position
                     # remains until the next reconciliation cycle.
                     logger.critical(
                         "CRITICAL: Cancel callback failed for order %s on %s: %s. "
-                        "Position may be orphaned in tracker. "
+                        "Order will be untracked; position may be orphaned in tracker. "
                         "MANUAL RECONCILIATION REQUIRED.",
                         order_id,
                         tracked.symbol,
@@ -425,10 +450,3 @@ class OrderTracker:
             # Stop tracking even if callback fails - cancelled orders won't
             # re-appear on exchange so keeping them tracked is a memory leak.
             self.stop_tracking(order_id)
-            if not callback_ok:
-                logger.critical(
-                    "Order %s stopped tracking after failed cancel callback. "
-                    "Check position tracker for orphaned position on %s.",
-                    order_id,
-                    tracked.symbol,
-                )

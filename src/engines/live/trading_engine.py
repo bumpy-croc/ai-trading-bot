@@ -2724,8 +2724,9 @@ class LiveTradingEngine:
         for pos_order_id, position in self.live_position_tracker.positions.items():
             if position.stop_loss_order_id == order_id:
                 logger.critical(
-                    "PARTIAL STOP-LOSS FILL: Position %s SL order %s partially filled (%.4f @ $%.2f). "
-                    "Remaining position may be unprotected. Attempting emergency close.",
+                    "PARTIAL STOP-LOSS FILL: Position %s SL order %s partially filled "
+                    "(%.4f @ $%.2f). Remaining SL order is still active on exchange. "
+                    "MANUAL MONITORING REQUIRED.",
                     pos_order_id,
                     order_id,
                     new_filled_qty,
@@ -2739,25 +2740,19 @@ class LiveTradingEngine:
                     filled_quantity=new_filled_qty,
                     average_price=avg_price,
                 )
+                # Do NOT auto-close the remaining position here. The partial SL
+                # fill already sold part of the position, and the remaining SL
+                # order is still active on the exchange protecting the unfilled
+                # portion. Calling _execute_exit(skip_live_close=False) would
+                # place a market order for the FULL position.quantity, over-selling
+                # by the already-filled amount and creating unintended exposure.
+                # If the remaining SL order expires/cancels, the cancel callback
+                # will fire and can be handled there.
                 self._send_alert(
                     f"⚠️ PARTIAL SL FILL: {symbol} position {pos_order_id} "
                     f"partially filled ({new_filled_qty} @ ${avg_price:.2f}). "
-                    f"Closing remaining position to prevent unprotected exposure."
+                    f"Remaining SL order still active. MANUAL MONITORING REQUIRED."
                 )
-                # Close the entire remaining position at market to prevent
-                # unprotected exposure. The partial SL fill already covered
-                # part of the position; closing the rest ensures no orphan.
-                if self.live_position_tracker.has_position(pos_order_id):
-                    self._execute_exit(
-                        position,
-                        reason="partial_stop_loss_fill_emergency_close",
-                        limit_price=None,
-                        current_price=float(avg_price),
-                        candle_high=None,
-                        candle_low=None,
-                        candle=None,
-                        skip_live_close=False,
-                    )
                 return
 
     def _handle_order_cancel(self, order_id: str, symbol: str) -> None:
