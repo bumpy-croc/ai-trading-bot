@@ -184,7 +184,7 @@ class ExecutionEngine:
             size=pending["size_fraction"],
             stop_loss=stop_loss,
             take_profit=take_profit,
-            entry_balance=balance - entry_fee,
+            entry_balance=balance - entry_fee if balance > entry_fee else balance,
         )
         # Note: component_notional removed - computed on-demand as current_size * balance
 
@@ -257,7 +257,7 @@ class ExecutionEngine:
             size=size_fraction,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            entry_balance=balance - entry_fee,
+            entry_balance=balance - entry_fee if balance > entry_fee else balance,
         )
         # Note: component_notional removed - computed on-demand as current_size * balance
 

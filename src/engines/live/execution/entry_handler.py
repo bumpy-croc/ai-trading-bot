@@ -349,6 +349,17 @@ class LiveEntryHandler:
         # CRITICAL: Subtract entry fee from entry_balance to match backtest behavior.
         # This ensures P&L calculations use the same basis in both engines.
         entry_balance = balance - exec_result.entry_fee
+        if entry_balance <= 0:
+            logger.critical(
+                "Entry balance for %s is non-positive (%.6f) after fee deduction "
+                "(balance=%.6f, fee=%.6f). P&L calculations will use raw balance.",
+                symbol,
+                entry_balance,
+                balance,
+                exec_result.entry_fee,
+            )
+            # Fall back to raw balance to prevent negative basis in P&L calculations
+            entry_balance = balance
         # Create position with actual quantity from execution
         position = LivePosition(
             symbol=symbol,

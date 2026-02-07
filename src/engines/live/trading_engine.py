@@ -2388,6 +2388,14 @@ class LiveTradingEngine:
             else:
                 # No trading session - update balance directly (testing/paper trading mode)
                 self.current_balance -= entry_fee
+                if self.current_balance < 0:
+                    logger.critical(
+                        "CRITICAL: Balance went negative (%.6f) after entry fee deduction "
+                        "of %.6f for %s. MANUAL RECONCILIATION REQUIRED.",
+                        self.current_balance,
+                        entry_fee,
+                        symbol,
+                    )
 
             position.metadata["entry_fee"] = entry_fee
             position.metadata["entry_slippage_cost"] = entry_slippage_cost
@@ -2902,6 +2910,15 @@ class LiveTradingEngine:
             else:
                 # No trading session - update balance directly (testing/paper trading mode)
                 self.current_balance += realized_pnl
+                if self.current_balance < 0:
+                    logger.critical(
+                        "CRITICAL: Balance went negative (%.6f) after realized PnL of "
+                        "%.6f for %s (%s). MANUAL RECONCILIATION REQUIRED.",
+                        self.current_balance,
+                        realized_pnl,
+                        position.symbol,
+                        reason,
+                    )
 
             exit_price = float(exit_result.exit_price)
             exit_fee = exit_result.exit_fee
