@@ -243,7 +243,8 @@ class CoinGeckoProvider(DataProvider):
                 )
                 df = self._fetch_via_coingecko_market_chart(coin_id, start, end, timeframe)
             else:
-                # Historical data: use Binance public archives
+                # Historical data: use Binance public archives for bulk,
+                # then backfill recent gaps with CoinGecko market_chart
                 binance_symbol = self.BINANCE_SYMBOL_MAPPING.get(coin_id)
                 if binance_symbol:
                     logger.info(
@@ -253,6 +254,29 @@ class CoinGeckoProvider(DataProvider):
                     df = self._fetch_via_binance_archive(
                         binance_symbol, start, end, timeframe
                     )
+                    # Backfill recent gap with CoinGecko if Binance archives
+                    # are missing recent months (archives may lag publication)
+                    if df is not None and not df.empty:
+                        last_archive_date = df.index.max()
+                        gap_days = (end - last_archive_date).days
+                        if gap_days > 2:
+                            logger.info(
+                                "Binance archives end at %s, backfilling %d-day "
+                                "gap with CoinGecko",
+                                last_archive_date.date(), gap_days,
+                            )
+                            cg_start = last_archive_date + timedelta(days=1)
+                            cg_df = self._fetch_via_coingecko_market_chart(
+                                coin_id, cg_start, end, timeframe
+                            )
+                            if cg_df is not None and not cg_df.empty:
+                                df = pd.concat([df, cg_df])
+                                df = df[~df.index.duplicated(keep="last")]
+                                df.sort_index(inplace=True)
+                                logger.info(
+                                    "Backfilled %d candles from CoinGecko",
+                                    len(cg_df),
+                                )
                 else:
                     # Fallback to CoinGecko for unsupported symbols
                     logger.info(
@@ -469,8 +493,11 @@ class CoinGeckoProvider(DataProvider):
                     names=["timestamp", "open", "high", "low", "close", "volume"],
                 )
 
-            # Convert timestamp from milliseconds to UTC datetime
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            # Detect timestamp unit: Binance switched from milliseconds to
+            # microseconds in January 2025 (values jump from ~1.7e12 to ~1.7e15)
+            first_ts = df["timestamp"].iloc[0]
+            ts_unit = "us" if first_ts > 1e14 else "ms"
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit=ts_unit, utc=True)
             df.set_index("timestamp", inplace=True)
 
             # Convert to numeric
