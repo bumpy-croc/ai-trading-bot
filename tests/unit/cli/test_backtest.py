@@ -141,6 +141,8 @@ class TestHandleBacktest:
             risk_per_trade=0.01,
             max_risk_per_trade=0.02,
             max_drawdown=0.5,
+            max_position_size=None,
+            disable_engine_sl=False,
             use_sentiment=False,
             no_cache=False,
             cache_ttl=24,
@@ -173,10 +175,16 @@ class TestHandleBacktest:
             patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
-            patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
             patch(
                 "src.data_providers.cached_data_provider.CachedDataProvider"
             ) as mock_cached_provider,
+            patch(
+                "src.infrastructure.runtime.cache.get_cache_ttl_for_provider",
+                return_value=24,
+            ),
             patch("cli.commands.backtest.SymbolFactory.to_exchange_symbol", return_value="BTCUSDT"),
             patch("builtins.open", create=True),
             patch("cli.commands.backtest.PROJECT_ROOT", Path("/tmp/test")),
@@ -187,7 +195,7 @@ class TestHandleBacktest:
             mock_load_strategy.return_value = mock_strategy
 
             mock_provider = Mock()
-            mock_provider_class.return_value = mock_provider
+            mock_create_provider.return_value = mock_provider
 
             mock_data_provider = Mock()
             mock_data_provider.get_cache_info.return_value = {
@@ -213,13 +221,19 @@ class TestHandleBacktest:
             patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
-            patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
             patch(
                 "src.data_providers.cached_data_provider.CachedDataProvider"
             ) as mock_cached_provider,
             patch(
                 "src.data_providers.feargreed_provider.FearGreedProvider"
             ) as mock_sentiment_provider,
+            patch(
+                "src.infrastructure.runtime.cache.get_cache_ttl_for_provider",
+                return_value=24,
+            ),
             patch("cli.commands.backtest.SymbolFactory.to_exchange_symbol", return_value="BTCUSDT"),
             patch("builtins.open", create=True),
             patch("cli.commands.backtest.PROJECT_ROOT", Path("/tmp/test")),
@@ -230,7 +244,7 @@ class TestHandleBacktest:
             mock_load_strategy.return_value = mock_strategy
 
             mock_provider = Mock()
-            mock_provider_class.return_value = mock_provider
+            mock_create_provider.return_value = mock_provider
 
             mock_data_provider = Mock()
             mock_data_provider.get_cache_info.return_value = {
@@ -260,7 +274,9 @@ class TestHandleBacktest:
             patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
-            patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
             patch(
                 "src.data_providers.cached_data_provider.CachedDataProvider"
             ) as mock_cached_provider,
@@ -274,7 +290,7 @@ class TestHandleBacktest:
             mock_load_strategy.return_value = mock_strategy
 
             mock_provider = Mock()
-            mock_provider_class.return_value = mock_provider
+            mock_create_provider.return_value = mock_provider
 
             # Act
             result = _handle(default_args)
@@ -299,6 +315,10 @@ class TestHandleBacktest:
             patch(
                 "src.data_providers.cached_data_provider.CachedDataProvider"
             ) as mock_cached_provider,
+            patch(
+                "src.infrastructure.runtime.cache.get_cache_ttl_for_provider",
+                return_value=24,
+            ),
             patch("cli.commands.backtest.SymbolFactory.to_exchange_symbol", return_value="BTC-USD"),
             patch("builtins.open", create=True),
             patch("cli.commands.backtest.PROJECT_ROOT", Path("/tmp/test")),
@@ -348,17 +368,23 @@ class TestHandleBacktest:
             patch("src.engines.backtest.engine.Backtester") as mock_backtester_class,
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
-            patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
             patch(
                 "src.data_providers.cached_data_provider.CachedDataProvider"
             ) as mock_cached_provider,
+            patch(
+                "src.infrastructure.runtime.cache.get_cache_ttl_for_provider",
+                return_value=24,
+            ),
         ):
 
             mock_strategy = Mock(name="ml_basic")
             mock_load_strategy.return_value = mock_strategy
 
             mock_provider = Mock()
-            mock_provider_class.return_value = mock_provider
+            mock_create_provider.return_value = mock_provider
 
             mock_data_provider = Mock()
             mock_data_provider.get_cache_info.return_value = {
@@ -384,10 +410,16 @@ class TestHandleBacktest:
             patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
-            patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
             patch(
                 "src.data_providers.cached_data_provider.CachedDataProvider"
             ) as mock_cached_provider,
+            patch(
+                "src.infrastructure.runtime.cache.get_cache_ttl_for_provider",
+                return_value=24,
+            ),
             patch("cli.commands.backtest.SymbolFactory.to_exchange_symbol", return_value="BTCUSDT"),
             patch("cli.commands.backtest.PROJECT_ROOT", Path("/tmp/test")),
         ):
@@ -397,7 +429,7 @@ class TestHandleBacktest:
             mock_load_strategy.return_value = mock_strategy
 
             mock_provider = Mock()
-            mock_provider_class.return_value = mock_provider
+            mock_create_provider.return_value = mock_provider
 
             mock_data_provider = Mock()
             mock_data_provider.get_cache_info.return_value = {

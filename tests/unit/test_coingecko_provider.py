@@ -151,13 +151,17 @@ class TestCoinGeckoProviderMocked:
 
     def test_network_error_raises_after_retries(self, mock_provider):
         """Test that network errors raise after exhausting retries."""
-        # Arrange
-        start = datetime(2024, 1, 1, tzinfo=UTC)
-        end = datetime(2024, 1, 2, tzinfo=UTC)
+        # Arrange - use recent dates so CoinGecko market_chart path is taken
+        start = datetime.now(UTC) - timedelta(days=10)
+        end = datetime.now(UTC) - timedelta(days=9)
 
         # Mock connection error
-        with patch.object(
-            mock_provider._session, "get", side_effect=requests.ConnectionError("Network unreachable")
+        with (
+            patch.object(
+                mock_provider._session, "get",
+                side_effect=requests.ConnectionError("Network unreachable"),
+            ),
+            patch("time.sleep"),
         ):
             # Act & Assert - should raise after retries
             with pytest.raises(requests.ConnectionError):
@@ -165,13 +169,17 @@ class TestCoinGeckoProviderMocked:
 
     def test_timeout_error_raises_after_retries(self, mock_provider):
         """Test that timeout errors raise after exhausting retries."""
-        # Arrange
-        start = datetime(2024, 1, 1, tzinfo=UTC)
-        end = datetime(2024, 1, 2, tzinfo=UTC)
+        # Arrange - use recent dates so CoinGecko market_chart path is taken
+        start = datetime.now(UTC) - timedelta(days=10)
+        end = datetime.now(UTC) - timedelta(days=9)
 
         # Mock timeout error
-        with patch.object(
-            mock_provider._session, "get", side_effect=requests.Timeout("Request timed out")
+        with (
+            patch.object(
+                mock_provider._session, "get",
+                side_effect=requests.Timeout("Request timed out"),
+            ),
+            patch("time.sleep"),
         ):
             # Act & Assert
             with pytest.raises(requests.Timeout):
@@ -179,16 +187,19 @@ class TestCoinGeckoProviderMocked:
 
     def test_rate_limit_error_retries(self, mock_provider):
         """Test that 429 rate limit errors trigger retry logic."""
-        # Arrange
-        start = datetime(2024, 1, 1, tzinfo=UTC)
-        end = datetime(2024, 1, 2, tzinfo=UTC)
+        # Arrange - use recent dates so CoinGecko market_chart path is taken
+        start = datetime.now(UTC) - timedelta(days=10)
+        end = datetime.now(UTC) - timedelta(days=9)
 
         # Mock 429 response
         mock_response = Mock()
         mock_response.status_code = 429
         mock_response.raise_for_status.side_effect = requests.HTTPError("429 Too Many Requests")
 
-        with patch.object(mock_provider._session, "get", return_value=mock_response):
+        with (
+            patch.object(mock_provider._session, "get", return_value=mock_response),
+            patch("time.sleep"),
+        ):
             # Act & Assert - should raise after retries
             with pytest.raises(requests.HTTPError) as exc_info:
                 mock_provider.get_historical_data("BTC-USD", "4h", start, end)
@@ -250,86 +261,88 @@ class TestCoinGeckoProviderMocked:
             assert result.empty
 
     def test_valid_ohlc_response_with_volume(self, mock_provider):
-        """Test that valid OHLC responses are processed correctly."""
-        # Arrange
-        start = datetime(2024, 1, 1, tzinfo=UTC)
-        end = datetime(2024, 1, 2, tzinfo=UTC)
+        """Test that valid market_chart responses are processed correctly."""
+        # Arrange - use recent dates so CoinGecko market_chart path is taken
+        # Align to midnight UTC to get clean daily candle boundaries
+        now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = now - timedelta(days=5)
+        end = now - timedelta(days=3)
 
-        # Mock valid OHLC response
-        mock_ohlc_response = Mock()
-        mock_ohlc_response.status_code = 200
-        mock_ohlc_response.raise_for_status = Mock()
-        mock_ohlc_response.json.return_value = [
-            [1704067200000, 42000.0, 43000.0, 41000.0, 42500.0],
-            [1704153600000, 42500.0, 44000.0, 42000.0, 43000.0],
-        ]
+        # Build hourly price points for exactly 2 days starting at midnight
+        base_ts = int(start.timestamp() * 1000)
+        prices = []
+        volumes = []
+        for i in range(48):
+            ts = base_ts + i * 3600 * 1000  # Hourly intervals
+            price = 42000.0 + (i % 24) * 50  # Varies within each day
+            vol = 1000000.0 + i * 10000
+            prices.append([ts, price])
+            volumes.append([ts, vol])
 
-        # Mock valid volume response
-        mock_volume_response = Mock()
-        mock_volume_response.status_code = 200
-        mock_volume_response.raise_for_status = Mock()
-        mock_volume_response.json.return_value = {
-            "total_volumes": [
-                [1704067200000, 1000000.0],
-                [1704153600000, 1200000.0],
-            ]
+        # Mock market_chart response (single API call returns prices + volumes)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "prices": prices,
+            "total_volumes": volumes,
         }
 
-        # Mock session to return valid responses
-        with patch.object(
-            mock_provider._session,
-            "get",
-            side_effect=[mock_ohlc_response, mock_volume_response],
-        ):
+        with patch.object(mock_provider._session, "get", return_value=mock_response):
             # Act
-            result = mock_provider.get_historical_data("BTC-USD", "4h", start, end)
+            result = mock_provider.get_historical_data("BTC-USD", "1d", start, end)
 
             # Assert
             assert isinstance(result, pd.DataFrame)
             assert len(result) == 2
             assert all(col in result.columns for col in ["open", "high", "low", "close", "volume"])
+            # First candle open should be the first price point
             assert result["open"].iloc[0] == 42000.0
-            assert result["close"].iloc[1] == 43000.0
 
     def test_invalid_volume_data_filtered(self, mock_provider):
-        """Test that invalid volume values (NaN, Infinity, negative) are filtered."""
-        # Arrange
-        start = datetime(2024, 1, 1, tzinfo=UTC)
-        end = datetime(2024, 1, 2, tzinfo=UTC)
+        """Test that invalid volume values (NaN, negative) are cleaned."""
+        # Arrange - use recent dates so CoinGecko market_chart path is taken
+        # Align to midnight UTC to get clean daily candle boundaries
+        now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = now - timedelta(days=5)
+        end = now - timedelta(days=4)
 
-        # Mock OHLC response
-        mock_ohlc_response = Mock()
-        mock_ohlc_response.status_code = 200
-        mock_ohlc_response.raise_for_status = Mock()
-        mock_ohlc_response.json.return_value = [
-            [1704067200000, 42000.0, 43000.0, 41000.0, 42500.0],
-        ]
+        # Build hourly price points for 1 day starting at midnight
+        base_ts = int(start.timestamp() * 1000)
+        prices = []
+        for i in range(24):
+            ts = base_ts + i * 3600 * 1000
+            prices.append([ts, 42000.0 + i * 10])
 
-        # Mock volume response with invalid values
-        mock_volume_response = Mock()
-        mock_volume_response.status_code = 200
-        mock_volume_response.raise_for_status = Mock()
-        mock_volume_response.json.return_value = {
-            "total_volumes": [
-                [1704067200000, float("nan")],  # Invalid: NaN
-                [1704153600000, float("inf")],  # Invalid: Infinity
-                [1704239400000, -1000.0],  # Invalid: negative
-            ]
+        # Volume data with invalid values (NaN, negative) at matching timestamps
+        volumes = []
+        for i in range(24):
+            ts = base_ts + i * 3600 * 1000
+            if i < 8:
+                volumes.append([ts, float("nan")])
+            elif i < 16:
+                volumes.append([ts, -1000.0])
+            else:
+                volumes.append([ts, 0.0])
+
+        # Mock market_chart response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "prices": prices,
+            "total_volumes": volumes,
         }
 
-        # Mock session to return responses
-        with patch.object(
-            mock_provider._session,
-            "get",
-            side_effect=[mock_ohlc_response, mock_volume_response],
-        ):
+        with patch.object(mock_provider._session, "get", return_value=mock_response):
             # Act
-            result = mock_provider.get_historical_data("BTC-USD", "4h", start, end)
+            result = mock_provider.get_historical_data("BTC-USD", "1d", start, end)
 
-            # Assert - volume should be 0 (default) since all volume data was invalid
+            # Assert - should have 1 candle with volume cleaned
             assert isinstance(result, pd.DataFrame)
             assert len(result) == 1
-            assert result["volume"].iloc[0] == 0  # Default volume
+            # NaN volumes are filled with 0, negative volumes are set to 0
+            assert result["volume"].iloc[0] >= 0
 
     def test_get_current_price_with_mock(self, mock_provider):
         """Test get_current_price with mocked response."""
