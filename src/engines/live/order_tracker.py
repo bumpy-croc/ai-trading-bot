@@ -246,6 +246,8 @@ class OrderTracker:
                     "(attempt %d/%d) - retrying on next poll",
                     filled_qty,
                     order_id,
+                    tracked.invalid_data_count,
+                    MAX_INVALID_DATA_RETRIES,
                 )
                 # Don't stop tracking - keep polling until we get valid quantity
                 return
