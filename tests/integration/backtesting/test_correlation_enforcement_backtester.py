@@ -130,9 +130,20 @@ def test_backtester_correlation_reduces_size(monkeypatch):
     )
     bt.balance = 10_000
 
-    # Seed an existing correlated open position
-    bt.risk_manager.positions = {"BTCUSDT": {"size": 0.06, "entry_price": 110.0, "side": "long"}}
-    bt.positions = [SimpleNamespace(symbol="BTCUSDT")]
+    # Seed an existing correlated open position AFTER _reset_run_state runs.
+    # _reset_run_state correctly clears risk_manager.positions for instance
+    # reuse, so we inject the seed via a post-reset hook to simulate a
+    # mid-backtest scenario where a correlated position is already open.
+    seeded_positions = {"BTCUSDT": {"size": 0.06, "entry_price": 110.0, "side": "long"}}
+    seeded_bt_positions = [SimpleNamespace(symbol="BTCUSDT")]
+    original_reset = bt._reset_run_state
+
+    def _reset_then_seed():
+        original_reset()
+        bt.risk_manager.positions = seeded_positions.copy()
+        bt.positions = list(seeded_bt_positions)
+
+    monkeypatch.setattr(bt, "_reset_run_state", _reset_then_seed)
 
     original_apply = bt.correlation_handler.apply_correlation_control
     captures: dict[str, float] = {}
