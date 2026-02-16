@@ -14,11 +14,11 @@ _INDICATOR_CACHE: dict[str, Any] = {}
 _CACHE_MAX_SIZE = 1000  # Limit cache size to prevent memory issues
 
 
-def _make_cache_key(df: pd.DataFrame, func_name: str, **kwargs) -> str | None:
+def _make_cache_key(df: pd.DataFrame, func_name: str, *args, **kwargs) -> str | None:
     """
     Create a cache key from DataFrame properties and function parameters.
 
-    Uses last timestamp, row count, function name, and sorted parameters.
+    Uses last timestamp, row count, function name, positional args, and sorted parameters.
     Returns None for empty DataFrames (skip caching).
     """
     if df.empty:
@@ -28,11 +28,13 @@ def _make_cache_key(df: pd.DataFrame, func_name: str, **kwargs) -> str | None:
     last_ts = str(df.index[-1]) if hasattr(df.index, "__getitem__") else str(len(df))
     num_rows = len(df)
 
+    # Include positional arguments in cache key
+    args_str = "_".join(str(a) for a in args)
     # Sort parameters for consistent hashing
     param_str = "_".join(f"{k}={v}" for k, v in sorted(kwargs.items()))
 
     # Create composite key and hash for shorter keys
-    key_str = "|".join([func_name, last_ts, str(num_rows), param_str])
+    key_str = "|".join([func_name, last_ts, str(num_rows), args_str, param_str])
     return hashlib.md5(key_str.encode()).hexdigest()
 
 
@@ -48,7 +50,7 @@ def cached_indicator(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(df: pd.DataFrame, *args, **kwargs):
         # Build cache key
-        cache_key = _make_cache_key(df, func.__name__, **kwargs)
+        cache_key = _make_cache_key(df, func.__name__, *args, **kwargs)
 
         if cache_key is None:
             # Empty DataFrame, skip caching
