@@ -228,8 +228,6 @@ class Backtester:
 
         # Risk management - handle backward compatibility for max_position_size
         if max_position_size is not None:
-            from src.risk.risk_manager import RiskParameters
-
             if risk_parameters is None:
                 risk_parameters = RiskParameters(max_position_size=max_position_size)
             else:
