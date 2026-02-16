@@ -754,6 +754,10 @@ class Backtester:
         # Restore initial strategy if regime switching changed it
         if self.strategy is not self._initial_strategy:
             self._configure_strategy(self._initial_strategy)
+            # Rebind handlers to use the restored strategy (matches _switch_strategy behavior)
+            self.entry_handler.set_component_strategy(self._component_strategy)
+            if self.correlation_handler:
+                self.correlation_handler.set_strategy(self.strategy)
         if self.regime_handler is not None:
             self.regime_handler.regime_history.clear()
             self.regime_handler.strategy_switches.clear()

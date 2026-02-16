@@ -181,7 +181,20 @@ class OrderTracker:
                     self.exchange.get_order, order_id, tracked.symbol
                 )
                 if not order:
-                    logger.warning("Could not fetch order %s - may have expired", order_id)
+                    # If order disappeared from exchange AND callback previously failed,
+                    # untrack to prevent ghost-order memory leak (matches CANCELLED path logic).
+                    if tracked.callback_failure_count > 0:
+                        logger.critical(
+                            "CRITICAL: Order %s on %s no longer returned by exchange after "
+                            "%d failed callback attempts. Force-removing to prevent permanent "
+                            "tracking. MANUAL RECONCILIATION REQUIRED.",
+                            order_id,
+                            tracked.symbol,
+                            tracked.callback_failure_count,
+                        )
+                        self.stop_tracking(order_id)
+                    else:
+                        logger.warning("Could not fetch order %s - may have expired", order_id)
                     continue
 
                 self._process_order_status(order_id, tracked, order)
