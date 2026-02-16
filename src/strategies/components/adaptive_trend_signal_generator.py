@@ -98,6 +98,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         # Cache for precomputed EMA values (avoids recalculating every bar)
         self._cached_ema: np.ndarray | None = None
         self._cached_ema_length: int = 0
+        self._cached_data_hash: int | None = None
 
     @property
     def warmup_period(self) -> int:
@@ -272,13 +273,20 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
             Array of EMA values.
         """
         needed_length = max_index + 1
-        if self._cached_ema is not None and self._cached_ema_length >= needed_length:
+        data_hash = hash(close[:needed_length].tobytes())
+
+        if (
+            self._cached_ema is not None
+            and self._cached_ema_length >= needed_length
+            and self._cached_data_hash == data_hash
+        ):
             return self._cached_ema
 
         series = pd.Series(close[:needed_length])
         ema_values = series.ewm(span=self.trend_ema_period, adjust=False).mean().values
         self._cached_ema = ema_values
         self._cached_ema_length = needed_length
+        self._cached_data_hash = data_hash
         return ema_values
 
     def _count_consecutive_days_above(
