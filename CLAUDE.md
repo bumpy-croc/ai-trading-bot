@@ -502,6 +502,15 @@ railway logs --environment production
 
 When Claude makes a mistake or you discover a best practice during development, add it to the "Learned Constraints" section below. This builds institutional knowledge and prevents repeating mistakes.
 
+### Quick-Add with `#` Hashtag
+
+Type `#` followed by a rule to quickly add a learned constraint. Claude will append it to the appropriate section below.
+
+Examples:
+- `# Never use .iloc[] without bounds checking in backtesting engine`
+- `# Always validate model paths with .resolve() before loading`
+- `# ML models require sentiment features even when not used - validate schema`
+
 ### Learned Constraints
 
 - Always validate model paths with `.resolve()` before loading to prevent path traversal
