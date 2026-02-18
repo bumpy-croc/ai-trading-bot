@@ -7,7 +7,7 @@
 
 ## Overview
 
-The AI Trading Bot is a modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live modes), ML-driven predictions, and Railway deployment.
+The AI Trading Bot is a modular cryptocurrency trading system capable of multiple strategies with different risk and return profiles. It supports backtesting, live trading (paper and live modes), ML-driven predictions, and Railway deployment.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -216,7 +216,7 @@ class Strategy:
 **Available Strategies:**
 | Strategy | Description |
 |----------|-------------|
-| `ml_basic` | Core ML-driven trend following |
+| `ml_basic` | Core ML-driven trading strategy |
 | `ml_adaptive` | Regime-aware dynamic strategy |
 | `ml_sentiment` | ML with sentiment integration |
 | `ensemble_weighted` | Weighted signal combination |

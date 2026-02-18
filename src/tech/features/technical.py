@@ -350,8 +350,8 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         """
         Get feature importance weights based on common usage in strategies.
 
-        These are heuristic weights based on typical usage patterns in momentum and
-        trend-following strategies, not empirically derived from model training.
+        These are heuristic weights based on typical usage patterns in various
+        trading strategies, not empirically derived from model training.
         Normalized features (1.0) are most important for ML models, technical indicators
         and derived features (0.8) provide strong signals, moving averages (0.5) are
         supporting indicators, and other features (0.6) are secondary.
