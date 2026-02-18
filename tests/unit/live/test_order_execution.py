@@ -588,6 +588,50 @@ class TestHandleOrderCancel:
         assert engine_with_exchange.current_balance == 10000.0
         assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
 
+    def test_handle_cancel_partial_refund_for_partial_fill(
+        self, engine_with_exchange, sample_position
+    ):
+        """Cancel callback refunds only the unfilled portion's fee after a partial fill.
+
+        When an entry limit order partially fills (e.g., 50% filled) before
+        being cancelled, only the fee for the unfilled 50% is refunded.
+        """
+        # Arrange - entry for 0.02 qty total, fee=10.0, 50% filled before cancel
+        sample_position.metadata["entry_fee"] = 10.0
+        sample_position.quantity = 0.02  # Total intended order quantity
+        engine_with_exchange.current_balance = 9990.0  # 10000 - 10.0 entry fee
+        engine_with_exchange.trading_session_id = None  # Paper trading mode
+        engine_with_exchange.live_position_tracker.track_recovered_position(
+            sample_position, db_id=None
+        )
+
+        # Act - cancel with 50% already filled
+        engine_with_exchange._handle_order_cancel("entry_order_123", "BTCUSDT", filled_qty=0.01)
+
+        # Assert - only 50% of fee refunded (unfilled fraction = 0.5)
+        assert engine_with_exchange.current_balance == pytest.approx(9995.0)  # +5.0 refund
+        assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
+
+    def test_handle_cancel_full_refund_when_fully_unfilled(
+        self, engine_with_exchange, sample_position
+    ):
+        """Cancel callback refunds the full fee when no partial fills occurred."""
+        # Arrange
+        sample_position.metadata["entry_fee"] = 5.0
+        sample_position.quantity = 0.02
+        engine_with_exchange.current_balance = 9995.0
+        engine_with_exchange.trading_session_id = None
+        engine_with_exchange.live_position_tracker.track_recovered_position(
+            sample_position, db_id=None
+        )
+
+        # Act - cancel with zero filled quantity
+        engine_with_exchange._handle_order_cancel("entry_order_123", "BTCUSDT", filled_qty=0.0)
+
+        # Assert - full fee refunded
+        assert engine_with_exchange.current_balance == pytest.approx(10000.0)
+        assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
+
     def test_handle_cancel_no_phantom_position(self, engine_with_exchange):
         """Cancel callback handles missing position gracefully."""
         engine_with_exchange._handle_order_cancel("unknown", "BTCUSDT")

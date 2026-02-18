@@ -2755,15 +2755,18 @@ class LiveTradingEngine:
                 )
                 return
 
-    def _handle_order_cancel(self, order_id: str, symbol: str) -> None:
+    def _handle_order_cancel(self, order_id: str, symbol: str, filled_qty: float = 0.0) -> None:
         """Handle an order cancellation/rejection notification from OrderTracker.
 
-        Refunds the entry fee that was deducted when the position was created,
-        since the order never executed on the exchange.
+        Refunds only the entry fee for the unfilled portion of the order.
+        When an entry limit order partially fills before cancellation, part of
+        the fee was legitimately incurred on the exchange; only the unfilled
+        fraction is refunded to prevent over-crediting the balance.
 
         Args:
             order_id: The cancelled/rejected order ID.
             symbol: Trading symbol.
+            filled_qty: Cumulative quantity filled before cancellation (0.0 if fully unfilled).
         """
         logger.warning("Order cancelled/rejected: %s %s", order_id, symbol)
         log_order_event(
@@ -2777,36 +2780,58 @@ class LiveTradingEngine:
         removed_position = self.live_position_tracker.pop_position(order_id)
         if removed_position is not None:
             logger.error("Entry order %s was cancelled - removing phantom position", order_id)
-            # Refund the entry fee that was deducted from balance when position was
-            # created. Without this refund, cancelled orders permanently leak fees.
+            # Refund only the fee for the unfilled portion. If the order partially filled
+            # before cancellation, the exchange kept the fee for those fills; refunding the
+            # full entry_fee would over-credit the balance and corrupt P&L accounting.
             entry_fee = float(removed_position.metadata.get("entry_fee", 0.0))
             if entry_fee > 0:
-                if self.trading_session_id is not None:
-                    try:
-                        with self.db_manager.atomic_balance_update(
-                            balance_change=entry_fee,
-                            reason=f"refund_entry_fee_{symbol}_order_cancelled",
-                            updated_by="live_engine",
-                            correlation_id=order_id,
-                        ) as balance_result:
-                            self.current_balance = balance_result["new_balance"]
+                original_qty = removed_position.quantity or 0.0
+                if original_qty > 0 and filled_qty > 0:
+                    # Compute the fraction of the order that was NOT filled.
+                    unfilled_fraction = max(0.0, (original_qty - filled_qty) / original_qty)
+                    refund_amount = entry_fee * unfilled_fraction
+                    if unfilled_fraction < 1.0:
                         logger.info(
-                            "Refunded entry fee %.6f for cancelled order %s on %s",
-                            entry_fee,
+                            "Order %s partially filled (%.6f / %.6f qty); "
+                            "refunding %.6f of %.6f entry fee (unfilled fraction: %.4f)",
                             order_id,
-                            symbol,
-                        )
-                    except Exception as refund_err:
-                        logger.critical(
-                            "CRITICAL: Failed to refund entry fee %.6f for cancelled "
-                            "order %s on %s. MANUAL RECONCILIATION REQUIRED. Error: %s",
+                            filled_qty,
+                            original_qty,
+                            refund_amount,
                             entry_fee,
-                            order_id,
-                            symbol,
-                            refund_err,
+                            unfilled_fraction,
                         )
                 else:
-                    self.current_balance += entry_fee
+                    # Order was fully unfilled - refund the entire fee
+                    refund_amount = entry_fee
+
+                if refund_amount > 0:
+                    if self.trading_session_id is not None:
+                        try:
+                            with self.db_manager.atomic_balance_update(
+                                balance_change=refund_amount,
+                                reason=f"refund_entry_fee_{symbol}_order_cancelled",
+                                updated_by="live_engine",
+                                correlation_id=order_id,
+                            ) as balance_result:
+                                self.current_balance = balance_result["new_balance"]
+                            logger.info(
+                                "Refunded entry fee %.6f for cancelled order %s on %s",
+                                refund_amount,
+                                order_id,
+                                symbol,
+                            )
+                        except Exception as refund_err:
+                            logger.critical(
+                                "CRITICAL: Failed to refund entry fee %.6f for cancelled "
+                                "order %s on %s. MANUAL RECONCILIATION REQUIRED. Error: %s",
+                                refund_amount,
+                                order_id,
+                                symbol,
+                                refund_err,
+                            )
+                    else:
+                        self.current_balance += refund_amount
 
     def _execute_exit(
         self,

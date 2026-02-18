@@ -64,7 +64,7 @@ class OrderTracker:
         poll_interval: int = DEFAULT_ORDER_POLL_INTERVAL,
         on_fill: Callable[[str, str, float, float], None] | None = None,
         on_partial_fill: Callable[[str, str, float, float], None] | None = None,
-        on_cancel: Callable[[str, str], None] | None = None,
+        on_cancel: Callable[[str, str, float], None] | None = None,
     ):
         """
         Initialize the order tracker.
@@ -74,7 +74,8 @@ class OrderTracker:
             poll_interval: Seconds between status checks
             on_fill: Callback(order_id, symbol, filled_qty, avg_price) for filled orders
             on_partial_fill: Callback(order_id, symbol, new_filled_qty, avg_price) for partial fills
-            on_cancel: Callback(order_id, symbol) for cancelled/rejected orders
+            on_cancel: Callback(order_id, symbol, filled_qty) for cancelled/rejected orders.
+                filled_qty is the cumulative quantity filled before cancellation (0.0 if unfilled).
         """
         self.exchange = exchange
         self.poll_interval = poll_interval
@@ -443,10 +444,12 @@ class OrderTracker:
             OrderStatus.EXPIRED,
         ):
             logger.warning("Order %s: %s %s", status.value, order_id, tracked.symbol)
-            # Call callback outside any lock to prevent deadlock
+            # Call callback outside any lock to prevent deadlock.
+            # Pass last_filled_qty so the caller can compute a proportional fee refund
+            # when the order was partially filled before cancellation.
             if self.on_cancel:
                 try:
-                    self.on_cancel(order_id, tracked.symbol)
+                    self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
                 except Exception as e:
                     # Escalate to CRITICAL: the position may still exist in the
                     # tracker with no exchange order backing it. The order won't
