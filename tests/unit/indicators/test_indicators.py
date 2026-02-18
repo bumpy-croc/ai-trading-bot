@@ -452,6 +452,24 @@ class TestIndicatorCaching:
         # Results should be different (different last value)
         assert not result1["ma_5"].equals(result2["ma_5"])
 
+    def test_cache_key_respects_earlier_row_changes(self):
+        """Test that cache invalidates when earlier rows change even if last row is the same.
+
+        Regression test for the Codex P1 finding: exchange backfills or corrected
+        historical candles change earlier rows without affecting the final candle.
+        All indicator functions (MA, ATR, BB, MACD) depend on prior rows via rolling
+        windows, so the cache must detect these changes.
+        """
+        # Same last row (close=5), completely different earlier rows
+        data1 = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
+        data2 = pd.DataFrame({"close": [10, 20, 30, 40, 5]})
+
+        result1 = calculate_moving_averages(data1, [3])
+        result2 = calculate_moving_averages(data2, [3])
+
+        # MA values should differ because earlier rows are different
+        assert not result1["ma_3"].equals(result2["ma_3"])
+
     def test_cache_key_respects_row_count(self):
         """Test that cache invalidates when row count changes."""
         data1 = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
