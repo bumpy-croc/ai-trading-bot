@@ -30,6 +30,15 @@ from .data_provider import DataProvider
 
 logger = logging.getLogger(__name__)
 
+# Maps timeframe strings to their candle duration as a timedelta.
+# Used when stitching Binance archive data with CoinGecko backfill to ensure
+# the backfill starts exactly one candle after the last archive candle.
+_TIMEFRAME_TO_CANDLE_INTERVAL: dict[str, timedelta] = {
+    "1h": timedelta(hours=1),
+    "4h": timedelta(hours=4),
+    "1d": timedelta(days=1),
+}
+
 
 class CoinGeckoProvider(DataProvider):
     """
@@ -265,7 +274,14 @@ class CoinGeckoProvider(DataProvider):
                                 "gap with CoinGecko",
                                 last_archive_date.date(), gap_days,
                             )
-                            cg_start = last_archive_date + timedelta(days=1)
+                            # Advance by one candle interval (not one day) to avoid
+                            # skipping intraday candles at the archive/CoinGecko boundary
+                            # e.g. for 1h data: last candle at 23:00 → backfill from 00:00,
+                            # not from 23:00 the next day
+                            candle_interval = _TIMEFRAME_TO_CANDLE_INTERVAL.get(
+                                timeframe, timedelta(days=1)
+                            )
+                            cg_start = last_archive_date + candle_interval
                             cg_df = self._fetch_via_coingecko_market_chart(
                                 coin_id, cg_start, end, timeframe
                             )
@@ -278,7 +294,17 @@ class CoinGeckoProvider(DataProvider):
                                     len(cg_df),
                                 )
                 else:
-                    # Fallback to CoinGecko for unsupported symbols
+                    # Fallback to CoinGecko for symbols without a Binance archive mapping.
+                    # Fail fast if the requested range exceeds what CoinGecko can return:
+                    # silently truncating to 365 days would produce misleading backtest results.
+                    if days_from_now > self.COINGECKO_FREE_MAX_DAYS:
+                        raise ValueError(
+                            f"Symbol '{coin_id}' has no Binance archive mapping and the "
+                            f"requested range ({days_from_now} days back from now) exceeds "
+                            f"the CoinGecko free tier limit ({self.COINGECKO_FREE_MAX_DAYS} "
+                            f"days). Add '{coin_id}' to BINANCE_SYMBOL_MAPPING or reduce "
+                            f"the date range to within {self.COINGECKO_FREE_MAX_DAYS} days."
+                        )
                     logger.info(
                         "Fetching %s data for %d days (%s to %s) via CoinGecko market_chart",
                         coin_id, days_diff, start.date(), end.date(),

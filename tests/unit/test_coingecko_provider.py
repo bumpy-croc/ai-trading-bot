@@ -412,3 +412,107 @@ class TestCoinGeckoProviderMocked:
             # Act & Assert - should not raise
             provider.close()
             assert provider._session is None
+
+    def test_unsupported_symbol_beyond_365_days_raises_value_error(self, mock_provider):
+        """Test that a symbol with no Binance mapping fails fast for multi-year requests.
+
+        Regression guard for the P1 Codex review finding: silently capping
+        a >365-day request to 365 days produces misleading backtest results.
+        """
+        # Arrange - request more than 365 days for a symbol not in BINANCE_SYMBOL_MAPPING
+        start = datetime.now(UTC) - timedelta(days=800)
+        end = datetime.now(UTC)
+
+        # Patch BINANCE_SYMBOL_MAPPING so 'bitcoin' has no entry
+        with patch.dict(mock_provider.BINANCE_SYMBOL_MAPPING, {}, clear=True):
+            # Act & Assert
+            with pytest.raises(ValueError, match="no Binance archive mapping"):
+                mock_provider.get_historical_data("BTC-USD", "1h", start, end)
+
+    def test_unsupported_symbol_within_365_days_succeeds(self, mock_provider):
+        """Test that a symbol with no Binance mapping works fine within 365 days."""
+        # Arrange - request within 365 days for an unmapped symbol
+        now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = now - timedelta(days=10)
+        end = now - timedelta(days=8)
+
+        base_ts = int(start.timestamp() * 1000)
+        prices = [[base_ts + i * 3600 * 1000, 42000.0 + i] for i in range(48)]
+        volumes = [[base_ts + i * 3600 * 1000, 1_000_000.0] for i in range(48)]
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {"prices": prices, "total_volumes": volumes}
+
+        with (
+            patch.dict(mock_provider.BINANCE_SYMBOL_MAPPING, {}, clear=True),
+            patch.object(mock_provider._session, "get", return_value=mock_response),
+        ):
+            # Act - should NOT raise because it's within 365 days
+            result = mock_provider.get_historical_data("BTC-USD", "1d", start, end)
+
+            # Assert - data is returned
+            assert isinstance(result, pd.DataFrame)
+            assert not result.empty
+
+    def test_binance_coingecko_stitch_uses_candle_interval_not_full_day(
+        self, mock_provider
+    ):
+        """Test that the Binance→CoinGecko stitch advances by one candle interval.
+
+        Regression guard for the P2 Codex review finding: using timedelta(days=1)
+        creates an intraday data gap for 1h/4h timeframes.
+        """
+        # Arrange - set up a historical request (>365 days) for a mapped symbol
+        now = datetime.now(UTC)
+        start = now - timedelta(days=800)
+        end = now
+
+        # Last Binance archive candle at 2024-11-30 18:00 UTC (an evening timestamp,
+        # not midnight – specifically to expose the +1 day vs +1 hour difference)
+        last_archive_ts = datetime(2024, 11, 30, 18, 0, 0, tzinfo=UTC)
+
+        # Build a minimal archive DataFrame whose last candle is at 18:00
+        archive_df = pd.DataFrame(
+            {
+                "open": [40000.0],
+                "high": [41000.0],
+                "low": [39000.0],
+                "close": [40500.0],
+                "volume": [100.0],
+            },
+            index=pd.DatetimeIndex([last_archive_ts], name="timestamp"),
+        )
+
+        # CoinGecko backfill mock – captures the `start` parameter it receives
+        captured_cg_starts: list[datetime] = []
+
+        def fake_fetch_coingecko(
+            coin_id: str, cg_start: datetime, cg_end: datetime, timeframe: str
+        ) -> pd.DataFrame:
+            captured_cg_starts.append(cg_start)
+            return pd.DataFrame()  # Return empty so concat logic is skipped
+
+        with (
+            patch.object(
+                mock_provider,
+                "_fetch_via_binance_archive",
+                return_value=archive_df,
+            ),
+            patch.object(
+                mock_provider,
+                "_fetch_via_coingecko_market_chart",
+                side_effect=fake_fetch_coingecko,
+            ),
+        ):
+            mock_provider.get_historical_data("BTC-USD", "1h", start, end)
+
+        # Assert: CoinGecko was asked to start at last_archive_ts + 1 hour (19:00),
+        # NOT at last_archive_ts + 1 day (2024-12-01 18:00)
+        assert len(captured_cg_starts) == 1
+        expected_cg_start = last_archive_ts + timedelta(hours=1)
+        assert captured_cg_starts[0] == expected_cg_start, (
+            f"Expected CoinGecko backfill to start at {expected_cg_start} (+1h), "
+            f"but got {captured_cg_starts[0]}"
+        )
