@@ -309,7 +309,7 @@ class LiveTradingEngine:
                 if hasattr(self.strategy, "get_risk_overrides")
                 else None
             )
-            if strategy_overrides and "partial_operations" in strategy_overrides:
+            if isinstance(strategy_overrides, dict) and "partial_operations" in strategy_overrides:
                 partial_config = strategy_overrides["partial_operations"]
                 self.partial_manager = PartialExitPolicy(
                     exit_targets=partial_config.get("exit_targets", []),
