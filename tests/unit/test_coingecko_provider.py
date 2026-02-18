@@ -134,10 +134,13 @@ class TestCoinGeckoProviderMocked:
             provider.close()
 
     def test_invalid_symbol_returns_empty_dataframe(self, mock_provider):
-        """Test that invalid symbols return empty DataFrame."""
-        # Arrange
-        start = datetime(2024, 1, 1, tzinfo=UTC)
-        end = datetime(2024, 1, 2, tzinfo=UTC)
+        """Test that invalid symbols (unknown coin IDs) raise HTTPError from the provider."""
+        # Arrange - use recent dates (within 365 days) so the Binance-mapping guard
+        # does not fire before the HTTP request is made.  An "invalid" symbol with
+        # no mapping would previously have been tried against CoinGecko directly and
+        # received a 404; we replicate that path here.
+        start = datetime.now(UTC) - timedelta(days=10)
+        end = datetime.now(UTC) - timedelta(days=9)
 
         # Mock 404 response for invalid coin ID
         mock_response = Mock()
