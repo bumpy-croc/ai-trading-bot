@@ -51,7 +51,7 @@ Reducing backtest/live engine duplication by centralizing shared entry and exit 
 
 | Strategy | Status | Description |
 |----------|--------|-------------|
-| `ml_basic` | Production | Core ML-driven trend following |
+| `ml_basic` | Production | Core ML-driven trading strategy |
 | `ml_adaptive` | Production | Regime-adaptive ML strategy |
 | `ml_sentiment` | Production | ML with sentiment integration |
 | `ensemble_weighted` | Production | Weighted ensemble of signals |
