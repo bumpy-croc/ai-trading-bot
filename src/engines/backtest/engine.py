@@ -365,10 +365,12 @@ class Backtester:
             max_position_size=self.risk_manager.params.max_position_size,
         )
 
-        # Wrap PartialExitPolicy in unified PartialOperationsManager
+        # Wrap PartialExitPolicy in unified PartialOperationsManager.
+        # Use self.partial_manager (not the constructor parameter) so that policies
+        # created from enable_partial_operations=True are wired into the ExitHandler.
         partial_ops_manager = (
-            PartialOperationsManager(policy=partial_manager)
-            if partial_manager is not None
+            PartialOperationsManager(policy=self.partial_manager)
+            if self.partial_manager is not None
             else None
         )
 
