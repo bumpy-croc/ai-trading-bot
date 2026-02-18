@@ -18,8 +18,8 @@ def _make_cache_key(df: pd.DataFrame, func_name: str, *args, **kwargs) -> str | 
     """
     Create a cache key from DataFrame properties and function parameters.
 
-    Uses last timestamp, row count, function name, positional args, and sorted parameters.
-    Returns None for empty DataFrames (skip caching).
+    Uses last timestamp, row count, last row value hash, function name, positional args,
+    and sorted parameters. Returns None for empty DataFrames (skip caching).
     """
     if df.empty:
         return None
@@ -28,13 +28,17 @@ def _make_cache_key(df: pd.DataFrame, func_name: str, *args, **kwargs) -> str | 
     last_ts = str(df.index[-1]) if hasattr(df.index, "__getitem__") else str(len(df))
     num_rows = len(df)
 
+    # Hash last row values to detect data changes even when shape is unchanged
+    # (e.g., two DataFrames with same row count but different values)
+    last_row_hash = hashlib.md5(str(df.iloc[-1].values).encode()).hexdigest()[:8]
+
     # Include positional arguments in cache key
     args_str = "_".join(str(a) for a in args)
     # Sort parameters for consistent hashing
     param_str = "_".join(f"{k}={v}" for k, v in sorted(kwargs.items()))
 
     # Create composite key and hash for shorter keys
-    key_str = "|".join([func_name, last_ts, str(num_rows), args_str, param_str])
+    key_str = "|".join([func_name, last_ts, str(num_rows), last_row_hash, args_str, param_str])
     return hashlib.md5(key_str.encode()).hexdigest()
 
 
