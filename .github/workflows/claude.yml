@@ -30,6 +30,18 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-github.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-github.txt
+          pip install -e . --no-deps
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1

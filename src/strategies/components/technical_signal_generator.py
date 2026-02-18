@@ -366,7 +366,7 @@ class TechnicalSignalGenerator(SignalGenerator):
 
         # Adjust weights based on regime if available
         if regime:
-            # In trending markets, give more weight to trend-following indicators
+            # In trending markets, give more weight to directional indicators
             if regime.trend.value in ["trend_up", "trend_down"]:
                 weights["ma"] = 0.4
                 weights["macd"] = 0.3

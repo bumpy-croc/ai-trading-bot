@@ -1,7 +1,7 @@
 """
 Momentum Signal Generator Component
 
-Generates momentum/trend-based signals derived from the prior MomentumLeverage
+Generates momentum-based signals derived from the prior MomentumLeverage
 strategy, designed for component-based composition.
 """
 
