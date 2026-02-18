@@ -1,6 +1,6 @@
-# Crypto Trend-Following Trading Bot
+# Versatile Crypto Trading Bot
 
-A modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live), ML-driven models (price and sentiment), PostgreSQL logging, and optional Railway deployment.
+A modular cryptocurrency trading system capable of multiple strategies with different risk and return profiles. It supports backtesting, live trading (paper and live), ML-driven models (price and sentiment), PostgreSQL logging, and optional Railway deployment.
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
