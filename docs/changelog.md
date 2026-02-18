@@ -11,19 +11,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+---
+
+## 2026-02-18
+
+### Infrastructure
+- Added minimal CI dependencies and enabled tests in Claude GitHub workflow (#551)
+- Added Claude Code GitHub Workflow (#543)
+
+---
+
+## 2026-01-15
+
 ### Added
+- Automated cloud training with auto data download/upload (#532)
+- CoinGecko data provider as Binance alternative (#538)
+- Feature schema saving with trained ML models (#530)
+- `--changed` flag to run quality checks only on modified files (#529)
+- Code review agents and deployment slash commands
+- Automated quality checks hook for Python files
+- Side utilities and validation utility modules (#500)
+- Order-type execution modeling for live and backtest (#493)
+
+### Changed
+- Consolidated backtesting and live engines into unified architecture (#527)
+- Removed deprecated `src/indicators` directory (#515)
+- Refactored strategies for improved code quality and maintainability (#501)
+- Improved ML training and cloud module code quality (#502)
+- Used shared `pnl_percent` function for engine parity (#505)
+
+### Fixed
+- Prevented race conditions in position tracking (#528)
+- Addressed infrastructure code quality and safety issues (#513)
+- Resolved database manager bugs and improved financial data safety (#512)
+- Comprehensive position management code quality and safety improvements (#507)
+- Critical issues in risk management module (#509)
+- Comprehensive input validation for performance module (#508)
+- Made regime regression test deterministic with dependency injection (#504)
+- Used relative comparison in cache performance test (#540)
+
+### Documentation
+- Comprehensive risk management architecture documentation (#518)
+- Updated docs and CLI commands for cache and migrations (#533)
+- Added common PR review issues to CLAUDE.md (#499)
+- Added instructions to run review agents after significant changes
+
+---
+
+## 2025-12-28
+
+### Added
+- Stop hook with completion detection for Claude Code Web
 - PSB system analysis documentation (`docs/PSB_SYSTEM_ANALYSIS.md`)
 - Automated documentation system (changelog.md, project_status.md, architecture.md)
 - `/update-docs` slash command for documentation maintenance
 - Shared entry utilities and validation helpers for consistent engine behavior
+- Comprehensive engine parity test coverage (#487)
+- Correlation sizing adjustments for runtime entries (#483)
 
 ### Changed
-- Enhanced CLAUDE.md with regression prevention section
+- Enhanced CLAUDE.md with Railway environment guidelines
 - Unified backtest/live entry and partial-exit logic via shared helpers
+- Refactored live entry execution to use LiveEntryHandler & LiveExecutionEngine (#482)
+- Routed filled live exits through LiveExitHandler (#485)
+- Completed shared engine models consolidation (#475)
 
 ### Fixed
-- Recorded live exits even when filled prices exceed deviation thresholds to keep state consistent
-- Aligned live exit-condition evaluation order with backtest engine parity
+- Fixed post-fee entry balance in live entry paths (#491)
+- Aligned live engine dynamic risk handling (#490)
+- Honored take-profit limit pricing (#489)
+- Added missing order tracking columns to positions table migration
+- Recorded live exits even when filled prices exceed deviation thresholds
+
+### Documentation
+- Updated documentation links in READMEs (#488)
+- Added comprehensive backtesting engine audit report (#476)
+- Added performance tracker integration execplan (#467)
 
 ---
 
