@@ -29,7 +29,7 @@ The AI trading bot project **already implements many PSB best practices**, parti
 ### ✅ What's Already Strong
 
 1. **Clear Project Goals** - The CLAUDE.md clearly states:
-   - What: "Modular cryptocurrency trading system focused on long-term, risk-balanced trend following"
+   - What: "Modular cryptocurrency trading system capable of multiple strategies with different risk and return profiles"
    - Tech Stack: Explicitly defined (Python 3.11+, PostgreSQL, TensorFlow/ONNX, etc.)
    - Architecture: Well-documented data flow and component boundaries
 
