@@ -64,12 +64,20 @@ class TestCreateDataProvider:
         mock_config.get.return_value = None
         mock_get_config.return_value = mock_config
 
-        # Act
-        provider = create_data_provider(provider_type="coinbase")
+        # Act - mock CoinbaseProvider to avoid credential validation from env vars
+        with patch("src.data_providers.provider_factory.CoinbaseProvider") as mock_coinbase:
+            mock_provider = Mock(spec=CoinbaseProvider)
+            mock_coinbase.return_value = mock_provider
+            provider = create_data_provider(provider_type="coinbase")
 
-        # Assert
-        assert isinstance(provider, CoinbaseProvider)
-        provider.close()
+            # Assert
+            assert provider is mock_provider
+            mock_coinbase.assert_called_once_with(
+                api_key=None,
+                api_secret=None,
+                passphrase=None,
+                testnet=False,
+            )
 
     @patch("src.data_providers.provider_factory.get_config")
     def test_creates_coingecko_provider(self, mock_get_config):

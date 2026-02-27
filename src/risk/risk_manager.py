@@ -971,6 +971,11 @@ class PortfolioRiskManager:
         with self._state_lock:
             return float(sum(pos["size"] for pos in self.positions.values()))
 
+    def get_positions_snapshot(self) -> dict[str, dict[str, Any]]:
+        """Return a shallow copy of current positions (thread-safe)."""
+        with self._state_lock:
+            return {symbol: pos.copy() for symbol, pos in self.positions.items()}
+
     def get_position_correlation_risk(
         self,
         symbols: list,
