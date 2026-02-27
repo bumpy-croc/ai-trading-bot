@@ -368,6 +368,57 @@ class TestDynamicRiskParity:
         )
         assert adjusted_15pct == pytest.approx(original_size * 0.4, rel=0.1)
 
+    def test_correlation_adjustment_parity(self):
+        """Verify correlation adjustments match between backtest and live engines."""
+        strategy = create_mock_strategy()
+        data_provider = MockDataProvider()
+        config = DynamicRiskConfig(enabled=True)
+
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=data_provider,
+            initial_balance=10_000.0,
+            enable_dynamic_risk=True,
+            dynamic_risk_config=config,
+            log_to_database=False,
+        )
+
+        live_engine = LiveTradingEngine(
+            strategy=strategy,
+            data_provider=data_provider,
+            initial_balance=10_000.0,
+            enable_live_trading=False,
+            log_trades=False,
+            enable_dynamic_risk=True,
+            dynamic_risk_config=config,
+        )
+
+        # Seed identical positions in both engines to trigger correlation cap
+        for manager in (backtester.risk_manager, live_engine.risk_manager):
+            manager.update_position("BTCUSDT", "long", 0.08, 100.0)
+            manager.update_position("ETHUSDT", "long", 0.08, 100.0)
+            manager.update_position("BNBUSDT", "long", 0.08, 100.0)
+
+        # Force live manager to use in-memory snapshot for parity with backtest
+        live_engine.dynamic_risk_manager.db_manager = None
+
+        back_adjustment = backtester.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
+            current_balance=10_000.0,
+            peak_balance=10_000.0,
+            session_id=None,
+        )
+        live_adjustment = live_engine.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
+            current_balance=10_000.0,
+            peak_balance=10_000.0,
+            session_id=None,
+        )
+
+        assert back_adjustment.primary_reason == "high_correlated_exposure"
+        assert live_adjustment.primary_reason == "high_correlated_exposure"
+        assert back_adjustment.position_size_factor == pytest.approx(
+            live_adjustment.position_size_factor
+        )
+
     def test_handler_graceful_degradation(self):
         """Verify handler returns original size when manager is None."""
         handler = DynamicRiskHandler(dynamic_risk_manager=None)

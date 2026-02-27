@@ -243,7 +243,12 @@ class Backtester:
         if enable_dynamic_risk:
             config = dynamic_risk_config or DynamicRiskConfig()
             final_config = self._merge_dynamic_risk_config(config, strategy)
-            self.dynamic_risk_manager = DynamicRiskManager(final_config, db_manager=None)
+            self.dynamic_risk_manager = DynamicRiskManager(
+                final_config,
+                db_manager=None,
+                risk_parameters=self.risk_manager.params,
+                positions_provider=self.risk_manager.get_positions_snapshot,
+            )
 
         # Build policies
         self._custom_trailing_stop_policy = trailing_stop_policy is not None
