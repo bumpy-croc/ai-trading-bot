@@ -3,16 +3,16 @@ import math
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_CORRELATED_EXPOSURE_MIN_FACTOR,
     DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT,
     DEFAULT_DRAWDOWN_THRESHOLDS,
     DEFAULT_EPSILON,
-    DEFAULT_CORRELATED_EXPOSURE_MIN_FACTOR,
     DEFAULT_GOOD_PERF_DAILY_RISK_FACTOR,
     DEFAULT_GOOD_PERF_POSITION_FACTOR,
     DEFAULT_GOOD_PERF_STOP_TIGHTENING,
@@ -127,8 +127,8 @@ class DynamicRiskManager:
     def __init__(
         self,
         config: DynamicRiskConfig | None = None,
-        db_manager: Optional["DatabaseManager"] = None,
-        max_correlated_risk: Optional[float] = None,
+        db_manager: "DatabaseManager | None" = None,
+        max_correlated_risk: float | None = None,
         risk_parameters: RiskParameters | None = None,
         positions_provider: Callable[[], dict[str, dict[str, Any]]] | None = None,
     ):
@@ -200,9 +200,7 @@ class DynamicRiskManager:
         drawdown_adjustment = self._calculate_drawdown_adjustment(current_drawdown, recovery_return)
         performance_adjustment = self._calculate_performance_adjustment(performance_metrics)
         volatility_adjustment = self._calculate_volatility_adjustment(performance_metrics)
-        correlation_adjustment = self._calculate_correlation_adjustment(
-            session_id
-        )  # Placeholder for future implementation
+        correlation_adjustment = self._calculate_correlation_adjustment(session_id)
 
         # Combine adjustments (take the most conservative)
         final_position_factor = min(
@@ -525,85 +523,55 @@ class DynamicRiskManager:
             return RiskAdjustments(primary_reason="correlation_no_data")
 
         try:
-            # Get active positions from database when available; otherwise use in-memory snapshot
-            if self.db_manager:
-                positions = self.db_manager.get_active_positions(session_id=session_id)
-            else:
-                positions_snapshot = self._positions_provider() if self._positions_provider else {}
-                positions = [
-                    {"symbol": symbol, **(pos or {})}
-                    for symbol, pos in positions_snapshot.items()
-                ]
+            positions = self._get_active_positions(session_id)
             if not positions:
                 return RiskAdjustments(primary_reason="correlation_no_positions")
 
             # Calculate total exposure and concentration metrics
             total_exposure = 0.0
             max_single_exposure = 0.0
-            num_positions = len(positions)
 
             for pos in positions:
-                # Extract size as fraction of balance using current_size after partial exits.
-                size = pos.get("current_size")
-                if size is None:
-                    size = pos.get("size", 0.0)
-                if size is None:
-                    size = 0.0
-                size = float(size)
-                if not math.isfinite(size):
-                    logger.warning(
-                        "Invalid position size for %s: %s",
-                        pos.get("symbol", "unknown"),
-                        size,
-                    )
-                    size = 0.0
-                # Normalize sizes that arrive as raw quantities (exchange sync).
-                if size > 1.0:
-                    entry_balance = pos.get("entry_balance")
-                    entry_price = pos.get("entry_price")
-                    quantity = pos.get("quantity")
-                    if entry_balance and entry_price and quantity:
-                        size = float(quantity) * float(entry_price) / float(entry_balance)
+                size = abs(self._extract_position_size(pos))
+                total_exposure += size
+                max_single_exposure = max(max_single_exposure, size)
 
-                total_exposure += abs(size)  # Count both long and short
-                max_single_exposure = max(max_single_exposure, abs(size))
-
-            # Apply concentration-based risk reduction
-            position_size_factor = 1.0
-            stop_loss_factor = 1.0
-            primary_reason = "normal"
-            details = {
+            num_positions = len(positions)
+            details: dict[str, Any] = {
                 "total_exposure": round(total_exposure, 4),
                 "num_positions": num_positions,
                 "max_single_exposure": round(max_single_exposure, 4),
             }
 
+            position_size_factor = 1.0
+            stop_loss_factor = 1.0
+            primary_reason = "normal"
+
             # Check 1: Correlated exposure cap (proxy via low position count).
             # Treat small baskets as likely correlated and enforce cap on total exposure.
-            max_correlated_positions = DEFAULT_MAX_CORRELATED_POSITIONS_FOR_CAP
-            if num_positions <= max_correlated_positions and total_exposure > self.max_correlated_risk:
+            if (
+                num_positions <= DEFAULT_MAX_CORRELATED_POSITIONS_FOR_CAP
+                and total_exposure > self.max_correlated_risk
+            ):
                 excess_ratio = total_exposure / self.max_correlated_risk
-                position_size_factor = 1.0 / excess_ratio
                 position_size_factor = max(
                     DEFAULT_CORRELATED_EXPOSURE_MIN_FACTOR,
-                    min(1.0, position_size_factor),
+                    min(1.0, 1.0 / excess_ratio),
                 )
                 primary_reason = "high_correlated_exposure"
                 details["excess_ratio"] = round(excess_ratio, 2)
-                details["correlated_positions_cap"] = max_correlated_positions
+                details["correlated_positions_cap"] = DEFAULT_MAX_CORRELATED_POSITIONS_FOR_CAP
 
             # Check 2: Low diversification (too few positions with high exposure)
             elif (
                 num_positions <= DEFAULT_LOW_DIVERSIFICATION_POSITION_COUNT
                 and total_exposure > DEFAULT_LOW_DIVERSIFICATION_EXPOSURE_THRESHOLD
             ):
-                # Reduce new position sizing to encourage diversification
                 position_size_factor = DEFAULT_LOW_DIVERSIFICATION_SIZE_FACTOR
                 primary_reason = "low_diversification"
 
             # Check 3: Single position too large
             elif max_single_exposure > DEFAULT_LARGE_SINGLE_POSITION_THRESHOLD:
-                # Widen stop distance on new positions
                 stop_loss_factor = DEFAULT_LARGE_SINGLE_POSITION_STOP_MULTIPLIER
                 position_size_factor = DEFAULT_LARGE_SINGLE_POSITION_SIZE_FACTOR
                 primary_reason = "large_single_position"
@@ -611,7 +579,7 @@ class DynamicRiskManager:
             return RiskAdjustments(
                 position_size_factor=position_size_factor,
                 stop_loss_tightening=stop_loss_factor,
-                daily_risk_factor=position_size_factor,  # Also reduce daily risk allowance
+                daily_risk_factor=position_size_factor,
                 primary_reason=primary_reason,
                 adjustment_details=details,
             )
@@ -623,6 +591,55 @@ class DynamicRiskManager:
                 exc_info=True,
             )
             return RiskAdjustments(primary_reason="correlation_error")
+
+    def _get_active_positions(self, session_id: int | None) -> list[dict[str, Any]]:
+        """Retrieve active positions from the database or in-memory snapshot."""
+        if self.db_manager:
+            return self.db_manager.get_active_positions(session_id=session_id)
+
+        snapshot = self._positions_provider() if self._positions_provider else {}
+        return [
+            {"symbol": symbol, **(pos or {})}
+            for symbol, pos in snapshot.items()
+        ]
+
+    @staticmethod
+    def _extract_position_size(pos: dict[str, Any]) -> float:
+        """Extract position size as a fraction of balance.
+
+        Prefers current_size (after partial exits) over size. Normalizes
+        raw quantities back to a balance fraction when possible.
+        """
+        size = pos.get("current_size")
+        if size is None:
+            size = pos.get("size", 0.0)
+        if size is None:
+            size = 0.0
+
+        size = float(size)
+        if not math.isfinite(size):
+            logger.warning(
+                "Invalid position size for %s: %s",
+                pos.get("symbol", "unknown"),
+                size,
+            )
+            return 0.0
+
+        # Normalize sizes that arrive as raw quantities (exchange sync).
+        if size > 1.0:
+            entry_balance = pos.get("entry_balance")
+            entry_price = pos.get("entry_price")
+            quantity = pos.get("quantity")
+            if entry_balance and entry_price and quantity:
+                size = float(quantity) * float(entry_price) / float(entry_balance)
+            else:
+                logger.warning(
+                    "Cannot normalize size > 1.0 for %s (missing metadata), capping at 1.0",
+                    pos.get("symbol", "unknown"),
+                )
+                size = 1.0
+
+        return size
 
     def _determine_primary_reason(
         self,
