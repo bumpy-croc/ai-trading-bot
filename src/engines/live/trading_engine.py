@@ -177,7 +177,7 @@ class LiveTradingEngine:
         time_exit_policy: TimeExitPolicy | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
-        enable_partial_operations: bool = False,
+        enable_partial_operations: bool = True,  # Enable by default for better profit capture
         # Execution realism parameters (parity with backtest engine)
         fee_rate: float = DEFAULT_FEE_RATE,
         slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
@@ -298,7 +298,7 @@ class LiveTradingEngine:
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
         self.testnet = testnet
-        # Partial operations policy (disabled by default for parity)
+        # Partial operations policy (enabled by default for better profit capture)
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager = partial_manager
@@ -309,7 +309,7 @@ class LiveTradingEngine:
                 if hasattr(self.strategy, "get_risk_overrides")
                 else None
             )
-            if strategy_overrides and "partial_operations" in strategy_overrides:
+            if isinstance(strategy_overrides, dict) and "partial_operations" in strategy_overrides:
                 partial_config = strategy_overrides["partial_operations"]
                 self.partial_manager = PartialExitPolicy(
                     exit_targets=partial_config.get("exit_targets", []),
