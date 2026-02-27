@@ -320,8 +320,16 @@ def apply_policies_to_engine(
 
             if should_create:
                 # Create manager even if db_manager is None - some operations work without it
+                risk_manager = getattr(engine, "risk_manager", None)
+                risk_params = getattr(risk_manager, "params", None) if risk_manager else None
+                positions_provider = (
+                    risk_manager.get_positions_snapshot if risk_manager else None
+                )
                 engine.dynamic_risk_manager = DynamicRiskManager(
-                    config=config, db_manager=db_manager
+                    config=config,
+                    db_manager=db_manager,
+                    risk_parameters=risk_params,
+                    positions_provider=positions_provider,
                 )
                 # Update entry handler if present
                 entry_handler = getattr(engine, "entry_handler", None)

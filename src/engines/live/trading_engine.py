@@ -361,7 +361,10 @@ class LiveTradingEngine:
                 # Merge strategy risk overrides with engine config
                 final_config = self._merge_dynamic_risk_config(self._dynamic_risk_config)
                 self.dynamic_risk_manager = DynamicRiskManager(
-                    config=final_config, db_manager=self.db_manager
+                    config=final_config,
+                    db_manager=self.db_manager,
+                    risk_parameters=self.risk_manager.params,
+                    positions_provider=self.risk_manager.get_positions_snapshot,
                 )
                 logger.info("Dynamic risk management enabled")
             except Exception as e:

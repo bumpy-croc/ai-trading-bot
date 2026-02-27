@@ -144,7 +144,7 @@ def test_dynamic_risk_policy_reuses_existing_manager(monkeypatch: pytest.MonkeyP
     created_configs: list[DynamicRiskConfig] = []
 
     class StubDynamicRiskManager:
-        def __init__(self, *, config: DynamicRiskConfig, db_manager):
+        def __init__(self, *, config: DynamicRiskConfig, db_manager, **kwargs):
             self.config = config
             self.db_manager = db_manager
             self._performance_cache: dict[str, Any] = {}
@@ -189,7 +189,7 @@ def test_dynamic_risk_policy_recreates_when_config_changes(
     created_configs: list[DynamicRiskConfig] = []
 
     class StubDynamicRiskManager:
-        def __init__(self, *, config: DynamicRiskConfig, db_manager):
+        def __init__(self, *, config: DynamicRiskConfig, db_manager, **kwargs):
             self.config = config
             self.db_manager = db_manager
             self._performance_cache: dict[str, Any] = {}
