@@ -298,7 +298,7 @@ class LiveTradingEngine:
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
         self.testnet = testnet
-        # Partial operations policy (disabled by default for parity)
+        # Partial operations policy (enabled by default for better profit capture)
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager = partial_manager
