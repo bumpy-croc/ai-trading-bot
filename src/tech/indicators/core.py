@@ -65,18 +65,18 @@ def cached_indicator(func: Callable) -> Callable:
             # Empty DataFrame, skip caching
             return func(df, *args, **kwargs)
 
-        # Check cache
-        if cache_key in _INDICATOR_CACHE:
-            cached = _INDICATOR_CACHE[cache_key]
-            # Return copy to prevent mutation
-            return cached.copy() if isinstance(cached, pd.DataFrame) else cached
+        # Check cache (use .get() for atomic lookup, avoiding KeyError if a
+        # concurrent thread evicts between `in` check and `[]` access)
+        cached = _INDICATOR_CACHE.get(cache_key)
+        if cached is not None:
+            return cached.copy() if isinstance(cached, (pd.DataFrame, pd.Series)) else cached
 
         # Calculate indicator
         result = func(df, *args, **kwargs)
 
-        # Store in cache
+        # Store in cache (copy to isolate from caller mutations)
         _INDICATOR_CACHE[cache_key] = (
-            result.copy() if isinstance(result, pd.DataFrame) else result
+            result.copy() if isinstance(result, (pd.DataFrame, pd.Series)) else result
         )
 
         # Limit cache size (remove oldest 20% when exceeded)
@@ -85,7 +85,8 @@ def cached_indicator(func: Callable) -> Callable:
             for key in keys_to_remove:
                 del _INDICATOR_CACHE[key]
 
-        return result
+        # Return a copy for consistent mutation safety on first and subsequent calls
+        return result.copy() if isinstance(result, (pd.DataFrame, pd.Series)) else result
 
     return wrapper
 
