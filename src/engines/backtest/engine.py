@@ -65,7 +65,7 @@ from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskM
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
-from src.risk.risk_manager import RiskManager
+from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import (
     RuntimeContext,
@@ -150,6 +150,7 @@ class Backtester:
         dynamic_risk_config: DynamicRiskConfig | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         partial_manager: Any | None = None,
+        enable_partial_operations: bool = True,  # Enable by default for better profit capture
         enable_regime_switching: bool = False,
         regime_config: Any | None = None,
         strategy_mapping: Any | None = None,
@@ -180,6 +181,7 @@ class Backtester:
             dynamic_risk_config: Configuration for dynamic risk.
             trailing_stop_policy: Policy for trailing stops.
             partial_manager: Manager for partial exits/scale-ins.
+            enable_partial_operations: Enable partial exit operations by default (parity with live engine).
             enable_regime_switching: Enable regime-based strategy switching.
             regime_config: Configuration for regime detection.
             strategy_mapping: Mapping of regimes to strategies.
@@ -227,8 +229,6 @@ class Backtester:
 
         # Risk management - handle backward compatibility for max_position_size
         if max_position_size is not None:
-            from src.risk.risk_manager import RiskParameters
-
             if risk_parameters is None:
                 risk_parameters = RiskParameters(max_position_size=max_position_size)
             else:
@@ -244,7 +244,12 @@ class Backtester:
         if enable_dynamic_risk:
             config = dynamic_risk_config or DynamicRiskConfig()
             final_config = self._merge_dynamic_risk_config(config, strategy)
-            self.dynamic_risk_manager = DynamicRiskManager(final_config, db_manager=None)
+            self.dynamic_risk_manager = DynamicRiskManager(
+                final_config,
+                db_manager=None,
+                risk_parameters=self.risk_manager.params,
+                positions_provider=self.risk_manager.get_positions_snapshot,
+            )
 
         # Build policies
         self._custom_trailing_stop_policy = trailing_stop_policy is not None
@@ -254,8 +259,27 @@ class Backtester:
         self._custom_time_exit_policy = time_exit_policy is not None
         self.time_exit_policy = time_exit_policy or self._build_time_exit_policy()
 
-        self.partial_manager = partial_manager
-        self._partial_operations_opt_in = partial_manager is not None
+        # Partial operations policy (enabled by default for parity with live engine)
+        self.enable_partial_operations = bool(enable_partial_operations)
+        if partial_manager is not None:
+            self.partial_manager = partial_manager
+        elif enable_partial_operations:
+            # Create default partial exit policy from risk parameters
+            from src.position_management.partial_manager import PartialExitPolicy
+
+            rp = self.risk_parameters if self.risk_parameters else RiskParameters()
+            self.partial_manager = PartialExitPolicy(
+                exit_targets=rp.partial_exit_targets or [],
+                exit_sizes=rp.partial_exit_sizes or [],
+                scale_in_thresholds=rp.scale_in_thresholds or [],
+                scale_in_sizes=rp.scale_in_sizes or [],
+                max_scale_ins=rp.max_scale_ins,
+            )
+        else:
+            self.partial_manager = None
+        self._partial_operations_opt_in = bool(
+            self.enable_partial_operations or self.partial_manager is not None
+        )
 
         # Feature flags
         self.default_take_profit_pct = default_take_profit_pct
@@ -347,10 +371,12 @@ class Backtester:
             max_position_size=self.risk_manager.params.max_position_size,
         )
 
-        # Wrap PartialExitPolicy in unified PartialOperationsManager
+        # Wrap PartialExitPolicy in unified PartialOperationsManager.
+        # Use self.partial_manager (not the constructor parameter) so that policies
+        # created from enable_partial_operations=True are wired into the ExitHandler.
         partial_ops_manager = (
-            PartialOperationsManager(policy=partial_manager)
-            if partial_manager is not None
+            PartialOperationsManager(policy=self.partial_manager)
+            if self.partial_manager is not None
             else None
         )
 
