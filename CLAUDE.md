@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live), ML-driven predictions (price and sentiment), PostgreSQL logging, and Railway deployment.
+This is a modular cryptocurrency trading system capable of multiple strategies with different risk and return profiles. It supports backtesting, live trading (paper and live), ML-driven predictions (price and sentiment), PostgreSQL logging, and Railway deployment.
 
 **Tech Stack**: Python 3.11+, PostgreSQL, TensorFlow/ONNX, Flask, SQLAlchemy, pandas, scikit-learn
 
@@ -501,6 +501,15 @@ railway logs --environment production
 ## Regression Prevention
 
 When Claude makes a mistake or you discover a best practice during development, add it to the "Learned Constraints" section below. This builds institutional knowledge and prevents repeating mistakes.
+
+### Quick-Add with `#` Hashtag
+
+Type `#` followed by a rule to quickly add a learned constraint. Claude will append it to the appropriate section below.
+
+Examples:
+- `# Never use .iloc[] without bounds checking in backtesting engine`
+- `# Always validate model paths with .resolve() before loading`
+- `# ML models require sentiment features even when not used - validate schema`
 
 ### Learned Constraints
 

@@ -1,13 +1,13 @@
 # Project Status
 
-> **Last Updated**: 2026-01-02
+> **Last Updated**: 2026-02-18
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## Current Focus
 
-Reducing backtest/live engine duplication by centralizing shared entry and exit logic.
+Implementing PSB (Plan, Setup, Build) framework improvements: automated documentation, slash commands, and regression prevention patterns.
 
 ---
 
@@ -17,7 +17,7 @@ Reducing backtest/live engine duplication by centralizing shared entry and exit 
 
 - [x] **Core Trading System** - Backtesting engine, live trading, paper mode
 - [x] **ML Prediction Pipeline** - CNN+LSTM models, ONNX export, model registry
-- [x] **Data Infrastructure** - Binance/Coinbase providers, caching, sentiment integration
+- [x] **Data Infrastructure** - Binance/Coinbase/CoinGecko providers, caching, sentiment integration
 - [x] **Database Layer** - PostgreSQL, SQLAlchemy models, Alembic migrations
 - [x] **CLI Interface** - `atb` command with comprehensive subcommands
 - [x] **Testing Infrastructure** - Unit/integration tests, markers, parallel execution
@@ -25,11 +25,17 @@ Reducing backtest/live engine duplication by centralizing shared entry and exit 
 - [x] **Railway Deployment** - Production deployment configuration
 - [x] **Code Quality Gates** - Black, Ruff, MyPy, Bandit integration
 - [x] **ExecPlans System** - Structured approach for complex features
+- [x] **Engine Consolidation** - Unified backtest/live engines with shared modules (#527)
+- [x] **Risk Management Architecture** - Three-layer risk system with comprehensive docs (#518)
+- [x] **Race Condition Fixes** - Thread-safe position tracking (#528)
+- [x] **Feature Schema Saving** - ML models save feature schemas for validation (#530)
+- [x] **Cloud Training Automation** - Auto data download/upload for cloud training (#532)
+- [x] **CI/CD Pipeline** - Claude Code GitHub Workflow with tests (#551)
 
 ### In Progress
 
 - [ ] **PSB System Implementation** - Automated docs, slash commands, regression prevention
-- [ ] **Performance Optimization** - Ongoing ML pipeline improvements (#439)
+- [ ] **Performance Optimization** - Ongoing ML pipeline improvements
 
 ### Planned
 
@@ -51,7 +57,7 @@ Reducing backtest/live engine duplication by centralizing shared entry and exit 
 
 | Strategy | Status | Description |
 |----------|--------|-------------|
-| `ml_basic` | Production | Core ML-driven trend following |
+| `ml_basic` | Production | Core ML-driven trading strategy |
 | `ml_adaptive` | Production | Regime-adaptive ML strategy |
 | `ml_sentiment` | Production | ML with sentiment integration |
 | `ensemble_weighted` | Production | Weighted ensemble of signals |
@@ -67,24 +73,27 @@ Reducing backtest/live engine duplication by centralizing shared entry and exit 
 | Indicator Refactor | Completed | `docs/execplans/indicator_refactor_plan.md` |
 | Platform Modularization | Completed | `docs/execplans/platform_modularization_plan.md` |
 | Remove Safe Trainer | Completed | `docs/execplans/remove_safe_trainer.md` |
-| Codex Auto Review | In Progress | `docs/execplans/codex_auto_review.md` |
+| Backtesting Engine Audit | Completed | `docs/execplans/backtesting_engine_audit.md` |
+| Shared Engine Consolidation | Completed | `docs/execplans/shared_engine_consolidation.md` |
+| Performance Tracker Integration | Completed | `docs/execplans/performance_tracker_integration.md` |
 
 ---
 
 ## Last Session Summary
 
-**Date**: 2026-01-02
+**Date**: 2026-02-18
 
 **Work Completed**:
-- Added shared entry and validation helpers under `src/engines/shared/`
-- Wired backtest/live entry handlers and partial-exit loops to shared helpers
-- Added unit coverage for shared entry and validation utilities
+- Implemented PSB high-priority improvements: updated changelog, project status, architecture docs
+- Added `#` hashtag regression prevention pattern to CLAUDE.md
+- Verified `/update-docs` slash command is complete
 
 **Ended At**:
-- Shared entry/exit helper wiring and targeted unit tests
+- PSB high-priority documentation improvements
 
 **Next Steps**:
-- Run full unit test suite for shared helper changes
+- Implement PSB medium-priority items (feature reference docs, additional slash commands)
+- Continue performance optimization work
 
 ---
 

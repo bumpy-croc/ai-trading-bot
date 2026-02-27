@@ -1,13 +1,13 @@
 # System Architecture
 
-> **Last Updated**: 2026-01-12
+> **Last Updated**: 2026-02-18
 > **Maintainer Note**: This is a living document. Update after major architectural changes or new component additions. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## Overview
 
-The AI Trading Bot is a modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live modes), ML-driven predictions, and Railway deployment.
+The AI Trading Bot is a modular cryptocurrency trading system capable of multiple strategies with different risk and return profiles. It supports backtesting, live trading (paper and live modes), ML-driven predictions, and Railway deployment.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -216,7 +216,7 @@ class Strategy:
 **Available Strategies:**
 | Strategy | Description |
 |----------|-------------|
-| `ml_basic` | Core ML-driven trend following |
+| `ml_basic` | Core ML-driven trading strategy |
 | `ml_adaptive` | Regime-aware dynamic strategy |
 | `ml_sentiment` | ML with sentiment integration |
 | `ensemble_weighted` | Weighted signal combination |
@@ -444,6 +444,17 @@ LOG_LEVEL=INFO
 ---
 
 ## Recent Architectural Changes
+
+### January-February 2026
+- **Claude Code CI Workflow** (#551): Added GitHub Actions workflow with test execution
+- **Cloud Training Automation** (#532): Auto data download/upload for cloud-based model training
+- **CoinGecko Provider** (#538): Added CoinGecko as alternative data provider to Binance
+- **Feature Schema Saving** (#530): ML models now save feature schemas alongside artifacts for inference validation
+- **Engine Consolidation Phase 2** (#527): Further unified backtest/live engines with shared modules
+- **Race Condition Fixes** (#528): Thread-safe position tracking with lock-based synchronization
+- **Risk Management Hardening** (#509): Critical fixes to risk management module
+- **Order-Type Execution Modeling** (#493): Realistic order-type handling for both live and backtest engines
+- **Quality Infrastructure**: Added `--changed` flag for incremental quality checks (#529), automated quality hooks
 
 ### December 2025
 - **Performance Tracker Integration**: Unified performance tracking in `src/performance/` module
