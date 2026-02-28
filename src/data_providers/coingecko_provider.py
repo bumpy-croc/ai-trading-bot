@@ -269,11 +269,33 @@ class CoinGeckoProvider(DataProvider):
                         last_archive_date = df.index.max()
                         gap_days = (end - last_archive_date).days
                         if gap_days > 2:
+                            if gap_days > self.COINGECKO_FREE_MAX_DAYS:
+                                logger.warning(
+                                    "Binance archives end at %s (%d-day gap) which "
+                                    "exceeds CoinGecko's %d-day limit. Backfill will "
+                                    "only cover the most recent %d days, leaving a "
+                                    "%d-day data gap.",
+                                    last_archive_date.date(),
+                                    gap_days,
+                                    self.COINGECKO_FREE_MAX_DAYS,
+                                    self.COINGECKO_FREE_MAX_DAYS,
+                                    gap_days - self.COINGECKO_FREE_MAX_DAYS,
+                                )
                             logger.info(
                                 "Binance archives end at %s, backfilling %d-day "
                                 "gap with CoinGecko",
                                 last_archive_date.date(), gap_days,
                             )
+                            # CoinGecko returns daily granularity when days > 90,
+                            # so sub-daily timeframes get degraded resolution
+                            if gap_days > 90 and timeframe in ("1h", "4h"):
+                                logger.warning(
+                                    "Backfill gap (%d days) exceeds 90-day threshold: "
+                                    "CoinGecko returns daily data for this range, so "
+                                    "%s candles in the gap segment will have degraded "
+                                    "intraday resolution.",
+                                    gap_days, timeframe,
+                                )
                             # Advance by one candle interval (not one day) to avoid
                             # skipping intraday candles at the archive/CoinGecko boundary
                             # e.g. for 1h data: last candle at 23:00 → backfill from 00:00,

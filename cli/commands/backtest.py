@@ -115,6 +115,10 @@ def _handle(ns: argparse.Namespace) -> int:
             "max_drawdown": ns.max_drawdown,
         }
         if ns.max_position_size is not None:
+            if not 0 < ns.max_position_size <= 1:
+                raise ValueError(
+                    f"--max-position-size must be in (0, 1], got {ns.max_position_size}"
+                )
             risk_params_kwargs["max_position_size"] = ns.max_position_size
         elif hasattr(strategy, "get_risk_overrides"):
             # Honor strategy-level max_fraction (e.g., trend-following uses 95%

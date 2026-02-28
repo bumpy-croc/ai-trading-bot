@@ -112,8 +112,9 @@ class TrendFollowingRiskManager(RiskManager):
         Returns:
             True if position should be exited.
         """
-        loss_pct = abs(position.get_pnl_percentage()) / 100
-        return position.get_pnl_percentage() < 0 and loss_pct >= self.stop_loss_pct
+        # Convert percentage (-20 for -20% loss) to decimal ratio (0.20)
+        loss_ratio = abs(position.get_pnl_percentage()) / 100
+        return position.get_pnl_percentage() < 0 and loss_ratio >= self.stop_loss_pct
 
     def get_stop_loss(
         self,
