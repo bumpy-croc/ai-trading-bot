@@ -42,3 +42,6 @@ mcp.json
 .ruff_cache/
 cache/*
 .trees/
+
+**/CLAUDE.md
+!/CLAUDE.md

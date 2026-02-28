@@ -10,6 +10,7 @@ from src.tech.indicators.core import (
     calculate_moving_averages,
     calculate_rsi,
     calculate_support_resistance,
+    clear_indicator_cache,
     detect_market_regime,
 )
 
@@ -390,3 +391,186 @@ class TestIndicatorIntegration:
         _ = calculate_ema(large_data, period=20)
         _ = calculate_rsi(large_data, period=14)
         assert time.time() - start_time < 1.0
+
+
+class TestIndicatorCaching:
+    """Test caching functionality for technical indicators."""
+
+    def setup_method(self):
+        """Clear cache before each test."""
+        clear_indicator_cache()
+
+    def teardown_method(self):
+        """Clear cache after each test."""
+        clear_indicator_cache()
+
+    def test_cache_hit_returns_identical_results(self):
+        """Test that cached results match original calculations."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+        periods = [3, 5]
+
+        # First call - cache miss
+        result1 = calculate_moving_averages(data, periods)
+        # Second call - cache hit
+        result2 = calculate_moving_averages(data, periods)
+
+        # Results should be identical
+        pd.testing.assert_frame_equal(result1, result2)
+
+    def test_cache_key_includes_positional_arguments(self):
+        """Test that different positional arguments generate different cache keys."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+
+        # Call with different positional arguments
+        result1 = calculate_moving_averages(data, [5, 10])
+        result2 = calculate_moving_averages(data, [20, 50])
+
+        # Results should be different (different periods)
+        assert not result1["ma_5"].equals(result2.get("ma_5", pd.Series()))
+        assert "ma_20" in result2.columns
+        assert "ma_20" not in result1.columns
+
+    def test_cache_key_includes_keyword_arguments(self):
+        """Test that different keyword arguments generate different cache keys."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+
+        # Call with different keyword arguments
+        result1 = calculate_bollinger_bands(data, period=5, std_dev=2.0)
+        result2 = calculate_bollinger_bands(data, period=5, std_dev=3.0)
+
+        # Results should be different (different std_dev)
+        assert not result1["bb_upper"].equals(result2["bb_upper"])
+
+    def test_cache_key_respects_dataframe_changes(self):
+        """Test that cache invalidates when DataFrame changes."""
+        data1 = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+        data2 = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 11]})  # Last value different
+
+        result1 = calculate_moving_averages(data1, [5])
+        result2 = calculate_moving_averages(data2, [5])
+
+        # Results should be different (different last value)
+        assert not result1["ma_5"].equals(result2["ma_5"])
+
+    def test_cache_key_respects_earlier_row_changes(self):
+        """Test that cache invalidates when earlier rows change even if last row is the same.
+
+        Regression test for the Codex P1 finding: exchange backfills or corrected
+        historical candles change earlier rows without affecting the final candle.
+        All indicator functions (MA, ATR, BB, MACD) depend on prior rows via rolling
+        windows, so the cache must detect these changes.
+        """
+        # Same last row (close=5), completely different earlier rows
+        data1 = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
+        data2 = pd.DataFrame({"close": [10, 20, 30, 40, 5]})
+
+        result1 = calculate_moving_averages(data1, [3])
+        result2 = calculate_moving_averages(data2, [3])
+
+        # MA values should differ because earlier rows are different
+        assert not result1["ma_3"].equals(result2["ma_3"])
+
+    def test_cache_key_respects_row_count(self):
+        """Test that cache invalidates when row count changes."""
+        data1 = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
+        data2 = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6]})
+
+        result1 = calculate_moving_averages(data1, [3])
+        result2 = calculate_moving_averages(data2, [3])
+
+        # Results should have different lengths
+        assert len(result1) != len(result2)
+
+    def test_empty_dataframe_skips_caching(self):
+        """Test that empty DataFrames skip caching without errors."""
+        empty_data = pd.DataFrame({"close": []})
+
+        # Should not raise errors
+        result = calculate_moving_averages(empty_data, [5])
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 0
+
+    def test_clear_cache_function(self):
+        """Test that clear_indicator_cache() clears the cache."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+
+        # Populate cache
+        _ = calculate_moving_averages(data, [5])
+        _ = calculate_atr(
+            pd.DataFrame(
+                {
+                    "high": [10, 12, 11, 13, 14],
+                    "low": [8, 9, 10, 11, 12],
+                    "close": [9, 11, 10.5, 12, 13],
+                }
+            ),
+            period=3,
+        )
+
+        # Clear cache
+        clear_indicator_cache()
+
+        # Cache should be empty (we can't directly verify, but function should not error)
+        result = calculate_moving_averages(data, [5])
+        assert isinstance(result, pd.DataFrame)
+
+    def test_cache_eviction_when_exceeding_max_size(self):
+        """Test that cache evicts oldest entries when exceeding max size."""
+        # Note: _CACHE_MAX_SIZE is 1000, we can't easily test full eviction
+        # but we can verify the function handles large numbers of cache entries
+        data = pd.DataFrame({"close": list(range(100))})
+
+        # Create multiple cache entries with different parameters
+        for i in range(50):
+            calculate_moving_averages(data, [i + 1])
+
+        # Should not raise memory errors and still work correctly
+        result = calculate_moving_averages(data, [5])
+        assert isinstance(result, pd.DataFrame)
+        assert "ma_5" in result.columns
+
+    def test_cached_result_is_copy_not_reference(self):
+        """Test that cached results are copies to prevent mutation."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+
+        result1 = calculate_moving_averages(data, [5])
+        result2 = calculate_moving_averages(data, [5])
+
+        # Mutate result1
+        result1.loc[0, "ma_5"] = 999
+
+        # result2 should not be affected (it's a copy, not a reference)
+        assert result2.loc[0, "ma_5"] != 999
+
+    def test_atr_caching(self):
+        """Test caching works correctly for calculate_atr."""
+        data = pd.DataFrame(
+            {
+                "high": [10, 12, 11, 13, 14, 15, 16, 17, 18, 19],
+                "low": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                "close": [9, 11, 10.5, 12, 13, 14, 15, 16, 17, 18],
+            }
+        )
+
+        result1 = calculate_atr(data, period=3)
+        result2 = calculate_atr(data, period=3)
+
+        pd.testing.assert_frame_equal(result1, result2)
+
+    def test_bollinger_bands_caching(self):
+        """Test caching works correctly for calculate_bollinger_bands."""
+        data = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+
+        result1 = calculate_bollinger_bands(data, period=5, std_dev=2.0)
+        result2 = calculate_bollinger_bands(data, period=5, std_dev=2.0)
+
+        pd.testing.assert_frame_equal(result1, result2)
+
+    def test_macd_caching(self):
+        """Test caching works correctly for calculate_macd."""
+        data = pd.DataFrame({"close": list(range(1, 31))})
+
+        result1 = calculate_macd(data, fast_period=12, slow_period=26, signal_period=9)
+        result2 = calculate_macd(data, fast_period=12, slow_period=26, signal_period=9)
+
+        pd.testing.assert_frame_equal(result1, result2)

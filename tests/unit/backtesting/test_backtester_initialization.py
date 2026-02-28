@@ -51,3 +51,18 @@ class TestBacktesterInitialization:
         )
 
         assert backtester.sentiment_provider == mock_sentiment_provider
+
+    def test_partial_operations_enabled_by_default(self, mock_data_provider):
+        """Partial operations should be enabled by default and wired into ExitHandler."""
+
+        strategy = create_ml_basic_strategy()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+        )
+
+        assert backtester.enable_partial_operations is True
+        assert backtester.partial_manager is not None
+        # Verify the partial manager is wired into ExitHandler so check_partial_operations()
+        # actually executes partial exits (not a no-op).
+        assert backtester.exit_handler.partial_manager is not None

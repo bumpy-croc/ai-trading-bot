@@ -112,7 +112,7 @@ class DynamicRiskAdjustment:
     Attributes:
         timestamp: When the adjustment was made.
         position_size_factor: Factor applied to position size (1.0 = no change).
-        stop_loss_tightening: Factor for tightening stop loss.
+        stop_loss_tightening: Multiplier for stop-loss distance (>1 widens, <1 tightens).
         daily_risk_factor: Daily risk factor applied.
         primary_reason: Main reason for the adjustment.
         current_drawdown: Current drawdown percentage.
