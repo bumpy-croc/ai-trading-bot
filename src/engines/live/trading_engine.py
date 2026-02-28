@@ -1920,7 +1920,7 @@ class LiveTradingEngine:
                 log_reasons = [
                     exit_reason if should_exit else "holding_position",
                     f"current_pnl_{current_pnl:.4f}",
-                    f"position_age_{(datetime.now(UTC) - position.entry_time).total_seconds():.0f}s",
+                    f"position_age_{(datetime.utcnow() - position.entry_time.replace(tzinfo=None)).total_seconds():.0f}s",
                     f"entry_price_{position.entry_price:.2f}",
                 ]
 

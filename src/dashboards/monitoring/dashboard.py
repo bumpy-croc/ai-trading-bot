@@ -901,7 +901,8 @@ class MonitoringDashboard:
                 return "Unknown"
 
             last_update = pd.to_datetime(result[0]["timestamp"])
-            time_diff = (datetime.now(UTC) - last_update).total_seconds()
+            # Use naive UTC to avoid tz-naive/aware comparison errors
+            time_diff = (datetime.utcnow() - last_update.replace(tzinfo=None)).total_seconds()
 
             if time_diff < 300:  # 5 minutes
                 return "Healthy"
@@ -1084,7 +1085,8 @@ class MonitoringDashboard:
                 return "No Data"
 
             last_update = pd.to_datetime(result[0]["timestamp"])
-            time_diff = (datetime.now(UTC) - last_update).total_seconds()
+            # Use naive UTC to avoid tz-naive/aware comparison errors
+            time_diff = (datetime.utcnow() - last_update.replace(tzinfo=None)).total_seconds()
 
             if time_diff < 300:  # 5 minutes
                 return "Active"
