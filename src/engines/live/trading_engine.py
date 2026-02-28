@@ -3318,12 +3318,16 @@ class LiveTradingEngine:
         # Base interval from configuration
         interval = self.base_check_interval
 
-        # Factor in recent trading activity
+        # Factor in recent trading activity — use naive UTC for comparison
+        # since positions from the database store naive UTC timestamps
+        now_naive = datetime.utcnow()
+        one_hour_ago = now_naive - timedelta(hours=1)
         recent_trades = len(
             [
                 p
                 for p in self.live_position_tracker.positions.values()
-                if p.entry_time > datetime.now(UTC) - timedelta(hours=1)
+                if p.entry_time is not None
+                and p.entry_time.replace(tzinfo=None) > one_hour_ago
             ]
         )
         if recent_trades > 0:
