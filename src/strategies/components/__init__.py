@@ -63,6 +63,7 @@ from .strategy_factory import StrategyBuilder, StrategyFactory
 from .strategy_lineage import StrategyLineageTracker
 from .strategy_manager import ComponentStrategyManager
 from .strategy_registry import StrategyRegistry, StrategyVersion
+from .adaptive_trend_signal_generator import AdaptiveTrendSignalGenerator
 from .technical_signal_generator import (
     MACDSignalGenerator,
     RSISignalGenerator,
@@ -104,6 +105,7 @@ __all__ = [
     # Signal generators
     "MLSignalGenerator",
     "MLBasicSignalGenerator",
+    "AdaptiveTrendSignalGenerator",
     "TechnicalSignalGenerator",
     "RSISignalGenerator",
     "MACDSignalGenerator",
