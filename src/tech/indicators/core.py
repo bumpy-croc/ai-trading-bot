@@ -83,7 +83,7 @@ def cached_indicator(func: Callable) -> Callable:
         if len(_INDICATOR_CACHE) > _CACHE_MAX_SIZE:
             keys_to_remove = list(_INDICATOR_CACHE.keys())[: int(_CACHE_MAX_SIZE * 0.2)]
             for key in keys_to_remove:
-                del _INDICATOR_CACHE[key]
+                _INDICATOR_CACHE.pop(key, None)
 
         # Return a copy for consistent mutation safety on first and subsequent calls
         return result.copy() if isinstance(result, (pd.DataFrame, pd.Series)) else result
