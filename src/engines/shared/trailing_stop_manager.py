@@ -281,13 +281,19 @@ class TrailingStopManager:
         """
         # Try percentage-based trailing first
         if trailing_distance_pct is not None:
-            return current_price * trailing_distance_pct
+            distance = current_price * trailing_distance_pct
+            if not math.isfinite(distance) or distance <= 0:
+                return None
+            return distance
 
         # Try ATR-based trailing
         if atr_multiplier is not None and df is not None and index is not None:
             atr = self._get_atr(df, index)
             if atr is not None and atr > 0:
-                return atr * atr_multiplier
+                distance = atr * atr_multiplier
+                if not math.isfinite(distance) or distance <= 0:
+                    return None
+                return distance
 
         return None
 

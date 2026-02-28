@@ -19,7 +19,6 @@ from src.config.constants import (
     DEFAULT_MAX_STOP_LOSS_PCT,
     DEFAULT_MIN_STOP_LOSS_PCT,
     DEFAULT_STOP_LOSS_PCT,
-    DEFAULT_TAKE_PROFIT_PCT,
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
@@ -350,6 +349,17 @@ class LiveEntryHandler:
         # CRITICAL: Subtract entry fee from entry_balance to match backtest behavior.
         # This ensures P&L calculations use the same basis in both engines.
         entry_balance = balance - exec_result.entry_fee
+        if entry_balance <= 0:
+            logger.critical(
+                "Entry balance for %s is non-positive (%.6f) after fee deduction "
+                "(balance=%.6f, fee=%.6f). P&L calculations will use raw balance.",
+                symbol,
+                entry_balance,
+                balance,
+                exec_result.entry_fee,
+            )
+            # Fall back to raw balance to prevent negative basis in P&L calculations
+            entry_balance = balance
         # Create position with actual quantity from execution
         position = LivePosition(
             symbol=symbol,
@@ -401,6 +411,10 @@ class LiveEntryHandler:
     ) -> tuple[float | None, float | None]:
         """Calculate stop loss and take profit prices.
 
+        Uses the same parameters as the backtest engine to ensure
+        backtest-live parity. Both engines must produce identical SL/TP
+        values for the same inputs.
+
         Args:
             current_price: Current market price.
             entry_side: Entry side (LONG or SHORT).
@@ -417,17 +431,16 @@ class LiveEntryHandler:
             )
             return None, None
 
-        default_tp_pct = self.default_take_profit_pct or DEFAULT_TAKE_PROFIT_PCT
         sl_pct, tp_pct = resolve_stop_loss_take_profit_pct(
             current_price=current_price,
             entry_side=entry_side,
             runtime_decision=runtime_decision,
             component_strategy=self.component_strategy,
             default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
-            default_take_profit_pct=default_tp_pct,
+            default_take_profit_pct=self.default_take_profit_pct,
             min_stop_loss_pct=DEFAULT_MIN_STOP_LOSS_PCT,
             max_stop_loss_pct=DEFAULT_MAX_STOP_LOSS_PCT,
-            use_strategy_take_profit=False,
+            use_strategy_take_profit=True,
         )
 
         # Calculate prices using shared calculator

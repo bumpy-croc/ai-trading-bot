@@ -149,7 +149,9 @@ class ExecutionEngine:
             return ExecutionResult(executed=False)
 
         pending = self._pending_entry
-        self._pending_entry = None
+        # Clear pending entry only after successful execution below.
+        # Clearing before execution would permanently lose the signal if
+        # cost calculation or SL/TP computation raises an exception.
 
         # Calculate costs using shared cost calculator
         position_notional = balance * pending["size_fraction"]
@@ -182,9 +184,12 @@ class ExecutionEngine:
             size=pending["size_fraction"],
             stop_loss=stop_loss,
             take_profit=take_profit,
-            entry_balance=balance - entry_fee,
+            entry_balance=balance - entry_fee if balance > entry_fee else balance,
         )
         # Note: component_notional removed - computed on-demand as current_size * balance
+
+        # Clear pending entry now that execution succeeded
+        self._pending_entry = None
 
         logger.info(
             "Entered %s at %.2f (open: %.2f) via next-bar execution",
@@ -252,7 +257,7 @@ class ExecutionEngine:
             size=size_fraction,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            entry_balance=balance - entry_fee,
+            entry_balance=balance - entry_fee if balance > entry_fee else balance,
         )
         # Note: component_notional removed - computed on-demand as current_size * balance
 

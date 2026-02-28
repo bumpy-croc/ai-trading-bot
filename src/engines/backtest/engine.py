@@ -218,6 +218,7 @@ class Backtester:
         self._runtime_dataset = None
         self._runtime_warmup = 0
         self._configure_strategy(strategy)
+        self._initial_strategy = self.strategy  # Preserved for reset after regime switches
 
         name_source = strategy if isinstance(strategy, StrategyRuntime) else self.strategy
         self.initial_strategy_name = getattr(name_source, "name", name_source.__class__.__name__)
@@ -753,6 +754,41 @@ class Backtester:
             self._runtime_dataset = None
             self._runtime_warmup = 0
 
+    def _reset_run_state(self) -> None:
+        """Reset all mutable state so a reused Backtester produces isolated results.
+
+        Without this, trades, fees, performance metrics, early-stop flags,
+        risk counters, and regime state accumulate across consecutive ``run()``
+        calls on the same instance.
+        """
+        self.balance = self.initial_balance
+        self.peak_balance = self.initial_balance
+        self.trades.clear()
+        self.dynamic_risk_adjustments.clear()
+        self.early_stop_reason = None
+        self.early_stop_date = None
+        self.early_stop_candle_index = None
+        self.trading_session_id = None
+        self.execution_engine.reset()
+        self.position_tracker.reset()
+        self.performance_tracker.reset(self.initial_balance)
+
+        # Reset risk manager exposure tracking from previous run
+        self.risk_manager.reset_daily_risk()
+        self.risk_manager.positions.clear()
+
+        # Restore initial strategy if regime switching changed it
+        if self.strategy is not self._initial_strategy:
+            self._configure_strategy(self._initial_strategy)
+            # Rebind handlers to use the restored strategy (matches _switch_strategy behavior)
+            self.entry_handler.set_component_strategy(self._component_strategy)
+            if self.correlation_handler:
+                self.correlation_handler.set_strategy(self.strategy)
+        if self.regime_handler is not None:
+            self.regime_handler.regime_history.clear()
+            self.regime_handler.strategy_switches.clear()
+            self.regime_handler._current_strategy_name = self.initial_strategy_name
+
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> dict:
@@ -768,6 +804,10 @@ class Backtester:
             Dictionary with backtest results including metrics and trades.
         """
         try:
+            # Reset all mutable state from any previous run so that reusing
+            # a Backtester instance produces correct, isolated results.
+            self._reset_run_state()
+
             # Set logging context
             set_context(
                 component="backtester",
@@ -937,7 +977,12 @@ class Backtester:
             current_price = float(candle["close"])
             open_price = float(candle["open"])
 
-            # Process pending entry from previous candle
+            # Process pending entry from previous candle.
+            # Track whether entry occurred this candle to prevent unrealistic
+            # same-candle exit. In live trading there is always a time gap
+            # between entry and SL/TP evaluation; backtesting must model this
+            # by skipping exit checks on the entry candle.
+            entered_this_candle = False
             if self.execution_engine.has_pending_entry and not self.position_tracker.has_position:
                 entry_result = self.entry_handler.process_pending_entry(
                     symbol=symbol,
@@ -947,6 +992,7 @@ class Backtester:
                     candle=candle,
                 )
                 if entry_result.executed:
+                    entered_this_candle = True
                     self._deduct_entry_fee(entry_result.entry_fee)
 
                     # Final validation: ensure balance is still positive
@@ -998,8 +1044,12 @@ class Backtester:
                 if switched and new_strategy:
                     self._switch_strategy(new_strategy, df)
 
-            # Position exit path
-            if self.position_tracker.has_position:
+            # Position exit path - skip on the same candle as entry to model
+            # the realistic time gap between opening a position and the first
+            # SL/TP evaluation. Without this guard, a pending entry filled at
+            # open can immediately exit at the same candle's high/low, creating
+            # unrealistic trades that inflate backtest performance.
+            if self.position_tracker.has_position and not entered_this_candle:
                 exit_occurred, trade_result = self._process_position_exit(
                     runtime_decision=runtime_decision,
                     candle=candle,
@@ -1027,8 +1077,13 @@ class Backtester:
                         logger.warning("Maximum drawdown exceeded. Stopping backtest.")
                         break
 
-            # Entry path
-            elif self._is_runtime_strategy():
+            # Entry path - only evaluate when no position is open and no entry
+            # occurred this candle to prevent queuing stale signals
+            elif (
+                not self.position_tracker.has_position
+                and not entered_this_candle
+                and self._is_runtime_strategy()
+            ):
                 self._process_entry_signal(
                     runtime_decision=runtime_decision,
                     df=df,

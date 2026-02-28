@@ -157,7 +157,7 @@ def test_multiple_partial_fills_only_notify_new_fills(order_tracker, mock_exchan
 
 
 def test_cancelled_order_triggers_callback(order_tracker, mock_exchange):
-    """Test that a cancelled order triggers the on_cancel callback."""
+    """Test that a cancelled order triggers the on_cancel callback with filled_qty."""
     # Mock order status
     mock_order = MagicMock()
     mock_order.status = OrderStatus.CANCELLED
@@ -167,15 +167,15 @@ def test_cancelled_order_triggers_callback(order_tracker, mock_exchange):
     order_tracker.track_order("order123", "BTCUSDT")
     order_tracker._check_orders()
 
-    # Verify callback was called
-    order_tracker.on_cancel.assert_called_once_with("order123", "BTCUSDT")
+    # Verify callback was called with filled_qty=0.0 (no partial fills occurred)
+    order_tracker.on_cancel.assert_called_once_with("order123", "BTCUSDT", 0.0)
 
     # Verify order is no longer tracked
     assert order_tracker.get_tracked_count() == 0
 
 
 def test_rejected_order_triggers_cancel_callback(order_tracker, mock_exchange):
-    """Test that a rejected order triggers the on_cancel callback."""
+    """Test that a rejected order triggers the on_cancel callback with filled_qty."""
     mock_order = MagicMock()
     mock_order.status = OrderStatus.REJECTED
     mock_exchange.get_order.return_value = mock_order
@@ -183,12 +183,12 @@ def test_rejected_order_triggers_cancel_callback(order_tracker, mock_exchange):
     order_tracker.track_order("order123", "BTCUSDT")
     order_tracker._check_orders()
 
-    order_tracker.on_cancel.assert_called_once_with("order123", "BTCUSDT")
+    order_tracker.on_cancel.assert_called_once_with("order123", "BTCUSDT", 0.0)
     assert order_tracker.get_tracked_count() == 0
 
 
 def test_expired_order_triggers_cancel_callback(order_tracker, mock_exchange):
-    """Test that an expired order triggers the on_cancel callback."""
+    """Test that an expired order triggers the on_cancel callback with filled_qty."""
     mock_order = MagicMock()
     mock_order.status = OrderStatus.EXPIRED
     mock_exchange.get_order.return_value = mock_order
@@ -196,8 +196,30 @@ def test_expired_order_triggers_cancel_callback(order_tracker, mock_exchange):
     order_tracker.track_order("order123", "BTCUSDT")
     order_tracker._check_orders()
 
-    order_tracker.on_cancel.assert_called_once_with("order123", "BTCUSDT")
+    order_tracker.on_cancel.assert_called_once_with("order123", "BTCUSDT", 0.0)
     assert order_tracker.get_tracked_count() == 0
+
+
+def test_cancel_callback_passes_partial_filled_qty(order_tracker, mock_exchange):
+    """Test that on_cancel passes cumulative filled_qty from partial fills before cancel."""
+    # Simulate a partial fill followed by cancellation
+    partial_order = MagicMock()
+    partial_order.status = OrderStatus.PARTIALLY_FILLED
+    partial_order.filled_quantity = 0.5
+    partial_order.average_price = 50000.0
+
+    cancelled_order = MagicMock()
+    cancelled_order.status = OrderStatus.CANCELLED
+
+    # First poll: partially filled; second poll: cancelled
+    mock_exchange.get_order.side_effect = [partial_order, cancelled_order]
+
+    order_tracker.track_order("order123", "BTCUSDT")
+    order_tracker._check_orders()  # Partial fill poll
+    order_tracker._check_orders()  # Cancel poll
+
+    # Verify cancel callback received the cumulative filled quantity
+    order_tracker.on_cancel.assert_called_once_with("order123", "BTCUSDT", 0.5)
 
 
 def test_order_not_found_continues_tracking(order_tracker, mock_exchange):

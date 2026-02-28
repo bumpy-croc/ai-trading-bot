@@ -346,6 +346,20 @@ class LiveExitHandler:
                 error="Position has no order_id",
             )
 
+        # Validate prices before any calculations to prevent NaN/Infinity propagation
+        if current_price <= 0 or not math.isfinite(current_price):
+            return LiveExitResult(
+                success=False,
+                error=f"Invalid current_price: {current_price}",
+            )
+        if limit_price is not None and (limit_price <= 0 or not math.isfinite(limit_price)):
+            logger.warning(
+                "Invalid limit_price %.8f for %s - falling back to current_price",
+                limit_price,
+                position.symbol,
+            )
+            limit_price = None
+
         snapshot = self._build_snapshot(
             symbol=position.symbol,
             current_price=current_price,
@@ -466,10 +480,11 @@ class LiveExitHandler:
                 error="Position has no order_id",
             )
 
+        # Validate filled_price to prevent NaN/Infinity propagation into P&L
         if filled_price <= 0 or not math.isfinite(filled_price):
             return LiveExitResult(
                 success=False,
-                error=f"Invalid filled price: {filled_price}",
+                error=f"Invalid filled_price: {filled_price}",
             )
 
         # Validate filled price against entry price for flash crash detection

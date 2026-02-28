@@ -27,9 +27,9 @@ from src.data_providers.exchange_interface import (
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
 from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
+from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import default_fill_policy
-from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 from tests.mocks import MockDatabaseManager
 
 # ============================================================================
@@ -435,18 +435,28 @@ class TestHandleOrderFill:
     def test_handle_fill_skips_if_position_already_closed(
         self, engine_with_exchange, sample_position
     ):
-        """Fill callback skips exit when position is already closed."""
+        """Fill callback is a no-op when position was already closed and removed.
+
+        If the position was removed from the tracker (by another thread closing
+        it), the for loop in _handle_order_fill won't find a matching SL order,
+        so _execute_exit is never called. For the race where both threads find
+        the position simultaneously, _execute_exit's internal has_position()
+        check provides defense-in-depth against double-close.
+        """
         sample_position.stop_loss_order_id = "sl_order_456"
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
         )
 
-        with patch.object(engine_with_exchange.live_position_tracker, "has_position") as mock_has:
-            mock_has.return_value = False
-            with patch.object(engine_with_exchange, "_execute_exit") as mock_close:
-                engine_with_exchange._handle_order_fill("sl_order_456", "BTCUSDT", 0.02, 48000.0)
+        # Remove the position before the fill arrives (simulating race where
+        # another thread already closed it)
+        engine_with_exchange.live_position_tracker.remove_position(sample_position.order_id)
 
-                mock_close.assert_not_called()
+        with patch.object(engine_with_exchange, "_execute_exit") as mock_close:
+            engine_with_exchange._handle_order_fill("sl_order_456", "BTCUSDT", 0.02, 48000.0)
+
+            # Position already removed from tracker, so loop can't find it
+            mock_close.assert_not_called()
 
     def test_handle_fill_ignores_entry_orders(self, engine_with_exchange, sample_position):
         """Fill callback does not trigger close for entry order fills."""
@@ -483,7 +493,12 @@ class TestHandlePartialFill:
     def test_handle_partial_fill_logs_critical_for_sl(
         self, engine_with_exchange, sample_position, caplog
     ):
-        """Partial fill of stop-loss logs critical warning."""
+        """Partial fill of stop-loss logs critical warning without auto-closing.
+
+        Auto-closing was removed because it would place a market order for the
+        FULL position.quantity, over-selling the portion already filled by the
+        partial SL. The remaining SL order stays active on the exchange.
+        """
         sample_position.stop_loss_order_id = "sl_order_456"
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
@@ -554,6 +569,67 @@ class TestHandleOrderCancel:
 
         engine_with_exchange._handle_order_cancel("entry_order_123", "BTCUSDT")
 
+        assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
+
+    def test_handle_cancel_refunds_entry_fee(self, engine_with_exchange, sample_position):
+        """Cancel callback refunds entry fee to prevent permanent fee leakage."""
+        # Arrange - set entry fee in metadata and initial balance
+        sample_position.metadata["entry_fee"] = 5.0
+        engine_with_exchange.current_balance = 9995.0  # 10000 - 5.0 entry fee
+        engine_with_exchange.trading_session_id = None  # Paper trading mode
+        engine_with_exchange.live_position_tracker.track_recovered_position(
+            sample_position, db_id=None
+        )
+
+        # Act
+        engine_with_exchange._handle_order_cancel("entry_order_123", "BTCUSDT")
+
+        # Assert - fee refunded, position removed
+        assert engine_with_exchange.current_balance == 10000.0
+        assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
+
+    def test_handle_cancel_partial_refund_for_partial_fill(
+        self, engine_with_exchange, sample_position
+    ):
+        """Cancel callback refunds only the unfilled portion's fee after a partial fill.
+
+        When an entry limit order partially fills (e.g., 50% filled) before
+        being cancelled, only the fee for the unfilled 50% is refunded.
+        """
+        # Arrange - entry for 0.02 qty total, fee=10.0, 50% filled before cancel
+        sample_position.metadata["entry_fee"] = 10.0
+        sample_position.quantity = 0.02  # Total intended order quantity
+        engine_with_exchange.current_balance = 9990.0  # 10000 - 10.0 entry fee
+        engine_with_exchange.trading_session_id = None  # Paper trading mode
+        engine_with_exchange.live_position_tracker.track_recovered_position(
+            sample_position, db_id=None
+        )
+
+        # Act - cancel with 50% already filled
+        engine_with_exchange._handle_order_cancel("entry_order_123", "BTCUSDT", filled_qty=0.01)
+
+        # Assert - only 50% of fee refunded (unfilled fraction = 0.5)
+        assert engine_with_exchange.current_balance == pytest.approx(9995.0)  # +5.0 refund
+        assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
+
+    def test_handle_cancel_full_refund_when_fully_unfilled(
+        self, engine_with_exchange, sample_position
+    ):
+        """Cancel callback refunds the full fee when no partial fills occurred."""
+        # Arrange
+        sample_position.metadata["entry_fee"] = 5.0
+        sample_position.quantity = 0.02
+        engine_with_exchange.current_balance = 9995.0
+        engine_with_exchange.trading_session_id = None
+        engine_with_exchange.live_position_tracker.track_recovered_position(
+            sample_position, db_id=None
+        )
+
+        # Act - cancel with zero filled quantity
+        engine_with_exchange._handle_order_cancel("entry_order_123", "BTCUSDT", filled_qty=0.0)
+
+        # Assert - full fee refunded
+        assert engine_with_exchange.current_balance == pytest.approx(10000.0)
         assert not engine_with_exchange.live_position_tracker.has_position("entry_order_123")
 
     def test_handle_cancel_no_phantom_position(self, engine_with_exchange):
