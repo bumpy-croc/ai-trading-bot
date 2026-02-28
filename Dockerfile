@@ -43,4 +43,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD /bin/sh -c 'curl -f http://localhost:${PORT:-8000}/health || exit 1'
 
 # Default command - run migrations then start application
-CMD ["sh", "-c", "atb db verify --apply-migrations && atb live-health ml_basic"]
+CMD atb db verify --apply-migrations && atb live-health ml_basic
