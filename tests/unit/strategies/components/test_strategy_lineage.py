@@ -590,6 +590,58 @@ class TestStrategyLineageTracker:
         tracker.register_strategy("strategy2", metadata={"name": "Test2"})
         assert "strategy2" in tracker.strategies  # Should still be registered locally
 
+    def test_register_strategy_out_of_order(self, tracker):
+        """Test that registering a child before its parent backfills edges correctly"""
+        # Arrange: register child first with a parent_id that doesn't exist yet
+        tracker.register_strategy("child", parent_id="parent", metadata={"name": "Child"})
+
+        # At this point, child has parent_id="parent" in metadata but no edge exists
+        assert "parent" not in tracker.lineage_graph
+
+        # Act: now register the parent
+        tracker.register_strategy("parent", metadata={"name": "Parent"})
+
+        # Assert: backfill should have created the edge parent -> child
+        assert "child" in tracker.lineage_graph["parent"]
+        edge_key = "parent->child"
+        assert edge_key in tracker.graph_edges
+        assert tracker.graph_edges[edge_key]["relationship_type"] == RelationshipType.PARENT
+
+        # Child's generation should be updated (parent=0, child=1)
+        assert tracker.strategies["parent"]["generation"] == 0
+        assert tracker.strategies["child"]["generation"] == 1
+
+        # _get_descendants should find the child
+        descendants = tracker._get_descendants("parent")
+        assert len(descendants) == 1
+        assert descendants[0]["id"] == "child"
+
+        # get_lineage should work correctly
+        lineage = tracker.get_lineage("parent")
+        assert len(lineage["descendants"]) == 1
+        assert lineage["descendants"][0]["id"] == "child"
+
+    def test_register_strategy_out_of_order_chain(self, tracker):
+        """Test out-of-order registration for a multi-level chain"""
+        # Arrange: register grandchild, then child, then parent (fully reversed)
+        tracker.register_strategy("grandchild", parent_id="child", metadata={"name": "GC"})
+        tracker.register_strategy("child", parent_id="parent", metadata={"name": "Child"})
+        tracker.register_strategy("parent", metadata={"name": "Parent"})
+
+        # Assert: all edges should exist
+        assert "child" in tracker.lineage_graph["parent"]
+        assert "grandchild" in tracker.lineage_graph["child"]
+
+        # Generations should be correct
+        assert tracker.strategies["parent"]["generation"] == 0
+        assert tracker.strategies["child"]["generation"] == 1
+        assert tracker.strategies["grandchild"]["generation"] == 2
+
+        # Full descendant traversal from root should find both
+        descendants = tracker._get_descendants("parent")
+        desc_ids = {d["id"] for d in descendants}
+        assert desc_ids == {"child", "grandchild"}
+
     def test_complex_branching_and_merging(self, tracker):
         """Test complex branching and merging scenario"""
         # Create main line

@@ -215,7 +215,7 @@ class StrategyLineageTracker:
             **(metadata or {}),
         }
 
-        # Add parent relationship if specified
+        # Add parent relationship if specified and parent already registered
         if parent_id and parent_id in self.strategies:
             self.lineage_graph[parent_id].append(strategy_id)
             edge_key = f"{parent_id}->{strategy_id}"
@@ -228,6 +228,37 @@ class StrategyLineageTracker:
             # Update generation
             parent_generation = self.strategies[parent_id]["generation"]
             self.strategies[strategy_id]["generation"] = parent_generation + 1
+
+        # Backfill edges for any previously-registered strategies that claim
+        # this strategy as their parent. Handles out-of-order registration
+        # where a child is registered before its parent.
+        for existing_id, existing_meta in self.strategies.items():
+            if existing_id == strategy_id:
+                continue
+            if existing_meta.get("parent_id") == strategy_id:
+                edge_key = f"{strategy_id}->{existing_id}"
+                if edge_key not in self.graph_edges:
+                    self.lineage_graph[strategy_id].append(existing_id)
+                    self.graph_edges[edge_key] = {
+                        "relationship_type": RelationshipType.PARENT,
+                        "source": strategy_id,
+                        "target": existing_id,
+                    }
+
+        # Propagate correct generation numbers through the subtree via BFS.
+        # This handles chains registered out of order (e.g., grandchild before
+        # child before parent) where intermediate generations were initially 0.
+        propagation_queue = deque()
+        for child_id in self.lineage_graph.get(strategy_id, []):
+            propagation_queue.append((strategy_id, child_id))
+
+        while propagation_queue:
+            parent, child = propagation_queue.popleft()
+            correct_gen = self.strategies[parent]["generation"] + 1
+            if self.strategies[child]["generation"] != correct_gen:
+                self.strategies[child]["generation"] = correct_gen
+            for grandchild in self.lineage_graph.get(child, []):
+                propagation_queue.append((child, grandchild))
 
         # Clear caches
         self._invalidate_caches()
