@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from src.prediction.exceptions import ModelInferenceError
 from src.prediction.models.onnx_runner import ModelPrediction
 
 
@@ -30,31 +31,39 @@ class SimpleEnsembleAggregator:
         self.method = method
 
     def aggregate(self, preds: Iterable[ModelPrediction]) -> EnsembleResult:
-        """
-        Aggregate predictions from multiple models.
-
-        Args:
-            preds: Iterable of ModelPrediction objects
-
-        Returns:
-            EnsembleResult with aggregated values
-
-        Raises:
-            ValueError: If predictions list is empty
-        """
         members = list(preds)
         if not members:
-            raise ValueError("Cannot aggregate empty predictions list")
+            raise ModelInferenceError(
+                "All ensemble models failed or timed out - no valid predictions available"
+            )
 
         prices = np.array([p.price for p in members], dtype=float)
         confs = np.array([max(0.0, min(1.0, p.confidence)) for p in members], dtype=float)
         dirs = np.array([p.direction for p in members], dtype=int)
+
+        # Filter out predictions with NaN/Inf prices to prevent silent data corruption
+        # Replacing NaN with 0.0 would severely bias the ensemble result
+        # (e.g., [50000, NaN→0.0] → mean=25000 which is nonsensical for BTC)
+        valid_mask = np.isfinite(prices)
+
+        if not valid_mask.any():
+            raise ModelInferenceError(
+                "All ensemble predictions contain NaN/Inf prices - cannot aggregate"
+            )
+
+        # Filter all arrays using the valid mask
+        prices = prices[valid_mask]
+        confs = confs[valid_mask]
+        dirs = dirs[valid_mask]
+        # Keep original members list for metadata, but note some may have had invalid prices
+        # The member_predictions field contains all original predictions for debugging
 
         if self.method == "median":
             agg_price = float(np.median(prices))
             agg_conf = float(np.median(confs))
         elif self.method == "weighted":
             w = confs
+            # Handle case where all weights are zero (including from NaN replacement)
             if np.all(w == 0):
                 w = np.ones_like(w)
             norm_w = w / w.sum()

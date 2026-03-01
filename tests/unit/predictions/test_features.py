@@ -48,9 +48,7 @@ class TestTechnicalFeatureExtractor:
             {
                 "open": prices,
                 "high": [p * (1 + h) for p, h in zip(prices, high_offset, strict=False)],
-                "low": [
-                    p * (1 + low_delta) for p, low_delta in zip(prices, low_offset, strict=False)
-                ],
+                "low": [p * (1 + low_delta) for p, low_delta in zip(prices, low_offset, strict=False)],
                 "close": prices,
                 "volume": volume,
             },
