@@ -341,24 +341,28 @@ class FeatureCache:
         """
         Get information about cache size and memory usage.
 
+        Thread-safe: Acquires lock to prevent RuntimeError from concurrent
+        dict mutation during iteration.
+
         Returns:
             Dictionary with size information
         """
-        total_memory = 0
-        entry_sizes = []
+        with self._lock:
+            total_memory = 0
+            entry_sizes = []
 
-        for entry in self._cache.values():
-            # Rough estimate of DataFrame memory usage
-            entry_size = entry.data.memory_usage(deep=True).sum()
-            entry_sizes.append(entry_size)
-            total_memory += entry_size
+            for entry in self._cache.values():
+                # Rough estimate of DataFrame memory usage
+                entry_size = entry.data.memory_usage(deep=True).sum()
+                entry_sizes.append(entry_size)
+                total_memory += entry_size
 
-        return {
-            "total_entries": len(self._cache),
-            "total_memory_bytes": total_memory,
-            "average_entry_size_bytes": np.mean(entry_sizes) if entry_sizes else 0,
-            "largest_entry_size_bytes": max(entry_sizes) if entry_sizes else 0,
-        }
+            return {
+                "total_entries": len(self._cache),
+                "total_memory_bytes": total_memory,
+                "average_entry_size_bytes": np.mean(entry_sizes) if entry_sizes else 0,
+                "largest_entry_size_bytes": max(entry_sizes) if entry_sizes else 0,
+            }
 
 
 # Global feature cache instance

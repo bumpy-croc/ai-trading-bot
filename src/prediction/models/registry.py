@@ -1,6 +1,7 @@
 """Model registry for managing ML model bundles with metadata and selection."""
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,8 @@ class PredictionModelRegistry:
         self._bundles: dict[tuple[str, str, str], StrategyModel] = {}
         # Optional production selections: (symbol, timeframe, model_type) -> version_id
         self._production_index: dict[tuple[str, str, str], str] = {}
+        # Lock for thread-safe atomic swaps during reload
+        self._lock = threading.Lock()
         # Load structured models
         self._load()
 
@@ -294,10 +297,56 @@ class PredictionModelRegistry:
         return [b.runner for b in self.list_bundles()]
 
     def reload_models(self) -> None:
-        """Reload all bundles from disk."""
-        # Explicitly close existing runners to release resources immediately
-        # (rather than waiting for garbage collection)
-        for bundle in self._bundles.values():
+        """Reload all bundles from disk with copy-on-write pattern.
+
+        Loads new bundles into temporary dicts first, then atomically swaps
+        them in. If loading fails, the existing bundles remain available so
+        predictions continue working with the previous model versions.
+        """
+        # Load new bundles into temporary dicts (outside lock, may be slow)
+        new_bundles: dict[tuple[str, str, str], StrategyModel] = {}
+        new_production_index: dict[tuple[str, str, str], str] = {}
+        base = Path(self.config.model_registry_path)
+
+        if base.exists():
+            for symbol_dir in base.iterdir():
+                if not symbol_dir.is_dir():
+                    continue
+                symbol = symbol_dir.name
+                for mtype_dir in symbol_dir.iterdir():
+                    if not mtype_dir.is_dir():
+                        continue
+                    model_type = mtype_dir.name
+                    latest = mtype_dir / "latest"
+                    version_dirs = [
+                        p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"
+                    ]
+                    # Deterministic order; latest symlink applied afterwards
+                    version_dirs.sort()
+                    for vdir in version_dirs:
+                        try:
+                            bundle = self._load_bundle(symbol, model_type, vdir)
+                            key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+                            new_bundles[key] = bundle
+                        except Exception as e:  # pragma: no cover
+                            logger.error("Failed to load bundle at %s: %s", vdir, e)
+                    if latest.exists():
+                        try:
+                            bundle = self._load_bundle(symbol, model_type, latest)
+                            key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+                            new_bundles[key] = bundle
+                            new_production_index[key] = bundle.version_id
+                        except Exception as e:  # pragma: no cover
+                            logger.error("Failed to load bundle at %s: %s", latest, e)
+
+        # Atomic swap under lock — other threads see the old bundles until this completes
+        with self._lock:
+            old_bundles = self._bundles
+            self._bundles = new_bundles
+            self._production_index = new_production_index
+
+        # Close old runners outside lock to avoid blocking other threads
+        for bundle in old_bundles.values():
             if hasattr(bundle.runner, "close"):
                 try:
                     bundle.runner.close()
@@ -307,9 +356,6 @@ class PredictionModelRegistry:
                         bundle.key,
                         e,
                     )
-        self._bundles.clear()
-        self._production_index.clear()
-        self._load()
 
     def invalidate_cache(self, model_name: str | None = None) -> int:
         """
