@@ -9,16 +9,13 @@ from __future__ import annotations
 import logging
 import math
 import threading
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 
 from src.performance import metrics as perf_metrics
-
-if TYPE_CHECKING:
-    pass
 
 
 class TradeProtocol(Protocol):
@@ -133,42 +130,7 @@ class PerformanceMetrics:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
-        return {
-            # Trade statistics
-            "total_trades": self.total_trades,
-            "winning_trades": self.winning_trades,
-            "losing_trades": self.losing_trades,
-            "win_rate": self.win_rate,
-            # Returns
-            "total_pnl": self.total_pnl,
-            "total_return_pct": self.total_return_pct,
-            "annualized_return": self.annualized_return,
-            # Risk metrics
-            "max_drawdown": self.max_drawdown,
-            "current_drawdown": self.current_drawdown,
-            "sharpe_ratio": self.sharpe_ratio,
-            "sortino_ratio": self.sortino_ratio,
-            "calmar_ratio": self.calmar_ratio,
-            "var_95": self.var_95,
-            # Trade quality
-            "profit_factor": self.profit_factor,
-            "expectancy": self.expectancy,
-            "avg_win": self.avg_win,
-            "avg_loss": self.avg_loss,
-            "largest_win": self.largest_win,
-            "largest_loss": self.largest_loss,
-            # Efficiency
-            "avg_trade_duration_hours": self.avg_trade_duration_hours,
-            "consecutive_wins": self.consecutive_wins,
-            "consecutive_losses": self.consecutive_losses,
-            # Costs
-            "total_fees_paid": self.total_fees_paid,
-            "total_slippage_cost": self.total_slippage_cost,
-            # Balance tracking
-            "initial_balance": self.initial_balance,
-            "current_balance": self.current_balance,
-            "peak_balance": self.peak_balance,
-        }
+        return asdict(self)
 
 
 class PerformanceTracker:

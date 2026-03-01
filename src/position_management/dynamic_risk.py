@@ -1,9 +1,10 @@
 import logging
 import math
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -65,11 +66,11 @@ class DynamicRiskConfig:
     performance_window_days: int = DEFAULT_PERFORMANCE_WINDOW_DAYS
 
     # Drawdown thresholds and adjustments (use centralized constants)
-    drawdown_thresholds: list[float] = None
-    risk_reduction_factors: list[float] = None
+    drawdown_thresholds: list[float] | None = None
+    risk_reduction_factors: list[float] | None = None
 
     # Recovery thresholds
-    recovery_thresholds: list[float] = None
+    recovery_thresholds: list[float] | None = None
 
     # Volatility adjustments (use centralized constants)
     volatility_adjustment_enabled: bool = DEFAULT_VOLATILITY_ADJUSTMENT_ENABLED
@@ -109,7 +110,7 @@ class RiskAdjustments:
 
     # Metadata
     primary_reason: str = "normal"
-    adjustment_details: dict[str, Any] = None
+    adjustment_details: dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.adjustment_details is None:
@@ -337,61 +338,66 @@ class DynamicRiskManager:
         # Calculate new metrics outside lock to minimize lock duration
         metrics = {}
 
-        if self.db_manager and session_id:
-            try:
-                # Get recent performance data
-                start_date = now - timedelta(days=self.config.performance_window_days)
-                db_metrics = self.db_manager.get_dynamic_risk_performance_metrics(
-                    start_date=start_date, session_id=session_id
-                )
-
-                metrics.update(db_metrics)
-
-                # Estimate volatility from recent account equity if available
+        try:
+            if self.db_manager and session_id:
                 try:
-                    with self.db_manager.get_session() as session:
-                        from src.database.models import AccountHistory
+                    # Get recent performance data
+                    start_date = now - timedelta(days=self.config.performance_window_days)
+                    db_metrics = self.db_manager.get_dynamic_risk_performance_metrics(
+                        start_date=start_date, session_id=session_id
+                    )
 
-                        history = (
-                            session.query(AccountHistory)
-                            .filter(AccountHistory.session_id == session_id)
-                            .filter(AccountHistory.timestamp >= start_date)
-                            .order_by(AccountHistory.timestamp.asc())
-                            .all()
+                    metrics.update(db_metrics)
+
+                    # Estimate volatility from recent account equity if available
+                    try:
+                        with self.db_manager.get_session() as session:
+                            from src.database.models import AccountHistory
+
+                            history = (
+                                session.query(AccountHistory)
+                                .filter(AccountHistory.session_id == session_id)
+                                .filter(AccountHistory.timestamp >= start_date)
+                                .order_by(AccountHistory.timestamp.asc())
+                                .all()
+                            )
+                            closes: list[float] = []
+                            for rec in history:
+                                try:
+                                    closes.append(float(rec.equity))
+                                except (ValueError, TypeError, AttributeError):
+                                    # Skip invalid equity values that cannot be converted to float
+                                    continue
+                            # Need at least 3 prices to calculate 2 log returns (N prices -> N-1 returns)
+                            if len(closes) >= 3:
+                                series = pd.Series(closes)
+                                # Volatility calculations require positive prices for log returns
+                                # Non-positive values from data gaps would corrupt the volatility metric
+                                series_positive = series[series > 0]
+                                if len(series_positive) >= 3:
+                                    log_returns = np.log(series_positive).diff().dropna()
+                                    # Require at least 2 returns for reliable std (ddof=1 requires 2+ samples)
+                                    if len(log_returns) >= 2:
+                                        vol = float(log_returns.std())
+                                        if math.isfinite(vol):
+                                            metrics["estimated_volatility"] = vol
+                                        else:
+                                            logger.debug(
+                                                "Volatility std() returned non-finite value"
+                                            )
+                    except Exception as vol_err:
+                        logger.warning(
+                            f"Volatility estimation failed, using fallback: {vol_err}"
                         )
-                        closes: list[float] = []
-                        for rec in history:
-                            try:
-                                closes.append(float(rec.equity))
-                            except (ValueError, TypeError, AttributeError):
-                                # Skip invalid equity values that cannot be converted to float
-                                continue
-                        # Need at least 3 prices to calculate 2 log returns (N prices -> N-1 returns)
-                        if len(closes) >= 3:
-                            series = pd.Series(closes)
-                            # Volatility calculations require positive prices for log returns
-                            # Non-positive values from data gaps would corrupt the volatility metric
-                            series_positive = series[series > 0]
-                            if len(series_positive) >= 3:
-                                log_returns = np.log(series_positive).diff().dropna()
-                                # Require at least 2 returns for reliable std (ddof=1 requires 2+ samples)
-                                if len(log_returns) >= 2:
-                                    vol = float(log_returns.std())
-                                    if math.isfinite(vol):
-                                        metrics["estimated_volatility"] = vol
-                                    else:
-                                        logger.debug("Volatility std() returned non-finite value")
-                except Exception as vol_err:
-                    logger.warning(f"Volatility estimation failed, using fallback: {vol_err}")
 
-            except Exception as e:
-                logger.warning(f"Failed to get performance metrics from database: {e}")
-
-        # Cache the results with lock to prevent race conditions
-        with self._cache_lock:
-            self._performance_cache = metrics
-            self._cache_timestamp = now
-            self._computing = False
+                except Exception as e:
+                    logger.warning(f"Failed to get performance metrics from database: {e}")
+        finally:
+            # Always reset _computing flag to prevent permanent starvation
+            with self._cache_lock:
+                self._performance_cache = metrics
+                self._cache_timestamp = now
+                self._computing = False
 
         return metrics
 

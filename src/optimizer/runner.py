@@ -69,8 +69,7 @@ class _RandomWalkProvider(DataProvider):
     def _generate(
         self, start: datetime, end: datetime, timeframe: str, start_price: float, vol: float
     ) -> pd.DataFrame:
-        if self.seed is not None:
-            np.random.seed(self.seed)
+        rng = np.random.default_rng(self.seed)
         idx = pd.date_range(
             start=pd.Timestamp(start), end=pd.Timestamp(end), freq=self._freq(timeframe)
         )
@@ -80,13 +79,13 @@ class _RandomWalkProvider(DataProvider):
             ).fillna(0.0)
         prices = [start_price]
         for _ in range(1, len(idx)):
-            shock = np.random.normal(0, vol)
+            shock = rng.normal(0, vol)
             prices.append(max(1.0, prices[-1] * (1.0 + shock)))
         prices = np.array(prices)
-        highs = prices * (1.0 + np.abs(np.random.normal(0, vol / 2, size=len(prices))))
-        lows = prices * (1.0 - np.abs(np.random.normal(0, vol / 2, size=len(prices))))
+        highs = prices * (1.0 + np.abs(rng.normal(0, vol / 2, size=len(prices))))
+        lows = prices * (1.0 - np.abs(rng.normal(0, vol / 2, size=len(prices))))
         opens = np.r_[prices[0], prices[:-1]]
-        volume = np.random.uniform(1000.0, 10000.0, size=len(prices))
+        volume = rng.uniform(1000.0, 10000.0, size=len(prices))
         df = pd.DataFrame(
             {
                 "open": opens,

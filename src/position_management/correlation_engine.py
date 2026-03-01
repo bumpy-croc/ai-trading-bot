@@ -7,9 +7,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
-import pandas as pd
 
 from src.config.constants import (
     DEFAULT_CORRELATION_SAMPLE_MIN_SIZE,
@@ -166,13 +166,8 @@ class CorrelationEngine:
 
         thr = float(self.config.correlation_threshold)
         for i, a in enumerate(symbols):
-            # Skip if symbol was filtered out during correlation calculation
-            if a not in corr.columns:
-                continue
             for j in range(i + 1, len(symbols)):
                 b = symbols[j]
-                if b not in corr.columns:
-                    continue
                 try:
                     val = corr.at[a, b]
                     if pd.notna(val) and val >= thr:
@@ -277,7 +272,7 @@ class CorrelationGroupManager:
                     size = positions[s].get("size", 0.0)
                     if isinstance(size, int | float) and math.isfinite(size) and size >= 0:
                         present.append(s)
-                        total = CorrelationEngine._safe_size_add(total, size)
+                        total += float(size)
             out[name] = {
                 "total_exposure": round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS),
                 "position_count": len(present),

@@ -32,7 +32,6 @@ else:
 # Standard library imports
 import argparse
 import logging
-import sys
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -740,25 +739,6 @@ class MonitoringDashboard:
             logger.error(f"Error calculating max drawdown: {e}")
             return 0.0
 
-    def _get_current_exposure(self) -> float:
-        """Get current market exposure as percentage of balance"""
-        try:
-            # Get current balance and active position values
-            balance = self._get_current_balance()
-            if balance <= 0:
-                return 0.0
-
-            positions = self.db_manager.get_active_positions()
-            exposure = sum(
-                self._safe_float(pos.get("quantity", 0))
-                * self._safe_float(pos.get("entry_price", 0))
-                for pos in positions
-            )
-            return (exposure / balance) * 100
-        except Exception as e:
-            logger.error(f"Error calculating current exposure: {e}")
-            return 0.0
-
     def _get_risk_per_trade(self) -> float:
         """Get average risk per trade"""
         # This would typically come from the risk manager configuration
@@ -901,8 +881,9 @@ class MonitoringDashboard:
                 return "Unknown"
 
             last_update = pd.to_datetime(result[0]["timestamp"])
-            # Use naive UTC to avoid tz-naive/aware comparison errors
-            time_diff = (datetime.utcnow() - last_update.replace(tzinfo=None)).total_seconds()
+            if last_update.tzinfo is None:
+                last_update = last_update.tz_localize(UTC)
+            time_diff = (datetime.now(UTC) - last_update).total_seconds()
 
             if time_diff < 300:  # 5 minutes
                 return "Healthy"
@@ -925,21 +906,6 @@ class MonitoringDashboard:
             logger.error(f"API status check failed: {e}")
             return "Disconnected"
 
-    def _get_recent_error_count(self) -> int:
-        """Get count of recent errors (last 24 hours)"""
-        try:
-            query = """
-            SELECT COUNT(*) as count
-            FROM system_events
-            WHERE event_type = 'ERROR'
-            AND timestamp > NOW() - INTERVAL '1 day'
-            """
-            result = self.db_manager.execute_query(query)
-            return result[0]["count"] if result else 0
-        except Exception as e:
-            logger.error(f"Error getting error count: {e}")
-            return 0
-
     def _get_current_strategy(self) -> str:
         """Get current active strategy"""
         try:
@@ -955,33 +921,6 @@ class MonitoringDashboard:
             logger.error(f"Error getting current strategy: {e}")
             return "Unknown"
 
-    def _get_strategy_confidence(self) -> float:
-        """Get strategy confidence level"""
-        # This would need to be implemented in the strategy itself
-        return 75.0  # Placeholder
-
-    def _get_signals_today(self) -> int:
-        """Get number of signals generated today"""
-        try:
-            query = """
-            SELECT COUNT(*) as count
-            FROM trades
-            WHERE DATE(entry_time) = CURRENT_DATE
-            """
-            result = self.db_manager.execute_query(query)
-            return result[0]["count"] if result else 0
-        except Exception as e:
-            logger.error(f"Error getting signals today: {e}")
-            return 0
-
-    def _get_current_price(self) -> float:
-        """Get current BTC price"""
-        try:
-            return self.data_provider.get_current_price("BTCUSDT")
-        except Exception as e:
-            logger.error(f"Error getting current price: {e}")
-            return 0.0
-
     def _get_price_change_24h(self) -> float:
         """Get 24h price change percentage"""
         try:
@@ -995,19 +934,6 @@ class MonitoringDashboard:
             return 0.0
         except Exception as e:
             logger.error(f"Error getting 24h price change: {e}")
-            return 0.0
-
-    def _get_volume_24h(self) -> float:
-        """Get 24h trading volume"""
-        try:
-            df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=1), datetime.now(UTC)
-            )
-            if not df.empty:
-                return df["volume"].sum()
-            return 0.0
-        except Exception as e:
-            logger.error(f"Error getting 24h volume: {e}")
             return 0.0
 
     def _get_current_rsi(self) -> float:
@@ -1047,15 +973,6 @@ class MonitoringDashboard:
         except Exception as e:
             logger.error(f"Error getting EMA trend: {e}")
             return "Neutral"
-
-    def _get_sentiment_score(self) -> float:
-        """Get current sentiment score"""
-        # This would integrate with sentiment providers
-        return 0.0  # Placeholder
-
-    def _get_sentiment_trend(self) -> str:
-        """Get sentiment trend"""
-        return "Neutral"  # Placeholder
 
     # ========== SYSTEM HEALTH METRICS ==========
 
@@ -1222,20 +1139,6 @@ class MonitoringDashboard:
             return total_value
         except Exception as e:
             logger.error(f"Error getting total position sizes: {e}")
-            return 0.0
-
-    def _get_total_position_value_at_entry(self) -> float:
-        """Get total value of all active positions at entry prices"""
-        try:
-            positions = self.db_manager.get_active_positions()
-            total_value = sum(
-                self._safe_float(pos.get("quantity", 0))
-                * self._safe_float(pos.get("entry_price", 0))
-                for pos in positions
-            )
-            return total_value
-        except Exception as e:
-            logger.error(f"Error getting total position value at entry: {e}")
             return 0.0
 
     # ========== ORDER EXECUTION METRICS ==========
@@ -1786,69 +1689,8 @@ class MonitoringDashboard:
             return 0.0
 
     def _get_error_rate(self) -> float:
-        """Get error rate over last hour"""
-        try:
-            query = """
-            SELECT
-                COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
-                COUNT(*) as total
-            FROM system_events
-            WHERE timestamp > NOW() - INTERVAL '1 hour'
-            """
-            result = self.db_manager.execute_query(query)
-            if result and result[0]["total"] > 0:
-                return (result[0]["errors"] / result[0]["total"]) * 100
-            return 0.0
-        except Exception as e:
-            logger.error(f"Error getting error rate: {e}")
-            return 0.0
-
-    def _get_balance_info(self) -> dict[str, Any]:
-        """Get comprehensive balance information"""
-        try:
-            current_balance = self.db_manager.get_current_balance()
-            balance_history = self.db_manager.get_balance_history(limit=10)
-
-            # Calculate balance change over time
-            balance_change_24h = 0.0
-            if len(balance_history) >= 2:
-                try:
-                    recent_balance = balance_history[0]["balance"]
-                    older_balance = next(
-                        (
-                            h["balance"]
-                            for h in balance_history
-                            if ((datetime.now(UTC) - h["timestamp"].astimezone(UTC)).days >= 1)
-                        ),
-                        recent_balance,
-                    )
-                    if older_balance > 0:
-                        balance_change_24h = (
-                            (recent_balance - older_balance) / older_balance
-                        ) * 100
-                except (KeyError, TypeError, ZeroDivisionError):
-                    pass
-
-            return {
-                "current_balance": current_balance,
-                "balance_change_24h": balance_change_24h,
-                "last_updated": (
-                    balance_history[0]["timestamp"].isoformat()
-                    if balance_history and isinstance(balance_history[0]["timestamp"], datetime)
-                    else balance_history[0]["timestamp"] if balance_history else None
-                ),
-                "last_update_reason": balance_history[0]["reason"] if balance_history else None,
-                "recent_history": balance_history[:5],  # Last 5 balance changes
-            }
-        except Exception as e:
-            logger.error(f"Error getting balance info: {e}")
-            return {
-                "current_balance": 0.0,
-                "balance_change_24h": 0.0,
-                "last_updated": None,
-                "last_update_reason": "Error retrieving balance",
-                "recent_history": [],
-            }
+        """Get error rate over last hour."""
+        return self._get_error_rate_hourly()
 
     def _get_balance_history(self, days: int = 30):
         """Retrieve balance history.

@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+_ML_COLUMNS = ["onnx_pred", "ml_prediction", "prediction_confidence"]
+
 _INDICATOR_COLUMNS = [
     "rsi",
     "macd",
@@ -22,10 +24,7 @@ _INDICATOR_COLUMNS = [
     "body_size",
     "upper_wick",
     "lower_wick",
-    "onnx_pred",
-    "ml_prediction",
-    "prediction_confidence",
-]
+] + _ML_COLUMNS
 
 _SENTIMENT_COLUMNS = [
     "sentiment_score",
@@ -35,8 +34,6 @@ _SENTIMENT_COLUMNS = [
     "sentiment_confidence",
     "sentiment_freshness",
 ]
-
-_ML_COLUMNS = ["onnx_pred", "ml_prediction", "prediction_confidence"]
 _OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 
 

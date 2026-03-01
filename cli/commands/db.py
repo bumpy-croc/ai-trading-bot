@@ -35,8 +35,6 @@ except ImportError:  # pragma: no cover - optional dependency for local dev
 
 from src.database.models import Base
 
-# * Constants for Alembic/DB
-MIN_POSTGRESQL_URL_PREFIX = "postgresql"
 # * Allow environment overrides for packaged/production deployments
 ALEMBIC_INI_PATH = os.getenv("ATB_ALEMBIC_INI", str(PROJECT_ROOT / "alembic.ini"))
 
@@ -71,20 +69,6 @@ def _safe_bool_env(name: str, default: bool = False) -> bool:
     if val is None:
         return default
     return val.strip().lower() in {"1", "true", "yes", "on", "enabled"}
-
-
-def _resolve_database_url() -> str:
-    from src.config.config_manager import get_config
-
-    cfg = get_config()
-    database_url: str | None = cfg.get("DATABASE_URL") or os.getenv("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("DATABASE_URL is required but not set.")
-    if not database_url.startswith(MIN_POSTGRESQL_URL_PREFIX):
-        raise RuntimeError(
-            f"Unsupported DATABASE_URL scheme. Expected '{MIN_POSTGRESQL_URL_PREFIX}://'."
-        )
-    return database_url
 
 
 def _alembic_config(db_url: str) -> Config:
@@ -135,112 +119,6 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
             engine.dispose()
         except Exception:
             pass
-
-
-def _complete_database_reset(cfg: Config) -> bool:
-    """Completely reset database schema - drops all types, tables, and alembic versions"""
-    try:
-        db_url = cfg.get_main_option("sqlalchemy.url")
-        engine_config = _get_secure_engine_config()
-        engine_config["connect_args"]["application_name"] = "ai-trading-bot:complete-reset"
-        engine = create_engine(db_url, **engine_config)
-
-        print("🚨 Performing COMPLETE database reset...")
-
-        with engine.begin() as conn:  # Use begin() for automatic transaction management
-            # Force drop all known enum types with multiple attempts
-            print("🔄 Force dropping all custom types...")
-            known_types = [
-                "tradesource",
-                "eventtype",
-                "positionstatus",
-                "ordertype",
-                "orderstatus",
-                "positionside",
-                "partialoperationtype",
-            ]
-
-            # First pass: try to drop with CASCADE
-            for type_name in known_types:
-                try:
-                    conn.execute(text(f"DROP TYPE IF EXISTS {type_name} CASCADE"))
-                    print(f"  ✓ Dropped type: {type_name}")
-                except Exception as e:
-                    print(f"  ⚠️  Could not drop type {type_name}: {e}")
-
-            # Second pass: try to drop any remaining enum types
-            try:
-                result = conn.execute(
-                    text(
-                        """
-                    SELECT typname
-                    FROM pg_type
-                    WHERE typtype = 'e'
-                    AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
-                """
-                    )
-                )
-                remaining_enums = [row[0] for row in result.fetchall()]
-
-                for enum_name in remaining_enums:
-                    try:
-                        conn.execute(text(f"DROP TYPE IF EXISTS {enum_name} CASCADE"))
-                        print(f"  ✓ Dropped remaining enum: {enum_name}")
-                    except Exception as e:
-                        print(f"  ⚠️  Could not drop remaining enum {enum_name}: {e}")
-            except Exception as e:
-                print(f"  ⚠️  Could not query remaining enums: {e}")
-
-            # Drop all tables
-            print("🔄 Dropping all tables...")
-            try:
-                result = conn.execute(
-                    text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-                )
-                tables = result.fetchall()
-
-                for (table_name,) in tables:
-                    try:
-                        conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
-                        print(f"  ✓ Dropped table: {table_name}")
-                    except Exception as e:
-                        print(f"  ⚠️  Could not drop table {table_name}: {e}")
-            except Exception as e:
-                print(f"  ⚠️  Could not query tables: {e}")
-
-            # Drop all sequences
-            print("🔄 Dropping all sequences...")
-            try:
-                result = conn.execute(
-                    text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'")
-                )
-                sequences = result.fetchall()
-
-                for (seq_name,) in sequences:
-                    try:
-                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
-                        print(f"  ✓ Dropped sequence: {seq_name}")
-                    except Exception as e:
-                        print(f"  ⚠️  Could not drop sequence {seq_name}: {e}")
-            except Exception as e:
-                print(f"  ⚠️  Could not query sequences: {e}")
-
-            # Drop alembic version table specifically
-            try:
-                conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
-                print("  ✓ Dropped alembic_version table")
-            except Exception as e:
-                print(f"  ⚠️  Could not drop alembic_version: {e}")
-
-        print("✅ Complete database reset successful.")
-        return True
-
-    except Exception as e:
-        print(f"❌ Complete database reset failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
 
 
 def _apply_migrations(cfg: Config) -> bool:
@@ -366,6 +244,18 @@ def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
     return results
 
 
+def _norm_type(s: str) -> str:
+    """Normalize a PostgreSQL type string for comparison."""
+    return (
+        s.replace("jsonb", "json")
+        .replace("timestampwithouttimezone", "timestamp")
+        .replace("doubleprecision", "float")
+        .replace("float8", "float")
+        .replace("float4", "float")
+        .replace("real", "float")
+    )
+
+
 def _verify_schema(db_url: str) -> dict[str, Any]:
     # * Use secure engine configuration for consistency
     engine_config = _get_secure_engine_config()
@@ -443,18 +333,7 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
                     exp_str = str(exp_type).lower().replace(" ", "")
                 act_str = actual_types_map.get(col_name, "")
 
-                def _norm(s: str) -> str:
-                    return (
-                        s.replace("jsonb", "json")
-                        .replace("timestampwithouttimezone", "timestamp")
-                        # Normalize PostgreSQL float synonyms
-                        .replace("doubleprecision", "float")
-                        .replace("float8", "float")
-                        .replace("float4", "float")
-                        .replace("real", "float")
-                    )
-
-                if _norm(exp_str) != _norm(act_str):
+                if _norm_type(exp_str) != _norm_type(act_str):
                     result["ok"] = False
                     result.setdefault("type_mismatches", {}).setdefault(table, {})[col_name] = {
                         "expected": exp_str,
@@ -788,19 +667,20 @@ def _backup(ns: argparse.Namespace) -> int:
     dbname = parsed.path.lstrip("/")
     password = parsed.password or ""
 
-    timestamp = _dt.datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    backup_path = Path(backup_dir) / dbname / _dt.datetime.now(UTC).strftime("%Y/%m/%d")
+    now = _dt.datetime.now(UTC)
+    timestamp = now.strftime("%Y%m%dT%H%M%SZ")
+    backup_path = Path(backup_dir) / dbname / now.strftime("%Y/%m/%d")
     dump_filename = f"backup-{timestamp}.dump"
     dump_path = backup_path / dump_filename
 
     backup_path.mkdir(parents=True, exist_ok=True)
     print(f"📦 Creating dump: {dump_path}")
 
-    env = os.environ.copy()
-    env["PGPASSWORD"] = password
+    env_vars = os.environ.copy()
+    env_vars["PGPASSWORD"] = password
     cmd = ["pg_dump", f"--dbname={db_url}", "-Fc", "-Z", "9", "-f", str(dump_path)]
     try:
-        subprocess.run(cmd, check=True, env=env, capture_output=True)
+        subprocess.run(cmd, check=True, env=env_vars, capture_output=True)
     except subprocess.CalledProcessError as exc:
         print(f"❌ pg_dump failed: {exc.stderr.decode()}", file=sys.stderr)
         return 1
@@ -813,7 +693,7 @@ def _backup(ns: argparse.Namespace) -> int:
         if db_backup_dir.exists():
             for backup_file in db_backup_dir.rglob("backup-*.dump"):
                 try:
-                    file_time = _dt.datetime.fromtimestamp(backup_file.stat().st_mtime)
+                    file_time = _dt.datetime.fromtimestamp(backup_file.stat().st_mtime, tz=UTC)
                     if file_time < cutoff:
                         print(f"   • Removing {backup_file}")
                         backup_file.unlink()
@@ -1118,8 +998,6 @@ def _nuke_database(db_url: str) -> bool:
 
     except Exception as e:
         print(f"❌ Database nuke operation failed: {e}")
-        import traceback
-
         traceback.print_exc()
         return False
     finally:

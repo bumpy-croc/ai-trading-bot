@@ -626,8 +626,6 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         current_price = float(ticker["price"])
 
                         # Validate price is finite to prevent inf/nan in positions
-                        import math
-
                         if not math.isfinite(current_price) or current_price <= 0:
                             logger.warning(
                                 "Invalid price %.8f for %s. Position not loaded.",
@@ -698,7 +696,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             # Safe extraction with type validation
             order_id_raw = order_data["orderId"]
-            if not isinstance(order_id_raw, (int, str)):
+            if not isinstance(order_id_raw, int | str):
                 logger.error("Invalid orderId type: %s", type(order_id_raw))
                 return None
 
@@ -783,7 +781,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 # Validate critical fields to prevent KeyError/TypeError from malformed API response
                 try:
                     trade_time_ms = trade_data.get("time")
-                    if trade_time_ms is None or not isinstance(trade_time_ms, (int, float)):
+                    if trade_time_ms is None or not isinstance(trade_time_ms, int | float):
                         logger.warning("Skipping trade with invalid timestamp: %s", trade_data)
                         continue
 
@@ -937,7 +935,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 # Validate tick_size is numeric before division to prevent TypeError
                 tick_size_raw = symbol_info.get("tick_size", 0.01)
                 tick_size = (
-                    float(tick_size_raw) if isinstance(tick_size_raw, (int, float)) else 0.01
+                    float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
                 )
                 if tick_size > 0:
                     stop_price = round(stop_price / tick_size) * tick_size
@@ -946,7 +944,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 # Validate step_size is numeric before division to prevent TypeError
                 step_size_raw = symbol_info.get("step_size", 0.00001)
                 step_size = (
-                    float(step_size_raw) if isinstance(step_size_raw, (int, float)) else 0.00001
+                    float(step_size_raw) if isinstance(step_size_raw, int | float) else 0.00001
                 )
                 if step_size > 0:
                     quantity = round(quantity / step_size) * step_size

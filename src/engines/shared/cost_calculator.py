@@ -78,6 +78,35 @@ class CostCalculator:
             return self.fee_rate
         return self.fee_rate
 
+    @staticmethod
+    def _validate_cost_inputs(price: float, notional: float, side: str) -> str:
+        """Validate inputs for cost calculations.
+
+        Args:
+            price: The intended price.
+            notional: The notional value of the trade.
+            side: Trade side ('long' or 'short').
+
+        Returns:
+            Normalized lowercase side string.
+
+        Raises:
+            ValueError: If any input is invalid.
+        """
+        if not math.isfinite(price):
+            raise ValueError(f"Price must be finite, got {price}")
+        if price <= 0:
+            raise ValueError(f"Price must be positive, got {price}")
+        if not math.isfinite(notional):
+            raise ValueError(f"Notional must be finite, got {notional}")
+        if notional < 0:
+            raise ValueError(f"Notional must be non-negative, got {notional}")
+
+        side_lower = side.lower() if isinstance(side, str) else str(side).lower()
+        if side_lower not in ("long", "short"):
+            raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
+        return side_lower
+
     def calculate_entry_costs(
         self,
         price: float,
@@ -103,19 +132,7 @@ class CostCalculator:
         Raises:
             ValueError: If price <= 0, notional < 0, side is invalid, or values are NaN/infinity.
         """
-        # Input validation - check for NaN/infinity to prevent corrupted state
-        if not math.isfinite(price):
-            raise ValueError(f"Price must be finite, got {price}")
-        if price <= 0:
-            raise ValueError(f"Price must be positive, got {price}")
-        if not math.isfinite(notional):
-            raise ValueError(f"Notional must be finite, got {notional}")
-        if notional < 0:
-            raise ValueError(f"Notional must be non-negative, got {notional}")
-
-        side_lower = side.lower() if isinstance(side, str) else str(side).lower()
-        if side_lower not in ("long", "short"):
-            raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
+        side_lower = self._validate_cost_inputs(price, notional, side)
 
         # Apply slippage adversely for entry unless maker liquidity is specified
         if liquidity == LIQUIDITY_MAKER:
@@ -169,19 +186,7 @@ class CostCalculator:
         Raises:
             ValueError: If price <= 0, notional < 0, side is invalid, or values are NaN/infinity.
         """
-        # Input validation - check for NaN/infinity to prevent corrupted state
-        if not math.isfinite(price):
-            raise ValueError(f"Price must be finite, got {price}")
-        if price <= 0:
-            raise ValueError(f"Price must be positive, got {price}")
-        if not math.isfinite(notional):
-            raise ValueError(f"Notional must be finite, got {notional}")
-        if notional < 0:
-            raise ValueError(f"Notional must be non-negative, got {notional}")
-
-        side_lower = side.lower() if isinstance(side, str) else str(side).lower()
-        if side_lower not in ("long", "short"):
-            raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
+        side_lower = self._validate_cost_inputs(price, notional, side)
 
         # Apply slippage adversely for exit unless maker liquidity is specified
         if not apply_slippage or liquidity == LIQUIDITY_MAKER:

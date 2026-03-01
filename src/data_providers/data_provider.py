@@ -1,6 +1,6 @@
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-import logging
 
 import numpy as np
 import pandas as pd
@@ -54,22 +54,27 @@ class DataProvider(ABC):
         # NaN/Infinity/zero/negative prices would corrupt position sizing and P&L calculations
         # For production resilience, we drop invalid rows and log a warning instead of failing
         original_length = len(df)
+        combined_invalid = pd.Series(False, index=df.index)
         for col in ["open", "high", "low", "close"]:
-            # Check for invalid values (NaN, Infinity, zero, negative)
-            invalid_mask = df[col].isna() | np.isinf(df[col]) | (df[col] <= 0)
-            invalid_count = invalid_mask.sum()
-
+            col_invalid = df[col].isna() | np.isinf(df[col]) | (df[col] <= 0)
+            invalid_count = col_invalid.sum()
             if invalid_count > 0:
                 logger.warning(
-                    "Dropping %d rows with invalid %s values (NaN/Infinity/non-positive) "
-                    "from exchange data. This may indicate temporary exchange issues "
-                    "or network problems. Remaining rows: %d/%d",
+                    "Found %d rows with invalid %s values (NaN/Infinity/non-positive) "
+                    "in exchange data. This may indicate temporary exchange issues "
+                    "or network problems.",
                     invalid_count,
                     col,
-                    original_length - invalid_count,
-                    original_length,
                 )
-                df = df[~invalid_mask].copy()
+                combined_invalid = combined_invalid | col_invalid
+
+        if combined_invalid.any():
+            df = df[~combined_invalid].copy()
+            logger.warning(
+                "Dropped %d/%d rows with invalid price data.",
+                combined_invalid.sum(),
+                original_length,
+            )
 
         # If all rows were invalid, return empty DataFrame to allow retry on next cycle
         if len(df) == 0:

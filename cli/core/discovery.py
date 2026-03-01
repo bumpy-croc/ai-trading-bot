@@ -90,8 +90,6 @@ def discover_dashboards() -> dict[str, DiscoveredDashboard]:
 
 def call_with_supported_params(func, maybe_kwargs: dict[str, Any]) -> Any:
     """Call a function with only the kwargs that it accepts (by name)."""
-    import inspect as _inspect
-
-    sig = _inspect.signature(func)
+    sig = inspect.signature(func)
     accepted = {k: v for k, v in maybe_kwargs.items() if k in sig.parameters and v is not None}
     return func(**accepted)

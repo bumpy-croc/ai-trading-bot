@@ -62,7 +62,6 @@ class FeatureCache:
         """
         self.default_ttl = default_ttl
         self._cache: dict[str, CacheEntry] = {}
-        self._quick_hash_cache: dict[str, str] = {}  # Quick hash to full hash mapping
         self._stats = {
             "hits": 0,
             "misses": 0,
@@ -305,7 +304,6 @@ class FeatureCache:
         """Clear all cached entries."""
         with self._lock:
             self._cache.clear()
-            self._quick_hash_cache.clear()
             self._stats = {
                 "hits": 0,
                 "misses": 0,
@@ -858,11 +856,11 @@ def _generate_cache_key(*args, **kwargs) -> str:
                 return f"array:{hashlib.sha256(value.tobytes()).hexdigest()}"
 
             # Handle basic types that can be JSON serialized
-            elif isinstance(value, (str, int, float, bool, type(None))):
+            elif isinstance(value, str | int | float | bool | type(None)):
                 return json.dumps(value, sort_keys=True)
 
             # Handle lists and tuples
-            elif isinstance(value, (list, tuple)):
+            elif isinstance(value, list | tuple):
                 return f"[{','.join(_serialize_value(v) for v in value)}]"
 
             # Handle dictionaries

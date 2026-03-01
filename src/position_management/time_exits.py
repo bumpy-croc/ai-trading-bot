@@ -170,7 +170,7 @@ class TimeExitPolicy:
             next_close = self.market_session.next_close_after(now_utc)
             if next_close:
                 # If we are at or beyond close, exit
-                # Use 1-minute tolerance to avoid precision issues
+                # Use 1-second tolerance to avoid precision issues
                 if now_utc >= next_close - timedelta(seconds=1):
                     return True, "End of day flat"
 

@@ -13,9 +13,6 @@ from .base import ConfigProvider
 class EnvVarProvider(ConfigProvider):
     """Provider that reads configuration from environment variables"""
 
-    def __init__(self):
-        self._prefix = ""  # Optional prefix for env vars
-
     def get(self, key: str, default: Any | None = None) -> str | None:
         """Get configuration value from environment variables."""
         return os.getenv(key, default)

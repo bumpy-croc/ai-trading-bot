@@ -6,12 +6,10 @@ cooling-off periods, audit trails, and performance impact analysis.
 """
 
 import logging
-import threading
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -62,50 +60,6 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
         raise ExecutionTimeoutError(f"Execution timed out after {timeout_seconds} seconds") from exc
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
-
-
-@contextmanager
-def timeout_context(seconds: int):
-    """
-    Context manager for executing code with a timeout using thread-safe mechanism
-
-    This implementation uses threading.Timer with proper thread safety
-    to ensure compatibility with worker threads and Windows systems.
-
-    Args:
-        seconds: Maximum execution time in seconds
-
-    Raises:
-        ExecutionTimeoutError: If execution exceeds the specified timeout
-    """
-    timeout_occurred = threading.Event()
-    original_exception = None
-
-    def timeout_handler():
-        """Handler that sets the timeout event"""
-        timeout_occurred.set()
-
-    # Start the timeout timer
-    timer = threading.Timer(seconds, timeout_handler)
-    timer.start()
-
-    try:
-        yield
-    except Exception as e:
-        # Store the original exception
-        original_exception = e
-        raise
-    finally:
-        # Cancel the timer
-        timer.cancel()
-
-        # Check if timeout occurred
-        if timeout_occurred.is_set():
-            # If we had an original exception, preserve it
-            if original_exception:
-                raise original_exception
-            else:
-                raise ExecutionTimeoutError(f"Execution timed out after {seconds} seconds")
 
 
 class SwitchTrigger(Enum):

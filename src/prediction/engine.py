@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 # Constants
 ENSEMBLE_MODEL_PREFIX = "ensemble:"
 
-from src.config.constants import DEFAULT_INFERENCE_TIMEOUT
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.regime.detector import RegimeConfig, RegimeDetector
@@ -166,12 +165,7 @@ class PredictionEngine:
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
                 # Wrap prediction with timeout to prevent hanging on slow/hung models
-                timeout_seconds = (
-                    self.config.max_prediction_latency
-                    if hasattr(self.config, "max_prediction_latency")
-                    and isinstance(self.config.max_prediction_latency, (int, float))
-                    else DEFAULT_INFERENCE_TIMEOUT
-                )
+                timeout_seconds = self._get_timeout_seconds()
                 try:
                     prediction = run_with_timeout(
                         model.predict,
@@ -216,12 +210,7 @@ class PredictionEngine:
                     ensemble_bundles = [bundle]
 
                 # Same timeout configuration as single model
-                timeout_seconds = (
-                    self.config.max_prediction_latency
-                    if hasattr(self.config, "max_prediction_latency")
-                    and isinstance(self.config.max_prediction_latency, (int, float))
-                    else DEFAULT_INFERENCE_TIMEOUT
-                )
+                timeout_seconds = self._get_timeout_seconds()
 
                 for ensemble_bundle in ensemble_bundles:
                     ensemble_features = self._prepare_features_for_bundle(
@@ -274,11 +263,7 @@ class PredictionEngine:
 
             # Predictions that exceed max_prediction_latency should return an error result,
             # even if the prediction completed successfully.
-            if (
-                hasattr(self.config, "max_prediction_latency")
-                and isinstance(self.config.max_prediction_latency, (int, float))
-                and inference_time > self.config.max_prediction_latency
-            ):
+            if inference_time > self.config.max_prediction_latency:
                 return PredictionResult(
                     price=0.0,
                     confidence=0.0,
@@ -343,11 +328,7 @@ class PredictionEngine:
             error_message = str(e)
             error_type = type(e).__name__
 
-            if (
-                hasattr(self.config, "max_prediction_latency")
-                and isinstance(self.config.max_prediction_latency, (int, float))
-                and total_time > self.config.max_prediction_latency
-            ):
+            if total_time > self.config.max_prediction_latency:
                 # Add timeout information to the original error message.
                 error_message = f"Prediction timeout after {total_time:.3f}s (max: {self.config.max_prediction_latency}s). Original error: {error_message}"
                 error_type = f"PredictionTimeoutError+{error_type}"
@@ -470,12 +451,7 @@ class PredictionEngine:
         preds_norm = np.empty((num_windows,), dtype=np.float32)
 
         # Configure timeout for series prediction
-        timeout_seconds = (
-            self.config.max_prediction_latency
-            if hasattr(self.config, "max_prediction_latency")
-            and isinstance(self.config.max_prediction_latency, (int, float))
-            else DEFAULT_INFERENCE_TIMEOUT
-        )
+        timeout_seconds = self._get_timeout_seconds()
 
         for start in range(0, num_windows, batch_size):
             end = min(start + batch_size, num_windows)
@@ -599,12 +575,7 @@ class PredictionEngine:
                 self._feature_extraction_count += 1
 
                 # Make prediction with pre-loaded model (with timeout protection)
-                timeout_seconds = (
-                    self.config.max_prediction_latency
-                    if hasattr(self.config, "max_prediction_latency")
-                    and isinstance(self.config.max_prediction_latency, (int, float))
-                    else DEFAULT_INFERENCE_TIMEOUT
-                )
+                timeout_seconds = self._get_timeout_seconds()
                 try:
                     prediction = run_with_timeout(
                         model.predict,
@@ -845,6 +816,10 @@ class PredictionEngine:
         return health
 
     # Private methods
+    def _get_timeout_seconds(self) -> float:
+        """Return the configured prediction timeout in seconds."""
+        return self.config.max_prediction_latency
+
     def _validate_input_data(self, data: pd.DataFrame) -> None:
         """Validate input data has required columns and sufficient length"""
         if not isinstance(data, pd.DataFrame):
@@ -869,36 +844,6 @@ class PredictionEngine:
         # Check for infinite values (defense-in-depth before feature extraction)
         if np.isinf(data[required_columns].select_dtypes(include=[np.number])).any().any():
             raise InvalidInputError("Input data contains infinite values")
-
-    def _extract_features(self, data: pd.DataFrame) -> np.ndarray:
-        """Extract features using feature pipeline"""
-        try:
-            # Get features from pipeline (returns DataFrame with original data + features)
-            features_result = self.feature_pipeline.transform(data, use_cache=True)
-
-            # Handle different return types from feature pipeline
-            if isinstance(features_result, np.ndarray):
-                # Feature pipeline returned numpy array directly
-                return features_result
-            elif isinstance(features_result, pd.DataFrame):
-                # Feature pipeline returned DataFrame - extract feature columns
-                original_columns = ["open", "high", "low", "close", "volume"]
-                feature_columns = [
-                    col for col in features_result.columns if col not in original_columns
-                ]
-
-                if not feature_columns:
-                    raise FeatureExtractionError("No feature columns found in pipeline output")
-
-                # Convert feature columns to numpy array
-                features_array = features_result[feature_columns].values
-                return features_array
-            else:
-                raise FeatureExtractionError(
-                    f"Unexpected feature pipeline output type: {type(features_result)}"
-                )
-        except Exception as e:
-            raise FeatureExtractionError(f"Feature extraction failed: {str(e)}") from e
 
     def _select_schema_features(
         self, bundle: StrategyModel, features_df: pd.DataFrame
@@ -993,11 +938,6 @@ class PredictionEngine:
             return bundles[0]
 
         raise ModelNotFoundError("No prediction models available")
-
-    def _get_model(self, model_name: str | None):
-        """Get model runner for prediction (structured-only)."""
-        bundle = self._resolve_bundle(model_name)
-        return bundle.runner
 
     def _was_cache_hit(self) -> bool:
         """Check if last operation was a cache hit"""

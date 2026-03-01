@@ -93,7 +93,7 @@ class ConfigManager:
 
     def get_int(self, key: str, default: int = 0) -> int:
         """Get configuration value as integer"""
-        value = self.get(key, str(default))
+        value = self.get(key)
         if value is None:
             return default
         try:
@@ -103,7 +103,7 @@ class ConfigManager:
 
     def get_float(self, key: str, default: float = 0.0) -> float:
         """Get configuration value as float"""
-        value = self.get(key, str(default))
+        value = self.get(key)
         if value is None:
             return default
         try:

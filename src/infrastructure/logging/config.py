@@ -10,6 +10,32 @@ from typing import Any
 from src.config import get_config
 from src.infrastructure.logging.context import get_context
 
+# Built-in LogRecord fields that filters/formatters should skip
+_BUILTIN_RECORD_FIELDS = frozenset({
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "getMessage",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "message",
+})
+
 
 class SensitiveDataFilter(logging.Filter):
     """
@@ -117,38 +143,11 @@ class NamespacePrefixFilter(logging.Filter):
 class ContextInjectorFilter(logging.Filter):
     """Injects structured context fields from contextvars into LogRecord."""
 
-    # * Built-in LogRecord fields that should not be overwritten
-    _RESERVED_FIELDS = {
-        "name",
-        "msg",
-        "args",
-        "levelname",
-        "levelno",
-        "pathname",
-        "filename",
-        "module",
-        "lineno",
-        "funcName",
-        "created",
-        "msecs",
-        "relativeCreated",
-        "thread",
-        "threadName",
-        "processName",
-        "process",
-        "getMessage",
-        "exc_info",
-        "exc_text",
-        "stack_info",
-        "message",
-    }
-
     def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
         try:
             ctx = get_context()
             for key, value in ctx.items():
-                # * Only add context fields that don't conflict with built-in LogRecord fields
-                if key not in self._RESERVED_FIELDS and not hasattr(record, key):
+                if key not in _BUILTIN_RECORD_FIELDS and not hasattr(record, key):
                     setattr(record, key, value)
         except Exception:
             return True
@@ -242,30 +241,7 @@ class SimpleJsonFormatter(logging.Formatter):
 
         # * Add any extra fields from the record (excluding built-in fields)
         for key, value in record.__dict__.items():
-            if key not in [
-                "name",
-                "msg",
-                "args",
-                "levelname",
-                "levelno",
-                "pathname",
-                "filename",
-                "module",
-                "lineno",
-                "funcName",
-                "created",
-                "msecs",
-                "relativeCreated",
-                "thread",
-                "threadName",
-                "processName",
-                "process",
-                "getMessage",
-                "exc_info",
-                "exc_text",
-                "stack_info",
-                "message",
-            ]:
+            if key not in _BUILTIN_RECORD_FIELDS:
                 log_entry[key] = value
 
         try:

@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import time
 from datetime import UTC, datetime, timedelta
@@ -192,8 +193,6 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
     @staticmethod
     def _safe_calculate_average_price(executed_value: Any, filled_size: Any) -> float | None:
         """Safely calculate average price with validation to prevent NaN/inf propagation."""
-        import math
-
         try:
             exec_val = float(executed_value)
             fill_sz = float(filled_size)
@@ -325,42 +324,41 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         logger.info("get_positions not implemented for Coinbase spot API (only holdings)")
         return []
 
+    def _parse_order_data(self, od: dict[str, Any]) -> Order:
+        """Parse a Coinbase order response dict into an Order object."""
+        return Order(
+            order_id=od.get("id"),
+            symbol=od.get("product_id"),
+            side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
+            order_type=self._convert_order_type(od.get("type")),
+            quantity=float(od.get("size", 0)),
+            price=float(od.get("price")) if od.get("price") else None,
+            status=self._convert_order_status(od.get("status"), od.get("done_reason")),
+            filled_quantity=float(od.get("filled_size", 0)),
+            average_price=(
+                self._safe_calculate_average_price(
+                    od.get("executed_value", 0), od.get("filled_size", 0)
+                )
+            ),
+            commission=0.0,
+            commission_asset="",
+            create_time=datetime.fromisoformat(od.get("created_at")),
+            update_time=(
+                datetime.fromisoformat(od.get("done_at"))
+                if od.get("done_at")
+                else datetime.now(UTC)
+            ),
+            stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
+            time_in_force=od.get("time_in_force", "GTC"),
+        )
+
     def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         try:
             params = {"status": "open"}
             if symbol:
                 params["product_id"] = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
             data = self._request("GET", "/orders", params=params, auth=True)
-            orders: list[Order] = []
-            for od in data:
-                orders.append(
-                    Order(
-                        order_id=od.get("id"),
-                        symbol=od.get("product_id"),
-                        side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
-                        order_type=self._convert_order_type(od.get("type")),
-                        quantity=float(od.get("size", 0)),
-                        price=float(od.get("price")) if od.get("price") else None,
-                        status=self._convert_order_status(od.get("status"), od.get("done_reason")),
-                        filled_quantity=float(od.get("filled_size", 0)),
-                        average_price=(
-                            self._safe_calculate_average_price(
-                                od.get("executed_value", 0), od.get("filled_size", 0)
-                            )
-                        ),
-                        commission=0.0,
-                        commission_asset="",
-                        create_time=datetime.fromisoformat(od.get("created_at")),
-                        update_time=(
-                            datetime.fromisoformat(od.get("done_at"))
-                            if od.get("done_at")
-                            else datetime.now(UTC)
-                        ),
-                        stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
-                        time_in_force=od.get("time_in_force", "GTC"),
-                    )
-                )
-            return orders
+            return [self._parse_order_data(od) for od in data]
         except Exception as e:
             logger.error(f"Failed to get open orders: {e}")
             return []
@@ -368,31 +366,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
     def get_order(self, order_id: str, symbol: str) -> Order | None:
         try:
             od = self._request("GET", f"/orders/{order_id}", auth=True)
-            return Order(
-                order_id=od.get("id"),
-                symbol=od.get("product_id"),
-                side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
-                order_type=self._convert_order_type(od.get("type")),
-                quantity=float(od.get("size", 0)),
-                price=float(od.get("price")) if od.get("price") else None,
-                status=self._convert_order_status(od.get("status"), od.get("done_reason")),
-                filled_quantity=float(od.get("filled_size", 0)),
-                average_price=(
-                    self._safe_calculate_average_price(
-                        od.get("executed_value", 0), od.get("filled_size", 0)
-                    )
-                ),
-                commission=0.0,
-                commission_asset="",
-                create_time=datetime.fromisoformat(od.get("created_at")),
-                update_time=(
-                    datetime.fromisoformat(od.get("done_at"))
-                    if od.get("done_at")
-                    else datetime.now(UTC)
-                ),
-                stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
-                time_in_force=od.get("time_in_force", "GTC"),
-            )
+            return self._parse_order_data(od)
         except Exception as e:
             logger.error(f"Failed to get order {order_id}: {e}")
             return None

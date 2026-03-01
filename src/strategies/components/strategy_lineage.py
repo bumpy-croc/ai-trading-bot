@@ -754,29 +754,30 @@ class StrategyLineageTracker:
         raise ValueError(f"Unsupported format: {format}")
 
     def _get_descendants(self, strategy_id: str) -> list[dict[str, Any]]:
-        """Get all descendants of a strategy"""
+        """Get all descendants of a strategy using the adjacency list"""
         descendants = []
 
-        # Use BFS to find all descendants
+        # Use BFS with the lineage_graph adjacency list instead of scanning all strategies
         queue = deque([strategy_id])
         visited = {strategy_id}
 
         while queue:
             current_id = queue.popleft()
 
-            # Find direct children
-            for sid, strategy_data in self.strategies.items():
-                if strategy_data["parent_id"] == current_id and sid not in visited:
+            # Find direct children via adjacency list (O(children) instead of O(all strategies))
+            for child_id in self.lineage_graph.get(current_id, []):
+                if child_id not in visited:
+                    strategy_data = self.strategies[child_id]
                     descendants.append(
                         {
-                            "id": sid,
+                            "id": child_id,
                             "generation": strategy_data["generation"],
                             "created_at": strategy_data["created_at"].isoformat(),
                             "branch_id": strategy_data.get("branch_id"),
                         }
                     )
-                    queue.append(sid)
-                    visited.add(sid)
+                    queue.append(child_id)
+                    visited.add(child_id)
 
         return descendants
 
@@ -887,9 +888,20 @@ class StrategyLineageTracker:
         return "\n".join(dot)
 
     def _find_path(self, start: str, end: str) -> list[str]:
-        """Find path between two strategies using BFS"""
+        """Find path between two strategies using BFS on undirected edges
+
+        Traverses both parent-to-child and child-to-parent edges so paths
+        can be found between any two related strategies (e.g., sibling to
+        sibling via common ancestor, or descendant back to ancestor).
+        """
         if start == end:
             return [start]
+
+        # Build reverse adjacency (child -> parent) for bidirectional traversal
+        reverse_graph: dict[str, list[str]] = defaultdict(list)
+        for parent, children in self.lineage_graph.items():
+            for child in children:
+                reverse_graph[child].append(parent)
 
         queue = deque([(start, [start])])
         visited = {start}
@@ -897,8 +909,11 @@ class StrategyLineageTracker:
         while queue:
             current, path = queue.popleft()
 
-            # Check all outgoing edges from current strategy
-            for neighbor in self.lineage_graph.get(current, []):
+            # Traverse both forward (children) and reverse (parent) edges
+            neighbors = list(self.lineage_graph.get(current, []))
+            neighbors.extend(reverse_graph.get(current, []))
+
+            for neighbor in neighbors:
                 if neighbor == end:
                     return [*path, neighbor]
 
