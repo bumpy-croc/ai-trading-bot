@@ -5,9 +5,6 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
-
-import math
-
 import pytest
 
 from src.prediction.config import PredictionConfig
@@ -268,8 +265,9 @@ class TestApplyRollingDenormalization:
 
     def _make_engine(self):
         """Create engine with mocked registry/pipeline."""
-        with patch("src.prediction.engine.PredictionModelRegistry"), patch(
-            "src.prediction.engine.FeaturePipeline"
+        with (
+            patch("src.prediction.engine.PredictionModelRegistry"),
+            patch("src.prediction.engine.FeaturePipeline"),
         ):
             return PredictionEngine(PredictionConfig())
 
