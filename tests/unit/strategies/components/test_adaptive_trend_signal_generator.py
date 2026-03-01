@@ -531,3 +531,24 @@ class TestEmaCacheInvalidation:
 
         # Assert: even if id(arr2) == old id(arr1), content differs
         assert not np.allclose(ema1, ema2)
+
+    def test_cache_invalidates_on_interior_value_change(self):
+        """Test that changing only interior values invalidates the cache.
+
+        Regression: a sparse fingerprint (first/middle/last) could miss
+        interior changes that don't touch sampled positions.
+        """
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: compute EMA on initial data
+        arr = np.linspace(100, 200, 50)
+        ema_before = gen._compute_ema_series(arr, 49).copy()
+
+        # Act: mutate only interior values (not first, middle, or last)
+        arr[5] = 999.0
+        arr[10] = 999.0
+        arr[15] = 999.0
+        ema_after = gen._compute_ema_series(arr, 49)
+
+        # Assert: cache must detect the interior change
+        assert not np.allclose(ema_before, ema_after)

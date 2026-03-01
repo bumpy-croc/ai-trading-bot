@@ -248,12 +248,17 @@ class StrategyLineageTracker:
         # Propagate correct generation numbers through the subtree via BFS.
         # This handles chains registered out of order (e.g., grandchild before
         # child before parent) where intermediate generations were initially 0.
-        # A visited set guards against cycles in malformed lineage data.
+        # The visited set includes strategy_id AND parent_id to guard against
+        # cycles: strategy_id prevents re-enqueueing ourselves, parent_id
+        # prevents backward traversal that would inflate ancestor generations.
         propagation_queue = deque()
-        visited_propagation: set[str] = set()
+        visited_propagation: set[str] = {strategy_id}
+        if parent_id and parent_id in self.strategies:
+            visited_propagation.add(parent_id)
         for child_id in self.lineage_graph.get(strategy_id, []):
-            propagation_queue.append((strategy_id, child_id))
-            visited_propagation.add(child_id)
+            if child_id not in visited_propagation:
+                propagation_queue.append((strategy_id, child_id))
+                visited_propagation.add(child_id)
 
         while propagation_queue:
             parent, child = propagation_queue.popleft()

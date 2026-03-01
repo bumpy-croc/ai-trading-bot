@@ -661,6 +661,52 @@ class TestStrategyLineageTracker:
         assert len(descendants_a) <= 1
         assert len(descendants_b) <= 1
 
+    def test_cyclic_parent_does_not_corrupt_generations(self, tracker):
+        """Test that cyclic parent references don't inflate generation numbers.
+
+        Regression: if strategy_id is missing from visited_propagation, the BFS
+        re-enqueues the root through the cycle and overwrites its generation
+        from its child, producing inflated/unstable generation numbers.
+        """
+        # Arrange: create a->b->c chain, then add c->a cycle
+        tracker.register_strategy("a", metadata={"name": "A"})
+        tracker.register_strategy("b", parent_id="a", metadata={"name": "B"})
+        tracker.register_strategy("c", parent_id="b", metadata={"name": "C"})
+
+        # Assert: correct generation numbers before any cycle
+        assert tracker.strategies["a"]["generation"] == 0
+        assert tracker.strategies["b"]["generation"] == 1
+        assert tracker.strategies["c"]["generation"] == 2
+
+        # Act: register d with parent c, but also introduce a back-edge
+        # by modifying a's parent to c (simulates malformed input)
+        tracker.strategies["a"]["parent_id"] = "c"
+        # Re-register to trigger propagation with the cycle present
+        tracker.register_strategy("d", parent_id="c", metadata={"name": "D"})
+
+        # Assert: a's generation must NOT have been overwritten by the cycle
+        assert tracker.strategies["a"]["generation"] == 0
+        assert tracker.strategies["b"]["generation"] == 1
+        assert tracker.strategies["c"]["generation"] == 2
+        assert tracker.strategies["d"]["generation"] == 3
+
+    def test_cyclic_parent_does_not_inflate_generations(self, tracker):
+        """Test that cycles don't corrupt generation numbers.
+
+        Regression: if strategy_id is not in visited_propagation, BFS
+        re-enqueues the root from its child cycle and inflates generations.
+        """
+        # Arrange: register a with parent b (b doesn't exist yet → gen 0)
+        tracker.register_strategy("a", parent_id="b", metadata={"name": "A"})
+
+        # Act: register b with parent a, creating a cycle (a -> b -> a)
+        tracker.register_strategy("b", parent_id="a", metadata={"name": "B"})
+
+        # Assert: generation of "a" must remain 0 (root), not be inflated
+        # by the cycle traversal back through b.
+        assert tracker.strategies["a"]["generation"] == 0
+        assert tracker.strategies["b"]["generation"] == 1
+
     def test_complex_branching_and_merging(self, tracker):
         """Test complex branching and merging scenario"""
         # Create main line
