@@ -371,6 +371,7 @@ class FeatureCache:
 
 # Global feature cache instance
 _global_feature_cache: FeatureCache | None = None
+_global_cache_lock = threading.Lock()
 
 
 class PredictionCacheManager:
@@ -393,6 +394,7 @@ class PredictionCacheManager:
         self.db_manager = database_manager
         self.ttl = ttl
         self.max_size = max_size
+        self._stats_lock = threading.Lock()
         self._stats = {
             "hits": 0,
             "misses": 0,
@@ -400,6 +402,11 @@ class PredictionCacheManager:
             "evictions": 0,
             "expired_cleanups": 0,
         }
+
+    def _increment_stat(self, key: str, amount: int = 1) -> None:
+        """Thread-safe increment of a stats counter."""
+        with self._stats_lock:
+            self._stats[key] += amount
 
     def _generate_features_hash(self, features: np.ndarray) -> str:
         """
@@ -481,7 +488,7 @@ class PredictionCacheManager:
                 )
 
                 if cache_entry is None:
-                    self._stats["misses"] += 1
+                    self._increment_stat("misses")
                     return None
 
                 # Update access statistics
@@ -489,7 +496,7 @@ class PredictionCacheManager:
                 cache_entry.last_accessed = datetime.now(UTC)
                 session.commit()
 
-                self._stats["hits"] += 1
+                self._increment_stat("hits")
 
                 return {
                     "price": float(cache_entry.predicted_price),
@@ -501,7 +508,7 @@ class PredictionCacheManager:
 
         except Exception as e:
             logger.warning("Error accessing prediction cache: %s", e)
-            self._stats["misses"] += 1
+            self._increment_stat("misses")
             return None
 
     def set(
@@ -560,7 +567,7 @@ class PredictionCacheManager:
                     session.add(cache_entry)
 
                 session.commit()
-                self._stats["sets"] += 1
+                self._increment_stat("sets")
 
                 # Clean up expired entries and enforce size limit
                 # Wrap in try/except to isolate cleanup failures from main cache operation
@@ -595,7 +602,7 @@ class PredictionCacheManager:
             )
 
             session.commit()
-            self._stats["expired_cleanups"] += expired_count
+            self._increment_stat("expired_cleanups", expired_count)
             return expired_count
 
         except Exception as e:
@@ -633,7 +640,7 @@ class PredictionCacheManager:
                 session.delete(entry)
 
             session.commit()
-            self._stats["evictions"] += entries_to_remove
+            self._increment_stat("evictions", entries_to_remove)
             return entries_to_remove
 
         except Exception as e:
@@ -717,6 +724,8 @@ class PredictionCacheManager:
         """
         Get cache statistics.
 
+        Thread-safe: Acquires stats lock for a consistent snapshot.
+
         Returns:
             Dictionary with cache statistics
         """
@@ -729,32 +738,40 @@ class PredictionCacheManager:
                     .count()
                 )
 
-                total_requests = self._stats["hits"] + self._stats["misses"]
-                hit_rate = self._stats["hits"] / total_requests if total_requests > 0 else 0.0
+                with self._stats_lock:
+                    total_requests = self._stats["hits"] + self._stats["misses"]
+                    hit_rate = self._stats["hits"] / total_requests if total_requests > 0 else 0.0
 
-                return {
-                    "total_entries": total_entries,
-                    "expired_entries": expired_entries,
-                    "hit_rate": hit_rate,
-                    "total_requests": total_requests,
-                    **self._stats,
-                }
+                    return {
+                        "total_entries": total_entries,
+                        "expired_entries": expired_entries,
+                        "hit_rate": hit_rate,
+                        "total_requests": total_requests,
+                        **self._stats,
+                    }
 
         except Exception as e:
             logger.warning("Error getting cache stats: %s", e)
-            return self._stats.copy()
+            with self._stats_lock:
+                return self._stats.copy()
 
 
 def get_global_feature_cache() -> FeatureCache:
     """
     Get the global feature cache instance.
 
+    Thread-safe: Uses double-checked locking to prevent two threads from
+    creating separate FeatureCache instances on first access.
+
     Returns:
         Global FeatureCache instance
     """
     global _global_feature_cache
     if _global_feature_cache is None:
-        _global_feature_cache = FeatureCache()
+        with _global_cache_lock:
+            # Double-check after acquiring lock
+            if _global_feature_cache is None:
+                _global_feature_cache = FeatureCache()
     return _global_feature_cache
 
 

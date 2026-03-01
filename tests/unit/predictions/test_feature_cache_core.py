@@ -1,5 +1,6 @@
 """Core behaviour tests for the FeatureCache implementation."""
 
+import threading
 import time
 
 import numpy as np
@@ -241,3 +242,82 @@ class TestFeatureCache:
 
         stats = cache.get_stats()
         assert stats["total_entries"] == 2
+
+    def test_cache_concurrent_access_thread_safety(self, cache, sample_data, sample_result):
+        """Verify concurrent get/set/cleanup operations do not raise RuntimeError."""
+        extractor_name = "test_extractor"
+        config = {"param": "value"}
+        errors: list[Exception] = []
+
+        def writer():
+            """Write entries concurrently."""
+            try:
+                for i in range(20):
+                    data = sample_data.copy()
+                    data["close"] += i
+                    cache.set(data, extractor_name, config, sample_result)
+            except Exception as e:
+                errors.append(e)
+
+        def reader():
+            """Read entries concurrently."""
+            try:
+                for _ in range(20):
+                    cache.get(sample_data, extractor_name, config)
+                    cache.get_stats()
+                    cache.get_size_info()
+            except Exception as e:
+                errors.append(e)
+
+        def cleaner():
+            """Cleanup expired entries concurrently."""
+            try:
+                for _ in range(20):
+                    cache.cleanup_expired()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=writer),
+            threading.Thread(target=reader),
+            threading.Thread(target=cleaner),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"Thread safety violation: {errors}"
+
+    def test_cache_concurrent_clear_thread_safety(self, cache, sample_data, sample_result):
+        """Verify concurrent clear does not corrupt cache state."""
+        extractor_name = "test_extractor"
+        config = {"param": "value"}
+        errors: list[Exception] = []
+
+        def writer():
+            try:
+                for i in range(20):
+                    data = sample_data.copy()
+                    data["close"] += i
+                    cache.set(data, extractor_name, config, sample_result)
+            except Exception as e:
+                errors.append(e)
+
+        def clearer():
+            try:
+                for _ in range(20):
+                    cache.clear()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=writer),
+            threading.Thread(target=clearer),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"Thread safety violation: {errors}"

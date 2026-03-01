@@ -210,20 +210,22 @@ class PredictionModelRegistry:
             )
 
             class _StubRunner:
-                def __init__(self, path: str, original_error: Exception):
+                def __init__(self, path: str, error_message: str):
                     self.model_path = path
                     self.session = None
-                    self._load_error = original_error
+                    self._load_error_message = error_message
 
                 def predict(self, _features):  # pragma: no cover
                     raise RuntimeError(
-                        f"Model {self.model_path} failed to load - cannot perform inference"
-                    ) from self._load_error
+                        f"Model {self.model_path} failed to load - cannot perform inference. "
+                        f"Original error: {self._load_error_message}"
+                    )
 
                 def close(self):  # pragma: no cover
                     pass  # No resources to release
 
-            runner = _StubRunner(model_path, e)  # type: ignore[assignment]
+            # Store string representation to avoid retaining traceback frames in memory
+            runner = _StubRunner(model_path, str(e))  # type: ignore[assignment]
         return StrategyModel(
             symbol=symbol,
             timeframe=timeframe,
@@ -238,7 +240,13 @@ class PredictionModelRegistry:
 
     # ---- Introspection helpers ----
     def list_bundles(self) -> list[StrategyModel]:
-        return list(self._bundles.values())
+        """Return a snapshot of all loaded bundles.
+
+        Thread-safe: Acquires lock so the returned list is consistent with
+        any concurrent ``reload_models`` swap.
+        """
+        with self._lock:
+            return list(self._bundles.values())
 
     # ---- Structured selection API ----
     def select_bundle(
@@ -251,15 +259,21 @@ class PredictionModelRegistry:
     ) -> StrategyModel:
         """Select a bundle for symbol/model_type/timeframe.
 
+        Thread-safe: Acquires lock so the returned bundle is from the current
+        generation, preventing use-after-close if a reload happens concurrently.
+
         If stage is provided and a production index exists, use it. Otherwise, use the
         most recently loaded bundle for that key (latest symlink is preferred by _load()).
         """
-        key = (symbol, timeframe, model_type)
-        bundle = self._bundles.get(key)
-        if bundle is None:
-            raise ModelNotAvailableError(f"No model bundle for {symbol} {timeframe} {model_type}.")
-        # Stage currently informational; production_index ensures latest symlink dominance
-        return bundle
+        with self._lock:
+            key = (symbol, timeframe, model_type)
+            bundle = self._bundles.get(key)
+            if bundle is None:
+                raise ModelNotAvailableError(
+                    f"No model bundle for {symbol} {timeframe} {model_type}."
+                )
+            # Stage currently informational; production_index ensures latest symlink dominance
+            return bundle
 
     def select_many(
         self,
@@ -282,18 +296,30 @@ class PredictionModelRegistry:
 
     # ---- Runner helpers for engine ----
     def get_default_runner(self) -> OnnxRunner:
+        """Get the default model runner.
+
+        Thread-safe: Delegates to ``list_bundles`` which acquires lock.
+        """
         bundles = self.list_bundles()
         if not bundles:
             raise ModelNotAvailableError("No strategy models available")
         return bundles[0].runner
 
     def get_default_bundle(self) -> StrategyModel:
+        """Get the default model bundle.
+
+        Thread-safe: Delegates to ``list_bundles`` which acquires lock.
+        """
         bundles = self.list_bundles()
         if not bundles:
             raise ModelNotAvailableError("No strategy models available")
         return bundles[0]
 
     def iter_runners(self) -> list[OnnxRunner]:
+        """Return runners for all loaded bundles.
+
+        Thread-safe: Delegates to ``list_bundles`` which acquires lock.
+        """
         return [b.runner for b in self.list_bundles()]
 
     def reload_models(self) -> None:

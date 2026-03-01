@@ -431,6 +431,17 @@ class OnnxRunner:
                 "No feature_names in metadata - using normalization_params key order. "
                 "This may cause silent mis-normalization if feature order differs."
             )
+            norm_param_count = len(norm_params)
+            actual_count = features.shape[2]
+            if norm_param_count != actual_count:
+                logging.warning(
+                    "Feature count mismatch in legacy normalization: "
+                    "normalization_params has %d features but input has %d. "
+                    "Extra features will be left unnormalized, which may produce "
+                    "incorrect predictions.",
+                    norm_param_count,
+                    actual_count,
+                )
             for i, feature_name in enumerate(norm_params.keys()):
                 if i < features.shape[2]:  # Check feature index bounds
                     mean = norm_params[feature_name].get("mean", 0.0)
