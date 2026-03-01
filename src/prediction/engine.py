@@ -292,6 +292,11 @@ class PredictionEngine:
                             inference_time=raw_prediction.inference_time,
                         )
                     )
+                if not preds:
+                    raise ModelInferenceError(
+                        "All ensemble members failed (timeout or non-finite predictions). "
+                        "No valid predictions available for aggregation."
+                    )
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence

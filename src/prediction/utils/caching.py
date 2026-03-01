@@ -318,24 +318,28 @@ class FeatureCache:
         """
         Get cache statistics including two-tier hashing performance.
 
+        Thread-safe: Acquires lock for a consistent snapshot of stats
+        and cache size.
+
         Returns:
             Dictionary with cache statistics
         """
-        total_requests = self._stats["hits"] + self._stats["misses"]
-        hit_rate = self._stats["hits"] / total_requests if total_requests > 0 else 0.0
+        with self._lock:
+            total_requests = self._stats["hits"] + self._stats["misses"]
+            hit_rate = self._stats["hits"] / total_requests if total_requests > 0 else 0.0
 
-        # Calculate quick hash efficiency
-        quick_hash_efficiency = (
-            self._stats["quick_hash_matches"] / total_requests if total_requests > 0 else 0.0
-        )
+            # Calculate quick hash efficiency
+            quick_hash_efficiency = (
+                self._stats["quick_hash_matches"] / total_requests if total_requests > 0 else 0.0
+            )
 
-        return {
-            "total_entries": len(self._cache),
-            "hit_rate": hit_rate,
-            "total_requests": total_requests,
-            "quick_hash_efficiency": quick_hash_efficiency,
-            **self._stats,
-        }
+            return {
+                "total_entries": len(self._cache),
+                "hit_rate": hit_rate,
+                "total_requests": total_requests,
+                "quick_hash_efficiency": quick_hash_efficiency,
+                **self._stats,
+            }
 
     def get_size_info(self) -> dict[str, Any]:
         """
