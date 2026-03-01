@@ -100,7 +100,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         # using the EMA recurrence (O(1) per bar instead of O(N) recomputation).
         self._cached_ema: np.ndarray | None = None
         self._cached_ema_length: int = 0
-        self._cached_data_id: int | None = None
+        self._cached_data_fingerprint: tuple | None = None
 
     @property
     def warmup_period(self) -> int:
@@ -280,14 +280,24 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
             Array of EMA values (length >= max_index + 1).
         """
         needed_length = max_index + 1
-        data_id = id(close)
 
-        # If the underlying array changed (new backtest run or different data),
-        # invalidate the cache entirely.
-        if self._cached_data_id != data_id:
+        # Build a content fingerprint from array length and a few sampled
+        # values. This detects both new arrays and in-place mutations,
+        # unlike id() which can be reused after deallocation.
+        n = len(close)
+        fingerprint = (
+            n,
+            float(close[0]) if n > 0 else None,
+            float(close[n // 2]) if n > 0 else None,
+            float(close[n - 1]) if n > 0 else None,
+        )
+
+        # If the underlying data changed (new backtest run, different data,
+        # or in-place mutation), invalidate the cache entirely.
+        if self._cached_data_fingerprint != fingerprint:
             self._cached_ema = None
             self._cached_ema_length = 0
-            self._cached_data_id = data_id
+            self._cached_data_fingerprint = fingerprint
 
         if self._cached_ema is not None and self._cached_ema_length >= needed_length:
             return self._cached_ema

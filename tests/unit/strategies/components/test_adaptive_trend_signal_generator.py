@@ -466,3 +466,68 @@ class TestInputValidation:
         df = create_test_dataframe(length=100)
         with pytest.raises(IndexError):
             gen.generate_signal(df, 100)
+
+
+class TestEmaCacheInvalidation:
+    """Test EMA cache uses content fingerprint instead of object identity."""
+
+    def test_cache_invalidates_on_different_array(self):
+        """Test that passing a different array invalidates the cache."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: two distinct arrays with different content
+        arr1 = np.linspace(100, 200, 50)
+        arr2 = np.linspace(200, 300, 50)
+
+        # Act: compute EMA for both
+        ema1 = gen._compute_ema_series(arr1, 49)
+        ema2 = gen._compute_ema_series(arr2, 49)
+
+        # Assert: results should differ because arrays differ
+        assert not np.allclose(ema1, ema2)
+
+    def test_cache_invalidates_on_inplace_mutation(self):
+        """Test that in-place mutation of the array invalidates the cache."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange
+        arr = np.linspace(100, 200, 50)
+        ema_before = gen._compute_ema_series(arr, 49).copy()
+
+        # Act: mutate the array in-place (same object id, different content)
+        arr[0] = 999.0
+        arr[-1] = 999.0
+        ema_after = gen._compute_ema_series(arr, 49)
+
+        # Assert: cache should have been invalidated due to content change
+        assert not np.allclose(ema_before, ema_after)
+
+    def test_cache_reuse_on_incremental_extension(self):
+        """Test that cache extends incrementally for the same data."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange
+        arr = np.linspace(100, 200, 50)
+
+        # Act: compute EMA to index 30, then extend to 49
+        ema_partial = gen._compute_ema_series(arr, 30).copy()
+        ema_full = gen._compute_ema_series(arr, 49)
+
+        # Assert: the first 31 values should be identical (cache reused)
+        assert np.allclose(ema_partial[:31], ema_full[:31])
+
+    def test_cache_detects_reused_object_id(self):
+        """Test that a new array reusing the same id() is not stale-cached."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: compute EMA and store result
+        arr1 = np.linspace(100, 200, 50)
+        ema1 = gen._compute_ema_series(arr1, 49).copy()
+
+        # Act: delete arr1, create new array (may reuse same id)
+        del arr1
+        arr2 = np.linspace(300, 400, 50)
+        ema2 = gen._compute_ema_series(arr2, 49)
+
+        # Assert: even if id(arr2) == old id(arr1), content differs
+        assert not np.allclose(ema1, ema2)
