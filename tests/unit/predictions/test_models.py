@@ -500,20 +500,19 @@ class TestPredictionModelRegistry:
         reg.reload_models()
         assert len(reg.list_bundles()) == 1
 
-    def test_reload_models_preserves_bundles_on_failure(self, tmp_path):
-        """Verify copy-on-write pattern keeps old bundles when reload fails."""
+    def test_reload_models_preserves_bundles_when_path_missing(self, tmp_path):
+        """Verify copy-on-write pattern keeps old bundles when registry path disappears."""
         cfg = PredictionConfig(model_registry_path=str(tmp_path))
         self._write_bundle(tmp_path, "BTCUSDT", "basic", "2025-09-17_1h_v1")
         reg = PredictionModelRegistry(cfg)
         assert len(reg.list_bundles()) == 1
 
-        # Point registry at a non-existent path to simulate failure
+        # Point registry at a non-existent path to simulate transient filesystem issue
         reg.config = PredictionConfig(model_registry_path=str(tmp_path / "nonexistent"))
         reg.reload_models()
 
-        # Registry should be empty because the path doesn't exist (no bundles to load)
-        # but shouldn't crash — the swap happens safely
-        assert len(reg.list_bundles()) == 0
+        # Old bundles should be preserved when reload produces 0 results
+        assert len(reg.list_bundles()) == 1
 
     def test_reload_concurrent_read_safety(self, tmp_path):
         """Verify concurrent reads during reload don't crash."""

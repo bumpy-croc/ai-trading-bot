@@ -6,8 +6,13 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pandas as pd
 
+import math
+
+import pytest
+
 from src.prediction.config import PredictionConfig
 from src.prediction.engine import PredictionEngine, PredictionResult
+from src.prediction.exceptions import ModelInferenceError
 from src.prediction.models.onnx_runner import ModelPrediction
 from src.prediction.models.registry import StrategyModel
 
@@ -256,3 +261,97 @@ class TestPredictionEnginePredict:
         assert result.confidence == 0.0
         assert result.direction == 0
         assert result.metadata["error_type"] == "PredictionTimeoutError+FeatureExtractionError"
+
+
+class TestApplyRollingDenormalization:
+    """Tests for _apply_rolling_denormalization financial calculation."""
+
+    def _make_engine(self):
+        """Create engine with mocked registry/pipeline."""
+        with patch("src.prediction.engine.PredictionModelRegistry"), patch(
+            "src.prediction.engine.FeaturePipeline"
+        ):
+            return PredictionEngine(PredictionConfig())
+
+    def _make_input_data(self, close_values):
+        """Create minimal input DataFrame with close prices."""
+        return pd.DataFrame({"close": close_values})
+
+    def test_valid_denormalization_math(self):
+        """Verify inverse MinMax formula: price = normalized * (max - min) + min."""
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        input_data = self._make_input_data([100.0, 150.0, 200.0])
+
+        # normalized=0.5 with min=100, max=200 should yield 150
+        result = engine._apply_rolling_denormalization(0.5, bundle, input_data)
+        assert result == pytest.approx(150.0)
+
+        # normalized=0.0 yields min
+        result = engine._apply_rolling_denormalization(0.0, bundle, input_data)
+        assert result == pytest.approx(100.0)
+
+        # normalized=1.0 yields max
+        result = engine._apply_rolling_denormalization(1.0, bundle, input_data)
+        assert result == pytest.approx(200.0)
+
+    def test_nan_input_raises_model_inference_error(self):
+        """Verify NaN prediction raises error instead of returning 0.0."""
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        input_data = self._make_input_data([100.0, 200.0])
+
+        with pytest.raises(ModelInferenceError, match="non-finite prediction"):
+            engine._apply_rolling_denormalization(float("nan"), bundle, input_data)
+
+    def test_inf_input_raises_model_inference_error(self):
+        """Verify Inf prediction raises error instead of returning 0.0."""
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        input_data = self._make_input_data([100.0, 200.0])
+
+        with pytest.raises(ModelInferenceError, match="non-finite prediction"):
+            engine._apply_rolling_denormalization(float("inf"), bundle, input_data)
+
+    def test_nonfinite_window_raises_model_inference_error(self):
+        """Verify non-finite min/max in window raises error."""
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        # All-NaN window produces NaN min/max (pandas skips NaN in partial windows)
+        input_data = self._make_input_data([float("nan"), float("nan"), float("nan")])
+
+        with pytest.raises(ModelInferenceError, match="non-finite values in window"):
+            engine._apply_rolling_denormalization(0.5, bundle, input_data)
+
+    def test_constant_window_returns_window_min(self):
+        """Verify constant price window returns the constant value."""
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        input_data = self._make_input_data([50000.0, 50000.0, 50000.0])
+
+        result = engine._apply_rolling_denormalization(0.5, bundle, input_data)
+        assert result == pytest.approx(50000.0)
+
+    def test_no_metadata_returns_normalized_price(self):
+        """Verify passthrough when no metadata is present."""
+        engine = self._make_engine()
+        bundle = _make_bundle(Mock(), metadata={})
+        input_data = self._make_input_data([100.0, 200.0])
+
+        result = engine._apply_rolling_denormalization(0.75, bundle, input_data)
+        assert result == pytest.approx(0.75)
+
+    def test_non_rolling_minmax_returns_normalized_price(self):
+        """Verify passthrough when normalization method is not rolling_minmax."""
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "z_score"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        input_data = self._make_input_data([100.0, 200.0])
+
+        result = engine._apply_rolling_denormalization(0.75, bundle, input_data)
+        assert result == pytest.approx(0.75)

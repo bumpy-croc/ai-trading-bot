@@ -402,6 +402,14 @@ class OnnxRunner:
 
             # Use explicit feature ordering from metadata
             for i, feature_name in enumerate(feature_names):
+                if feature_name not in norm_params:
+                    logging.warning(
+                        "Feature '%s' in feature_names not found in normalization_params "
+                        "- feature will be left unnormalized, which may produce "
+                        "incorrect predictions.",
+                        feature_name,
+                    )
+                    continue
                 if feature_name in norm_params:
                     mean = norm_params[feature_name].get("mean", 0.0)
                     std = norm_params[feature_name].get("std", 1.0)

@@ -117,12 +117,12 @@ class PredictionEngine:
 
         # Optional helpers
         self._ensemble_aggregator = None
-        if getattr(self.config, "enable_ensemble", False):
+        if self.config.enable_ensemble:
             self._ensemble_aggregator = SimpleEnsembleAggregator(
-                getattr(self.config, "ensemble_method", "mean")
+                self.config.ensemble_method
             )
         self._regime_detector = None
-        if getattr(self.config, "enable_regime_aware_confidence", False):
+        if self.config.enable_regime_aware_confidence:
             self._regime_detector = RegimeDetector(RegimeConfig())
 
         # Performance tracking
@@ -258,7 +258,7 @@ class PredictionEngine:
                             ensemble_bundle.runner.predict,
                             args=(ensemble_features,),
                             timeout_seconds=timeout_seconds,
-                            operation_name=f"Ensemble model {ensemble_bundle.model_name} inference",
+                            operation_name=f"Ensemble model {ensemble_bundle.key} inference",
                         )
                     except InfraTimeoutError:
                         # Log timeout and skip this ensemble member

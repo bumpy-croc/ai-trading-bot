@@ -77,8 +77,10 @@ class PredictionModelRegistry:
         self._bundles: dict[tuple[str, str, str], StrategyModel] = {}
         # Optional production selections: (symbol, timeframe, model_type) -> version_id
         self._production_index: dict[tuple[str, str, str], str] = {}
-        # Lock for thread-safe atomic swaps during reload
-        self._lock = threading.Lock()
+        # RLock for thread-safe atomic swaps during reload. RLock (re-entrant) is used
+        # rather than Lock because _load and reload_models share traversal logic, and a
+        # future refactoring to consolidate them could call locked methods internally.
+        self._lock = threading.RLock()
         # Load structured models
         self._load()
 
@@ -365,9 +367,19 @@ class PredictionModelRegistry:
                         except Exception as e:  # pragma: no cover
                             logger.error("Failed to load bundle at %s: %s", latest, e)
 
-        # Atomic swap under lock — other threads see the old bundles until this completes
+        # Preserve existing bundles when reload produces empty results (e.g., transient
+        # filesystem issue, NFS timeout, Docker volume unmount). This prevents a full
+        # prediction outage from a temporary registry path unavailability.
         with self._lock:
             old_bundles = self._bundles
+            if not new_bundles and old_bundles:
+                logger.warning(
+                    "reload_models produced 0 bundles (had %d) — keeping existing bundles. "
+                    "Check model_registry_path: %s",
+                    len(old_bundles),
+                    self.config.model_registry_path,
+                )
+                return
             self._bundles = new_bundles
             self._production_index = new_production_index
 
