@@ -95,10 +95,12 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         self.momentum_lookback = momentum_lookback
         self.atr_period = atr_period
 
-        # Cache for precomputed EMA values (avoids recalculating every bar)
+        # Cache for precomputed EMA values (avoids recalculating every bar).
+        # Uses incremental extension: on each new bar, extends by one element
+        # using the EMA recurrence (O(1) per bar instead of O(N) recomputation).
         self._cached_ema: np.ndarray | None = None
         self._cached_ema_length: int = 0
-        self._cached_data_hash: int | None = None
+        self._cached_data_id: int | None = None
 
     @property
     def warmup_period(self) -> int:
@@ -216,7 +218,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
 
             strength = min(1.0, abs(price_vs_ema_pct) * 10)
             confidence = self._calculate_entry_confidence(
-                price_vs_ema_pct, momentum, days_above, atr_pct, regime
+                price_vs_ema_pct, momentum, days_above, regime
             )
             metadata["signal_reason"] = "price_above_ema_confirmed"
             return Signal(
@@ -263,31 +265,54 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         return params
 
     def _compute_ema_series(self, close: np.ndarray, max_index: int) -> np.ndarray:
-        """Compute EMA for the series up to max_index, using cache.
+        """Compute EMA for the series up to max_index, using incremental cache.
+
+        On the first call, computes the full EMA via pandas ewm. On subsequent
+        calls with the same underlying array, extends the cached EMA one element
+        at a time using the EMA recurrence relation: O(1) per bar instead of
+        recomputing the entire series.
 
         Args:
             close: Close price array.
             max_index: Maximum index to compute EMA up to.
 
         Returns:
-            Array of EMA values.
+            Array of EMA values (length >= max_index + 1).
         """
         needed_length = max_index + 1
-        data_hash = hash(close[:needed_length].tobytes())
+        data_id = id(close)
 
-        if (
-            self._cached_ema is not None
-            and self._cached_ema_length >= needed_length
-            and self._cached_data_hash == data_hash
-        ):
+        # If the underlying array changed (new backtest run or different data),
+        # invalidate the cache entirely.
+        if self._cached_data_id != data_id:
+            self._cached_ema = None
+            self._cached_ema_length = 0
+            self._cached_data_id = data_id
+
+        if self._cached_ema is not None and self._cached_ema_length >= needed_length:
             return self._cached_ema
 
-        series = pd.Series(close[:needed_length])
-        ema_values = series.ewm(span=self.trend_ema_period, adjust=False).mean().values
-        self._cached_ema = ema_values
-        self._cached_ema_length = needed_length
-        self._cached_data_hash = data_hash
-        return ema_values
+        alpha = 2.0 / (self.trend_ema_period + 1)
+
+        if self._cached_ema is None or self._cached_ema_length == 0:
+            # Cold start: compute full EMA via pandas (one-time cost)
+            series = pd.Series(close[:needed_length])
+            ema_values = series.ewm(span=self.trend_ema_period, adjust=False).mean().values
+            self._cached_ema = ema_values
+            self._cached_ema_length = needed_length
+        else:
+            # Incremental extension: append new EMA values using the recurrence
+            # ema[i] = alpha * close[i] + (1 - alpha) * ema[i-1]
+            prev_length = self._cached_ema_length
+            extension = np.empty(needed_length - prev_length)
+            prev_ema = float(self._cached_ema[prev_length - 1])
+            for i in range(prev_length, needed_length):
+                prev_ema = alpha * float(close[i]) + (1 - alpha) * prev_ema
+                extension[i - prev_length] = prev_ema
+            self._cached_ema = np.concatenate([self._cached_ema, extension])
+            self._cached_ema_length = needed_length
+
+        return self._cached_ema
 
     def _count_consecutive_days_above(
         self, close: np.ndarray, ema: np.ndarray, index: int, buffer_pct: float = 0.0
@@ -400,26 +425,22 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         close: np.ndarray,
         index: int,
     ) -> float:
-        """Calculate Average True Range at the given index."""
+        """Calculate Average True Range at the given index using vectorized numpy."""
         if index < self.atr_period:
             return float(np.mean(high[: index + 1] - low[: index + 1]))
 
         start = index - self.atr_period + 1
-        tr_values = []
-        for i in range(start, index + 1):
-            hl = float(high[i]) - float(low[i])
-            hc = abs(float(high[i]) - float(close[i - 1])) if i > 0 else hl
-            lc = abs(float(low[i]) - float(close[i - 1])) if i > 0 else hl
-            tr_values.append(max(hl, hc, lc))
-
-        return float(np.mean(tr_values))
+        h = high[start : index + 1]
+        lo = low[start : index + 1]
+        prev_c = close[start - 1 : index]
+        tr = np.maximum(h - lo, np.maximum(np.abs(h - prev_c), np.abs(lo - prev_c)))
+        return float(np.mean(tr))
 
     def _calculate_entry_confidence(
         self,
         price_vs_ema_pct: float,
         momentum: float,
         days_above: int,
-        atr_pct: float,
         regime: RegimeContext | None,
     ) -> float:
         """Calculate confidence for BUY signal."""

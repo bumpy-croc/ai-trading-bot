@@ -18,7 +18,6 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import requests
 
@@ -54,9 +53,6 @@ class CoinGeckoProvider(DataProvider):
     # Use 2.5 seconds to be safe and prevent 429 errors
     RATE_LIMIT_DELAY_SECONDS = 2.5
 
-    # CoinGecko OHLC endpoint only accepts these specific day values
-    VALID_OHLC_DAYS = [1, 7, 14, 30, 90, 180, 365]
-
     # Chunk size for market_chart/range: <90 days gives hourly granularity
     MARKET_CHART_CHUNK_DAYS = 85
 
@@ -83,21 +79,6 @@ class CoinGeckoProvider(DataProvider):
         "DOGE-USD": "dogecoin",
         "DOGEUSDT": "dogecoin",
         "DOGE": "dogecoin",
-    }
-
-    # CoinGecko OHLC granularity mapping (days parameter)
-    # 1 day = 30-minute candles
-    # 7-30 days = 4-hour candles
-    # 31-90 days = 4-hour candles
-    # 90+ days = 4-day candles
-    TIMEFRAME_MAPPING = {
-        "1m": None,  # Not supported by CoinGecko OHLC
-        "5m": None,  # Not supported
-        "15m": None,  # Not supported
-        "30m": 1,  # Use 1 day (gives 30m candles)
-        "1h": 7,  # Use 7 days (gives 4h candles, we'll need to aggregate)
-        "4h": 7,  # Use 7 days (gives 4h candles)
-        "1d": 90,  # Use 90 days (gives daily candles)
     }
 
     def __init__(self, api_key: str | None = None):
@@ -509,7 +490,6 @@ class CoinGeckoProvider(DataProvider):
             combined.index.max() if len(combined) > 0 else "N/A",
         )
 
-        self.data = combined
         return combined
 
     @staticmethod
@@ -552,10 +532,12 @@ class CoinGeckoProvider(DataProvider):
             for col in ["open", "high", "low", "close", "volume"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-            # Drop invalid rows
+            # Drop invalid rows (single combined mask avoids intermediate copies)
             df = df.dropna(subset=["open", "high", "low", "close"])
-            for col in ["open", "high", "low", "close"]:
-                df = df[df[col] > 0]
+            positive_mask = (
+                (df["open"] > 0) & (df["high"] > 0) & (df["low"] > 0) & (df["close"] > 0)
+            )
+            df = df[positive_mask]
 
             df["volume"] = df["volume"].fillna(0)
 
