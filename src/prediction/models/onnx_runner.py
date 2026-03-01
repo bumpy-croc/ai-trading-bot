@@ -521,10 +521,11 @@ class OnnxRunner:
                 std,
             )
             return pred
-        # Validate std is non-zero to prevent division issues in inverse operations
+        # When std is zero (constant target), denormalization collapses to mean
+        # because pred * 0 + mean = mean, which is the correct denormalized value
         if std == 0.0:
-            logging.warning("Zero std in normalization params - returning raw prediction")
-            return pred
+            logging.warning("Zero std in normalization params - returning mean")
+            return mean
         return pred * std + mean
 
     def _calculate_confidence(self, pred: float) -> float:

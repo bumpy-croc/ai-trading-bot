@@ -448,6 +448,28 @@ class TestOnnxRunner:
             # Third feature should be unnormalized (same as input)
             assert np.allclose(normalized[:, :, 2], 42.0, atol=1e-5)
 
+    @patch("onnxruntime.InferenceSession")
+    def test_denormalize_price_zero_std_returns_mean(self, mock_session):
+        """When std is zero, denormalization should return mean, not raw prediction."""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+
+        metadata = {
+            "price_normalization": {"mean": 30000.0, "std": 0.0},
+        }
+
+        with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
+            runner.model_metadata = metadata
+
+            # Any prediction should collapse to mean when std is zero
+            result = runner._denormalize_price(0.5)
+            assert result == 30000.0
+
+            result = runner._denormalize_price(-1.0)
+            assert result == 30000.0
+
 
 class TestPredictionModelRegistry:
     """Structured-only PredictionModelRegistry tests"""
