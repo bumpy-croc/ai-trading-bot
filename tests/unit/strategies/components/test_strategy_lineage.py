@@ -642,6 +642,25 @@ class TestStrategyLineageTracker:
         desc_ids = {d["id"] for d in descendants}
         assert desc_ids == {"child", "grandchild"}
 
+    def test_register_strategy_cyclic_parent_does_not_hang(self, tracker):
+        """Test that cyclic parent references don't cause infinite BFS loop"""
+        # Arrange: create a mutual parent cycle (a -> b -> a)
+        tracker.register_strategy("a", parent_id="b", metadata={"name": "A"})
+
+        # Act: registering b with parent a creates a cycle in the graph.
+        # This must terminate (not hang) thanks to the visited set.
+        tracker.register_strategy("b", parent_id="a", metadata={"name": "B"})
+
+        # Assert: both strategies are registered and reachable
+        assert "a" in tracker.strategies
+        assert "b" in tracker.strategies
+
+        # Descendant traversal should terminate without infinite loop
+        descendants_a = tracker._get_descendants("a")
+        descendants_b = tracker._get_descendants("b")
+        assert len(descendants_a) <= 1
+        assert len(descendants_b) <= 1
+
     def test_complex_branching_and_merging(self, tracker):
         """Test complex branching and merging scenario"""
         # Create main line
