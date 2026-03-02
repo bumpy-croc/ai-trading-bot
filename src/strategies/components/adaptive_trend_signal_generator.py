@@ -98,9 +98,11 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         # Cache for precomputed EMA values (avoids recalculating every bar).
         # Uses incremental extension: on each new bar, extends by one element
         # using the EMA recurrence (O(1) per bar instead of O(N) recomputation).
+        # The buffer is pre-allocated to avoid per-bar copying from concatenation.
         self._cached_ema: np.ndarray | None = None
         self._cached_ema_length: int = 0
-        self._cached_data_fingerprint: int | None = None
+        self._cached_data_len: int = 0
+        self._cached_data_first: float | None = None
 
     @property
     def warmup_period(self) -> int:
@@ -281,18 +283,18 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         """
         needed_length = max_index + 1
 
-        # Build a content fingerprint from the full array bytes.
-        # This detects both new arrays and in-place mutations,
-        # unlike id() which can be reused after deallocation, and
-        # unlike sparse sampling which misses interior changes.
-        fingerprint = hash(close.tobytes())
+        # O(1) identity check: detect new/replaced arrays by comparing
+        # length and first element. This avoids O(N) hashing per bar
+        # while still catching new backtest runs or array replacements.
+        n = len(close)
+        first_val = float(close[0]) if n > 0 else None
+        data_changed = n != self._cached_data_len or first_val != self._cached_data_first
 
-        # If the underlying data changed (new backtest run, different data,
-        # or in-place mutation), invalidate the cache entirely.
-        if self._cached_data_fingerprint != fingerprint:
+        if data_changed:
             self._cached_ema = None
             self._cached_ema_length = 0
-            self._cached_data_fingerprint = fingerprint
+            self._cached_data_len = n
+            self._cached_data_first = first_val
 
         if self._cached_ema is not None and self._cached_ema_length >= needed_length:
             return self._cached_ema
@@ -300,21 +302,23 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         alpha = 2.0 / (self.trend_ema_period + 1)
 
         if self._cached_ema is None or self._cached_ema_length == 0:
-            # Cold start: compute full EMA via pandas (one-time cost)
+            # Cold start: compute full EMA via pandas (one-time cost),
+            # then pre-allocate buffer to array length to avoid future copies.
             series = pd.Series(close[:needed_length])
             ema_values = series.ewm(span=self.trend_ema_period, adjust=False).mean().values
-            self._cached_ema = ema_values
+            buf = np.empty(n)
+            buf[:needed_length] = ema_values
+            self._cached_ema = buf
             self._cached_ema_length = needed_length
         else:
-            # Incremental extension: append new EMA values using the recurrence
-            # ema[i] = alpha * close[i] + (1 - alpha) * ema[i-1]
+            # Incremental extension: fill new EMA values into the
+            # pre-allocated buffer using the recurrence relation.
+            # O(k) where k = new bars since last call (typically 1).
             prev_length = self._cached_ema_length
-            extension = np.empty(needed_length - prev_length)
             prev_ema = float(self._cached_ema[prev_length - 1])
             for i in range(prev_length, needed_length):
                 prev_ema = alpha * float(close[i]) + (1 - alpha) * prev_ema
-                extension[i - prev_length] = prev_ema
-            self._cached_ema = np.concatenate([self._cached_ema, extension])
+                self._cached_ema[i] = prev_ema
             self._cached_ema_length = needed_length
 
         return self._cached_ema

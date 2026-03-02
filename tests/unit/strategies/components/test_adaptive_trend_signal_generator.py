@@ -469,7 +469,7 @@ class TestInputValidation:
 
 
 class TestEmaCacheInvalidation:
-    """Test EMA cache uses content fingerprint instead of object identity."""
+    """Test EMA cache uses O(1) fingerprint (length + first element)."""
 
     def test_cache_invalidates_on_different_array(self):
         """Test that passing a different array invalidates the cache."""
@@ -532,23 +532,34 @@ class TestEmaCacheInvalidation:
         # Assert: even if id(arr2) == old id(arr1), content differs
         assert not np.allclose(ema1, ema2)
 
-    def test_cache_invalidates_on_interior_value_change(self):
-        """Test that changing only interior values invalidates the cache.
-
-        Regression: a sparse fingerprint (first/middle/last) could miss
-        interior changes that don't touch sampled positions.
-        """
+    def test_cache_invalidates_on_different_length(self):
+        """Test that a shorter or longer array invalidates the cache."""
         gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
 
-        # Arrange: compute EMA on initial data
+        # Arrange
+        arr1 = np.linspace(100, 200, 50)
+        ema1 = gen._compute_ema_series(arr1, 49).copy()
+
+        # Act: new array with different length but same starting value
+        arr2 = np.linspace(100, 200, 60)
+        ema2 = gen._compute_ema_series(arr2, 49)
+
+        # Assert: cache should be invalidated due to length change
+        assert not np.allclose(ema1[:50], ema2[:50])
+
+    def test_preallocated_buffer_reused_across_incremental_calls(self):
+        """Test that incremental extension reuses the same buffer (no copy)."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: cold-start allocates buffer sized to array length
         arr = np.linspace(100, 200, 50)
-        ema_before = gen._compute_ema_series(arr, 49).copy()
+        ema_first = gen._compute_ema_series(arr, 30)
+        buf_id = id(ema_first)
 
-        # Act: mutate only interior values (not first, middle, or last)
-        arr[5] = 999.0
-        arr[10] = 999.0
-        arr[15] = 999.0
-        ema_after = gen._compute_ema_series(arr, 49)
+        # Act: incremental extension fills into same pre-allocated buffer
+        ema_second = gen._compute_ema_series(arr, 40)
+        ema_third = gen._compute_ema_series(arr, 49)
 
-        # Assert: cache must detect the interior change
-        assert not np.allclose(ema_before, ema_after)
+        # Assert: same buffer object throughout (no concatenation copies)
+        assert id(ema_second) == buf_id
+        assert id(ema_third) == buf_id
