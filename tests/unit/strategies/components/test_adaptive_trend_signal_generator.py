@@ -466,3 +466,116 @@ class TestInputValidation:
         df = create_test_dataframe(length=100)
         with pytest.raises(IndexError):
             gen.generate_signal(df, 100)
+
+
+class TestEmaCacheInvalidation:
+    """Test EMA cache invalidates when source data identity changes."""
+
+    def test_cache_invalidates_on_different_array(self):
+        """Test that passing a different array invalidates the cache."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: two distinct arrays with different content
+        arr1 = np.linspace(100, 200, 50)
+        arr2 = np.linspace(200, 300, 50)
+
+        # Act: compute EMA for both
+        ema1 = gen._compute_ema_series(arr1, 49)
+        ema2 = gen._compute_ema_series(arr2, 49)
+
+        # Assert: results should differ because arrays differ
+        assert not np.allclose(ema1, ema2)
+
+    def test_cache_invalidates_on_same_length_same_first_value(self):
+        """Test regression: arrays sharing len/first value still invalidate cache."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: same length and first element, different remaining series
+        arr1 = np.linspace(100, 200, 50)
+        arr2 = arr1.copy()
+        arr2[1:] = np.linspace(300, 400, 49)
+
+        # Act
+        ema1 = gen._compute_ema_series(arr1, 49).copy()
+        ema2 = gen._compute_ema_series(arr2, 49)
+
+        # Assert: second call must recompute against new series
+        assert not np.allclose(ema1, ema2)
+
+    def test_cache_invalidates_on_inplace_mutation(self):
+        """Test that in-place mutation of the array invalidates the cache."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange
+        arr = np.linspace(100, 200, 50)
+        ema_before = gen._compute_ema_series(arr, 49).copy()
+
+        # Act: mutate the array in-place (same object id, different content)
+        arr[0] = 999.0
+        arr[-1] = 999.0
+        ema_after = gen._compute_ema_series(arr, 49)
+
+        # Assert: cache should have been invalidated due to content change
+        assert not np.allclose(ema_before, ema_after)
+
+    def test_cache_reuse_on_incremental_extension(self):
+        """Test that cache extends incrementally for the same data."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange
+        arr = np.linspace(100, 200, 50)
+
+        # Act: compute EMA to index 30, then extend to 49
+        ema_partial = gen._compute_ema_series(arr, 30).copy()
+        ema_full = gen._compute_ema_series(arr, 49)
+
+        # Assert: the first 31 values should be identical (cache reused)
+        assert np.allclose(ema_partial[:31], ema_full[:31])
+
+    def test_cache_detects_reused_object_id(self):
+        """Test that a new array reusing the same id() is not stale-cached."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: compute EMA and store result
+        arr1 = np.linspace(100, 200, 50)
+        ema1 = gen._compute_ema_series(arr1, 49).copy()
+
+        # Act: delete arr1, create new array (may reuse same id)
+        del arr1
+        arr2 = np.linspace(300, 400, 50)
+        ema2 = gen._compute_ema_series(arr2, 49)
+
+        # Assert: even if id(arr2) == old id(arr1), content differs
+        assert not np.allclose(ema1, ema2)
+
+    def test_cache_invalidates_on_different_length(self):
+        """Test that a shorter or longer array invalidates the cache."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange
+        arr1 = np.linspace(100, 200, 50)
+        ema1 = gen._compute_ema_series(arr1, 49).copy()
+
+        # Act: new array with different length but same starting value
+        arr2 = np.linspace(100, 200, 60)
+        ema2 = gen._compute_ema_series(arr2, 49)
+
+        # Assert: cache should be invalidated due to length change
+        assert not np.allclose(ema1[:50], ema2[:50])
+
+    def test_preallocated_buffer_reused_across_incremental_calls(self):
+        """Test that incremental extension reuses the same buffer (no copy)."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: cold-start allocates buffer sized to array length
+        arr = np.linspace(100, 200, 50)
+        ema_first = gen._compute_ema_series(arr, 30)
+        buf_id = id(ema_first)
+
+        # Act: incremental extension fills into same pre-allocated buffer
+        ema_second = gen._compute_ema_series(arr, 40)
+        ema_third = gen._compute_ema_series(arr, 49)
+
+        # Assert: same buffer object throughout (no concatenation copies)
+        assert id(ema_second) == buf_id
+        assert id(ema_third) == buf_id

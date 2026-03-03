@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
+from functools import total_ordering
 from typing import Any
 
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
@@ -25,6 +26,7 @@ from .strategy_switcher import (
 )
 
 
+@total_ordering
 class EmergencyLevel(Enum):
     """Emergency severity levels"""
 
@@ -37,21 +39,6 @@ class EmergencyLevel(Enum):
     def __lt__(self, other):
         if self.__class__ is other.__class__:
             return self.value < other.value
-        return NotImplemented
-
-    def __le__(self, other):
-        if self.__class__ is other.__class__:
-            return self.value <= other.value
-        return NotImplemented
-
-    def __gt__(self, other):
-        if self.__class__ is other.__class__:
-            return self.value > other.value
-        return NotImplemented
-
-    def __ge__(self, other):
-        if self.__class__ is other.__class__:
-            return self.value >= other.value
         return NotImplemented
 
 

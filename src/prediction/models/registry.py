@@ -84,11 +84,19 @@ class PredictionModelRegistry:
         # Load structured models
         self._load()
 
-    def _load(self) -> None:
-        """Load structured bundles from the configured registry path."""
+    def _scan_registry(
+        self,
+    ) -> tuple[dict[tuple[str, str, str], StrategyModel], dict[tuple[str, str, str], str]]:
+        """Scan the registry directory and load all bundles.
+
+        Returns:
+            Tuple of (bundles dict, production index dict).
+        """
+        bundles: dict[tuple[str, str, str], StrategyModel] = {}
+        production_index: dict[tuple[str, str, str], str] = {}
         base = Path(self.config.model_registry_path)
         if not base.exists():
-            return
+            return bundles, production_index
         # Expect structure: base/{symbol}/{model_type}/{version_id}/model.onnx
         for symbol_dir in base.iterdir():
             if not symbol_dir.is_dir():
@@ -107,17 +115,22 @@ class PredictionModelRegistry:
                     try:
                         bundle = self._load_bundle(symbol, model_type, vdir)
                         key = (bundle.symbol, bundle.timeframe, bundle.model_type)
-                        self._bundles[key] = bundle
+                        bundles[key] = bundle
                     except Exception as e:  # pragma: no cover - aggregated logging
                         logger.error("Failed to load bundle at %s: %s", vdir, e)
                 if latest.exists():
                     try:
                         bundle = self._load_bundle(symbol, model_type, latest)
                         key = (bundle.symbol, bundle.timeframe, bundle.model_type)
-                        self._bundles[key] = bundle
-                        self._production_index[key] = bundle.version_id
+                        bundles[key] = bundle
+                        production_index[key] = bundle.version_id
                     except Exception as e:  # pragma: no cover - aggregated logging
                         logger.error("Failed to load bundle at %s: %s", latest, e)
+        return bundles, production_index
+
+    def _load(self) -> None:
+        """Load structured bundles from the configured registry path."""
+        self._bundles, self._production_index = self._scan_registry()
 
     def _load_bundle(self, symbol: str, model_type: str, vdir: Path) -> StrategyModel:
         """Load a single bundle directory into a ModelBundle."""
@@ -331,41 +344,8 @@ class PredictionModelRegistry:
         them in. If loading fails, the existing bundles remain available so
         predictions continue working with the previous model versions.
         """
-        # Load new bundles into temporary dicts (outside lock, may be slow)
-        new_bundles: dict[tuple[str, str, str], StrategyModel] = {}
-        new_production_index: dict[tuple[str, str, str], str] = {}
-        base = Path(self.config.model_registry_path)
-
-        if base.exists():
-            for symbol_dir in base.iterdir():
-                if not symbol_dir.is_dir():
-                    continue
-                symbol = symbol_dir.name
-                for mtype_dir in symbol_dir.iterdir():
-                    if not mtype_dir.is_dir():
-                        continue
-                    model_type = mtype_dir.name
-                    latest = mtype_dir / "latest"
-                    version_dirs = [
-                        p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"
-                    ]
-                    # Deterministic order; latest symlink applied afterwards
-                    version_dirs.sort()
-                    for vdir in version_dirs:
-                        try:
-                            bundle = self._load_bundle(symbol, model_type, vdir)
-                            key = (bundle.symbol, bundle.timeframe, bundle.model_type)
-                            new_bundles[key] = bundle
-                        except Exception as e:  # pragma: no cover
-                            logger.error("Failed to load bundle at %s: %s", vdir, e)
-                    if latest.exists():
-                        try:
-                            bundle = self._load_bundle(symbol, model_type, latest)
-                            key = (bundle.symbol, bundle.timeframe, bundle.model_type)
-                            new_bundles[key] = bundle
-                            new_production_index[key] = bundle.version_id
-                        except Exception as e:  # pragma: no cover
-                            logger.error("Failed to load bundle at %s: %s", latest, e)
+        # Load new bundles in background (outside lock to avoid blocking)
+        new_bundles, new_production_index = self._scan_registry()
 
         # Preserve existing bundles when reload produces empty results (e.g., transient
         # filesystem issue, NFS timeout, Docker volume unmount). This prevents a full

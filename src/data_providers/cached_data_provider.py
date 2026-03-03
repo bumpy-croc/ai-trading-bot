@@ -439,27 +439,11 @@ class CachedDataProvider(DataProvider):
 
         # Load data for each year
         year_dataframes = []
-        cached_years = []
-        missing_years = []
 
         for year, year_start, year_end in year_ranges:
-            cache_key = self._generate_year_cache_key(symbol, timeframe, year)
-            cache_path = self._get_cache_path(cache_key)
-
-            if cache_path and self._is_cache_valid(cache_path, year):
-                cached_years.append(year)
-            else:
-                missing_years.append(year)
-
             year_data = self._load_year_data(symbol, timeframe, year, year_start, year_end)
             if year_data is not None and not year_data.empty:
                 year_dataframes.append(year_data)
-
-        # Log cache efficiency
-        if cached_years:
-            logger.info(f"Cache hit for years: {cached_years}")
-        if missing_years:
-            logger.info(f"Cache miss for years: {missing_years}")
 
         # Combine all year data
         if year_dataframes:

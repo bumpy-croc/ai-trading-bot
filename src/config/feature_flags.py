@@ -37,7 +37,7 @@ def _load_repo_defaults() -> dict[str, Any]:
             if isinstance(data, dict):
                 return data
             return {}
-    except (json.JSONDecodeError, FileNotFoundError, PermissionError, Exception):
+    except Exception:
         # Fail-soft: if file is missing, permission denied, or JSON is malformed, ignore and return empty map
         return {}
 
@@ -91,14 +91,14 @@ def _resolve_from_sources(key: str) -> bool | str | None:
     overrides = _load_env_json("FEATURE_FLAGS_OVERRIDES")
     if key in overrides:
         value = overrides[key]
-        if isinstance(value, bool) or isinstance(value, str):
+        if isinstance(value, bool | str):
             return value
 
     # 3) feature_flags.json (repo defaults)
     defaults = _load_repo_defaults()
     if key in defaults:
         value = defaults[key]
-        if isinstance(value, bool) or isinstance(value, str):
+        if isinstance(value, bool | str):
             return value
 
     # Not found
@@ -149,12 +149,12 @@ def resolve_all() -> dict[str, bool | str]:
     merged: dict[str, bool | str] = {}
 
     # Start with repo defaults
-    merged.update({k: v for k, v in _load_repo_defaults().items() if isinstance(v, (bool, str))})
+    merged.update({k: v for k, v in _load_repo_defaults().items() if isinstance(v, bool | str)})
 
     # Apply overrides
     overrides = _load_env_json("FEATURE_FLAGS_OVERRIDES")
     for k, v in overrides.items():
-        if isinstance(v, (bool, str)):
+        if isinstance(v, bool | str):
             merged[k] = v
 
     # Apply per-flag env vars

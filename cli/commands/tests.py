@@ -79,7 +79,7 @@ def _handle_parse_junit(ns: argparse.Namespace) -> int:
     failures = _collect_failures(xml_path)
     output = _format_failures(failures, ns.label)
     print(output)
-    return 0 if failures else 0
+    return 1 if failures else 0
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:

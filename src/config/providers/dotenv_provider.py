@@ -4,7 +4,6 @@ Dotenv configuration provider.
 This module provides configuration from .env files.
 """
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -43,8 +42,8 @@ class DotEnvProvider(ConfigProvider):
         return self._cache.get(key, default)
 
     def get_all(self) -> dict[str, Any]:
-        """Get all environment variables."""
-        return dict(os.environ)
+        """Get all values loaded from the .env file."""
+        return dict(self._cache)
 
     def is_available(self) -> bool:
         """Check if .env file exists and was loaded"""

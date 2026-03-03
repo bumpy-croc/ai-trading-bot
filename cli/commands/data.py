@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # Ensure project root and src are in sys.path for absolute imports
@@ -16,17 +16,23 @@ SRC_PATH = PROJECT_ROOT / "src"
 if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
-import ccxt
-import pandas as pd
-
 from src.infrastructure.logging.config import configure_logging
 from src.trading.symbols.factory import SymbolFactory
 
 
+def _normalize_symbols(raw: list[str]) -> list[str]:
+    """Normalize symbol names to exchange format (e.g. BTC-USD -> BTCUSDT)."""
+    normalized = []
+    for s in raw:
+        s = s.strip().upper()
+        if "-" in s or "/" in s:
+            s = SymbolFactory.to_exchange_symbol(s, "binance")
+        normalized.append(s)
+    return normalized
+
+
 def _download(ns: argparse.Namespace) -> int:
     """Download historical price data using automatic Binance → CoinGecko failover."""
-    from datetime import datetime
-
     from src.data_providers.provider_factory import create_data_provider
 
     # Use auto provider (Binance → CoinGecko failover)
@@ -79,24 +85,11 @@ def _download(ns: argparse.Namespace) -> int:
 
 
 def _prefill(ns: argparse.Namespace) -> int:
-    from datetime import UTC, datetime
-
     from src.config.paths import get_cache_dir
     from src.data_providers.cached_data_provider import CachedDataProvider
     from src.data_providers.provider_factory import create_data_provider
 
-    def _normalize_symbols(raw):
-        normalized = []
-        for s in raw:
-            s = s.strip().upper()
-            if "-" in s or "/" in s:
-                s = SymbolFactory.to_exchange_symbol(s, "binance")
-            normalized.append(s)
-        return normalized
-
     def _year_chunks(start: datetime, end: datetime):
-        from datetime import UTC, timedelta
-
         chunks = []
         cur = start
         while cur <= end:
@@ -147,15 +140,12 @@ def _prefill(ns: argparse.Namespace) -> int:
 def _preload_offline(ns: argparse.Namespace) -> int:
     """Pre-load cache with historical data for offline backtesting."""
     import logging
-    from datetime import datetime, timedelta
-    from pathlib import Path
 
     from tqdm import tqdm
 
     from src.config.paths import ensure_dir_exists, get_cache_dir
     from src.data_providers.cached_data_provider import CachedDataProvider
     from src.data_providers.provider_factory import create_data_provider
-    from src.infrastructure.logging.config import configure_logging
 
     # Setup logging
     configure_logging(level_name="INFO")
@@ -170,16 +160,6 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     current_year = datetime.now(UTC).year
     years = list(range(current_year - ns.years_back + 1, current_year + 1))
     logger.info(f"Pre-loading data for years: {years}")
-
-    # Normalize symbols
-    def _normalize_symbols(raw):
-        normalized = []
-        for s in raw:
-            s = s.strip().upper()
-            if "-" in s or "/" in s:
-                s = SymbolFactory.to_exchange_symbol(s, "binance")
-            normalized.append(s)
-        return normalized
 
     symbols = _normalize_symbols(ns.symbols)
     timeframes = [tf.strip() for tf in ns.timeframes]
@@ -286,7 +266,6 @@ def _preload_offline(ns: argparse.Namespace) -> int:
 def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str = "1h") -> bool:
     """Test that cached data can be accessed in offline mode."""
     import logging
-    from datetime import datetime, timedelta
 
     from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
@@ -326,7 +305,6 @@ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str
 
 def _cache_manager(ns: argparse.Namespace) -> int:
     import pickle
-    from datetime import datetime
 
     from src.config.paths import get_cache_dir
     from src.data_providers.binance_provider import BinanceProvider
@@ -425,8 +403,6 @@ def _cache_manager(ns: argparse.Namespace) -> int:
             print(f"Cache directory {cache_dir} does not exist.")
             return 1
         files = [f for f in os.listdir(cache_dir) if f.endswith(".pkl")]
-        from datetime import datetime
-
         now = datetime.now(UTC)
         deleted = 0
         total = 0
@@ -540,7 +516,6 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
         print("✅ Database population completed successfully!")
         return 0
     except Exception as e:
-        logger = logging.getLogger("atb.data")
         logger.error(f"Failed to populate database: {e}")
         return 1
 

@@ -26,8 +26,9 @@ class ValidationReport:
 class StatisticalValidator:
     """Validate that a candidate configuration improves over baseline using simple bootstrap tests."""
 
-    def __init__(self, config: ValidationConfig | None = None):
+    def __init__(self, config: ValidationConfig | None = None, seed: int | None = None):
         self.cfg = config or ValidationConfig()
+        self._rng = np.random.default_rng(seed)
 
     def _cohens_d(self, x: np.ndarray, y: np.ndarray) -> float:
         nx = len(x)
@@ -45,20 +46,18 @@ class StatisticalValidator:
         return (np.mean(y) - np.mean(x)) / s
 
     def _bootstrap_pvalue(self, x: np.ndarray, y: np.ndarray) -> float:
-        # Test whether mean(y) - mean(x) > 0 using bootstrap
+        # Test whether mean(y) - mean(x) > 0 using vectorized bootstrap
         obs = np.mean(y) - np.mean(x)
         pooled = np.concatenate([x, y])
         n_x = len(x)
-        count = 0
-        for _ in range(self.cfg.bootstrap_samples):
-            resample = np.random.choice(pooled, size=len(pooled), replace=True)
-            x_s = resample[:n_x]
-            y_s = resample[n_x:]
-            diff = np.mean(y_s) - np.mean(x_s)
-            if diff >= obs:
-                count += 1
+        n_samples = self.cfg.bootstrap_samples
+        # Draw all bootstrap samples at once: (n_samples, len(pooled))
+        indices = self._rng.integers(0, len(pooled), size=(n_samples, len(pooled)))
+        resamples = pooled[indices]
+        diffs = resamples[:, n_x:].mean(axis=1) - resamples[:, :n_x].mean(axis=1)
+        count = int(np.sum(diffs >= obs))
         # One-sided p-value
-        return count / self.cfg.bootstrap_samples
+        return count / n_samples
 
     def validate(
         self, baseline: list[ExperimentResult], candidate: list[ExperimentResult]

@@ -10,7 +10,6 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from src.config.constants import (
     DEFAULT_FEE_RATE,
@@ -22,9 +21,6 @@ from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.engines.shared.side_utils import to_side_string
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

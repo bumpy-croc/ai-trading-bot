@@ -297,6 +297,7 @@ def create_adaptive_trend_strategy(
             "max_fraction": max_position_pct,
             "stop_loss_pct": stop_loss_pct,
             "take_profit_pct": take_profit_pct,
+            "enable_dynamic_risk": False,
         }
     )
 

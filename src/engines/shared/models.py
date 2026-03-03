@@ -238,11 +238,11 @@ class BasePosition:
 
     def is_long(self) -> bool:
         """Check if this is a long position."""
-        return self.side == PositionSide.LONG or self.side_str == "long"
+        return self.side == PositionSide.LONG
 
     def is_short(self) -> bool:
         """Check if this is a short position."""
-        return self.side == PositionSide.SHORT or self.side_str == "short"
+        return self.side == PositionSide.SHORT
 
 
 @dataclass
@@ -314,11 +314,11 @@ class BaseTrade:
 
     def is_long(self) -> bool:
         """Check if this was a long trade."""
-        return self.side == PositionSide.LONG or self.side_str == "long"
+        return self.side == PositionSide.LONG
 
     def is_short(self) -> bool:
         """Check if this was a short trade."""
-        return self.side == PositionSide.SHORT or self.side_str == "short"
+        return self.side == PositionSide.SHORT
 
     def duration_seconds(self) -> float:
         """Calculate trade duration in seconds."""

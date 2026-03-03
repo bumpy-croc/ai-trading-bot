@@ -215,7 +215,7 @@ class StrategyLineageTracker:
             **(metadata or {}),
         }
 
-        # Add parent relationship if specified
+        # Add parent relationship if specified and parent already registered
         if parent_id and parent_id in self.strategies:
             self.lineage_graph[parent_id].append(strategy_id)
             edge_key = f"{parent_id}->{strategy_id}"
@@ -228,6 +228,47 @@ class StrategyLineageTracker:
             # Update generation
             parent_generation = self.strategies[parent_id]["generation"]
             self.strategies[strategy_id]["generation"] = parent_generation + 1
+
+        # Backfill edges for any previously-registered strategies that claim
+        # this strategy as their parent. Handles out-of-order registration
+        # where a child is registered before its parent.
+        for existing_id, existing_meta in self.strategies.items():
+            if existing_id == strategy_id:
+                continue
+            if existing_meta.get("parent_id") == strategy_id:
+                edge_key = f"{strategy_id}->{existing_id}"
+                if edge_key not in self.graph_edges:
+                    self.lineage_graph[strategy_id].append(existing_id)
+                    self.graph_edges[edge_key] = {
+                        "relationship_type": RelationshipType.PARENT,
+                        "source": strategy_id,
+                        "target": existing_id,
+                    }
+
+        # Propagate correct generation numbers through the subtree via BFS.
+        # This handles chains registered out of order (e.g., grandchild before
+        # child before parent) where intermediate generations were initially 0.
+        # The visited set includes strategy_id AND parent_id to guard against
+        # cycles: strategy_id prevents re-enqueueing ourselves, parent_id
+        # prevents backward traversal that would inflate ancestor generations.
+        propagation_queue = deque()
+        visited_propagation: set[str] = {strategy_id}
+        if parent_id and parent_id in self.strategies:
+            visited_propagation.add(parent_id)
+        for child_id in self.lineage_graph.get(strategy_id, []):
+            if child_id not in visited_propagation:
+                propagation_queue.append((strategy_id, child_id))
+                visited_propagation.add(child_id)
+
+        while propagation_queue:
+            parent, child = propagation_queue.popleft()
+            correct_gen = self.strategies[parent]["generation"] + 1
+            if self.strategies[child]["generation"] != correct_gen:
+                self.strategies[child]["generation"] = correct_gen
+            for grandchild in self.lineage_graph.get(child, []):
+                if grandchild not in visited_propagation:
+                    visited_propagation.add(grandchild)
+                    propagation_queue.append((child, grandchild))
 
         # Clear caches
         self._invalidate_caches()
@@ -754,29 +795,30 @@ class StrategyLineageTracker:
         raise ValueError(f"Unsupported format: {format}")
 
     def _get_descendants(self, strategy_id: str) -> list[dict[str, Any]]:
-        """Get all descendants of a strategy"""
+        """Get all descendants of a strategy using the adjacency list"""
         descendants = []
 
-        # Use BFS to find all descendants
+        # Use BFS with the lineage_graph adjacency list instead of scanning all strategies
         queue = deque([strategy_id])
         visited = {strategy_id}
 
         while queue:
             current_id = queue.popleft()
 
-            # Find direct children
-            for sid, strategy_data in self.strategies.items():
-                if strategy_data["parent_id"] == current_id and sid not in visited:
+            # Find direct children via adjacency list (O(children) instead of O(all strategies))
+            for child_id in self.lineage_graph.get(current_id, []):
+                if child_id not in visited:
+                    strategy_data = self.strategies[child_id]
                     descendants.append(
                         {
-                            "id": sid,
+                            "id": child_id,
                             "generation": strategy_data["generation"],
                             "created_at": strategy_data["created_at"].isoformat(),
                             "branch_id": strategy_data.get("branch_id"),
                         }
                     )
-                    queue.append(sid)
-                    visited.add(sid)
+                    queue.append(child_id)
+                    visited.add(child_id)
 
         return descendants
 
@@ -887,9 +929,20 @@ class StrategyLineageTracker:
         return "\n".join(dot)
 
     def _find_path(self, start: str, end: str) -> list[str]:
-        """Find path between two strategies using BFS"""
+        """Find path between two strategies using BFS on undirected edges
+
+        Traverses both parent-to-child and child-to-parent edges so paths
+        can be found between any two related strategies (e.g., sibling to
+        sibling via common ancestor, or descendant back to ancestor).
+        """
         if start == end:
             return [start]
+
+        # Build reverse adjacency (child -> parent) for bidirectional traversal
+        reverse_graph: dict[str, list[str]] = defaultdict(list)
+        for parent, children in self.lineage_graph.items():
+            for child in children:
+                reverse_graph[child].append(parent)
 
         queue = deque([(start, [start])])
         visited = {start}
@@ -897,8 +950,11 @@ class StrategyLineageTracker:
         while queue:
             current, path = queue.popleft()
 
-            # Check all outgoing edges from current strategy
-            for neighbor in self.lineage_graph.get(current, []):
+            # Traverse both forward (children) and reverse (parent) edges
+            neighbors = list(self.lineage_graph.get(current, []))
+            neighbors.extend(reverse_graph.get(current, []))
+
+            for neighbor in neighbors:
                 if neighbor == end:
                     return [*path, neighbor]
 

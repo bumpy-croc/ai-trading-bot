@@ -126,7 +126,7 @@ def _handle(ns: argparse.Namespace) -> int:
             overrides = strategy.get_risk_overrides()
             if isinstance(overrides, dict) and "max_fraction" in overrides:
                 max_frac = overrides["max_fraction"]
-                if isinstance(max_frac, (int, float)) and 0 < max_frac <= 1:
+                if isinstance(max_frac, int | float) and 0 < max_frac <= 1:
                     risk_params_kwargs["max_position_size"] = max_frac
         risk_params = RiskParameters(**risk_params_kwargs)
 
@@ -137,9 +137,14 @@ def _handle(ns: argparse.Namespace) -> int:
         enable_engine_risk_exits = not ns.disable_engine_sl
 
         # Disable dynamic risk management for strategies that manage their own risk
-        # via signal timing (e.g., adaptive_trend). Dynamic risk reduces position
-        # sizes after losses, which undermines fully-invested trend-following.
-        enable_dynamic_risk = ns.strategy not in ("adaptive_trend",)
+        # via signal timing (e.g., trend-following). Dynamic risk reduces position
+        # sizes after losses, which undermines fully-invested strategies.
+        # Strategies opt out by setting enable_dynamic_risk=False in risk overrides.
+        enable_dynamic_risk = True
+        if hasattr(strategy, "get_risk_overrides"):
+            overrides = strategy.get_risk_overrides()
+            if isinstance(overrides, dict) and overrides.get("enable_dynamic_risk") is False:
+                enable_dynamic_risk = False
 
         backtester = Backtester(
             strategy=strategy,

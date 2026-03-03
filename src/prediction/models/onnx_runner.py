@@ -281,6 +281,18 @@ class OnnxRunner:
         except Exception as e:
             raise RuntimeError(f"Prediction failed: {e}") from e
 
+    def _build_cache_config(self) -> dict[str, Any]:
+        """Build the config dict used as part of cache keys."""
+        return {
+            "confidence_scale_factor": self.config.confidence_scale_factor,
+            "direction_threshold": self.config.direction_threshold,
+            "normalization_params": (
+                self.model_metadata.get("normalization_params", {})
+                if self.model_metadata
+                else {}
+            ),
+        }
+
     def _check_cache(self, features: np.ndarray) -> dict | None:
         """Check cache for existing prediction result"""
         if not self.cache_manager:
@@ -288,17 +300,7 @@ class OnnxRunner:
 
         model_name = os.path.basename(self.model_path)
         try:
-            config = {
-                "confidence_scale_factor": self.config.confidence_scale_factor,
-                "direction_threshold": self.config.direction_threshold,
-                "normalization_params": (
-                    self.model_metadata.get("normalization_params", {})
-                    if self.model_metadata
-                    else {}
-                ),
-            }
-
-            return self.cache_manager.get(features, model_name, config)
+            return self.cache_manager.get(features, model_name, self._build_cache_config())
         except Exception as e:
             # Log cache errors at warning level to ensure visibility in production logs
             logging.warning(
@@ -316,20 +318,10 @@ class OnnxRunner:
 
         model_name = os.path.basename(self.model_path)
         try:
-            config = {
-                "confidence_scale_factor": self.config.confidence_scale_factor,
-                "direction_threshold": self.config.direction_threshold,
-                "normalization_params": (
-                    self.model_metadata.get("normalization_params", {})
-                    if self.model_metadata
-                    else {}
-                ),
-            }
-
             self.cache_manager.set(
                 features,
                 model_name,
-                config,
+                self._build_cache_config(),
                 prediction["price"],
                 prediction["confidence"],
                 prediction["direction"],

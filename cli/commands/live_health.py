@@ -43,7 +43,7 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
             }
             # Config providers
             try:
-                from config.config_manager import get_config
+                from src.config.config_manager import get_config
 
                 cfg = get_config()
                 status["components"]["config"] = {
@@ -55,18 +55,20 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
 
             # Database
             try:
-                from database.manager import DatabaseManager
+                from sqlalchemy import text
+
+                from src.database.manager import DatabaseManager
 
                 dbm = DatabaseManager()
                 with dbm.get_session() as s:
-                    s.execute("SELECT 1")
+                    s.execute(text("SELECT 1"))
                 status["components"]["database"] = {"status": "healthy"}
             except Exception as e:
                 status["components"]["database"] = {"status": "unhealthy", "error": str(e)}
 
             # Binance API (best-effort)
             try:
-                from data_providers.binance_provider import BinanceProvider
+                from src.data_providers.binance_provider import BinanceProvider
 
                 prov = BinanceProvider()
                 df = prov.get_live_data("BTCUSDT", "1h", limit=1)
