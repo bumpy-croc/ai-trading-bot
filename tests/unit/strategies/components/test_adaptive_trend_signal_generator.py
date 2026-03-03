@@ -469,7 +469,7 @@ class TestInputValidation:
 
 
 class TestEmaCacheInvalidation:
-    """Test EMA cache uses O(1) fingerprint (length + first element)."""
+    """Test EMA cache invalidates when source data identity changes."""
 
     def test_cache_invalidates_on_different_array(self):
         """Test that passing a different array invalidates the cache."""
@@ -484,6 +484,22 @@ class TestEmaCacheInvalidation:
         ema2 = gen._compute_ema_series(arr2, 49)
 
         # Assert: results should differ because arrays differ
+        assert not np.allclose(ema1, ema2)
+
+    def test_cache_invalidates_on_same_length_same_first_value(self):
+        """Test regression: arrays sharing len/first value still invalidate cache."""
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+
+        # Arrange: same length and first element, different remaining series
+        arr1 = np.linspace(100, 200, 50)
+        arr2 = arr1.copy()
+        arr2[1:] = np.linspace(300, 400, 49)
+
+        # Act
+        ema1 = gen._compute_ema_series(arr1, 49).copy()
+        ema2 = gen._compute_ema_series(arr2, 49)
+
+        # Assert: second call must recompute against new series
         assert not np.allclose(ema1, ema2)
 
     def test_cache_invalidates_on_inplace_mutation(self):

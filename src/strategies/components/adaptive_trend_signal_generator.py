@@ -101,8 +101,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         # The buffer is pre-allocated to avoid per-bar copying from concatenation.
         self._cached_ema: np.ndarray | None = None
         self._cached_ema_length: int = 0
-        self._cached_data_len: int = 0
-        self._cached_data_first: float | None = None
+        self._cached_close_snapshot: np.ndarray | None = None
 
     @property
     def warmup_period(self) -> int:
@@ -283,18 +282,19 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         """
         needed_length = max_index + 1
 
-        # O(1) identity check: detect new/replaced arrays by comparing
-        # length and first element. This avoids O(N) hashing per bar
-        # while still catching new backtest runs or array replacements.
+        # Validate full input identity against a snapshot to prevent stale EMA
+        # reuse when a new series has the same length/first value.
         n = len(close)
-        first_val = float(close[0]) if n > 0 else None
-        data_changed = n != self._cached_data_len or first_val != self._cached_data_first
+        data_changed = (
+            self._cached_close_snapshot is None
+            or close.shape != self._cached_close_snapshot.shape
+            or not np.array_equal(close, self._cached_close_snapshot)
+        )
 
         if data_changed:
             self._cached_ema = None
             self._cached_ema_length = 0
-            self._cached_data_len = n
-            self._cached_data_first = first_val
+            self._cached_close_snapshot = close.copy()
 
         if self._cached_ema is not None and self._cached_ema_length >= needed_length:
             return self._cached_ema
