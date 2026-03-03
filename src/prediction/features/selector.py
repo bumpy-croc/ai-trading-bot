@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+import math
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from src.config.constants import DEFAULT_NORMALIZATION_EPSILON
+logger = logging.getLogger(__name__)
 
 
 class FeatureSelector:
@@ -56,16 +58,30 @@ class FeatureSelector:
             raise ValueError("No matching features found for selection")
 
         window = features_df.tail(self.sequence_length)
-        arr = window[cols].to_numpy(dtype=np.float32, copy=False)
+        # Use copy=True to avoid modifying the original DataFrame's underlying data
+        # when applying in-place normalization below
+        arr = window[cols].to_numpy(dtype=np.float32, copy=True)
 
         # Apply per-feature normalization when provided
         for j, norm in enumerate(normalizers):
             if not norm:
                 continue
-            mean = float(norm.get("mean", 0.0))
-            std = float(norm.get("std", 1.0))
-            if std == 0.0:
-                std = DEFAULT_NORMALIZATION_EPSILON
+            mean_val = norm.get("mean")
+            std_val = norm.get("std")
+            # Handle None values from JSON null and convert to float
+            mean = float(mean_val) if mean_val is not None else 0.0
+            std = float(std_val) if std_val is not None else 1.0
+            # Handle edge cases: zero, NaN, or infinity in normalization params
+            if std == 0.0 or not math.isfinite(std):
+                logger.warning(
+                    "Invalid std value in normalization for feature index %d, using 1e-8", j
+                )
+                std = 1e-8
+            if not math.isfinite(mean):
+                logger.warning(
+                    "Invalid mean value in normalization for feature index %d, using 0.0", j
+                )
+                mean = 0.0
             arr[:, j] = (arr[:, j] - mean) / std
 
         return arr

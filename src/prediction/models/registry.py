@@ -77,7 +77,9 @@ class PredictionModelRegistry:
         self._bundles: dict[tuple[str, str, str], StrategyModel] = {}
         # Optional production selections: (symbol, timeframe, model_type) -> version_id
         self._production_index: dict[tuple[str, str, str], str] = {}
-        # Lock to protect registry state from concurrent access during reload
+        # RLock for thread-safe atomic swaps during reload. RLock (re-entrant) is used
+        # rather than Lock because _load and reload_models share traversal logic, and a
+        # future refactoring to consolidate them could call locked methods internally.
         self._lock = threading.RLock()
         # Load structured models
         self._load()
@@ -215,23 +217,30 @@ class PredictionModelRegistry:
         try:
             runner = OnnxRunner(model_path, self.config, self.cache_manager)
         except Exception as e:
-            # Log the actual error before creating stub for graceful degradation
-            logger.error(
-                "Failed to load OnnxRunner for %s: %s. Creating stub runner.",
+            # Log the original error to aid debugging when stub runner is used
+            logger.warning(
+                "Failed to create OnnxRunner for %s, using stub runner: %s",
                 model_path,
                 e,
-                exc_info=True,
             )
 
             class _StubRunner:
-                def __init__(self, path: str):
+                def __init__(self, path: str, error_message: str):
                     self.model_path = path
                     self.session = None
+                    self._load_error_message = error_message
 
                 def predict(self, _features):  # pragma: no cover
-                    raise RuntimeError("Stub runner cannot perform inference")
+                    raise RuntimeError(
+                        f"Model {self.model_path} failed to load - cannot perform inference. "
+                        f"Original error: {self._load_error_message}"
+                    )
 
-            runner = _StubRunner(model_path)  # type: ignore[assignment]
+                def close(self):  # pragma: no cover
+                    pass  # No resources to release
+
+            # Store string representation to avoid retaining traceback frames in memory
+            runner = _StubRunner(model_path, str(e))  # type: ignore[assignment]
         return StrategyModel(
             symbol=symbol,
             timeframe=timeframe,
@@ -246,6 +255,11 @@ class PredictionModelRegistry:
 
     # ---- Introspection helpers ----
     def list_bundles(self) -> list[StrategyModel]:
+        """Return a snapshot of all loaded bundles.
+
+        Thread-safe: Acquires lock so the returned list is consistent with
+        any concurrent ``reload_models`` swap.
+        """
         with self._lock:
             return list(self._bundles.values())
 
@@ -259,6 +273,9 @@ class PredictionModelRegistry:
         stage: str | None = None,
     ) -> StrategyModel:
         """Select a bundle for symbol/model_type/timeframe.
+
+        Thread-safe: Acquires lock so the returned bundle is from the current
+        generation, preventing use-after-close if a reload happens concurrently.
 
         If stage is provided and a production index exists, use it. Otherwise, use the
         most recently loaded bundle for that key (latest symlink is preferred by _load()).
@@ -294,47 +311,69 @@ class PredictionModelRegistry:
 
     # ---- Runner helpers for engine ----
     def get_default_runner(self) -> OnnxRunner:
+        """Get the default model runner.
+
+        Thread-safe: Delegates to ``list_bundles`` which acquires lock.
+        """
         bundles = self.list_bundles()
         if not bundles:
             raise ModelNotAvailableError("No strategy models available")
         return bundles[0].runner
 
     def get_default_bundle(self) -> StrategyModel:
+        """Get the default model bundle.
+
+        Thread-safe: Delegates to ``list_bundles`` which acquires lock.
+        """
         bundles = self.list_bundles()
         if not bundles:
             raise ModelNotAvailableError("No strategy models available")
         return bundles[0]
 
     def iter_runners(self) -> list[OnnxRunner]:
+        """Return runners for all loaded bundles.
+
+        Thread-safe: Delegates to ``list_bundles`` which acquires lock.
+        """
         return [b.runner for b in self.list_bundles()]
 
     def reload_models(self) -> None:
-        """Reload all bundles from disk with thread-safe atomic swap using copy-on-write pattern.
+        """Reload all bundles from disk with copy-on-write pattern.
 
-        This method uses a copy-on-write pattern to avoid race conditions:
-        1. Load new bundles in background (outside lock)
-        2. Acquire lock and atomically swap the bundles dict
-        3. Release lock
-        4. Close old runners outside lock (no blocking of other threads)
+        Loads new bundles into temporary dicts first, then atomically swaps
+        them in. If loading fails, the existing bundles remain available so
+        predictions continue working with the previous model versions.
         """
         # Load new bundles in background (outside lock to avoid blocking)
         new_bundles, new_production_index = self._scan_registry()
 
-        # Acquire lock briefly for atomic swap
+        # Preserve existing bundles when reload produces empty results (e.g., transient
+        # filesystem issue, NFS timeout, Docker volume unmount). This prevents a full
+        # prediction outage from a temporary registry path unavailability.
         with self._lock:
-            # Capture old bundles for cleanup after lock release
-            old_bundles = self._bundles.copy()
-            # Atomic swap - other threads will see new bundles immediately
+            old_bundles = self._bundles
+            if not new_bundles and old_bundles:
+                logger.warning(
+                    "reload_models produced 0 bundles (had %d) — keeping existing bundles. "
+                    "Check model_registry_path: %s",
+                    len(old_bundles),
+                    self.config.model_registry_path,
+                )
+                return
             self._bundles = new_bundles
             self._production_index = new_production_index
 
-        # Close old runners outside lock (no blocking of other threads)
+        # Close old runners outside lock to avoid blocking other threads
         for bundle in old_bundles.values():
             if hasattr(bundle.runner, "close"):
                 try:
                     bundle.runner.close()
                 except Exception as e:
-                    logger.warning("Failed to close runner for %s: %s", bundle.key, e)
+                    logger.warning(
+                        "Failed to close runner for %s during reload: %s",
+                        bundle.key,
+                        e,
+                    )
 
     def invalidate_cache(self, model_name: str | None = None) -> int:
         """

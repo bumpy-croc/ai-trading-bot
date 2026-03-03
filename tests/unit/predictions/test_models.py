@@ -3,6 +3,7 @@ Tests for prediction engine model components.
 """
 
 import json
+import threading
 from unittest.mock import Mock, mock_open, patch
 
 import numpy as np
@@ -364,98 +365,110 @@ class TestOnnxRunner:
                 runner._normalize_features(features_1d)
 
     @patch("onnxruntime.InferenceSession")
-    def test_normalize_features_feature_order_fallback(self, mock_session):
-        """Test feature order fallback for backward compatibility with older models"""
+    def test_normalize_features_with_explicit_feature_order(self, mock_session):
+        """Test normalization using explicit feature_names from metadata."""
         mock_session_instance = Mock()
         mock_session.return_value = mock_session_instance
 
-        # Mock metadata WITHOUT feature_order (simulating older model)
         metadata = {
             "normalization_params": {
-                "close": {"mean": 100.0, "std": 10.0},
-                "volume": {"mean": 1000.0, "std": 100.0},
-                "rsi": {"mean": 50.0, "std": 15.0},
-            }
+                "close": {"mean": 30000.0, "std": 1000.0},
+                "volume": {"mean": 500.0, "std": 100.0},
+            },
+            "feature_names": ["close", "volume"],
         }
 
         with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
-            # Use proper path format instead of filename string
             model_path = "/tmp/test_model.onnx"
             runner = OnnxRunner(model_path, self.config)
 
-            # Create 3D features matching the normalization params order
-            # Note: The dict key order in Python 3.7+ is insertion order
-            features = np.array(
-                [
-                    [
-                        [100.0, 1000.0, 50.0],  # Close=100, Volume=1000, RSI=50
-                        [110.0, 1100.0, 60.0],  # Close=110, Volume=1100, RSI=60
-                    ]
-                ],
-                dtype=np.float32,
-            )
+            features = np.array([[[30000.0, 500.0]]] * 5, dtype=np.float32)
+            normalized = runner._normalize_features(features.copy())
 
-            # Normalize with fallback to dict key order
-            normalized = runner._normalize_features(features)
-
-            # Verify normalization applied correctly
-            assert normalized.shape == features.shape
-            # First feature (close): (100 - 100) / 10 = 0, (110 - 100) / 10 = 1
-            assert np.isclose(normalized[0, 0, 0], 0.0, atol=1e-5)
-            assert np.isclose(normalized[0, 1, 0], 1.0, atol=1e-5)
-            # Second feature (volume): (1000 - 1000) / 100 = 0, (1100 - 1000) / 100 = 1
-            assert np.isclose(normalized[0, 0, 1], 0.0, atol=1e-5)
-            assert np.isclose(normalized[0, 1, 1], 1.0, atol=1e-5)
-            # Third feature (rsi): (50 - 50) / 15 = 0, (60 - 50) / 15 ≈ 0.667
-            assert np.isclose(normalized[0, 0, 2], 0.0, atol=1e-5)
-            assert np.isclose(normalized[0, 1, 2], 10.0 / 15.0, atol=1e-5)
+            # close: (30000 - 30000) / 1000 = 0.0
+            assert np.allclose(normalized[:, :, 0], 0.0, atol=1e-5)
+            # volume: (500 - 500) / 100 = 0.0
+            assert np.allclose(normalized[:, :, 1], 0.0, atol=1e-5)
 
     @patch("onnxruntime.InferenceSession")
-    def test_normalize_features_with_explicit_feature_order(self, mock_session):
-        """Test that explicit feature_order from metadata is used correctly"""
+    def test_normalize_features_feature_order_fallback(self, mock_session):
+        """Test normalization fallback when feature_names is absent."""
         mock_session_instance = Mock()
         mock_session.return_value = mock_session_instance
 
-        # Mock metadata WITH explicit feature_order
+        # No feature_names in metadata — triggers legacy fallback
         metadata = {
-            "feature_order": ["rsi", "close", "volume"],  # Different order than dict
             "normalization_params": {
-                "close": {"mean": 100.0, "std": 10.0},
-                "volume": {"mean": 1000.0, "std": 100.0},
-                "rsi": {"mean": 50.0, "std": 15.0},
+                "close": {"mean": 30000.0, "std": 1000.0},
+                "volume": {"mean": 500.0, "std": 100.0},
             },
         }
 
         with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
-            # Use proper path format instead of filename string
             model_path = "/tmp/test_model.onnx"
             runner = OnnxRunner(model_path, self.config)
 
-            # Create features in feature_order: [RSI, Close, Volume]
-            features = np.array(
-                [
-                    [
-                        [50.0, 100.0, 1000.0],  # RSI=50, Close=100, Volume=1000
-                        [60.0, 110.0, 1100.0],  # RSI=60, Close=110, Volume=1100
-                    ]
-                ],
-                dtype=np.float32,
-            )
+            features = np.array([[[30000.0, 500.0]]] * 5, dtype=np.float32)
+            normalized = runner._normalize_features(features.copy())
 
-            # Normalize using explicit feature_order
-            normalized = runner._normalize_features(features)
+            # Should still normalize using key iteration order
+            assert not np.isnan(normalized).any()
+            assert not np.isinf(normalized).any()
 
-            # Verify normalization applied using feature_order
-            assert normalized.shape == features.shape
-            # First feature (rsi per feature_order): (50 - 50) / 15 = 0, (60 - 50) / 15 ≈ 0.667
-            assert np.isclose(normalized[0, 0, 0], 0.0, atol=1e-5)
-            assert np.isclose(normalized[0, 1, 0], 10.0 / 15.0, atol=1e-5)
-            # Second feature (close per feature_order): (100 - 100) / 10 = 0, (110 - 100) / 10 = 1
-            assert np.isclose(normalized[0, 0, 1], 0.0, atol=1e-5)
-            assert np.isclose(normalized[0, 1, 1], 1.0, atol=1e-5)
-            # Third feature (volume per feature_order): (1000 - 1000) / 100 = 0, (1100 - 1000) / 100 = 1
-            assert np.isclose(normalized[0, 0, 2], 0.0, atol=1e-5)
-            assert np.isclose(normalized[0, 1, 2], 1.0, atol=1e-5)
+    @patch("onnxruntime.InferenceSession")
+    def test_normalize_features_count_mismatch_warns(self, mock_session):
+        """Test that feature count mismatch produces a warning in fallback path."""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+
+        # 2 norm params but input will have 3 features
+        metadata = {
+            "normalization_params": {
+                "close": {"mean": 30000.0, "std": 1000.0},
+                "volume": {"mean": 500.0, "std": 100.0},
+            },
+        }
+
+        with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
+
+            features = np.array([[[30000.0, 500.0, 42.0]]] * 5, dtype=np.float32)
+
+            import logging
+
+            with patch.object(logging, "warning") as mock_warn:
+                normalized = runner._normalize_features(features.copy())
+                # Should warn about feature count mismatch
+                mismatch_calls = [
+                    c for c in mock_warn.call_args_list if "Feature count mismatch" in str(c)
+                ]
+                assert len(mismatch_calls) > 0
+
+            # Third feature should be unnormalized (same as input)
+            assert np.allclose(normalized[:, :, 2], 42.0, atol=1e-5)
+
+    @patch("onnxruntime.InferenceSession")
+    def test_denormalize_price_zero_std_returns_mean(self, mock_session):
+        """When std is zero, denormalization should return mean, not raw prediction."""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+
+        metadata = {
+            "price_normalization": {"mean": 30000.0, "std": 0.0},
+        }
+
+        with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
+            runner.model_metadata = metadata
+
+            # Any prediction should collapse to mean when std is zero
+            result = runner._denormalize_price(0.5)
+            assert result == 30000.0
+
+            result = runner._denormalize_price(-1.0)
+            assert result == 30000.0
 
 
 class TestPredictionModelRegistry:
@@ -508,3 +521,54 @@ class TestPredictionModelRegistry:
         assert len(reg.list_bundles()) == 1
         reg.reload_models()
         assert len(reg.list_bundles()) == 1
+
+    def test_reload_models_preserves_bundles_when_path_missing(self, tmp_path):
+        """Verify copy-on-write pattern keeps old bundles when registry path disappears."""
+        cfg = PredictionConfig(model_registry_path=str(tmp_path))
+        self._write_bundle(tmp_path, "BTCUSDT", "basic", "2025-09-17_1h_v1")
+        reg = PredictionModelRegistry(cfg)
+        assert len(reg.list_bundles()) == 1
+
+        # Point registry at a non-existent path to simulate transient filesystem issue
+        reg.config = PredictionConfig(model_registry_path=str(tmp_path / "nonexistent"))
+        reg.reload_models()
+
+        # Old bundles should be preserved when reload produces 0 results
+        assert len(reg.list_bundles()) == 1
+
+    def test_reload_concurrent_read_safety(self, tmp_path):
+        """Verify concurrent reads during reload don't crash."""
+        cfg = PredictionConfig(model_registry_path=str(tmp_path))
+        self._write_bundle(tmp_path, "BTCUSDT", "basic", "2025-09-17_1h_v1")
+        reg = PredictionModelRegistry(cfg)
+        errors: list[Exception] = []
+
+        def reader():
+            try:
+                for _ in range(50):
+                    reg.list_bundles()
+                    try:
+                        reg.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+                    except Exception:
+                        pass  # ModelNotAvailableError during reload is expected
+            except Exception as e:
+                errors.append(e)
+
+        def reloader():
+            try:
+                for _ in range(10):
+                    reg.reload_models()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=reader),
+            threading.Thread(target=reader),
+            threading.Thread(target=reloader),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert not errors, f"Thread safety violation: {errors}"

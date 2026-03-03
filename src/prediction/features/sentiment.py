@@ -5,12 +5,16 @@ This module extracts sentiment-based features from market sentiment data.
 For MVP, this extractor is disabled and returns neutral sentiment values.
 """
 
+import logging
+
 import pandas as pd
 
 from src.config.constants import DEFAULT_ENABLE_SENTIMENT
 from src.data_providers.feargreed_provider import FearGreedProvider
 from src.tech.features.base import FeatureExtractor
 from src.tech.features.schemas import SENTIMENT_FEATURES_SCHEMA
+
+logger = logging.getLogger(__name__)
 
 
 class SentimentFeatureExtractor(FeatureExtractor):
@@ -88,8 +92,9 @@ class SentimentFeatureExtractor(FeatureExtractor):
         if self._provider is None:
             try:
                 self._provider = FearGreedProvider()
-            except Exception:
+            except Exception as e:
                 # If provider init fails (e.g., no network), fallback to neutral
+                logger.warning("FearGreedProvider init failed, using neutral sentiment: %s", e)
                 return self._add_neutral_sentiment_features(df)
         # Ensure datetime index
         work = df.copy()
@@ -102,8 +107,9 @@ class SentimentFeatureExtractor(FeatureExtractor):
                 work.index = (
                     pd.to_datetime(work.index, utc=True).tz_convert("UTC").tz_localize(None)
                 )
-            except Exception:
+            except Exception as e:
                 # Best effort standardization; if it fails, fallback to neutral to be safe
+                logger.warning("Timezone conversion failed, using neutral sentiment: %s", e)
                 return self._add_neutral_sentiment_features(df)
         if not isinstance(work.index, pd.DatetimeIndex):
             # Cannot merge robustly; fall back to neutral
@@ -117,7 +123,8 @@ class SentimentFeatureExtractor(FeatureExtractor):
             if not self._provider._is_fresh(now_ts.to_pydatetime()):
                 return self._add_neutral_sentiment_features(df)
             sents = self._provider.get_historical_sentiment(symbol="BTCUSDT", start=start, end=end)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to fetch historical sentiment: %s", e)
             sents = pd.DataFrame()
 
         if sents.empty:
@@ -126,7 +133,8 @@ class SentimentFeatureExtractor(FeatureExtractor):
         # Resample sentiment to the data's frequency (infer)
         try:
             inferred = pd.infer_freq(work.index)
-        except Exception:
+        except Exception as e:
+            logger.debug("Could not infer frequency: %s", e)
             inferred = None
         if inferred is None:
             # Default to daily if cannot infer; forward fill will align
@@ -140,7 +148,8 @@ class SentimentFeatureExtractor(FeatureExtractor):
                     .tz_convert("UTC")
                     .tz_localize(None)
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning("Sentiment index timezone conversion failed, using neutral: %s", e)
                 return self._add_neutral_sentiment_features(df)
 
         # Join and forward-fill sentiment features; do not backfill into the future
