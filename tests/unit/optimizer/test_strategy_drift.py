@@ -114,7 +114,11 @@ class TestZScore:
 
     def test_zero_std_with_deviation(self):
         z = StrategyDriftDetector._z_score(0.5, 1.0, 0.0)
-        assert z < 0  # worse than baseline
+        assert z == -5.0  # max-signal negative (observed < baseline)
+
+    def test_zero_std_positive_deviation(self):
+        z = StrategyDriftDetector._z_score(1.5, 1.0, 0.0)
+        assert z == 5.0  # max-signal positive (observed > baseline)
 
     def test_normal_z_score(self):
         z = StrategyDriftDetector._z_score(0.5, 1.0, 0.25)

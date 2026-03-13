@@ -143,6 +143,11 @@ class WalkForwardAnalyzer:
         cfg = self.config
         step = cfg.step_days or cfg.test_days
 
+        if cfg.num_folds is not None and cfg.total_days is not None:
+            raise ValueError(
+                "Cannot set both num_folds and total_days — they are mutually exclusive"
+            )
+
         if cfg.num_folds is not None:
             return cfg.num_folds, step
 
@@ -177,11 +182,10 @@ class WalkForwardAnalyzer:
     @staticmethod
     def _safe_robustness(oos_sharpe: float, is_sharpe: float) -> float:
         """Compute OOS/IS Sharpe ratio, handling edge cases."""
-        if is_sharpe == 0:
-            # Cannot compute ratio; treat positive OOS as mildly robust
-            return 1.0 if oos_sharpe > 0 else 0.0
+        if is_sharpe <= 0:
+            # Negative or zero IS Sharpe provides no valid baseline for comparison
+            return 0.0
         ratio = oos_sharpe / is_sharpe
-        # Negative IS Sharpe inverts the ratio — clamp to [-1, 2] for sanity
         return max(-1.0, min(ratio, 2.0))
 
     def run(self, end: datetime | None = None) -> WalkForwardResult:

@@ -20,13 +20,11 @@ class DriftConfig:
     """Thresholds for drift detection.
 
     Attributes:
-        window_size: Number of recent data points used for the rolling metric.
         mild_z: Z-score threshold for MILD drift.
         severe_z: Z-score threshold for SEVERE drift.
         critical_z: Z-score threshold for CRITICAL drift (recommend pausing).
     """
 
-    window_size: int = 30
     mild_z: float = 1.5
     severe_z: float = 2.0
     critical_z: float = 2.5
@@ -70,8 +68,8 @@ class StrategyDriftDetector:
                 diff = observed - baseline_mean
                 if abs(diff) < 1e-9:
                     return 0.0
-                # No variance — any deviation is noteworthy; return clamped sign
-                return max(-5.0, min(5.0, diff * 100))
+                # No variance — any deviation is max-signal in the direction of change
+                return 5.0 if diff > 0 else -5.0
             return 0.0
         return (observed - baseline_mean) / baseline_std
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -80,6 +81,9 @@ def _handle(ns: argparse.Namespace) -> int:
 
         return 0
     except Exception as exc:
+        if getattr(ns, "debug", False):
+            raise
+        logging.exception("Walk-forward analysis failed")
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -105,4 +109,5 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--debug", action="store_true", help="Re-raise exceptions with full traceback")
     p.set_defaults(func=_handle)

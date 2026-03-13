@@ -132,13 +132,15 @@ class TestSafeRobustness:
         ratio = WalkForwardAnalyzer._safe_robustness(0.8, 1.0)
         assert ratio == pytest.approx(0.8)
 
-    def test_is_sharpe_zero_positive_oos(self):
-        ratio = WalkForwardAnalyzer._safe_robustness(0.5, 0.0)
-        assert ratio == 1.0
+    def test_is_sharpe_zero_returns_zero(self):
+        # Zero IS Sharpe provides no valid baseline
+        assert WalkForwardAnalyzer._safe_robustness(0.5, 0.0) == 0.0
+        assert WalkForwardAnalyzer._safe_robustness(-0.5, 0.0) == 0.0
 
-    def test_is_sharpe_zero_negative_oos(self):
-        ratio = WalkForwardAnalyzer._safe_robustness(-0.5, 0.0)
-        assert ratio == 0.0
+    def test_is_sharpe_negative_returns_zero(self):
+        # Negative IS Sharpe means no valid baseline to compare against
+        assert WalkForwardAnalyzer._safe_robustness(0.8, -1.0) == 0.0
+        assert WalkForwardAnalyzer._safe_robustness(-0.5, -0.3) == 0.0
 
     def test_clamped_high(self):
         ratio = WalkForwardAnalyzer._safe_robustness(5.0, 1.0)
@@ -288,6 +290,12 @@ class TestFoldResolution:
         cfg = WalkForwardConfig(total_days=100, train_days=180, test_days=30)
         analyzer = WalkForwardAnalyzer(cfg)
         with pytest.raises(ValueError, match="too small"):
+            analyzer._resolve_folds()
+
+    def test_num_folds_and_total_days_raises(self):
+        cfg = WalkForwardConfig(num_folds=5, total_days=360, train_days=180, test_days=30)
+        analyzer = WalkForwardAnalyzer(cfg)
+        with pytest.raises(ValueError, match="mutually exclusive"):
             analyzer._resolve_folds()
 
     def test_default_folds(self):
