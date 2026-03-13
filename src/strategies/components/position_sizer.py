@@ -6,6 +6,7 @@ for calculating position sizes based on various factors in the component-based
 strategy architecture.
 """
 
+import threading
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Sequence
@@ -497,14 +498,20 @@ class KellySizer(PositionSizer):
         return params
 
 
+# Minimum multiplier for signal confidence/strength adjustments.
+# Prevents near-zero sizing from low-confidence or low-strength signals.
+MIN_SIGNAL_ADJUSTMENT = 0.3
+
+
 class KellyCriterionSizer(PositionSizer):
     """
     Kelly Criterion position sizer with adaptive trade tracking.
 
     Computes optimal position sizes using the Kelly formula f* = (bp - q) / b
-    where b = reward/risk ratio, p = win rate, q = 1 - p. Uses a deque ring
-    buffer to track rolling trade statistics and supports fractional Kelly,
-    regime-aware scaling, overfitting detection, and cold start fallback.
+    where b = mean(win_amounts) / mean(loss_amounts), p = win rate, q = 1 - p.
+    Uses a deque ring buffer to track rolling trade statistics and supports
+    fractional Kelly, regime-aware scaling, overfitting detection, and cold
+    start fallback.
     """
 
     def __init__(
@@ -559,6 +566,10 @@ class KellyCriterionSizer(PositionSizer):
             raise ValueError(
                 f"overfitting_threshold must be between 0 and 1 inclusive, got {overfitting_threshold}"
             )
+        if not 0.01 <= max_fraction <= 1.0:
+            raise ValueError(
+                f"max_fraction must be between 0.01 and 1.0, got {max_fraction}"
+            )
 
         self.kelly_fraction = kelly_fraction
         self.min_trades = min_trades
@@ -569,8 +580,16 @@ class KellyCriterionSizer(PositionSizer):
         self.overfitting_threshold = overfitting_threshold
         self.max_fraction = max_fraction
 
-        # Ring buffer: each entry is (win: bool, reward_risk: float)
-        self._trades: deque[tuple[bool, float]] = deque(maxlen=lookback_trades)
+        # Ring buffer: each entry is (win: bool, profit_pct: float, loss_risk_pct: float)
+        self._trades: deque[tuple[bool, float, float]] = deque(maxlen=lookback_trades)
+        self._trades_lock = threading.Lock()
+
+        # Cache regime multiplier objects (config is static)
+        self._regime_config = RegimeMultiplierConfig(
+            bull_high_conf_multiplier=1.0,  # No boost in bull markets
+            min_multiplier=0.2,  # 20% floor
+        )
+        self._regime_calculator = RegimeMultiplierCalculator(self._regime_config)
 
     @property
     def trade_count(self) -> int:
@@ -593,25 +612,41 @@ class KellyCriterionSizer(PositionSizer):
         """
         if loss_risk_pct <= 0:
             return  # Cannot compute reward-to-risk without valid risk
-        reward_risk = abs(profit_pct) / loss_risk_pct
-        self._trades.append((win, reward_risk))
+        with self._trades_lock:
+            self._trades.append((win, abs(profit_pct), loss_risk_pct))
 
     def _compute_statistics(self) -> tuple[float, float]:
         """
         Compute live win rate and average reward-to-risk from the ring buffer.
 
+        Computes b = mean(win_amounts) / mean(loss_amounts) to include loss
+        magnitude in the reward-to-risk ratio.
+
         Returns:
             Tuple of (win_rate, avg_reward_risk). Falls back to expected values
             when the buffer has insufficient data.
         """
-        if not self._trades:
+        with self._trades_lock:
+            trades_snapshot = list(self._trades)
+
+        if not trades_snapshot:
             return self.expected_win_rate, self.expected_reward_risk
 
-        wins = [rr for win, rr in self._trades if win]
-        total = len(self._trades)
-        win_rate = len(wins) / total
+        win_amounts = [profit for win, profit, _ in trades_snapshot if win]
+        loss_amounts = [profit for win, profit, _ in trades_snapshot if not win]
+        total = len(trades_snapshot)
+        win_rate = len(win_amounts) / total
 
-        avg_rr = float(np.mean(wins)) if wins else self.expected_reward_risk
+        # b = mean(win_amounts) / mean(loss_amounts)
+        if win_amounts and loss_amounts:
+            avg_rr = float(np.mean(win_amounts)) / float(np.mean(loss_amounts))
+        elif win_amounts:
+            # No losses yet — fall back to expected reward-to-risk
+            avg_rr = self.expected_reward_risk
+        else:
+            # No wins — ratio is effectively zero
+            avg_rr = 0.0
+
         return win_rate, avg_rr
 
     def _kelly_percentage(self, win_rate: float, reward_risk: float) -> float:
@@ -688,8 +723,8 @@ class KellyCriterionSizer(PositionSizer):
             base_fraction = self.fallback_fraction
 
         # Apply signal-based adjustments
-        confidence_adj = max(0.3, signal.confidence)
-        strength_adj = max(0.3, signal.strength)
+        confidence_adj = max(MIN_SIGNAL_ADJUSTMENT, signal.confidence)
+        strength_adj = max(MIN_SIGNAL_ADJUSTMENT, signal.strength)
         adjusted_fraction = base_fraction * confidence_adj * strength_adj
 
         # Apply regime scaling
@@ -704,6 +739,11 @@ class KellyCriterionSizer(PositionSizer):
         if risk_amount > 0:
             position_size = min(position_size, risk_amount)
 
+        # Kelly says don't trade — return 0 before bounds checking
+        # can inflate it to min_fraction
+        if position_size <= 0:
+            return 0.0
+
         # Apply bounds checking
         return self.apply_bounds_checking(
             position_size, balance, max_fraction=self.max_fraction
@@ -715,12 +755,7 @@ class KellyCriterionSizer(PositionSizer):
         Uses conservative config (no bull boost) to avoid amplifying
         position sizes in favorable conditions beyond Kelly's recommendation.
         """
-        config = RegimeMultiplierConfig(
-            bull_high_conf_multiplier=1.0,  # No boost in bull markets
-            min_multiplier=0.2,  # 20% floor
-        )
-        calculator = RegimeMultiplierCalculator(config)
-        return calculator.calculate_conservative(regime)
+        return self._regime_calculator.calculate_conservative(regime)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get Kelly Criterion sizer parameters."""

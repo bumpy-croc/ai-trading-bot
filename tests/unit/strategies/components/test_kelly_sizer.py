@@ -105,6 +105,18 @@ class TestKellyCriterionSizerInit:
         with pytest.raises(ValueError, match="overfitting_threshold"):
             KellyCriterionSizer(overfitting_threshold=1.5)
 
+    def test_invalid_max_fraction_raises(self):
+        """Test that invalid max_fraction raises ValueError."""
+        with pytest.raises(ValueError, match="max_fraction"):
+            KellyCriterionSizer(max_fraction=0.0)
+        with pytest.raises(ValueError, match="max_fraction"):
+            KellyCriterionSizer(max_fraction=1.5)
+
+    def test_valid_max_fraction_accepted(self):
+        """Test valid max_fraction values are accepted."""
+        sizer = KellyCriterionSizer(max_fraction=0.50)
+        assert sizer.max_fraction == 0.50
+
 
 class TestKellyCalculation:
     """Test the core Kelly formula and statistics computation."""
@@ -150,8 +162,33 @@ class TestKellyCalculation:
 
         win_rate, avg_rr = sizer._compute_statistics()
         assert win_rate == pytest.approx(0.7, abs=1e-6)
-        # Wins have reward_risk = 0.04/0.02 = 2.0
+        # b = mean(win_amounts) / mean(loss_amounts) = 0.04 / 0.02 = 2.0
         assert avg_rr == pytest.approx(2.0, abs=1e-6)
+
+    def test_compute_statistics_includes_loss_magnitude(self):
+        """Test b calculation uses both win and loss magnitudes."""
+        sizer = KellyCriterionSizer(min_trades=3, lookback_trades=20)
+        # 2 wins at 6%, 1 loss at 3%
+        sizer.record_trade(win=True, profit_pct=0.06, loss_risk_pct=0.02)
+        sizer.record_trade(win=True, profit_pct=0.06, loss_risk_pct=0.02)
+        sizer.record_trade(win=False, profit_pct=0.03, loss_risk_pct=0.02)
+
+        win_rate, avg_rr = sizer._compute_statistics()
+        assert win_rate == pytest.approx(2.0 / 3.0, abs=1e-6)
+        # b = mean([0.06, 0.06]) / mean([0.03]) = 0.06 / 0.03 = 2.0
+        assert avg_rr == pytest.approx(2.0, abs=1e-6)
+
+    def test_compute_statistics_no_losses_fallback(self):
+        """Test b falls back to expected_reward_risk when no losses exist."""
+        sizer = KellyCriterionSizer(
+            min_trades=2, lookback_trades=20, expected_reward_risk=1.5
+        )
+        sizer.record_trade(win=True, profit_pct=0.04, loss_risk_pct=0.02)
+        sizer.record_trade(win=True, profit_pct=0.04, loss_risk_pct=0.02)
+
+        win_rate, avg_rr = sizer._compute_statistics()
+        assert win_rate == 1.0
+        assert avg_rr == 1.5  # Falls back to expected
 
     def test_compute_statistics_empty_buffer(self):
         """Test statistics default to expected values when buffer is empty."""
@@ -401,6 +438,20 @@ class TestBoundsEnforcement:
         size = sizer.calculate_size(signal, balance, risk)
         # Max fraction is 0.20 → max size = 2000
         assert size <= balance * 0.20 + 1e-6
+
+    def test_kelly_zero_position_not_inflated_by_min_fraction(self):
+        """Test that Kelly zero/negative position returns 0.0, not min_fraction floor."""
+        sizer = KellyCriterionSizer(min_trades=3, lookback_trades=10)
+        # Seed trades with negative edge: 20% win rate, small wins, big losses
+        for _ in range(2):
+            sizer.record_trade(win=True, profit_pct=0.01, loss_risk_pct=0.02)
+        for _ in range(8):
+            sizer.record_trade(win=False, profit_pct=0.03, loss_risk_pct=0.02)
+
+        signal = _make_signal(confidence=0.9, strength=0.8)
+        size = sizer.calculate_size(signal, balance=10000.0, risk_amount=5000.0)
+        # Kelly should recommend zero with negative edge
+        assert size == 0.0
 
     def test_hold_signal_returns_zero(self):
         """Test hold signal returns zero position size."""
