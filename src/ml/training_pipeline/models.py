@@ -260,13 +260,24 @@ def create_model(
     # Temporal Fusion Transformer
     elif model_type_lower == "tft":
         try:
-            from src.ml.training_pipeline.models_tft import create_tft_model
+            from src.ml.training_pipeline.models_tft import (
+                RECOMMENDED_HYPERPARAMETERS as TFT_HYPERPARAMS,
+                create_tft_model,
+            )
         except ImportError:
             raise ImportError(
                 "TFT model requires models_tft module. "
                 "Ensure the file exists in src/ml/training_pipeline/"
             ) from None
 
+        if variant != "default" and variant in TFT_HYPERPARAMS:
+            variant_params = {
+                k: v
+                for k, v in TFT_HYPERPARAMS[variant].items()
+                if k not in ("batch_size", "epochs", "patience")
+            }
+            variant_params.update(kwargs)
+            return create_tft_model(input_shape, **variant_params)
         return create_tft_model(input_shape, **kwargs)
 
     # Price-only LSTM (simple baseline)

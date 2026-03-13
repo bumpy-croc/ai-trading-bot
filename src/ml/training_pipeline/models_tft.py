@@ -444,7 +444,6 @@ def create_tft_model(
             hidden_size,
             return_sequences=True,
             dropout=dropout,
-            recurrent_dropout=dropout * 0.5,
             name=f"lstm_encoder_{i + 1}",
         )(x)
 
