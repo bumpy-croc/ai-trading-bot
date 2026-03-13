@@ -293,3 +293,8 @@ DEFAULT_STRATEGY_BASE_FRACTION_SMALL = 0.04  # Smaller base fraction for conserv
 
 # Confidence Scale Factors
 DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM = 8  # Scale factor for momentum-based confidence
+
+# Kelly Criterion Position Sizing
+DEFAULT_KELLY_FRACTION = 0.5  # Half-Kelly balances growth against drawdown risk
+DEFAULT_KELLY_MIN_TRADES = 30  # Minimum trades before Kelly activates (cold start threshold)
+DEFAULT_KELLY_LOOKBACK_TRADES = 100  # Rolling window size for trade statistics
