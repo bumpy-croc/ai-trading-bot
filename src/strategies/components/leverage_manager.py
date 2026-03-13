@@ -34,7 +34,6 @@ class LeverageState:
 
     current_leverage: float = 1.0
     target_leverage: float = 1.0
-    regime_bars_held: int = 0
     last_trend: TrendLabel | None = None
     last_volatility: VolLabel | None = None
 
@@ -119,16 +118,9 @@ class LeverageManager:
         # Clamp to bounds
         scaled_target = max(0.0, min(scaled_target, self.max_leverage))
 
-        # Detect regime change and reset duration tracking
-        if (
-            regime.trend != self._state.last_trend
-            or regime.volatility != self._state.last_volatility
-        ):
-            self._state.regime_bars_held = 0
-            self._state.last_trend = regime.trend
-            self._state.last_volatility = regime.volatility
-        else:
-            self._state.regime_bars_held += 1
+        # Track last regime for transition detection
+        self._state.last_trend = regime.trend
+        self._state.last_volatility = regime.volatility
 
         # Update target
         self._state.target_leverage = scaled_target

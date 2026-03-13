@@ -28,6 +28,7 @@ from .position_sizer import (
     ConfidenceWeightedSizer,
     FixedFractionSizer,
     KellySizer,
+    LeveragedPositionSizer,
     PositionSizer,
     RegimeAdaptiveSizer,
 )
@@ -131,6 +132,7 @@ __all__ = [
     "FixedFractionSizer",
     "ConfidenceWeightedSizer",
     "KellySizer",
+    "LeveragedPositionSizer",
     "RegimeAdaptiveSizer",
     # Testing framework
     "TestDatasetGenerator",

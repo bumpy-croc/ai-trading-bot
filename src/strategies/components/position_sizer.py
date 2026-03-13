@@ -17,6 +17,7 @@ from src.utils.bounds import clamp_position_size, validate_non_negative, validat
 from .regime_utils import RegimeMultiplierCalculator, RegimeMultiplierConfig
 
 if TYPE_CHECKING:
+    from .leverage_manager import LeverageManager
     from .regime_context import RegimeContext
     from .runtime import FeatureGeneratorSpec
     from .signal_generator import Signal
@@ -714,6 +715,84 @@ class RegimeAdaptiveSizer(PositionSizer):
             }
         )
         return params
+
+
+class LeveragedPositionSizer(PositionSizer):
+    """Wraps another PositionSizer and multiplies output by leverage from LeverageManager.
+
+    Applies regime-based leverage through the normal position sizing pipeline,
+    ensuring leverage is actually reflected in final position sizes.
+
+    Args:
+        base_sizer: Underlying position sizer to delegate to.
+        leverage_manager: LeverageManager that provides regime-based multipliers.
+        max_leveraged_fraction: Maximum position size as fraction of balance
+            after leverage is applied (safety cap).
+    """
+
+    def __init__(
+        self,
+        base_sizer: PositionSizer,
+        leverage_manager: "LeverageManager",
+        max_leveraged_fraction: float = 0.50,
+    ) -> None:
+        super().__init__("leveraged_position_sizer")
+        self.base_sizer = base_sizer
+        self.leverage_manager = leverage_manager
+        self.max_leveraged_fraction = max_leveraged_fraction
+
+    def calculate_size(
+        self,
+        signal: "Signal",
+        balance: float,
+        risk_amount: float,
+        regime: Optional["RegimeContext"] = None,
+    ) -> float:
+        """Calculate position size with leverage applied.
+
+        Delegates to the base sizer, then multiplies by the leverage multiplier
+        from the LeverageManager. Caps at max_leveraged_fraction of balance.
+
+        Args:
+            signal: Trading signal with strength and confidence.
+            balance: Available account balance.
+            risk_amount: Maximum amount to risk on this trade.
+            regime: Optional regime context for regime-aware sizing.
+
+        Returns:
+            Leveraged position size in base currency.
+        """
+        base_size = self.base_sizer.calculate_size(signal, balance, risk_amount, regime)
+        if base_size <= 0 or regime is None:
+            return base_size
+
+        leverage = self.leverage_manager.get_leverage_multiplier(regime)
+        leveraged_size = base_size * leverage
+
+        # Cap at max_leveraged_fraction of balance
+        max_size = balance * self.max_leveraged_fraction
+        return min(leveraged_size, max_size)
+
+    def get_parameters(self) -> dict[str, Any]:
+        """Get leveraged position sizer parameters."""
+        params = super().get_parameters()
+        params.update(
+            {
+                "base_sizer": self.base_sizer.get_parameters(),
+                "leverage_manager": self.leverage_manager.get_parameters(),
+                "max_leveraged_fraction": self.max_leveraged_fraction,
+            }
+        )
+        return params
+
+    @property
+    def warmup_period(self) -> int:
+        """Delegate warmup period to base sizer."""
+        return self.base_sizer.warmup_period
+
+    def get_feature_generators(self) -> Sequence["FeatureGeneratorSpec"]:
+        """Delegate feature generators to base sizer."""
+        return self.base_sizer.get_feature_generators()
 
 
 # Utility functions for position sizing

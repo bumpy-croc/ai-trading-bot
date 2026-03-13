@@ -30,6 +30,7 @@ from src.strategies.components import (
     VolatilityRiskManager,
 )
 from src.strategies.components.leverage_manager import LeverageManager
+from src.strategies.components.position_sizer import LeveragedPositionSizer
 
 
 def create_leveraged_regime_strategy(
@@ -64,6 +65,13 @@ def create_leveraged_regime_strategy(
     Returns:
         Configured Strategy instance with leverage manager attached.
     """
+    # Validate signal_source parameter
+    valid_sources = ("momentum", "ml")
+    if signal_source not in valid_sources:
+        raise ValueError(
+            f"signal_source must be one of {valid_sources}, got '{signal_source}'"
+        )
+
     # Create signal generator based on source preference
     if signal_source == "ml":
         signal_generator = MLBasicSignalGenerator(name=f"{name}_signals")
@@ -78,8 +86,8 @@ def create_leveraged_regime_strategy(
         max_risk=0.15,
     )
 
-    # Create position sizer
-    position_sizer = ConfidenceWeightedSizer(
+    # Create base position sizer
+    base_sizer = ConfidenceWeightedSizer(
         base_fraction=base_fraction,
         min_confidence=min_confidence,
     )
@@ -94,6 +102,12 @@ def create_leveraged_regime_strategy(
         min_regime_bars=min_regime_bars,
     )
 
+    # Wrap base sizer with leverage so it flows through the normal pipeline
+    position_sizer = LeveragedPositionSizer(
+        base_sizer=base_sizer,
+        leverage_manager=leverage_manager,
+    )
+
     # Compose strategy
     strategy = Strategy(
         name=name,
@@ -103,20 +117,23 @@ def create_leveraged_regime_strategy(
         regime_detector=regime_detector,
     )
 
-    # Attach leverage manager for position size amplification
+    # Expose leverage manager for introspection
     strategy.leverage_manager = leverage_manager
 
     # Expose configuration for validation
     strategy.base_position_size = base_fraction
     strategy.take_profit_pct = take_profit_pct
 
+    # Cap max_fraction at 0.50 to prevent excessive position sizes
+    max_fraction = min(base_fraction * max_leverage, 0.50)
+
     # Engine-level risk overrides
     strategy.set_risk_overrides(
         {
-            "position_sizer": "confidence_weighted",
+            "position_sizer": "leveraged_position_sizer",
             "base_fraction": base_fraction,
             "min_fraction": 0.01,
-            "max_fraction": base_fraction * max_leverage,
+            "max_fraction": max_fraction,
             "stop_loss_pct": stop_loss_pct,
             "take_profit_pct": take_profit_pct,
             "leverage": {

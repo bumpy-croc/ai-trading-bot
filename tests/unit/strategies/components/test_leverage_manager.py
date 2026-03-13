@@ -322,8 +322,8 @@ class TestState:
         assert params["min_regime_bars"] == 8
         assert isinstance(params["leverage_map"], dict)
 
-    def test_regime_change_resets_duration(self) -> None:
-        """Switching regimes should reset internal duration tracking."""
+    def test_regime_change_tracks_last_trend(self) -> None:
+        """Switching regimes should update last_trend tracking."""
         mgr = LeverageManager(decay_rate=0.5)
 
         bull = _make_regime(TrendLabel.TREND_UP, VolLabel.LOW, duration=20)
@@ -334,5 +334,5 @@ class TestState:
         bear = _make_regime(TrendLabel.TREND_DOWN, VolLabel.HIGH, duration=1)
         mgr.get_leverage_multiplier(bear)
 
-        assert mgr._state.regime_bars_held == 0
         assert mgr._state.last_trend == TrendLabel.TREND_DOWN
+        assert mgr._state.last_volatility == VolLabel.HIGH
