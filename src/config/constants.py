@@ -293,3 +293,8 @@ DEFAULT_STRATEGY_BASE_FRACTION_SMALL = 0.04  # Smaller base fraction for conserv
 
 # Confidence Scale Factors
 DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM = 8  # Scale factor for momentum-based confidence
+
+# Leverage Manager Defaults
+DEFAULT_MAX_LEVERAGE = 3.0  # Maximum leverage multiplier (safety cap)
+DEFAULT_LEVERAGE_DECAY_RATE = 0.15  # Exponential decay rate for smooth transitions
+DEFAULT_MIN_REGIME_BARS = 5  # Minimum bars in regime before conviction scaling
