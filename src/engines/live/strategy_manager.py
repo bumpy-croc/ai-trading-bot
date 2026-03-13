@@ -93,6 +93,13 @@ class StrategyManager:
         except Exception as e:
             logger.debug(f"ML Sentiment strategy not available: {e}")
 
+        try:
+            from src.strategies.leveraged_regime import create_leveraged_regime_strategy
+
+            self.strategy_registry["leveraged_regime"] = create_leveraged_regime_strategy
+        except Exception as e:
+            logger.debug(f"Leveraged Regime strategy not available: {e}")
+
         # Version history
         self.version_history: dict[str, StrategyVersion] = {}
 

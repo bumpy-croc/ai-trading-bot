@@ -285,6 +285,10 @@ class RegimeHandler:
                 "src.strategies.momentum_leverage",
                 "create_momentum_leverage_strategy",
             ),
+            "leveraged_regime": (
+                "src.strategies.leveraged_regime",
+                "create_leveraged_regime_strategy",
+            ),
         }
 
         if strategy_name not in strategy_factories:
