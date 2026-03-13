@@ -257,6 +257,18 @@ def create_model(
 
         return create_tcn_with_attention(input_shape, **kwargs)
 
+    # Temporal Fusion Transformer
+    elif model_type_lower == "tft":
+        try:
+            from src.ml.training_pipeline.models_tft import create_tft_model
+        except ImportError:
+            raise ImportError(
+                "TFT model requires models_tft module. "
+                "Ensure the file exists in src/ml/training_pipeline/"
+            ) from None
+
+        return create_tft_model(input_shape, **kwargs)
+
     # Price-only LSTM (simple baseline)
     elif model_type_lower == "lstm":
         sequence_length, num_features = input_shape
@@ -265,7 +277,7 @@ def create_model(
     else:
         raise ValueError(
             f"Unknown model_type: {model_type}. "
-            f"Supported types: 'cnn_lstm', 'attention_lstm', 'tcn', 'tcn_attention', 'lstm'"
+            f"Supported types: 'cnn_lstm', 'attention_lstm', 'tcn', 'tcn_attention', 'tft', 'lstm'"
         )
 
 
@@ -303,6 +315,14 @@ def get_model_callbacks(model_type: str, patience: int = 15) -> list[Any]:
         except ImportError:
             pass
 
+    elif model_type_lower == "tft":
+        try:
+            from src.ml.training_pipeline.models_tft import tft_callbacks
+
+            return tft_callbacks(patience=patience)
+        except ImportError:
+            pass
+
     # Default callbacks for all models
     return default_callbacks(patience=patience)
 
@@ -313,6 +333,7 @@ AVAILABLE_MODELS = {
     "attention_lstm": "LSTM with multi-head attention (12-15% improvement expected)",
     "tcn": "Temporal Convolutional Network (fast training, competitive accuracy)",
     "tcn_attention": "TCN with multi-head attention",
+    "tft": "Temporal Fusion Transformer (interpretable, attention-based)",
     "lstm": "Simple LSTM baseline",
 }
 
