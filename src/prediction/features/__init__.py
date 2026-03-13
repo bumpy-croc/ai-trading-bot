@@ -16,16 +16,24 @@ from src.tech.features.schemas import (
 )
 from src.tech.features.technical import TechnicalFeatureExtractor
 
+from .enhanced_sentiment import EnhancedSentimentExtractor
+from .fusion import FeatureFusionPipeline
+from .macro import MacroFeatureExtractor
 from .market import MarketFeatureExtractor
+from .onchain import OnChainFeatureExtractor
 from .pipeline import FeaturePipeline
 from .sentiment import SentimentFeatureExtractor
 
 __all__ = [
     "FeatureExtractor",
     "FeaturePipeline",
+    "FeatureFusionPipeline",
     "TechnicalFeatureExtractor",
     "SentimentFeatureExtractor",
     "MarketFeatureExtractor",
+    "OnChainFeatureExtractor",
+    "MacroFeatureExtractor",
+    "EnhancedSentimentExtractor",
     "FeatureDefinition",
     "FeatureSchema",
     "FeatureType",
