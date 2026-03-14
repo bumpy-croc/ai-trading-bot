@@ -37,7 +37,7 @@ def _load_repo_defaults() -> dict[str, Any]:
             if isinstance(data, dict):
                 return data
             return {}
-    except Exception:
+    except (json.JSONDecodeError, FileNotFoundError, PermissionError, OSError):
         # Fail-soft: if file is missing, permission denied, or JSON is malformed, ignore and return empty map
         return {}
 
