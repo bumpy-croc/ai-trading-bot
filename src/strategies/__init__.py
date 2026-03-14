@@ -5,6 +5,7 @@ from .ml_adaptive import create_ml_adaptive_strategy
 from .ml_basic import create_ml_basic_strategy
 from .ml_sentiment import create_ml_sentiment_strategy
 from .momentum_leverage import create_momentum_leverage_strategy
+from .leveraged_regime import create_leveraged_regime_strategy
 
 __all__ = [
     "create_ml_basic_strategy",
@@ -14,4 +15,5 @@ __all__ = [
     "create_momentum_leverage_strategy",
     "create_adaptive_trend_strategy",
     "create_kelly_momentum_strategy",
+    "create_leveraged_regime_strategy",
 ]

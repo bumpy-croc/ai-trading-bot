@@ -29,9 +29,11 @@ from .position_sizer import (
     FixedFractionSizer,
     KellyCriterionSizer,
     KellySizer,
+    LeveragedPositionSizer,
     PositionSizer,
     RegimeAdaptiveSizer,
 )
+from .leverage_manager import LeverageManager
 from .regime_context import EnhancedRegimeDetector, RegimeContext, TrendLabel, VolLabel
 from .risk_adapter import CoreRiskAdapter
 from .risk_manager import (
@@ -125,11 +127,14 @@ __all__ = [
     "PartialExitPolicyDescriptor",
     "TrailingStopPolicyDescriptor",
     "DynamicRiskDescriptor",
+    # Leverage
+    "LeverageManager",
     # Position sizers
     "FixedFractionSizer",
     "ConfidenceWeightedSizer",
     "KellyCriterionSizer",
     "KellySizer",
+    "LeveragedPositionSizer",
     "RegimeAdaptiveSizer",
     # Testing framework
     "TestDatasetGenerator",

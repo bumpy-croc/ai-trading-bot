@@ -309,6 +309,11 @@ DEFAULT_KELLY_EXPECTED_REWARD_RISK = 1.5  # Prior reward:risk from backtested re
 DEFAULT_KELLY_OVERFITTING_THRESHOLD = 0.15  # Flag >15% deviation from backtest priors
 DEFAULT_KELLY_MAX_FRACTION = 0.20  # Cap single-trade exposure at 20% of balance
 
+# Leverage Manager Defaults
+DEFAULT_MAX_LEVERAGE = 3.0  # Maximum leverage multiplier (safety cap)
+DEFAULT_LEVERAGE_DECAY_RATE = 0.15  # Exponential decay rate for smooth transitions
+DEFAULT_MIN_REGIME_BARS = 5  # Minimum bars in regime before conviction scaling
+
 # TFT (Temporal Fusion Transformer) Model Defaults
 DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
 DEFAULT_TFT_HIDDEN_SIZE = 64  # Hidden dimension for GRN and attention layers
