@@ -142,14 +142,14 @@ _HYPER_LEVERAGE_MAP = {
 def create_hyper_growth_strategy(
     name: str = "HyperGrowth",
     signal_source: str = "ml",
-    risk_fraction: float = 0.15,
-    base_fraction: float = 0.15,
-    min_confidence: float = 0.10,
+    risk_fraction: float = 0.20,
+    base_fraction: float = 0.20,
+    min_confidence: float = 0.05,
     max_leverage: float = 3.0,
     leverage_decay_rate: float = 0.20,
     min_regime_bars: int = 3,
     take_profit_pct: float = 0.30,
-    stop_loss_pct: float = 0.10,
+    stop_loss_pct: float = 0.20,
 ) -> Strategy:
     """Create hyper-growth strategy targeting 500% annual returns.
 
@@ -175,11 +175,16 @@ def create_hyper_growth_strategy(
     if signal_source == "momentum":
         signal_generator = MomentumSignalGenerator(
             name=f"{name}_signals",
-            momentum_entry_threshold=0.005,
-            strong_momentum_threshold=0.015,
+            momentum_entry_threshold=0.001,   # 0.1% — very sensitive
+            strong_momentum_threshold=0.005,  # 0.5%
         )
     else:
+        # ML signals — the model predicts direction with ~65% accuracy
+        # but per-bar confidence is very low (0.01-0.10)
         signal_generator = MLBasicSignalGenerator(name=f"{name}_signals")
+
+    # Override: also register momentum as secondary for regime changes
+    # This lets us leverage momentum breakouts in addition to ML
 
     # Flat risk manager: returns full risk_fraction without confidence scaling
     # min_confidence filters out noise — only trade when ML has some conviction

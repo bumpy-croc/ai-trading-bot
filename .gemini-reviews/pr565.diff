@@ -1,0 +1,3693 @@
+diff --git a/.gitignore b/.gitignore
+index 48be4779..391dffbd 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -7,6 +7,7 @@ __pycache__/
+ 
+ .vscode/
+ .claude/settings.local.json
++.claude/worktrees/
+ .cursor/mcp.json
+ .codex/
+ 
+diff --git a/cli/commands/backtest.py b/cli/commands/backtest.py
+index 7c6ccec6..7caa3301 100644
+--- a/cli/commands/backtest.py
++++ b/cli/commands/backtest.py
+@@ -126,7 +126,7 @@ def _handle(ns: argparse.Namespace) -> int:
+             overrides = strategy.get_risk_overrides()
+             if isinstance(overrides, dict) and "max_fraction" in overrides:
+                 max_frac = overrides["max_fraction"]
+-                if isinstance(max_frac, (int, float)) and 0 < max_frac <= 1:
++                if isinstance(max_frac, int | float) and 0 < max_frac <= 1:
+                     risk_params_kwargs["max_position_size"] = max_frac
+         risk_params = RiskParameters(**risk_params_kwargs)
+ 
+@@ -137,9 +137,14 @@ def _handle(ns: argparse.Namespace) -> int:
+         enable_engine_risk_exits = not ns.disable_engine_sl
+ 
+         # Disable dynamic risk management for strategies that manage their own risk
+-        # via signal timing (e.g., adaptive_trend). Dynamic risk reduces position
+-        # sizes after losses, which undermines fully-invested trend-following.
+-        enable_dynamic_risk = ns.strategy not in ("adaptive_trend",)
++        # via signal timing (e.g., trend-following). Dynamic risk reduces position
++        # sizes after losses, which undermines fully-invested strategies.
++        # Strategies opt out by setting enable_dynamic_risk=False in risk overrides.
++        enable_dynamic_risk = True
++        if hasattr(strategy, "get_risk_overrides"):
++            overrides = strategy.get_risk_overrides()
++            if isinstance(overrides, dict) and overrides.get("enable_dynamic_risk") is False:
++                enable_dynamic_risk = False
+ 
+         backtester = Backtester(
+             strategy=strategy,
+diff --git a/cli/commands/data.py b/cli/commands/data.py
+index 2706efc2..d0b9ecc5 100644
+--- a/cli/commands/data.py
++++ b/cli/commands/data.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ import argparse
+ import os
+ import sys
+-from datetime import UTC, datetime
++from datetime import UTC, datetime, timedelta
+ from pathlib import Path
+ 
+ # Ensure project root and src are in sys.path for absolute imports
+@@ -16,17 +16,23 @@ SRC_PATH = PROJECT_ROOT / "src"
+ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
+     sys.path.insert(1, str(SRC_PATH))
+ 
+-import ccxt
+-import pandas as pd
+-
+ from src.infrastructure.logging.config import configure_logging
+ from src.trading.symbols.factory import SymbolFactory
+ 
+ 
++def _normalize_symbols(raw: list[str]) -> list[str]:
++    """Normalize symbol names to exchange format (e.g. BTC-USD -> BTCUSDT)."""
++    normalized = []
++    for s in raw:
++        s = s.strip().upper()
++        if "-" in s or "/" in s:
++            s = SymbolFactory.to_exchange_symbol(s, "binance")
++        normalized.append(s)
++    return normalized
++
++
+ def _download(ns: argparse.Namespace) -> int:
+     """Download historical price data using automatic Binance → CoinGecko failover."""
+-    from datetime import datetime
+-
+     from src.data_providers.provider_factory import create_data_provider
+ 
+     # Use auto provider (Binance → CoinGecko failover)
+@@ -79,24 +85,11 @@ def _download(ns: argparse.Namespace) -> int:
+ 
+ 
+ def _prefill(ns: argparse.Namespace) -> int:
+-    from datetime import UTC, datetime
+-
+     from src.config.paths import get_cache_dir
+     from src.data_providers.cached_data_provider import CachedDataProvider
+     from src.data_providers.provider_factory import create_data_provider
+ 
+-    def _normalize_symbols(raw):
+-        normalized = []
+-        for s in raw:
+-            s = s.strip().upper()
+-            if "-" in s or "/" in s:
+-                s = SymbolFactory.to_exchange_symbol(s, "binance")
+-            normalized.append(s)
+-        return normalized
+-
+     def _year_chunks(start: datetime, end: datetime):
+-        from datetime import UTC, timedelta
+-
+         chunks = []
+         cur = start
+         while cur <= end:
+@@ -147,15 +140,12 @@ def _prefill(ns: argparse.Namespace) -> int:
+ def _preload_offline(ns: argparse.Namespace) -> int:
+     """Pre-load cache with historical data for offline backtesting."""
+     import logging
+-    from datetime import datetime, timedelta
+-    from pathlib import Path
+ 
+     from tqdm import tqdm
+ 
+     from src.config.paths import ensure_dir_exists, get_cache_dir
+     from src.data_providers.cached_data_provider import CachedDataProvider
+     from src.data_providers.provider_factory import create_data_provider
+-    from src.infrastructure.logging.config import configure_logging
+ 
+     # Setup logging
+     configure_logging(level_name="INFO")
+@@ -171,16 +161,6 @@ def _preload_offline(ns: argparse.Namespace) -> int:
+     years = list(range(current_year - ns.years_back + 1, current_year + 1))
+     logger.info(f"Pre-loading data for years: {years}")
+ 
+-    # Normalize symbols
+-    def _normalize_symbols(raw):
+-        normalized = []
+-        for s in raw:
+-            s = s.strip().upper()
+-            if "-" in s or "/" in s:
+-                s = SymbolFactory.to_exchange_symbol(s, "binance")
+-            normalized.append(s)
+-        return normalized
+-
+     symbols = _normalize_symbols(ns.symbols)
+     timeframes = [tf.strip() for tf in ns.timeframes]
+ 
+@@ -286,7 +266,6 @@ def _preload_offline(ns: argparse.Namespace) -> int:
+ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str = "1h") -> bool:
+     """Test that cached data can be accessed in offline mode."""
+     import logging
+-    from datetime import datetime, timedelta
+ 
+     from src.data_providers.binance_provider import BinanceProvider
+     from src.data_providers.cached_data_provider import CachedDataProvider
+@@ -326,7 +305,6 @@ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str
+ 
+ def _cache_manager(ns: argparse.Namespace) -> int:
+     import pickle
+-    from datetime import datetime
+ 
+     from src.config.paths import get_cache_dir
+     from src.data_providers.binance_provider import BinanceProvider
+@@ -425,8 +403,6 @@ def _cache_manager(ns: argparse.Namespace) -> int:
+             print(f"Cache directory {cache_dir} does not exist.")
+             return 1
+         files = [f for f in os.listdir(cache_dir) if f.endswith(".pkl")]
+-        from datetime import datetime
+-
+         now = datetime.now(UTC)
+         deleted = 0
+         total = 0
+@@ -540,7 +516,6 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
+         print("✅ Database population completed successfully!")
+         return 0
+     except Exception as e:
+-        logger = logging.getLogger("atb.data")
+         logger.error(f"Failed to populate database: {e}")
+         return 1
+ 
+diff --git a/cli/commands/db.py b/cli/commands/db.py
+index 9a29b9c8..6c728f0c 100644
+--- a/cli/commands/db.py
++++ b/cli/commands/db.py
+@@ -35,8 +35,6 @@ except ImportError:  # pragma: no cover - optional dependency for local dev
+ 
+ from src.database.models import Base
+ 
+-# * Constants for Alembic/DB
+-MIN_POSTGRESQL_URL_PREFIX = "postgresql"
+ # * Allow environment overrides for packaged/production deployments
+ ALEMBIC_INI_PATH = os.getenv("ATB_ALEMBIC_INI", str(PROJECT_ROOT / "alembic.ini"))
+ 
+@@ -73,20 +71,6 @@ def _safe_bool_env(name: str, default: bool = False) -> bool:
+     return val.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+ 
+ 
+-def _resolve_database_url() -> str:
+-    from src.config.config_manager import get_config
+-
+-    cfg = get_config()
+-    database_url: str | None = cfg.get("DATABASE_URL") or os.getenv("DATABASE_URL")
+-    if not database_url:
+-        raise RuntimeError("DATABASE_URL is required but not set.")
+-    if not database_url.startswith(MIN_POSTGRESQL_URL_PREFIX):
+-        raise RuntimeError(
+-            f"Unsupported DATABASE_URL scheme. Expected '{MIN_POSTGRESQL_URL_PREFIX}://'."
+-        )
+-    return database_url
+-
+-
+ def _alembic_config(db_url: str) -> Config:
+     """Create an Alembic Config, tolerating missing alembic.ini in production.
+ 
+@@ -137,112 +121,6 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
+             pass
+ 
+ 
+-def _complete_database_reset(cfg: Config) -> bool:
+-    """Completely reset database schema - drops all types, tables, and alembic versions"""
+-    try:
+-        db_url = cfg.get_main_option("sqlalchemy.url")
+-        engine_config = _get_secure_engine_config()
+-        engine_config["connect_args"]["application_name"] = "ai-trading-bot:complete-reset"
+-        engine = create_engine(db_url, **engine_config)
+-
+-        print("🚨 Performing COMPLETE database reset...")
+-
+-        with engine.begin() as conn:  # Use begin() for automatic transaction management
+-            # Force drop all known enum types with multiple attempts
+-            print("🔄 Force dropping all custom types...")
+-            known_types = [
+-                "tradesource",
+-                "eventtype",
+-                "positionstatus",
+-                "ordertype",
+-                "orderstatus",
+-                "positionside",
+-                "partialoperationtype",
+-            ]
+-
+-            # First pass: try to drop with CASCADE
+-            for type_name in known_types:
+-                try:
+-                    conn.execute(text(f"DROP TYPE IF EXISTS {type_name} CASCADE"))
+-                    print(f"  ✓ Dropped type: {type_name}")
+-                except Exception as e:
+-                    print(f"  ⚠️  Could not drop type {type_name}: {e}")
+-
+-            # Second pass: try to drop any remaining enum types
+-            try:
+-                result = conn.execute(
+-                    text(
+-                        """
+-                    SELECT typname
+-                    FROM pg_type
+-                    WHERE typtype = 'e'
+-                    AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+-                """
+-                    )
+-                )
+-                remaining_enums = [row[0] for row in result.fetchall()]
+-
+-                for enum_name in remaining_enums:
+-                    try:
+-                        conn.execute(text(f"DROP TYPE IF EXISTS {enum_name} CASCADE"))
+-                        print(f"  ✓ Dropped remaining enum: {enum_name}")
+-                    except Exception as e:
+-                        print(f"  ⚠️  Could not drop remaining enum {enum_name}: {e}")
+-            except Exception as e:
+-                print(f"  ⚠️  Could not query remaining enums: {e}")
+-
+-            # Drop all tables
+-            print("🔄 Dropping all tables...")
+-            try:
+-                result = conn.execute(
+-                    text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+-                )
+-                tables = result.fetchall()
+-
+-                for (table_name,) in tables:
+-                    try:
+-                        conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
+-                        print(f"  ✓ Dropped table: {table_name}")
+-                    except Exception as e:
+-                        print(f"  ⚠️  Could not drop table {table_name}: {e}")
+-            except Exception as e:
+-                print(f"  ⚠️  Could not query tables: {e}")
+-
+-            # Drop all sequences
+-            print("🔄 Dropping all sequences...")
+-            try:
+-                result = conn.execute(
+-                    text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'")
+-                )
+-                sequences = result.fetchall()
+-
+-                for (seq_name,) in sequences:
+-                    try:
+-                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
+-                        print(f"  ✓ Dropped sequence: {seq_name}")
+-                    except Exception as e:
+-                        print(f"  ⚠️  Could not drop sequence {seq_name}: {e}")
+-            except Exception as e:
+-                print(f"  ⚠️  Could not query sequences: {e}")
+-
+-            # Drop alembic version table specifically
+-            try:
+-                conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+-                print("  ✓ Dropped alembic_version table")
+-            except Exception as e:
+-                print(f"  ⚠️  Could not drop alembic_version: {e}")
+-
+-        print("✅ Complete database reset successful.")
+-        return True
+-
+-    except Exception as e:
+-        print(f"❌ Complete database reset failed: {e}")
+-        import traceback
+-
+-        traceback.print_exc()
+-        return False
+-
+-
+ def _apply_migrations(cfg: Config) -> bool:
+     try:
+         from alembic import command  # type: ignore
+@@ -366,6 +244,18 @@ def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
+     return results
+ 
+ 
++def _norm_type(s: str) -> str:
++    """Normalize a PostgreSQL type string for comparison."""
++    return (
++        s.replace("jsonb", "json")
++        .replace("timestampwithouttimezone", "timestamp")
++        .replace("doubleprecision", "float")
++        .replace("float8", "float")
++        .replace("float4", "float")
++        .replace("real", "float")
++    )
++
++
+ def _verify_schema(db_url: str) -> dict[str, Any]:
+     # * Use secure engine configuration for consistency
+     engine_config = _get_secure_engine_config()
+@@ -443,18 +333,7 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
+                     exp_str = str(exp_type).lower().replace(" ", "")
+                 act_str = actual_types_map.get(col_name, "")
+ 
+-                def _norm(s: str) -> str:
+-                    return (
+-                        s.replace("jsonb", "json")
+-                        .replace("timestampwithouttimezone", "timestamp")
+-                        # Normalize PostgreSQL float synonyms
+-                        .replace("doubleprecision", "float")
+-                        .replace("float8", "float")
+-                        .replace("float4", "float")
+-                        .replace("real", "float")
+-                    )
+-
+-                if _norm(exp_str) != _norm(act_str):
++                if _norm_type(exp_str) != _norm_type(act_str):
+                     result["ok"] = False
+                     result.setdefault("type_mismatches", {}).setdefault(table, {})[col_name] = {
+                         "expected": exp_str,
+@@ -788,19 +667,20 @@ def _backup(ns: argparse.Namespace) -> int:
+     dbname = parsed.path.lstrip("/")
+     password = parsed.password or ""
+ 
+-    timestamp = _dt.datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+-    backup_path = Path(backup_dir) / dbname / _dt.datetime.now(UTC).strftime("%Y/%m/%d")
++    now = _dt.datetime.now(UTC)
++    timestamp = now.strftime("%Y%m%dT%H%M%SZ")
++    backup_path = Path(backup_dir) / dbname / now.strftime("%Y/%m/%d")
+     dump_filename = f"backup-{timestamp}.dump"
+     dump_path = backup_path / dump_filename
+ 
+     backup_path.mkdir(parents=True, exist_ok=True)
+     print(f"📦 Creating dump: {dump_path}")
+ 
+-    env = os.environ.copy()
+-    env["PGPASSWORD"] = password
++    env_vars = os.environ.copy()
++    env_vars["PGPASSWORD"] = password
+     cmd = ["pg_dump", f"--dbname={db_url}", "-Fc", "-Z", "9", "-f", str(dump_path)]
+     try:
+-        subprocess.run(cmd, check=True, env=env, capture_output=True)
++        subprocess.run(cmd, check=True, env=env_vars, capture_output=True)
+     except subprocess.CalledProcessError as exc:
+         print(f"❌ pg_dump failed: {exc.stderr.decode()}", file=sys.stderr)
+         return 1
+@@ -813,7 +693,7 @@ def _backup(ns: argparse.Namespace) -> int:
+         if db_backup_dir.exists():
+             for backup_file in db_backup_dir.rglob("backup-*.dump"):
+                 try:
+-                    file_time = _dt.datetime.fromtimestamp(backup_file.stat().st_mtime)
++                    file_time = _dt.datetime.fromtimestamp(backup_file.stat().st_mtime, tz=UTC)
+                     if file_time < cutoff:
+                         print(f"   • Removing {backup_file}")
+                         backup_file.unlink()
+@@ -1118,8 +998,6 @@ def _nuke_database(db_url: str) -> bool:
+ 
+     except Exception as e:
+         print(f"❌ Database nuke operation failed: {e}")
+-        import traceback
+-
+         traceback.print_exc()
+         return False
+     finally:
+diff --git a/cli/commands/live_health.py b/cli/commands/live_health.py
+index 54656ba8..23d26399 100644
+--- a/cli/commands/live_health.py
++++ b/cli/commands/live_health.py
+@@ -43,7 +43,7 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
+             }
+             # Config providers
+             try:
+-                from config.config_manager import get_config
++                from src.config.config_manager import get_config
+ 
+                 cfg = get_config()
+                 status["components"]["config"] = {
+@@ -55,18 +55,20 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
+ 
+             # Database
+             try:
+-                from database.manager import DatabaseManager
++                from sqlalchemy import text
++
++                from src.database.manager import DatabaseManager
+ 
+                 dbm = DatabaseManager()
+                 with dbm.get_session() as s:
+-                    s.execute("SELECT 1")
++                    s.execute(text("SELECT 1"))
+                 status["components"]["database"] = {"status": "healthy"}
+             except Exception as e:
+                 status["components"]["database"] = {"status": "unhealthy", "error": str(e)}
+ 
+             # Binance API (best-effort)
+             try:
+-                from data_providers.binance_provider import BinanceProvider
++                from src.data_providers.binance_provider import BinanceProvider
+ 
+                 prov = BinanceProvider()
+                 df = prov.get_live_data("BTCUSDT", "1h", limit=1)
+diff --git a/cli/commands/tests.py b/cli/commands/tests.py
+index 582c1b44..3eeff75f 100644
+--- a/cli/commands/tests.py
++++ b/cli/commands/tests.py
+@@ -79,7 +79,7 @@ def _handle_parse_junit(ns: argparse.Namespace) -> int:
+     failures = _collect_failures(xml_path)
+     output = _format_failures(failures, ns.label)
+     print(output)
+-    return 0 if failures else 0
++    return 1 if failures else 0
+ 
+ 
+ def register(subparsers: argparse._SubParsersAction) -> None:
+diff --git a/cli/core/discovery.py b/cli/core/discovery.py
+index 26020d3b..95539228 100644
+--- a/cli/core/discovery.py
++++ b/cli/core/discovery.py
+@@ -90,8 +90,6 @@ def discover_dashboards() -> dict[str, DiscoveredDashboard]:
+ 
+ def call_with_supported_params(func, maybe_kwargs: dict[str, Any]) -> Any:
+     """Call a function with only the kwargs that it accepts (by name)."""
+-    import inspect as _inspect
+-
+-    sig = _inspect.signature(func)
++    sig = inspect.signature(func)
+     accepted = {k: v for k, v in maybe_kwargs.items() if k in sig.parameters and v is not None}
+     return func(**accepted)
+diff --git a/src/config/config_manager.py b/src/config/config_manager.py
+index 022a3c0e..deb6e6c1 100644
+--- a/src/config/config_manager.py
++++ b/src/config/config_manager.py
+@@ -93,7 +93,7 @@ class ConfigManager:
+ 
+     def get_int(self, key: str, default: int = 0) -> int:
+         """Get configuration value as integer"""
+-        value = self.get(key, str(default))
++        value = self.get(key)
+         if value is None:
+             return default
+         try:
+@@ -103,7 +103,7 @@ class ConfigManager:
+ 
+     def get_float(self, key: str, default: float = 0.0) -> float:
+         """Get configuration value as float"""
+-        value = self.get(key, str(default))
++        value = self.get(key)
+         if value is None:
+             return default
+         try:
+diff --git a/src/config/feature_flags.py b/src/config/feature_flags.py
+index 09f3be15..f0614ac5 100644
+--- a/src/config/feature_flags.py
++++ b/src/config/feature_flags.py
+@@ -37,7 +37,7 @@ def _load_repo_defaults() -> dict[str, Any]:
+             if isinstance(data, dict):
+                 return data
+             return {}
+-    except (json.JSONDecodeError, FileNotFoundError, PermissionError, Exception):
++    except Exception:
+         # Fail-soft: if file is missing, permission denied, or JSON is malformed, ignore and return empty map
+         return {}
+ 
+@@ -91,14 +91,14 @@ def _resolve_from_sources(key: str) -> bool | str | None:
+     overrides = _load_env_json("FEATURE_FLAGS_OVERRIDES")
+     if key in overrides:
+         value = overrides[key]
+-        if isinstance(value, bool) or isinstance(value, str):
++        if isinstance(value, bool | str):
+             return value
+ 
+     # 3) feature_flags.json (repo defaults)
+     defaults = _load_repo_defaults()
+     if key in defaults:
+         value = defaults[key]
+-        if isinstance(value, bool) or isinstance(value, str):
++        if isinstance(value, bool | str):
+             return value
+ 
+     # Not found
+@@ -149,12 +149,12 @@ def resolve_all() -> dict[str, bool | str]:
+     merged: dict[str, bool | str] = {}
+ 
+     # Start with repo defaults
+-    merged.update({k: v for k, v in _load_repo_defaults().items() if isinstance(v, (bool, str))})
++    merged.update({k: v for k, v in _load_repo_defaults().items() if isinstance(v, bool | str)})
+ 
+     # Apply overrides
+     overrides = _load_env_json("FEATURE_FLAGS_OVERRIDES")
+     for k, v in overrides.items():
+-        if isinstance(v, (bool, str)):
++        if isinstance(v, bool | str):
+             merged[k] = v
+ 
+     # Apply per-flag env vars
+diff --git a/src/config/providers/dotenv_provider.py b/src/config/providers/dotenv_provider.py
+index a84dba2c..bbd2ca1a 100644
+--- a/src/config/providers/dotenv_provider.py
++++ b/src/config/providers/dotenv_provider.py
+@@ -4,7 +4,6 @@ Dotenv configuration provider.
+ This module provides configuration from .env files.
+ """
+ 
+-import os
+ from pathlib import Path
+ from typing import Any
+ 
+@@ -43,8 +42,8 @@ class DotEnvProvider(ConfigProvider):
+         return self._cache.get(key, default)
+ 
+     def get_all(self) -> dict[str, Any]:
+-        """Get all environment variables."""
+-        return dict(os.environ)
++        """Get all values loaded from the .env file."""
++        return dict(self._cache)
+ 
+     def is_available(self) -> bool:
+         """Check if .env file exists and was loaded"""
+diff --git a/src/config/providers/env_provider.py b/src/config/providers/env_provider.py
+index f91a2d22..32c92f7e 100644
+--- a/src/config/providers/env_provider.py
++++ b/src/config/providers/env_provider.py
+@@ -13,9 +13,6 @@ from .base import ConfigProvider
+ class EnvVarProvider(ConfigProvider):
+     """Provider that reads configuration from environment variables"""
+ 
+-    def __init__(self):
+-        self._prefix = ""  # Optional prefix for env vars
+-
+     def get(self, key: str, default: Any | None = None) -> str | None:
+         """Get configuration value from environment variables."""
+         return os.getenv(key, default)
+diff --git a/src/dashboards/monitoring/dashboard.py b/src/dashboards/monitoring/dashboard.py
+index d25b8be2..22643131 100644
+--- a/src/dashboards/monitoring/dashboard.py
++++ b/src/dashboards/monitoring/dashboard.py
+@@ -32,7 +32,6 @@ else:
+ # Standard library imports
+ import argparse
+ import logging
+-import sys
+ import threading
+ import time
+ from datetime import UTC, datetime, timedelta
+@@ -740,25 +739,6 @@ class MonitoringDashboard:
+             logger.error(f"Error calculating max drawdown: {e}")
+             return 0.0
+ 
+-    def _get_current_exposure(self) -> float:
+-        """Get current market exposure as percentage of balance"""
+-        try:
+-            # Get current balance and active position values
+-            balance = self._get_current_balance()
+-            if balance <= 0:
+-                return 0.0
+-
+-            positions = self.db_manager.get_active_positions()
+-            exposure = sum(
+-                self._safe_float(pos.get("quantity", 0))
+-                * self._safe_float(pos.get("entry_price", 0))
+-                for pos in positions
+-            )
+-            return (exposure / balance) * 100
+-        except Exception as e:
+-            logger.error(f"Error calculating current exposure: {e}")
+-            return 0.0
+-
+     def _get_risk_per_trade(self) -> float:
+         """Get average risk per trade"""
+         # This would typically come from the risk manager configuration
+@@ -901,8 +881,9 @@ class MonitoringDashboard:
+                 return "Unknown"
+ 
+             last_update = pd.to_datetime(result[0]["timestamp"])
+-            # Use naive UTC to avoid tz-naive/aware comparison errors
+-            time_diff = (datetime.utcnow() - last_update.replace(tzinfo=None)).total_seconds()
++            if last_update.tzinfo is None:
++                last_update = last_update.tz_localize(UTC)
++            time_diff = (datetime.now(UTC) - last_update).total_seconds()
+ 
+             if time_diff < 300:  # 5 minutes
+                 return "Healthy"
+@@ -925,21 +906,6 @@ class MonitoringDashboard:
+             logger.error(f"API status check failed: {e}")
+             return "Disconnected"
+ 
+-    def _get_recent_error_count(self) -> int:
+-        """Get count of recent errors (last 24 hours)"""
+-        try:
+-            query = """
+-            SELECT COUNT(*) as count
+-            FROM system_events
+-            WHERE event_type = 'ERROR'
+-            AND timestamp > NOW() - INTERVAL '1 day'
+-            """
+-            result = self.db_manager.execute_query(query)
+-            return result[0]["count"] if result else 0
+-        except Exception as e:
+-            logger.error(f"Error getting error count: {e}")
+-            return 0
+-
+     def _get_current_strategy(self) -> str:
+         """Get current active strategy"""
+         try:
+@@ -955,33 +921,6 @@ class MonitoringDashboard:
+             logger.error(f"Error getting current strategy: {e}")
+             return "Unknown"
+ 
+-    def _get_strategy_confidence(self) -> float:
+-        """Get strategy confidence level"""
+-        # This would need to be implemented in the strategy itself
+-        return 75.0  # Placeholder
+-
+-    def _get_signals_today(self) -> int:
+-        """Get number of signals generated today"""
+-        try:
+-            query = """
+-            SELECT COUNT(*) as count
+-            FROM trades
+-            WHERE DATE(entry_time) = CURRENT_DATE
+-            """
+-            result = self.db_manager.execute_query(query)
+-            return result[0]["count"] if result else 0
+-        except Exception as e:
+-            logger.error(f"Error getting signals today: {e}")
+-            return 0
+-
+-    def _get_current_price(self) -> float:
+-        """Get current BTC price"""
+-        try:
+-            return self.data_provider.get_current_price("BTCUSDT")
+-        except Exception as e:
+-            logger.error(f"Error getting current price: {e}")
+-            return 0.0
+-
+     def _get_price_change_24h(self) -> float:
+         """Get 24h price change percentage"""
+         try:
+@@ -997,19 +936,6 @@ class MonitoringDashboard:
+             logger.error(f"Error getting 24h price change: {e}")
+             return 0.0
+ 
+-    def _get_volume_24h(self) -> float:
+-        """Get 24h trading volume"""
+-        try:
+-            df = self.data_provider.get_historical_data(
+-                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=1), datetime.now(UTC)
+-            )
+-            if not df.empty:
+-                return df["volume"].sum()
+-            return 0.0
+-        except Exception as e:
+-            logger.error(f"Error getting 24h volume: {e}")
+-            return 0.0
+-
+     def _get_current_rsi(self) -> float:
+         """Get current RSI value"""
+         try:
+@@ -1048,15 +974,6 @@ class MonitoringDashboard:
+             logger.error(f"Error getting EMA trend: {e}")
+             return "Neutral"
+ 
+-    def _get_sentiment_score(self) -> float:
+-        """Get current sentiment score"""
+-        # This would integrate with sentiment providers
+-        return 0.0  # Placeholder
+-
+-    def _get_sentiment_trend(self) -> str:
+-        """Get sentiment trend"""
+-        return "Neutral"  # Placeholder
+-
+     # ========== SYSTEM HEALTH METRICS ==========
+ 
+     def _get_api_connection_status(self) -> str:
+@@ -1224,20 +1141,6 @@ class MonitoringDashboard:
+             logger.error(f"Error getting total position sizes: {e}")
+             return 0.0
+ 
+-    def _get_total_position_value_at_entry(self) -> float:
+-        """Get total value of all active positions at entry prices"""
+-        try:
+-            positions = self.db_manager.get_active_positions()
+-            total_value = sum(
+-                self._safe_float(pos.get("quantity", 0))
+-                * self._safe_float(pos.get("entry_price", 0))
+-                for pos in positions
+-            )
+-            return total_value
+-        except Exception as e:
+-            logger.error(f"Error getting total position value at entry: {e}")
+-            return 0.0
+-
+     # ========== ORDER EXECUTION METRICS ==========
+ 
+     def _get_fill_rate(self) -> float:
+@@ -1786,69 +1689,8 @@ class MonitoringDashboard:
+             return 0.0
+ 
+     def _get_error_rate(self) -> float:
+-        """Get error rate over last hour"""
+-        try:
+-            query = """
+-            SELECT
+-                COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
+-                COUNT(*) as total
+-            FROM system_events
+-            WHERE timestamp > NOW() - INTERVAL '1 hour'
+-            """
+-            result = self.db_manager.execute_query(query)
+-            if result and result[0]["total"] > 0:
+-                return (result[0]["errors"] / result[0]["total"]) * 100
+-            return 0.0
+-        except Exception as e:
+-            logger.error(f"Error getting error rate: {e}")
+-            return 0.0
+-
+-    def _get_balance_info(self) -> dict[str, Any]:
+-        """Get comprehensive balance information"""
+-        try:
+-            current_balance = self.db_manager.get_current_balance()
+-            balance_history = self.db_manager.get_balance_history(limit=10)
+-
+-            # Calculate balance change over time
+-            balance_change_24h = 0.0
+-            if len(balance_history) >= 2:
+-                try:
+-                    recent_balance = balance_history[0]["balance"]
+-                    older_balance = next(
+-                        (
+-                            h["balance"]
+-                            for h in balance_history
+-                            if ((datetime.now(UTC) - h["timestamp"].astimezone(UTC)).days >= 1)
+-                        ),
+-                        recent_balance,
+-                    )
+-                    if older_balance > 0:
+-                        balance_change_24h = (
+-                            (recent_balance - older_balance) / older_balance
+-                        ) * 100
+-                except (KeyError, TypeError, ZeroDivisionError):
+-                    pass
+-
+-            return {
+-                "current_balance": current_balance,
+-                "balance_change_24h": balance_change_24h,
+-                "last_updated": (
+-                    balance_history[0]["timestamp"].isoformat()
+-                    if balance_history and isinstance(balance_history[0]["timestamp"], datetime)
+-                    else balance_history[0]["timestamp"] if balance_history else None
+-                ),
+-                "last_update_reason": balance_history[0]["reason"] if balance_history else None,
+-                "recent_history": balance_history[:5],  # Last 5 balance changes
+-            }
+-        except Exception as e:
+-            logger.error(f"Error getting balance info: {e}")
+-            return {
+-                "current_balance": 0.0,
+-                "balance_change_24h": 0.0,
+-                "last_updated": None,
+-                "last_update_reason": "Error retrieving balance",
+-                "recent_history": [],
+-            }
++        """Get error rate over last hour."""
++        return self._get_error_rate_hourly()
+ 
+     def _get_balance_history(self, days: int = 30):
+         """Retrieve balance history.
+diff --git a/src/data_providers/binance_provider.py b/src/data_providers/binance_provider.py
+index 93bdb76a..0b13d8bd 100644
+--- a/src/data_providers/binance_provider.py
++++ b/src/data_providers/binance_provider.py
+@@ -626,8 +626,6 @@ class BinanceProvider(DataProvider, ExchangeInterface):
+                         current_price = float(ticker["price"])
+ 
+                         # Validate price is finite to prevent inf/nan in positions
+-                        import math
+-
+                         if not math.isfinite(current_price) or current_price <= 0:
+                             logger.warning(
+                                 "Invalid price %.8f for %s. Position not loaded.",
+@@ -698,7 +696,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
+ 
+             # Safe extraction with type validation
+             order_id_raw = order_data["orderId"]
+-            if not isinstance(order_id_raw, (int, str)):
++            if not isinstance(order_id_raw, int | str):
+                 logger.error("Invalid orderId type: %s", type(order_id_raw))
+                 return None
+ 
+@@ -783,7 +781,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
+                 # Validate critical fields to prevent KeyError/TypeError from malformed API response
+                 try:
+                     trade_time_ms = trade_data.get("time")
+-                    if trade_time_ms is None or not isinstance(trade_time_ms, (int, float)):
++                    if trade_time_ms is None or not isinstance(trade_time_ms, int | float):
+                         logger.warning("Skipping trade with invalid timestamp: %s", trade_data)
+                         continue
+ 
+@@ -937,7 +935,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
+                 # Validate tick_size is numeric before division to prevent TypeError
+                 tick_size_raw = symbol_info.get("tick_size", 0.01)
+                 tick_size = (
+-                    float(tick_size_raw) if isinstance(tick_size_raw, (int, float)) else 0.01
++                    float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
+                 )
+                 if tick_size > 0:
+                     stop_price = round(stop_price / tick_size) * tick_size
+@@ -946,7 +944,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
+                 # Validate step_size is numeric before division to prevent TypeError
+                 step_size_raw = symbol_info.get("step_size", 0.00001)
+                 step_size = (
+-                    float(step_size_raw) if isinstance(step_size_raw, (int, float)) else 0.00001
++                    float(step_size_raw) if isinstance(step_size_raw, int | float) else 0.00001
+                 )
+                 if step_size > 0:
+                     quantity = round(quantity / step_size) * step_size
+diff --git a/src/data_providers/cached_data_provider.py b/src/data_providers/cached_data_provider.py
+index 42a47115..44e46618 100644
+--- a/src/data_providers/cached_data_provider.py
++++ b/src/data_providers/cached_data_provider.py
+@@ -439,28 +439,12 @@ class CachedDataProvider(DataProvider):
+ 
+         # Load data for each year
+         year_dataframes = []
+-        cached_years = []
+-        missing_years = []
+ 
+         for year, year_start, year_end in year_ranges:
+-            cache_key = self._generate_year_cache_key(symbol, timeframe, year)
+-            cache_path = self._get_cache_path(cache_key)
+-
+-            if cache_path and self._is_cache_valid(cache_path, year):
+-                cached_years.append(year)
+-            else:
+-                missing_years.append(year)
+-
+             year_data = self._load_year_data(symbol, timeframe, year, year_start, year_end)
+             if year_data is not None and not year_data.empty:
+                 year_dataframes.append(year_data)
+ 
+-        # Log cache efficiency
+-        if cached_years:
+-            logger.info(f"Cache hit for years: {cached_years}")
+-        if missing_years:
+-            logger.info(f"Cache miss for years: {missing_years}")
+-
+         # Combine all year data
+         if year_dataframes:
+             combined_data = pd.concat(year_dataframes, ignore_index=False)
+diff --git a/src/data_providers/coinbase_provider.py b/src/data_providers/coinbase_provider.py
+index 70007c1a..c8a3489d 100644
+--- a/src/data_providers/coinbase_provider.py
++++ b/src/data_providers/coinbase_provider.py
+@@ -3,6 +3,7 @@ import hashlib
+ import hmac
+ import json
+ import logging
++import math
+ import os
+ import time
+ from datetime import UTC, datetime, timedelta
+@@ -192,8 +193,6 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
+     @staticmethod
+     def _safe_calculate_average_price(executed_value: Any, filled_size: Any) -> float | None:
+         """Safely calculate average price with validation to prevent NaN/inf propagation."""
+-        import math
+-
+         try:
+             exec_val = float(executed_value)
+             fill_sz = float(filled_size)
+@@ -325,42 +324,41 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
+         logger.info("get_positions not implemented for Coinbase spot API (only holdings)")
+         return []
+ 
++    def _parse_order_data(self, od: dict[str, Any]) -> Order:
++        """Parse a Coinbase order response dict into an Order object."""
++        return Order(
++            order_id=od.get("id"),
++            symbol=od.get("product_id"),
++            side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
++            order_type=self._convert_order_type(od.get("type")),
++            quantity=float(od.get("size", 0)),
++            price=float(od.get("price")) if od.get("price") else None,
++            status=self._convert_order_status(od.get("status"), od.get("done_reason")),
++            filled_quantity=float(od.get("filled_size", 0)),
++            average_price=(
++                self._safe_calculate_average_price(
++                    od.get("executed_value", 0), od.get("filled_size", 0)
++                )
++            ),
++            commission=0.0,
++            commission_asset="",
++            create_time=datetime.fromisoformat(od.get("created_at")),
++            update_time=(
++                datetime.fromisoformat(od.get("done_at"))
++                if od.get("done_at")
++                else datetime.now(UTC)
++            ),
++            stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
++            time_in_force=od.get("time_in_force", "GTC"),
++        )
++
+     def get_open_orders(self, symbol: str | None = None) -> list[Order]:
+         try:
+             params = {"status": "open"}
+             if symbol:
+                 params["product_id"] = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
+             data = self._request("GET", "/orders", params=params, auth=True)
+-            orders: list[Order] = []
+-            for od in data:
+-                orders.append(
+-                    Order(
+-                        order_id=od.get("id"),
+-                        symbol=od.get("product_id"),
+-                        side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
+-                        order_type=self._convert_order_type(od.get("type")),
+-                        quantity=float(od.get("size", 0)),
+-                        price=float(od.get("price")) if od.get("price") else None,
+-                        status=self._convert_order_status(od.get("status"), od.get("done_reason")),
+-                        filled_quantity=float(od.get("filled_size", 0)),
+-                        average_price=(
+-                            self._safe_calculate_average_price(
+-                                od.get("executed_value", 0), od.get("filled_size", 0)
+-                            )
+-                        ),
+-                        commission=0.0,
+-                        commission_asset="",
+-                        create_time=datetime.fromisoformat(od.get("created_at")),
+-                        update_time=(
+-                            datetime.fromisoformat(od.get("done_at"))
+-                            if od.get("done_at")
+-                            else datetime.now(UTC)
+-                        ),
+-                        stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
+-                        time_in_force=od.get("time_in_force", "GTC"),
+-                    )
+-                )
+-            return orders
++            return [self._parse_order_data(od) for od in data]
+         except Exception as e:
+             logger.error(f"Failed to get open orders: {e}")
+             return []
+@@ -368,31 +366,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
+     def get_order(self, order_id: str, symbol: str) -> Order | None:
+         try:
+             od = self._request("GET", f"/orders/{order_id}", auth=True)
+-            return Order(
+-                order_id=od.get("id"),
+-                symbol=od.get("product_id"),
+-                side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
+-                order_type=self._convert_order_type(od.get("type")),
+-                quantity=float(od.get("size", 0)),
+-                price=float(od.get("price")) if od.get("price") else None,
+-                status=self._convert_order_status(od.get("status"), od.get("done_reason")),
+-                filled_quantity=float(od.get("filled_size", 0)),
+-                average_price=(
+-                    self._safe_calculate_average_price(
+-                        od.get("executed_value", 0), od.get("filled_size", 0)
+-                    )
+-                ),
+-                commission=0.0,
+-                commission_asset="",
+-                create_time=datetime.fromisoformat(od.get("created_at")),
+-                update_time=(
+-                    datetime.fromisoformat(od.get("done_at"))
+-                    if od.get("done_at")
+-                    else datetime.now(UTC)
+-                ),
+-                stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
+-                time_in_force=od.get("time_in_force", "GTC"),
+-            )
++            return self._parse_order_data(od)
+         except Exception as e:
+             logger.error(f"Failed to get order {order_id}: {e}")
+             return None
+diff --git a/src/data_providers/coingecko_provider.py b/src/data_providers/coingecko_provider.py
+index 427567ce..da504318 100644
+--- a/src/data_providers/coingecko_provider.py
++++ b/src/data_providers/coingecko_provider.py
+@@ -18,7 +18,6 @@ import zipfile
+ from datetime import UTC, datetime, timedelta
+ from typing import Any
+ 
+-import numpy as np
+ import pandas as pd
+ import requests
+ 
+@@ -54,9 +53,6 @@ class CoinGeckoProvider(DataProvider):
+     # Use 2.5 seconds to be safe and prevent 429 errors
+     RATE_LIMIT_DELAY_SECONDS = 2.5
+ 
+-    # CoinGecko OHLC endpoint only accepts these specific day values
+-    VALID_OHLC_DAYS = [1, 7, 14, 30, 90, 180, 365]
+-
+     # Chunk size for market_chart/range: <90 days gives hourly granularity
+     MARKET_CHART_CHUNK_DAYS = 85
+ 
+@@ -85,21 +81,6 @@ class CoinGeckoProvider(DataProvider):
+         "DOGE": "dogecoin",
+     }
+ 
+-    # CoinGecko OHLC granularity mapping (days parameter)
+-    # 1 day = 30-minute candles
+-    # 7-30 days = 4-hour candles
+-    # 31-90 days = 4-hour candles
+-    # 90+ days = 4-day candles
+-    TIMEFRAME_MAPPING = {
+-        "1m": None,  # Not supported by CoinGecko OHLC
+-        "5m": None,  # Not supported
+-        "15m": None,  # Not supported
+-        "30m": 1,  # Use 1 day (gives 30m candles)
+-        "1h": 7,  # Use 7 days (gives 4h candles, we'll need to aggregate)
+-        "4h": 7,  # Use 7 days (gives 4h candles)
+-        "1d": 90,  # Use 90 days (gives daily candles)
+-    }
+-
+     def __init__(self, api_key: str | None = None):
+         """
+         Initialize CoinGecko provider.
+@@ -509,7 +490,6 @@ class CoinGeckoProvider(DataProvider):
+             combined.index.max() if len(combined) > 0 else "N/A",
+         )
+ 
+-        self.data = combined
+         return combined
+ 
+     @staticmethod
+@@ -552,10 +532,12 @@ class CoinGeckoProvider(DataProvider):
+             for col in ["open", "high", "low", "close", "volume"]:
+                 df[col] = pd.to_numeric(df[col], errors="coerce")
+ 
+-            # Drop invalid rows
++            # Drop invalid rows (single combined mask avoids intermediate copies)
+             df = df.dropna(subset=["open", "high", "low", "close"])
+-            for col in ["open", "high", "low", "close"]:
+-                df = df[df[col] > 0]
++            positive_mask = (
++                (df["open"] > 0) & (df["high"] > 0) & (df["low"] > 0) & (df["close"] > 0)
++            )
++            df = df[positive_mask]
+ 
+             df["volume"] = df["volume"].fillna(0)
+ 
+diff --git a/src/data_providers/data_provider.py b/src/data_providers/data_provider.py
+index f4fb281d..60415269 100644
+--- a/src/data_providers/data_provider.py
++++ b/src/data_providers/data_provider.py
+@@ -1,6 +1,6 @@
++import logging
+ from abc import ABC, abstractmethod
+ from datetime import datetime
+-import logging
+ 
+ import numpy as np
+ import pandas as pd
+@@ -54,22 +54,27 @@ class DataProvider(ABC):
+         # NaN/Infinity/zero/negative prices would corrupt position sizing and P&L calculations
+         # For production resilience, we drop invalid rows and log a warning instead of failing
+         original_length = len(df)
++        combined_invalid = pd.Series(False, index=df.index)
+         for col in ["open", "high", "low", "close"]:
+-            # Check for invalid values (NaN, Infinity, zero, negative)
+-            invalid_mask = df[col].isna() | np.isinf(df[col]) | (df[col] <= 0)
+-            invalid_count = invalid_mask.sum()
+-
++            col_invalid = df[col].isna() | np.isinf(df[col]) | (df[col] <= 0)
++            invalid_count = col_invalid.sum()
+             if invalid_count > 0:
+                 logger.warning(
+-                    "Dropping %d rows with invalid %s values (NaN/Infinity/non-positive) "
+-                    "from exchange data. This may indicate temporary exchange issues "
+-                    "or network problems. Remaining rows: %d/%d",
++                    "Found %d rows with invalid %s values (NaN/Infinity/non-positive) "
++                    "in exchange data. This may indicate temporary exchange issues "
++                    "or network problems.",
+                     invalid_count,
+                     col,
+-                    original_length - invalid_count,
+-                    original_length,
+                 )
+-                df = df[~invalid_mask].copy()
++                combined_invalid = combined_invalid | col_invalid
++
++        if combined_invalid.any():
++            df = df[~combined_invalid].copy()
++            logger.warning(
++                "Dropped %d/%d rows with invalid price data.",
++                combined_invalid.sum(),
++                original_length,
++            )
+ 
+         # If all rows were invalid, return empty DataFrame to allow retry on next cycle
+         if len(df) == 0:
+diff --git a/src/engines/backtest/execution/position_tracker.py b/src/engines/backtest/execution/position_tracker.py
+index ed17c04a..4492d406 100644
+--- a/src/engines/backtest/execution/position_tracker.py
++++ b/src/engines/backtest/execution/position_tracker.py
+@@ -10,7 +10,6 @@ import logging
+ import math
+ from dataclasses import dataclass
+ from datetime import datetime
+-from typing import TYPE_CHECKING
+ 
+ from src.config.constants import (
+     DEFAULT_FEE_RATE,
+@@ -23,9 +22,6 @@ from src.engines.shared.side_utils import to_side_string
+ from src.performance.metrics import Side, cash_pnl, pnl_percent
+ from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
+ 
+-if TYPE_CHECKING:
+-    pass
+-
+ logger = logging.getLogger(__name__)
+ 
+ 
+diff --git a/src/engines/shared/cost_calculator.py b/src/engines/shared/cost_calculator.py
+index 9adc2cda..2d9598a0 100644
+--- a/src/engines/shared/cost_calculator.py
++++ b/src/engines/shared/cost_calculator.py
+@@ -78,6 +78,35 @@ class CostCalculator:
+             return self.fee_rate
+         return self.fee_rate
+ 
++    @staticmethod
++    def _validate_cost_inputs(price: float, notional: float, side: str) -> str:
++        """Validate inputs for cost calculations.
++
++        Args:
++            price: The intended price.
++            notional: The notional value of the trade.
++            side: Trade side ('long' or 'short').
++
++        Returns:
++            Normalized lowercase side string.
++
++        Raises:
++            ValueError: If any input is invalid.
++        """
++        if not math.isfinite(price):
++            raise ValueError(f"Price must be finite, got {price}")
++        if price <= 0:
++            raise ValueError(f"Price must be positive, got {price}")
++        if not math.isfinite(notional):
++            raise ValueError(f"Notional must be finite, got {notional}")
++        if notional < 0:
++            raise ValueError(f"Notional must be non-negative, got {notional}")
++
++        side_lower = side.lower() if isinstance(side, str) else str(side).lower()
++        if side_lower not in ("long", "short"):
++            raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
++        return side_lower
++
+     def calculate_entry_costs(
+         self,
+         price: float,
+@@ -103,19 +132,7 @@ class CostCalculator:
+         Raises:
+             ValueError: If price <= 0, notional < 0, side is invalid, or values are NaN/infinity.
+         """
+-        # Input validation - check for NaN/infinity to prevent corrupted state
+-        if not math.isfinite(price):
+-            raise ValueError(f"Price must be finite, got {price}")
+-        if price <= 0:
+-            raise ValueError(f"Price must be positive, got {price}")
+-        if not math.isfinite(notional):
+-            raise ValueError(f"Notional must be finite, got {notional}")
+-        if notional < 0:
+-            raise ValueError(f"Notional must be non-negative, got {notional}")
+-
+-        side_lower = side.lower() if isinstance(side, str) else str(side).lower()
+-        if side_lower not in ("long", "short"):
+-            raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
++        side_lower = self._validate_cost_inputs(price, notional, side)
+ 
+         # Apply slippage adversely for entry unless maker liquidity is specified
+         if liquidity == LIQUIDITY_MAKER:
+@@ -169,19 +186,7 @@ class CostCalculator:
+         Raises:
+             ValueError: If price <= 0, notional < 0, side is invalid, or values are NaN/infinity.
+         """
+-        # Input validation - check for NaN/infinity to prevent corrupted state
+-        if not math.isfinite(price):
+-            raise ValueError(f"Price must be finite, got {price}")
+-        if price <= 0:
+-            raise ValueError(f"Price must be positive, got {price}")
+-        if not math.isfinite(notional):
+-            raise ValueError(f"Notional must be finite, got {notional}")
+-        if notional < 0:
+-            raise ValueError(f"Notional must be non-negative, got {notional}")
+-
+-        side_lower = side.lower() if isinstance(side, str) else str(side).lower()
+-        if side_lower not in ("long", "short"):
+-            raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
++        side_lower = self._validate_cost_inputs(price, notional, side)
+ 
+         # Apply slippage adversely for exit unless maker liquidity is specified
+         if not apply_slippage or liquidity == LIQUIDITY_MAKER:
+diff --git a/src/engines/shared/models.py b/src/engines/shared/models.py
+index df7c6e38..0c413e62 100644
+--- a/src/engines/shared/models.py
++++ b/src/engines/shared/models.py
+@@ -238,11 +238,11 @@ class BasePosition:
+ 
+     def is_long(self) -> bool:
+         """Check if this is a long position."""
+-        return self.side == PositionSide.LONG or self.side_str == "long"
++        return self.side == PositionSide.LONG
+ 
+     def is_short(self) -> bool:
+         """Check if this is a short position."""
+-        return self.side == PositionSide.SHORT or self.side_str == "short"
++        return self.side == PositionSide.SHORT
+ 
+ 
+ @dataclass
+@@ -314,11 +314,11 @@ class BaseTrade:
+ 
+     def is_long(self) -> bool:
+         """Check if this was a long trade."""
+-        return self.side == PositionSide.LONG or self.side_str == "long"
++        return self.side == PositionSide.LONG
+ 
+     def is_short(self) -> bool:
+         """Check if this was a short trade."""
+-        return self.side == PositionSide.SHORT or self.side_str == "short"
++        return self.side == PositionSide.SHORT
+ 
+     def duration_seconds(self) -> float:
+         """Calculate trade duration in seconds."""
+diff --git a/src/infrastructure/logging/config.py b/src/infrastructure/logging/config.py
+index fc4a860c..d055acdf 100644
+--- a/src/infrastructure/logging/config.py
++++ b/src/infrastructure/logging/config.py
+@@ -10,6 +10,32 @@ from typing import Any
+ from src.config import get_config
+ from src.infrastructure.logging.context import get_context
+ 
++# Built-in LogRecord fields that filters/formatters should skip
++_BUILTIN_RECORD_FIELDS = frozenset({
++    "name",
++    "msg",
++    "args",
++    "levelname",
++    "levelno",
++    "pathname",
++    "filename",
++    "module",
++    "lineno",
++    "funcName",
++    "created",
++    "msecs",
++    "relativeCreated",
++    "thread",
++    "threadName",
++    "processName",
++    "process",
++    "getMessage",
++    "exc_info",
++    "exc_text",
++    "stack_info",
++    "message",
++})
++
+ 
+ class SensitiveDataFilter(logging.Filter):
+     """
+@@ -117,38 +143,11 @@ class NamespacePrefixFilter(logging.Filter):
+ class ContextInjectorFilter(logging.Filter):
+     """Injects structured context fields from contextvars into LogRecord."""
+ 
+-    # * Built-in LogRecord fields that should not be overwritten
+-    _RESERVED_FIELDS = {
+-        "name",
+-        "msg",
+-        "args",
+-        "levelname",
+-        "levelno",
+-        "pathname",
+-        "filename",
+-        "module",
+-        "lineno",
+-        "funcName",
+-        "created",
+-        "msecs",
+-        "relativeCreated",
+-        "thread",
+-        "threadName",
+-        "processName",
+-        "process",
+-        "getMessage",
+-        "exc_info",
+-        "exc_text",
+-        "stack_info",
+-        "message",
+-    }
+-
+     def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+         try:
+             ctx = get_context()
+             for key, value in ctx.items():
+-                # * Only add context fields that don't conflict with built-in LogRecord fields
+-                if key not in self._RESERVED_FIELDS and not hasattr(record, key):
++                if key not in _BUILTIN_RECORD_FIELDS and not hasattr(record, key):
+                     setattr(record, key, value)
+         except Exception:
+             return True
+@@ -242,30 +241,7 @@ class SimpleJsonFormatter(logging.Formatter):
+ 
+         # * Add any extra fields from the record (excluding built-in fields)
+         for key, value in record.__dict__.items():
+-            if key not in [
+-                "name",
+-                "msg",
+-                "args",
+-                "levelname",
+-                "levelno",
+-                "pathname",
+-                "filename",
+-                "module",
+-                "lineno",
+-                "funcName",
+-                "created",
+-                "msecs",
+-                "relativeCreated",
+-                "thread",
+-                "threadName",
+-                "processName",
+-                "process",
+-                "getMessage",
+-                "exc_info",
+-                "exc_text",
+-                "stack_info",
+-                "message",
+-            ]:
++            if key not in _BUILTIN_RECORD_FIELDS:
+                 log_entry[key] = value
+ 
+         try:
+diff --git a/src/ml/training_pipeline/models.py b/src/ml/training_pipeline/models.py
+index 55491cfe..ecadea4a 100644
+--- a/src/ml/training_pipeline/models.py
++++ b/src/ml/training_pipeline/models.py
+@@ -257,6 +257,29 @@ def create_model(
+ 
+         return create_tcn_with_attention(input_shape, **kwargs)
+ 
++    # Temporal Fusion Transformer
++    elif model_type_lower == "tft":
++        try:
++            from src.ml.training_pipeline.models_tft import (
++                RECOMMENDED_HYPERPARAMETERS as TFT_HYPERPARAMS,
++                create_tft_model,
++            )
++        except ImportError:
++            raise ImportError(
++                "TFT model requires models_tft module. "
++                "Ensure the file exists in src/ml/training_pipeline/"
++            ) from None
++
++        if variant != "default" and variant in TFT_HYPERPARAMS:
++            variant_params = {
++                k: v
++                for k, v in TFT_HYPERPARAMS[variant].items()
++                if k not in ("batch_size", "epochs", "patience")
++            }
++            variant_params.update(kwargs)
++            return create_tft_model(input_shape, **variant_params)
++        return create_tft_model(input_shape, **kwargs)
++
+     # Price-only LSTM (simple baseline)
+     elif model_type_lower == "lstm":
+         sequence_length, num_features = input_shape
+@@ -265,7 +288,7 @@ def create_model(
+     else:
+         raise ValueError(
+             f"Unknown model_type: {model_type}. "
+-            f"Supported types: 'cnn_lstm', 'attention_lstm', 'tcn', 'tcn_attention', 'lstm'"
++            f"Supported types: 'cnn_lstm', 'attention_lstm', 'tcn', 'tcn_attention', 'tft', 'lstm'"
+         )
+ 
+ 
+@@ -303,6 +326,14 @@ def get_model_callbacks(model_type: str, patience: int = 15) -> list[Any]:
+         except ImportError:
+             pass
+ 
++    elif model_type_lower == "tft":
++        try:
++            from src.ml.training_pipeline.models_tft import tft_callbacks
++
++            return tft_callbacks(patience=patience)
++        except ImportError:
++            pass
++
+     # Default callbacks for all models
+     return default_callbacks(patience=patience)
+ 
+@@ -313,6 +344,7 @@ AVAILABLE_MODELS = {
+     "attention_lstm": "LSTM with multi-head attention (12-15% improvement expected)",
+     "tcn": "Temporal Convolutional Network (fast training, competitive accuracy)",
+     "tcn_attention": "TCN with multi-head attention",
++    "tft": "Temporal Fusion Transformer (interpretable, attention-based)",
+     "lstm": "Simple LSTM baseline",
+ }
+ 
+diff --git a/src/ml/training_pipeline/models_tft.py b/src/ml/training_pipeline/models_tft.py
+new file mode 100644
+index 00000000..bb315092
+--- /dev/null
++++ b/src/ml/training_pipeline/models_tft.py
+@@ -0,0 +1,547 @@
++"""Temporal Fusion Transformer (TFT) model for cryptocurrency price prediction.
++
++This module implements a simplified TFT architecture using TensorFlow/Keras,
++providing interpretable predictions via variable selection and attention weights.
++
++Architecture:
++    - Gated Residual Networks (GRN) for information flow control
++    - Variable Selection Networks (VSN) for feature importance
++    - LSTM encoder for temporal processing
++    - Multi-head self-attention decoder for long-range dependencies
++    - Sigmoid output for directional prediction (up/down)
++
++Performance expectations:
++    - Interpretable feature importance via learned selection weights
++    - Long-range temporal dependencies via self-attention
++    - Robust gradient flow via gated residual connections
++
++References:
++    - "Temporal Fusion Transformers for Interpretable Multi-horizon Time Series
++      Forecasting" (Lim et al., 2021)
++    - Gated mechanisms inspired by GRU/Highway Networks
++"""
++
++from __future__ import annotations
++
++from typing import TYPE_CHECKING, Any
++
++try:
++    import tensorflow as tf
++    from tensorflow.keras import Model, callbacks, layers
++
++    _TENSORFLOW_AVAILABLE = True
++except ImportError:
++    _TENSORFLOW_AVAILABLE = False
++    tf = None  # type: ignore
++    Model = None  # type: ignore
++    callbacks = None  # type: ignore
++    layers = None  # type: ignore
++
++if TYPE_CHECKING:
++    from tensorflow.keras import callbacks as CallbacksType
++    from tensorflow.keras.models import Model as ModelType
++else:
++    ModelType = Any  # type: ignore
++    CallbacksType = Any  # type: ignore
++
++
++def _ensure_tensorflow_available() -> None:
++    """Ensure tensorflow is available, raising ImportError with helpful message if not."""
++    if not _TENSORFLOW_AVAILABLE:
++        raise ImportError(
++            "tensorflow is required for model training but is not installed. "
++            "Install it with: pip install tensorflow"
++        )
++
++
++class GatedResidualNetwork(layers.Layer):
++    """Gated Residual Network for controlled information flow.
++
++    Applies a gated transformation with residual connection and layer
++    normalization. The GLU gate learns which information to pass through,
++    allowing the network to suppress irrelevant inputs.
++
++    Architecture:
++        Input -> Dense -> ELU -> Dense -> Dropout -> GLU gate -> Add residual -> LayerNorm
++
++    Args:
++        hidden_size: Dimension of the hidden layers
++        output_size: Dimension of the output (defaults to hidden_size)
++        dropout: Dropout rate for regularization
++    """
++
++    def __init__(
++        self,
++        hidden_size: int,
++        output_size: int | None = None,
++        dropout: float = 0.1,
++        **kwargs: Any,
++    ):
++        super().__init__(**kwargs)
++        self.hidden_size = hidden_size
++        self.output_size = output_size or hidden_size
++        self.dropout_rate = dropout
++
++        # Layers initialized in build()
++        self.dense_hidden = None
++        self.dense_gate_linear = None
++        self.dense_gate_sigmoid = None
++        self.dense_skip = None
++        self.dropout_layer = None
++        self.layer_norm = None
++
++    def build(self, input_shape: Any) -> None:
++        """Build GRN layers based on input shape."""
++        input_dim = input_shape[-1]
++
++        # Hidden transformation
++        self.dense_hidden = layers.Dense(self.hidden_size, activation="elu", name="grn_hidden")
++
++        # GLU gate: split into linear and sigmoid paths
++        self.dense_gate_linear = layers.Dense(self.output_size, name="grn_gate_linear")
++        self.dense_gate_sigmoid = layers.Dense(
++            self.output_size, activation="sigmoid", name="grn_gate_sigmoid"
++        )
++
++        self.dropout_layer = layers.Dropout(self.dropout_rate)
++
++        # Skip connection projection if input and output dimensions differ
++        if input_dim != self.output_size:
++            self.dense_skip = layers.Dense(self.output_size, name="grn_skip")
++        else:
++            self.dense_skip = None
++
++        self.layer_norm = layers.LayerNormalization(name="grn_layer_norm")
++
++        super().build(input_shape)
++
++    def call(self, inputs: Any, training: bool | None = None) -> Any:
++        """Apply gated residual transformation.
++
++        Args:
++            inputs: Input tensor of arbitrary shape with last dim matching input_dim
++            training: Whether in training mode (for dropout)
++
++        Returns:
++            Transformed tensor with same shape except last dim is output_size
++        """
++        # Hidden transformation: Dense -> ELU
++        hidden = self.dense_hidden(inputs)
++        hidden = self.dropout_layer(hidden, training=training)
++
++        # GLU gate: element-wise product of linear and sigmoid paths
++        gate_linear = self.dense_gate_linear(hidden)
++        gate_sigmoid = self.dense_gate_sigmoid(hidden)
++        gated = layers.Multiply()([gate_linear, gate_sigmoid])
++
++        # Residual connection
++        if self.dense_skip is not None:
++            residual = self.dense_skip(inputs)
++        else:
++            residual = inputs
++
++        output = layers.Add()([gated, residual])
++        output = self.layer_norm(output)
++
++        return output
++
++    def get_config(self) -> dict[str, Any]:
++        """Get layer configuration for serialization."""
++        config = super().get_config()
++        config.update(
++            {
++                "hidden_size": self.hidden_size,
++                "output_size": self.output_size,
++                "dropout": self.dropout_rate,
++            }
++        )
++        return config
++
++
++class VariableSelectionNetwork(layers.Layer):
++    """Variable Selection Network for learning feature importance.
++
++    Applies independent GRNs to each input feature, then uses a softmax-weighted
++    combination to select the most important features. Provides interpretable
++    feature weights.
++
++    Args:
++        n_features: Number of input features
++        hidden_size: Hidden dimension for GRN transformations
++        dropout: Dropout rate for regularization
++    """
++
++    def __init__(
++        self,
++        n_features: int,
++        hidden_size: int,
++        dropout: float = 0.1,
++        **kwargs: Any,
++    ):
++        super().__init__(**kwargs)
++        self.n_features = n_features
++        self.hidden_size = hidden_size
++        self.dropout_rate = dropout
++
++        # Layers initialized in build()
++        self.feature_grns: list[Any] = []
++        self.selection_grn = None
++        self.selection_dense = None
++
++    def build(self, input_shape: Any) -> None:
++        """Build VSN layers."""
++        # Per-feature GRN transformations
++        self.feature_grns = [
++            GatedResidualNetwork(
++                hidden_size=self.hidden_size,
++                output_size=self.hidden_size,
++                dropout=self.dropout_rate,
++                name=f"feature_grn_{i}",
++            )
++            for i in range(self.n_features)
++        ]
++
++        # Selection weights GRN: processes flattened features to produce weights
++        self.selection_grn = GatedResidualNetwork(
++            hidden_size=self.hidden_size,
++            output_size=self.hidden_size,
++            dropout=self.dropout_rate,
++            name="selection_grn",
++        )
++        self.selection_dense = layers.Dense(
++            self.n_features, activation="softmax", name="selection_weights"
++        )
++
++        super().build(input_shape)
++
++    def call(
++        self,
++        inputs: Any,
++        training: bool | None = None,
++        return_weights: bool = False,
++    ) -> Any:
++        """Apply variable selection to input features.
++
++        Args:
++            inputs: Tensor of shape (batch, timesteps, n_features)
++            training: Whether in training mode
++            return_weights: Whether to return selection weights
++
++        Returns:
++            Selected features tensor of shape (batch, timesteps, hidden_size).
++            If return_weights=True, returns tuple of (output, weights).
++        """
++        # Transform each feature independently through its own GRN
++        # Each feature is a scalar per timestep, expanded to hidden_size
++        transformed = []
++        for i in range(self.n_features):
++            # Extract single feature: (batch, timesteps, 1)
++            feature_i = inputs[:, :, i : i + 1]
++            # Transform through GRN: (batch, timesteps, hidden_size)
++            transformed_i = self.feature_grns[i](feature_i, training=training)
++            transformed.append(transformed_i)
++
++        # Stack transformed features: (batch, timesteps, n_features, hidden_size)
++        stacked = tf.stack(transformed, axis=2)
++
++        # Compute selection weights from flattened input
++        # Use the raw input to determine which features matter
++        selection_input = self.selection_grn(inputs, training=training)
++        # Weights: (batch, timesteps, n_features)
++        weights = self.selection_dense(selection_input)
++
++        # Weighted combination: expand weights for broadcasting
++        # weights: (batch, timesteps, n_features, 1)
++        weights_expanded = tf.expand_dims(weights, axis=-1)
++        # Weighted sum: (batch, timesteps, hidden_size)
++        selected = tf.reduce_sum(stacked * weights_expanded, axis=2)
++
++        if return_weights:
++            return selected, weights
++        return selected
++
++    def get_config(self) -> dict[str, Any]:
++        """Get layer configuration for serialization."""
++        config = super().get_config()
++        config.update(
++            {
++                "n_features": self.n_features,
++                "hidden_size": self.hidden_size,
++                "dropout": self.dropout_rate,
++            }
++        )
++        return config
++
++
++class TemporalFusionDecoder(layers.Layer):
++    """Self-attention decoder with causal masking for temporal fusion.
++
++    Applies multi-head self-attention over time steps with causal masking
++    to prevent information leakage from future timesteps, followed by
++    a GRN for post-attention processing.
++
++    Args:
++        n_heads: Number of attention heads
++        hidden_size: Dimension for attention keys/queries/values
++        dropout: Dropout rate for regularization
++    """
++
++    def __init__(
++        self,
++        n_heads: int = 4,
++        hidden_size: int = 64,
++        dropout: float = 0.1,
++        **kwargs: Any,
++    ):
++        super().__init__(**kwargs)
++        self.n_heads = n_heads
++        self.hidden_size = hidden_size
++        self.dropout_rate = dropout
++
++        # Layers initialized in build()
++        self.attention = None
++        self.attention_dropout = None
++        self.attention_norm = None
++        self.post_attention_grn = None
++
++    def build(self, input_shape: Any) -> None:
++        """Build decoder layers."""
++        self.attention = layers.MultiHeadAttention(
++            num_heads=self.n_heads,
++            key_dim=self.hidden_size // self.n_heads,
++            dropout=self.dropout_rate,
++            name="temporal_attention",
++        )
++        self.attention_dropout = layers.Dropout(self.dropout_rate)
++        self.attention_norm = layers.LayerNormalization(name="attention_norm")
++        self.post_attention_grn = GatedResidualNetwork(
++            hidden_size=self.hidden_size,
++            dropout=self.dropout_rate,
++            name="post_attention_grn",
++        )
++
++        super().build(input_shape)
++
++    def call(
++        self,
++        inputs: Any,
++        training: bool | None = None,
++        return_attention_scores: bool = False,
++    ) -> Any:
++        """Apply temporal self-attention with causal masking.
++
++        Args:
++            inputs: Tensor of shape (batch, timesteps, hidden_size)
++            training: Whether in training mode
++            return_attention_scores: Whether to return attention weights
++
++        Returns:
++            Processed tensor. If return_attention_scores=True, returns tuple.
++        """
++        # Self-attention with causal mask (prevents future peeking)
++        attended, attention_scores = self.attention(
++            query=inputs,
++            value=inputs,
++            key=inputs,
++            use_causal_mask=True,
++            return_attention_scores=True,
++            training=training,
++        )
++
++        attended = self.attention_dropout(attended, training=training)
++
++        # Add & Norm residual connection
++        x = layers.Add()([inputs, attended])
++        x = self.attention_norm(x)
++
++        # Post-attention GRN for additional processing
++        x = self.post_attention_grn(x, training=training)
++
++        if return_attention_scores:
++            return x, attention_scores
++        return x
++
++    def get_config(self) -> dict[str, Any]:
++        """Get layer configuration for serialization."""
++        config = super().get_config()
++        config.update(
++            {
++                "n_heads": self.n_heads,
++                "hidden_size": self.hidden_size,
++                "dropout": self.dropout_rate,
++            }
++        )
++        return config
++
++
++def create_tft_model(
++    input_shape: tuple[int, int],
++    n_heads: int = 4,
++    hidden_size: int = 64,
++    dropout: float = 0.1,
++    num_lstm_layers: int = 1,
++    learning_rate: float = 1e-3,
++) -> Any:
++    """Create a Temporal Fusion Transformer model for directional prediction.
++
++    Architecture:
++        1. Variable Selection Network - learns feature importance
++        2. LSTM encoder - captures temporal patterns
++        3. Multi-head self-attention decoder - models long-range dependencies
++        4. Dense output with sigmoid - predicts direction (up/down)
++
++    Args:
++        input_shape: Shape of input sequences (sequence_length, n_features)
++        n_heads: Number of attention heads in the decoder
++        hidden_size: Hidden dimension for GRN and attention layers
++        dropout: Dropout rate for regularization (0.0-0.5)
++        num_lstm_layers: Number of stacked LSTM layers (1-3)
++        learning_rate: Adam optimizer learning rate
++
++    Returns:
++        Compiled Keras model
++
++    Raises:
++        ValueError: If input parameters are invalid
++
++    Example:
++        >>> model = create_tft_model((60, 15), n_heads=4, hidden_size=64)
++        >>> model.fit(train_ds, validation_data=val_ds, epochs=50)
++    """
++    _ensure_tensorflow_available()
++
++    sequence_length, n_features = input_shape
++
++    # Validate parameters
++    if n_features <= 0:
++        raise ValueError(f"n_features must be positive, got {n_features}")
++    if n_heads <= 0:
++        raise ValueError(f"n_heads must be positive, got {n_heads}")
++    if hidden_size <= 0:
++        raise ValueError(f"hidden_size must be positive, got {hidden_size}")
++    if hidden_size % n_heads != 0:
++        raise ValueError(
++            f"hidden_size ({hidden_size}) must be divisible by n_heads ({n_heads})"
++        )
++    if not 0.0 <= dropout < 1.0:
++        raise ValueError(f"dropout must be in [0.0, 1.0), got {dropout}")
++    if num_lstm_layers <= 0:
++        raise ValueError(f"num_lstm_layers must be positive, got {num_lstm_layers}")
++
++    inputs = layers.Input(shape=input_shape, name="sequence_input")
++
++    # 1. Variable Selection Network - select important features
++    x = VariableSelectionNetwork(
++        n_features=n_features,
++        hidden_size=hidden_size,
++        dropout=dropout,
++        name="variable_selection",
++    )(inputs)
++
++    # 2. LSTM encoder for temporal processing
++    for i in range(num_lstm_layers):
++        x = layers.LSTM(
++            hidden_size,
++            return_sequences=True,
++            dropout=dropout,
++            name=f"lstm_encoder_{i + 1}",
++        )(x)
++
++    # 3. Multi-head self-attention decoder
++    x = TemporalFusionDecoder(
++        n_heads=n_heads,
++        hidden_size=hidden_size,
++        dropout=dropout,
++        name="temporal_decoder",
++    )(x)
++
++    # 4. Global pooling and output
++    avg_pool = layers.GlobalAveragePooling1D(name="global_avg_pool")(x)
++    max_pool = layers.GlobalMaxPooling1D(name="global_max_pool")(x)
++    pooled = layers.Concatenate(name="pooling_concat")([avg_pool, max_pool])
++
++    x = layers.Dense(hidden_size, activation="relu", name="dense_1")(pooled)
++    x = layers.Dropout(dropout, name="dropout_dense")(x)
++
++    # Sigmoid for binary directional prediction (up/down)
++    outputs = layers.Dense(1, activation="sigmoid", name="direction_prediction")(x)
++
++    model = Model(inputs=inputs, outputs=outputs, name="tft")
++
++    model.compile(
++        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
++        loss="binary_crossentropy",
++        metrics=[
++            tf.keras.metrics.BinaryAccuracy(name="accuracy"),
++            tf.keras.metrics.AUC(name="auc"),
++        ],
++    )
++
++    return model
++
++
++def tft_callbacks(patience: int = 20, min_delta: float = 1e-4) -> list[Any]:
++    """Get optimized callbacks for TFT training.
++
++    TFT benefits from longer patience due to complex architecture.
++
++    Args:
++        patience: Epochs to wait for improvement before early stopping
++        min_delta: Minimum change to qualify as improvement
++
++    Returns:
++        List of Keras callbacks
++    """
++    _ensure_tensorflow_available()
++
++    return [
++        callbacks.EarlyStopping(
++            monitor="val_loss",
++            patience=patience,
++            restore_best_weights=True,
++            min_delta=min_delta,
++            verbose=1,
++        ),
++        callbacks.ReduceLROnPlateau(
++            monitor="val_loss",
++            factor=0.5,
++            patience=max(patience // 3, 5),
++            min_lr=1e-6,
++            verbose=1,
++        ),
++    ]
++
++
++# Recommended hyperparameters for cryptocurrency directional prediction
++RECOMMENDED_HYPERPARAMETERS = {
++    "default": {
++        "n_heads": 4,
++        "hidden_size": 64,
++        "dropout": 0.1,
++        "num_lstm_layers": 1,
++        "learning_rate": 1e-3,
++        "batch_size": 32,
++        "epochs": 100,
++        "patience": 20,
++    },
++    "lightweight": {
++        "n_heads": 2,
++        "hidden_size": 32,
++        "dropout": 0.1,
++        "num_lstm_layers": 1,
++        "learning_rate": 1e-3,
++        "batch_size": 64,
++        "epochs": 80,
++        "patience": 15,
++    },
++    "deep": {
++        "n_heads": 8,
++        "hidden_size": 128,
++        "dropout": 0.2,
++        "num_lstm_layers": 2,
++        "learning_rate": 1e-3,
++        "batch_size": 16,
++        "epochs": 150,
++        "patience": 25,
++    },
++}
+diff --git a/src/optimizer/runner.py b/src/optimizer/runner.py
+index dc330093..ad9a8d07 100644
+--- a/src/optimizer/runner.py
++++ b/src/optimizer/runner.py
+@@ -69,8 +69,7 @@ class _RandomWalkProvider(DataProvider):
+     def _generate(
+         self, start: datetime, end: datetime, timeframe: str, start_price: float, vol: float
+     ) -> pd.DataFrame:
+-        if self.seed is not None:
+-            np.random.seed(self.seed)
++        rng = np.random.default_rng(self.seed)
+         idx = pd.date_range(
+             start=pd.Timestamp(start), end=pd.Timestamp(end), freq=self._freq(timeframe)
+         )
+@@ -80,13 +79,13 @@ class _RandomWalkProvider(DataProvider):
+             ).fillna(0.0)
+         prices = [start_price]
+         for _ in range(1, len(idx)):
+-            shock = np.random.normal(0, vol)
++            shock = rng.normal(0, vol)
+             prices.append(max(1.0, prices[-1] * (1.0 + shock)))
+         prices = np.array(prices)
+-        highs = prices * (1.0 + np.abs(np.random.normal(0, vol / 2, size=len(prices))))
+-        lows = prices * (1.0 - np.abs(np.random.normal(0, vol / 2, size=len(prices))))
++        highs = prices * (1.0 + np.abs(rng.normal(0, vol / 2, size=len(prices))))
++        lows = prices * (1.0 - np.abs(rng.normal(0, vol / 2, size=len(prices))))
+         opens = np.r_[prices[0], prices[:-1]]
+-        volume = np.random.uniform(1000.0, 10000.0, size=len(prices))
++        volume = rng.uniform(1000.0, 10000.0, size=len(prices))
+         df = pd.DataFrame(
+             {
+                 "open": opens,
+diff --git a/src/optimizer/validator.py b/src/optimizer/validator.py
+index 1c98c505..a06e4f1d 100644
+--- a/src/optimizer/validator.py
++++ b/src/optimizer/validator.py
+@@ -26,8 +26,9 @@ class ValidationReport:
+ class StatisticalValidator:
+     """Validate that a candidate configuration improves over baseline using simple bootstrap tests."""
+ 
+-    def __init__(self, config: ValidationConfig | None = None):
++    def __init__(self, config: ValidationConfig | None = None, seed: int | None = None):
+         self.cfg = config or ValidationConfig()
++        self._rng = np.random.default_rng(seed)
+ 
+     def _cohens_d(self, x: np.ndarray, y: np.ndarray) -> float:
+         nx = len(x)
+@@ -45,20 +46,18 @@ class StatisticalValidator:
+         return (np.mean(y) - np.mean(x)) / s
+ 
+     def _bootstrap_pvalue(self, x: np.ndarray, y: np.ndarray) -> float:
+-        # Test whether mean(y) - mean(x) > 0 using bootstrap
++        # Test whether mean(y) - mean(x) > 0 using vectorized bootstrap
+         obs = np.mean(y) - np.mean(x)
+         pooled = np.concatenate([x, y])
+         n_x = len(x)
+-        count = 0
+-        for _ in range(self.cfg.bootstrap_samples):
+-            resample = np.random.choice(pooled, size=len(pooled), replace=True)
+-            x_s = resample[:n_x]
+-            y_s = resample[n_x:]
+-            diff = np.mean(y_s) - np.mean(x_s)
+-            if diff >= obs:
+-                count += 1
++        n_samples = self.cfg.bootstrap_samples
++        # Draw all bootstrap samples at once: (n_samples, len(pooled))
++        indices = self._rng.integers(0, len(pooled), size=(n_samples, len(pooled)))
++        resamples = pooled[indices]
++        diffs = resamples[:, n_x:].mean(axis=1) - resamples[:, :n_x].mean(axis=1)
++        count = int(np.sum(diffs >= obs))
+         # One-sided p-value
+-        return count / self.cfg.bootstrap_samples
++        return count / n_samples
+ 
+     def validate(
+         self, baseline: list[ExperimentResult], candidate: list[ExperimentResult]
+diff --git a/src/performance/tracker.py b/src/performance/tracker.py
+index 08e6f659..73d31b92 100644
+--- a/src/performance/tracker.py
++++ b/src/performance/tracker.py
+@@ -9,17 +9,14 @@ from __future__ import annotations
+ import logging
+ import math
+ import threading
+-from dataclasses import dataclass
++from dataclasses import asdict, dataclass
+ from datetime import UTC, datetime
+-from typing import TYPE_CHECKING, Any, Protocol
++from typing import Any, Protocol
+ 
+ import pandas as pd
+ 
+ from src.performance import metrics as perf_metrics
+ 
+-if TYPE_CHECKING:
+-    pass
+-
+ 
+ class TradeProtocol(Protocol):
+     """Protocol for trade objects that can be recorded.
+@@ -133,42 +130,7 @@ class PerformanceMetrics:
+ 
+     def to_dict(self) -> dict[str, Any]:
+         """Convert to dictionary representation."""
+-        return {
+-            # Trade statistics
+-            "total_trades": self.total_trades,
+-            "winning_trades": self.winning_trades,
+-            "losing_trades": self.losing_trades,
+-            "win_rate": self.win_rate,
+-            # Returns
+-            "total_pnl": self.total_pnl,
+-            "total_return_pct": self.total_return_pct,
+-            "annualized_return": self.annualized_return,
+-            # Risk metrics
+-            "max_drawdown": self.max_drawdown,
+-            "current_drawdown": self.current_drawdown,
+-            "sharpe_ratio": self.sharpe_ratio,
+-            "sortino_ratio": self.sortino_ratio,
+-            "calmar_ratio": self.calmar_ratio,
+-            "var_95": self.var_95,
+-            # Trade quality
+-            "profit_factor": self.profit_factor,
+-            "expectancy": self.expectancy,
+-            "avg_win": self.avg_win,
+-            "avg_loss": self.avg_loss,
+-            "largest_win": self.largest_win,
+-            "largest_loss": self.largest_loss,
+-            # Efficiency
+-            "avg_trade_duration_hours": self.avg_trade_duration_hours,
+-            "consecutive_wins": self.consecutive_wins,
+-            "consecutive_losses": self.consecutive_losses,
+-            # Costs
+-            "total_fees_paid": self.total_fees_paid,
+-            "total_slippage_cost": self.total_slippage_cost,
+-            # Balance tracking
+-            "initial_balance": self.initial_balance,
+-            "current_balance": self.current_balance,
+-            "peak_balance": self.peak_balance,
+-        }
++        return asdict(self)
+ 
+ 
+ class PerformanceTracker:
+diff --git a/src/position_management/correlation_engine.py b/src/position_management/correlation_engine.py
+index 1d5376aa..3fbe3fd6 100644
+--- a/src/position_management/correlation_engine.py
++++ b/src/position_management/correlation_engine.py
+@@ -7,9 +7,9 @@ from datetime import UTC, datetime, timedelta
+ from typing import Any
+ 
+ import numpy as np
++import pandas as pd
+ 
+ logger = logging.getLogger(__name__)
+-import pandas as pd
+ 
+ from src.config.constants import (
+     DEFAULT_CORRELATION_SAMPLE_MIN_SIZE,
+@@ -166,13 +166,8 @@ class CorrelationEngine:
+ 
+         thr = float(self.config.correlation_threshold)
+         for i, a in enumerate(symbols):
+-            # Skip if symbol was filtered out during correlation calculation
+-            if a not in corr.columns:
+-                continue
+             for j in range(i + 1, len(symbols)):
+                 b = symbols[j]
+-                if b not in corr.columns:
+-                    continue
+                 try:
+                     val = corr.at[a, b]
+                     if pd.notna(val) and val >= thr:
+@@ -277,7 +272,7 @@ class CorrelationGroupManager:
+                     size = positions[s].get("size", 0.0)
+                     if isinstance(size, int | float) and math.isfinite(size) and size >= 0:
+                         present.append(s)
+-                        total = CorrelationEngine._safe_size_add(total, size)
++                        total += float(size)
+             out[name] = {
+                 "total_exposure": round(total, DEFAULT_EXPOSURE_PRECISION_DECIMALS),
+                 "position_count": len(present),
+diff --git a/src/position_management/dynamic_risk.py b/src/position_management/dynamic_risk.py
+index 2a474149..d85798f0 100644
+--- a/src/position_management/dynamic_risk.py
++++ b/src/position_management/dynamic_risk.py
+@@ -1,9 +1,10 @@
+ import logging
+ import math
+ import threading
++from collections.abc import Callable
+ from dataclasses import dataclass
+ from datetime import UTC, datetime, timedelta
+-from typing import TYPE_CHECKING, Any, Callable
++from typing import TYPE_CHECKING, Any
+ 
+ import numpy as np
+ import pandas as pd
+@@ -65,11 +66,11 @@ class DynamicRiskConfig:
+     performance_window_days: int = DEFAULT_PERFORMANCE_WINDOW_DAYS
+ 
+     # Drawdown thresholds and adjustments (use centralized constants)
+-    drawdown_thresholds: list[float] = None
+-    risk_reduction_factors: list[float] = None
++    drawdown_thresholds: list[float] | None = None
++    risk_reduction_factors: list[float] | None = None
+ 
+     # Recovery thresholds
+-    recovery_thresholds: list[float] = None
++    recovery_thresholds: list[float] | None = None
+ 
+     # Volatility adjustments (use centralized constants)
+     volatility_adjustment_enabled: bool = DEFAULT_VOLATILITY_ADJUSTMENT_ENABLED
+@@ -109,7 +110,7 @@ class RiskAdjustments:
+ 
+     # Metadata
+     primary_reason: str = "normal"
+-    adjustment_details: dict[str, Any] = None
++    adjustment_details: dict[str, Any] | None = None
+ 
+     def __post_init__(self):
+         if self.adjustment_details is None:
+@@ -337,61 +338,66 @@ class DynamicRiskManager:
+         # Calculate new metrics outside lock to minimize lock duration
+         metrics = {}
+ 
+-        if self.db_manager and session_id:
+-            try:
+-                # Get recent performance data
+-                start_date = now - timedelta(days=self.config.performance_window_days)
+-                db_metrics = self.db_manager.get_dynamic_risk_performance_metrics(
+-                    start_date=start_date, session_id=session_id
+-                )
+-
+-                metrics.update(db_metrics)
+-
+-                # Estimate volatility from recent account equity if available
++        try:
++            if self.db_manager and session_id:
+                 try:
+-                    with self.db_manager.get_session() as session:
+-                        from src.database.models import AccountHistory
+-
+-                        history = (
+-                            session.query(AccountHistory)
+-                            .filter(AccountHistory.session_id == session_id)
+-                            .filter(AccountHistory.timestamp >= start_date)
+-                            .order_by(AccountHistory.timestamp.asc())
+-                            .all()
++                    # Get recent performance data
++                    start_date = now - timedelta(days=self.config.performance_window_days)
++                    db_metrics = self.db_manager.get_dynamic_risk_performance_metrics(
++                        start_date=start_date, session_id=session_id
++                    )
++
++                    metrics.update(db_metrics)
++
++                    # Estimate volatility from recent account equity if available
++                    try:
++                        with self.db_manager.get_session() as session:
++                            from src.database.models import AccountHistory
++
++                            history = (
++                                session.query(AccountHistory)
++                                .filter(AccountHistory.session_id == session_id)
++                                .filter(AccountHistory.timestamp >= start_date)
++                                .order_by(AccountHistory.timestamp.asc())
++                                .all()
++                            )
++                            closes: list[float] = []
++                            for rec in history:
++                                try:
++                                    closes.append(float(rec.equity))
++                                except (ValueError, TypeError, AttributeError):
++                                    # Skip invalid equity values that cannot be converted to float
++                                    continue
++                            # Need at least 3 prices to calculate 2 log returns (N prices -> N-1 returns)
++                            if len(closes) >= 3:
++                                series = pd.Series(closes)
++                                # Volatility calculations require positive prices for log returns
++                                # Non-positive values from data gaps would corrupt the volatility metric
++                                series_positive = series[series > 0]
++                                if len(series_positive) >= 3:
++                                    log_returns = np.log(series_positive).diff().dropna()
++                                    # Require at least 2 returns for reliable std (ddof=1 requires 2+ samples)
++                                    if len(log_returns) >= 2:
++                                        vol = float(log_returns.std())
++                                        if math.isfinite(vol):
++                                            metrics["estimated_volatility"] = vol
++                                        else:
++                                            logger.debug(
++                                                "Volatility std() returned non-finite value"
++                                            )
++                    except Exception as vol_err:
++                        logger.warning(
++                            f"Volatility estimation failed, using fallback: {vol_err}"
+                         )
+-                        closes: list[float] = []
+-                        for rec in history:
+-                            try:
+-                                closes.append(float(rec.equity))
+-                            except (ValueError, TypeError, AttributeError):
+-                                # Skip invalid equity values that cannot be converted to float
+-                                continue
+-                        # Need at least 3 prices to calculate 2 log returns (N prices -> N-1 returns)
+-                        if len(closes) >= 3:
+-                            series = pd.Series(closes)
+-                            # Volatility calculations require positive prices for log returns
+-                            # Non-positive values from data gaps would corrupt the volatility metric
+-                            series_positive = series[series > 0]
+-                            if len(series_positive) >= 3:
+-                                log_returns = np.log(series_positive).diff().dropna()
+-                                # Require at least 2 returns for reliable std (ddof=1 requires 2+ samples)
+-                                if len(log_returns) >= 2:
+-                                    vol = float(log_returns.std())
+-                                    if math.isfinite(vol):
+-                                        metrics["estimated_volatility"] = vol
+-                                    else:
+-                                        logger.debug("Volatility std() returned non-finite value")
+-                except Exception as vol_err:
+-                    logger.warning(f"Volatility estimation failed, using fallback: {vol_err}")
+-
+-            except Exception as e:
+-                logger.warning(f"Failed to get performance metrics from database: {e}")
+-
+-        # Cache the results with lock to prevent race conditions
+-        with self._cache_lock:
+-            self._performance_cache = metrics
+-            self._cache_timestamp = now
+-            self._computing = False
++
++                except Exception as e:
++                    logger.warning(f"Failed to get performance metrics from database: {e}")
++        finally:
++            # Always reset _computing flag to prevent permanent starvation
++            with self._cache_lock:
++                self._performance_cache = metrics
++                self._cache_timestamp = now
++                self._computing = False
+ 
+         return metrics
+ 
+diff --git a/src/position_management/time_exits.py b/src/position_management/time_exits.py
+index 0e1d7dc7..3e6d91af 100644
+--- a/src/position_management/time_exits.py
++++ b/src/position_management/time_exits.py
+@@ -170,7 +170,7 @@ class TimeExitPolicy:
+             next_close = self.market_session.next_close_after(now_utc)
+             if next_close:
+                 # If we are at or beyond close, exit
+-                # Use 1-minute tolerance to avoid precision issues
++                # Use 1-second tolerance to avoid precision issues
+                 if now_utc >= next_close - timedelta(seconds=1):
+                     return True, "End of day flat"
+ 
+diff --git a/src/prediction/engine.py b/src/prediction/engine.py
+index 4b55cec9..8b9b7892 100644
+--- a/src/prediction/engine.py
++++ b/src/prediction/engine.py
+@@ -29,7 +29,6 @@ MIN_SEQUENCE_LENGTH = 120
+ # growth while maintaining enough samples for reliable average calculations.
+ MAX_INFERENCE_SAMPLES = 1000
+ 
+-from src.config.constants import DEFAULT_INFERENCE_TIMEOUT
+ from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
+ from src.infrastructure.timeout import run_with_timeout
+ from src.regime.detector import RegimeConfig, RegimeDetector
+@@ -189,12 +188,7 @@ class PredictionEngine:
+             # Make prediction (with optional ensemble)
+             if self._ensemble_aggregator is None:
+                 # Wrap prediction with timeout to prevent hanging on slow/hung models
+-                timeout_seconds = (
+-                    self.config.max_prediction_latency
+-                    if hasattr(self.config, "max_prediction_latency")
+-                    and isinstance(self.config.max_prediction_latency, (int, float))
+-                    else DEFAULT_INFERENCE_TIMEOUT
+-                )
++                timeout_seconds = self._get_timeout_seconds()
+                 try:
+                     prediction = run_with_timeout(
+                         model.predict,
+@@ -239,12 +233,7 @@ class PredictionEngine:
+                     ensemble_bundles = [bundle]
+ 
+                 # Same timeout configuration as single model
+-                timeout_seconds = (
+-                    self.config.max_prediction_latency
+-                    if hasattr(self.config, "max_prediction_latency")
+-                    and isinstance(self.config.max_prediction_latency, (int, float))
+-                    else DEFAULT_INFERENCE_TIMEOUT
+-                )
++                timeout_seconds = self._get_timeout_seconds()
+ 
+                 for ensemble_bundle in ensemble_bundles:
+                     ensemble_features = self._prepare_features_for_bundle(
+@@ -311,11 +300,7 @@ class PredictionEngine:
+ 
+             # Predictions that exceed max_prediction_latency should return an error result,
+             # even if the prediction completed successfully.
+-            if (
+-                hasattr(self.config, "max_prediction_latency")
+-                and isinstance(self.config.max_prediction_latency, (int, float))
+-                and inference_time > self.config.max_prediction_latency
+-            ):
++            if inference_time > self.config.max_prediction_latency:
+                 return PredictionResult(
+                     price=0.0,
+                     confidence=0.0,
+@@ -380,11 +365,7 @@ class PredictionEngine:
+             error_message = str(e)
+             error_type = type(e).__name__
+ 
+-            if (
+-                hasattr(self.config, "max_prediction_latency")
+-                and isinstance(self.config.max_prediction_latency, (int, float))
+-                and total_time > self.config.max_prediction_latency
+-            ):
++            if total_time > self.config.max_prediction_latency:
+                 # Add timeout information to the original error message.
+                 error_message = f"Prediction timeout after {total_time:.3f}s (max: {self.config.max_prediction_latency}s). Original error: {error_message}"
+                 error_type = f"PredictionTimeoutError+{error_type}"
+@@ -524,12 +505,7 @@ class PredictionEngine:
+         preds_norm = np.empty((num_windows,), dtype=np.float32)
+ 
+         # Configure timeout for series prediction
+-        timeout_seconds = (
+-            self.config.max_prediction_latency
+-            if hasattr(self.config, "max_prediction_latency")
+-            and isinstance(self.config.max_prediction_latency, (int, float))
+-            else DEFAULT_INFERENCE_TIMEOUT
+-        )
++        timeout_seconds = self._get_timeout_seconds()
+ 
+         for start in range(0, num_windows, batch_size):
+             end = min(start + batch_size, num_windows)
+@@ -662,12 +638,7 @@ class PredictionEngine:
+                 self._feature_extraction_count += 1
+ 
+                 # Make prediction with pre-loaded model (with timeout protection)
+-                timeout_seconds = (
+-                    self.config.max_prediction_latency
+-                    if hasattr(self.config, "max_prediction_latency")
+-                    and isinstance(self.config.max_prediction_latency, (int, float))
+-                    else DEFAULT_INFERENCE_TIMEOUT
+-                )
++                timeout_seconds = self._get_timeout_seconds()
+                 try:
+                     prediction = run_with_timeout(
+                         model.predict,
+@@ -908,6 +879,10 @@ class PredictionEngine:
+         return health
+ 
+     # Private methods
++    def _get_timeout_seconds(self) -> float:
++        """Return the configured prediction timeout in seconds."""
++        return self.config.max_prediction_latency
++
+     def _validate_input_data(self, data: pd.DataFrame) -> None:
+         """Validate input data has required columns and sufficient length"""
+         if not isinstance(data, pd.DataFrame):
+@@ -936,36 +911,6 @@ class PredictionEngine:
+         if np.isinf(numeric_data.values).any():
+             raise InvalidInputError("Input data contains infinite values")
+ 
+-    def _extract_features(self, data: pd.DataFrame) -> np.ndarray:
+-        """Extract features using feature pipeline"""
+-        try:
+-            # Get features from pipeline (returns DataFrame with original data + features)
+-            features_result = self.feature_pipeline.transform(data, use_cache=True)
+-
+-            # Handle different return types from feature pipeline
+-            if isinstance(features_result, np.ndarray):
+-                # Feature pipeline returned numpy array directly
+-                return features_result
+-            elif isinstance(features_result, pd.DataFrame):
+-                # Feature pipeline returned DataFrame - extract feature columns
+-                original_columns = ["open", "high", "low", "close", "volume"]
+-                feature_columns = [
+-                    col for col in features_result.columns if col not in original_columns
+-                ]
+-
+-                if not feature_columns:
+-                    raise FeatureExtractionError("No feature columns found in pipeline output")
+-
+-                # Convert feature columns to numpy array
+-                features_array = features_result[feature_columns].values
+-                return features_array
+-            else:
+-                raise FeatureExtractionError(
+-                    f"Unexpected feature pipeline output type: {type(features_result)}"
+-                )
+-        except Exception as e:
+-            raise FeatureExtractionError(f"Feature extraction failed: {str(e)}") from e
+-
+     def _select_schema_features(
+         self, bundle: StrategyModel, features_df: pd.DataFrame
+     ) -> tuple[np.ndarray, int]:
+@@ -1073,11 +1018,6 @@ class PredictionEngine:
+ 
+         raise ModelNotFoundError("No prediction models available")
+ 
+-    def _get_model(self, model_name: str | None):
+-        """Get model runner for prediction (structured-only)."""
+-        bundle = self._resolve_bundle(model_name)
+-        return bundle.runner
+-
+     def _was_cache_hit(self) -> bool:
+         """Check if last operation was a cache hit"""
+         # Get cache hit status directly from feature pipeline for current operation
+diff --git a/src/prediction/models/onnx_runner.py b/src/prediction/models/onnx_runner.py
+index 6ff2775a..32d90e66 100644
+--- a/src/prediction/models/onnx_runner.py
++++ b/src/prediction/models/onnx_runner.py
+@@ -281,6 +281,18 @@ class OnnxRunner:
+         except Exception as e:
+             raise RuntimeError(f"Prediction failed: {e}") from e
+ 
++    def _build_cache_config(self) -> dict[str, Any]:
++        """Build the config dict used as part of cache keys."""
++        return {
++            "confidence_scale_factor": self.config.confidence_scale_factor,
++            "direction_threshold": self.config.direction_threshold,
++            "normalization_params": (
++                self.model_metadata.get("normalization_params", {})
++                if self.model_metadata
++                else {}
++            ),
++        }
++
+     def _check_cache(self, features: np.ndarray) -> dict | None:
+         """Check cache for existing prediction result"""
+         if not self.cache_manager:
+@@ -288,17 +300,7 @@ class OnnxRunner:
+ 
+         model_name = os.path.basename(self.model_path)
+         try:
+-            config = {
+-                "confidence_scale_factor": self.config.confidence_scale_factor,
+-                "direction_threshold": self.config.direction_threshold,
+-                "normalization_params": (
+-                    self.model_metadata.get("normalization_params", {})
+-                    if self.model_metadata
+-                    else {}
+-                ),
+-            }
+-
+-            return self.cache_manager.get(features, model_name, config)
++            return self.cache_manager.get(features, model_name, self._build_cache_config())
+         except Exception as e:
+             # Log cache errors at warning level to ensure visibility in production logs
+             logging.warning(
+@@ -316,20 +318,10 @@ class OnnxRunner:
+ 
+         model_name = os.path.basename(self.model_path)
+         try:
+-            config = {
+-                "confidence_scale_factor": self.config.confidence_scale_factor,
+-                "direction_threshold": self.config.direction_threshold,
+-                "normalization_params": (
+-                    self.model_metadata.get("normalization_params", {})
+-                    if self.model_metadata
+-                    else {}
+-                ),
+-            }
+-
+             self.cache_manager.set(
+                 features,
+                 model_name,
+-                config,
++                self._build_cache_config(),
+                 prediction["price"],
+                 prediction["confidence"],
+                 prediction["direction"],
+diff --git a/src/prediction/models/registry.py b/src/prediction/models/registry.py
+index 4c62c85b..2ae7b678 100644
+--- a/src/prediction/models/registry.py
++++ b/src/prediction/models/registry.py
+@@ -84,11 +84,19 @@ class PredictionModelRegistry:
+         # Load structured models
+         self._load()
+ 
+-    def _load(self) -> None:
+-        """Load structured bundles from the configured registry path."""
++    def _scan_registry(
++        self,
++    ) -> tuple[dict[tuple[str, str, str], StrategyModel], dict[tuple[str, str, str], str]]:
++        """Scan the registry directory and load all bundles.
++
++        Returns:
++            Tuple of (bundles dict, production index dict).
++        """
++        bundles: dict[tuple[str, str, str], StrategyModel] = {}
++        production_index: dict[tuple[str, str, str], str] = {}
+         base = Path(self.config.model_registry_path)
+         if not base.exists():
+-            return
++            return bundles, production_index
+         # Expect structure: base/{symbol}/{model_type}/{version_id}/model.onnx
+         for symbol_dir in base.iterdir():
+             if not symbol_dir.is_dir():
+@@ -107,17 +115,22 @@ class PredictionModelRegistry:
+                     try:
+                         bundle = self._load_bundle(symbol, model_type, vdir)
+                         key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+-                        self._bundles[key] = bundle
++                        bundles[key] = bundle
+                     except Exception as e:  # pragma: no cover - aggregated logging
+                         logger.error("Failed to load bundle at %s: %s", vdir, e)
+                 if latest.exists():
+                     try:
+                         bundle = self._load_bundle(symbol, model_type, latest)
+                         key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+-                        self._bundles[key] = bundle
+-                        self._production_index[key] = bundle.version_id
++                        bundles[key] = bundle
++                        production_index[key] = bundle.version_id
+                     except Exception as e:  # pragma: no cover - aggregated logging
+                         logger.error("Failed to load bundle at %s: %s", latest, e)
++        return bundles, production_index
++
++    def _load(self) -> None:
++        """Load structured bundles from the configured registry path."""
++        self._bundles, self._production_index = self._scan_registry()
+ 
+     def _load_bundle(self, symbol: str, model_type: str, vdir: Path) -> StrategyModel:
+         """Load a single bundle directory into a ModelBundle."""
+@@ -331,41 +344,8 @@ class PredictionModelRegistry:
+         them in. If loading fails, the existing bundles remain available so
+         predictions continue working with the previous model versions.
+         """
+-        # Load new bundles into temporary dicts (outside lock, may be slow)
+-        new_bundles: dict[tuple[str, str, str], StrategyModel] = {}
+-        new_production_index: dict[tuple[str, str, str], str] = {}
+-        base = Path(self.config.model_registry_path)
+-
+-        if base.exists():
+-            for symbol_dir in base.iterdir():
+-                if not symbol_dir.is_dir():
+-                    continue
+-                symbol = symbol_dir.name
+-                for mtype_dir in symbol_dir.iterdir():
+-                    if not mtype_dir.is_dir():
+-                        continue
+-                    model_type = mtype_dir.name
+-                    latest = mtype_dir / "latest"
+-                    version_dirs = [
+-                        p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"
+-                    ]
+-                    # Deterministic order; latest symlink applied afterwards
+-                    version_dirs.sort()
+-                    for vdir in version_dirs:
+-                        try:
+-                            bundle = self._load_bundle(symbol, model_type, vdir)
+-                            key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+-                            new_bundles[key] = bundle
+-                        except Exception as e:  # pragma: no cover
+-                            logger.error("Failed to load bundle at %s: %s", vdir, e)
+-                    if latest.exists():
+-                        try:
+-                            bundle = self._load_bundle(symbol, model_type, latest)
+-                            key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+-                            new_bundles[key] = bundle
+-                            new_production_index[key] = bundle.version_id
+-                        except Exception as e:  # pragma: no cover
+-                            logger.error("Failed to load bundle at %s: %s", latest, e)
++        # Load new bundles in background (outside lock to avoid blocking)
++        new_bundles, new_production_index = self._scan_registry()
+ 
+         # Preserve existing bundles when reload produces empty results (e.g., transient
+         # filesystem issue, NFS timeout, Docker volume unmount). This prevents a full
+diff --git a/src/prediction/utils/caching.py b/src/prediction/utils/caching.py
+index cd96bfb3..436b30f6 100644
+--- a/src/prediction/utils/caching.py
++++ b/src/prediction/utils/caching.py
+@@ -62,7 +62,6 @@ class FeatureCache:
+         """
+         self.default_ttl = default_ttl
+         self._cache: dict[str, CacheEntry] = {}
+-        self._quick_hash_cache: dict[str, str] = {}  # Quick hash to full hash mapping
+         self._lock = threading.RLock()  # Reentrant lock for thread-safe operations
+         self._stats = {
+             "hits": 0,
+@@ -282,7 +281,6 @@ class FeatureCache:
+         """Clear all cached entries."""
+         with self._lock:
+             self._cache.clear()
+-            self._quick_hash_cache.clear()
+             self._stats = {
+                 "hits": 0,
+                 "misses": 0,
+@@ -853,11 +851,11 @@ def _generate_cache_key(*args, **kwargs) -> str:
+                 return f"array:{hashlib.sha256(value.tobytes()).hexdigest()}"
+ 
+             # Handle basic types that can be JSON serialized
+-            elif isinstance(value, (str, int, float, bool, type(None))):
++            elif isinstance(value, str | int | float | bool | type(None)):
+                 return json.dumps(value, sort_keys=True)
+ 
+             # Handle lists and tuples
+-            elif isinstance(value, (list, tuple)):
++            elif isinstance(value, list | tuple):
+                 return f"[{','.join(_serialize_value(v) for v in value)}]"
+ 
+             # Handle dictionaries
+diff --git a/src/strategies/adaptive_trend.py b/src/strategies/adaptive_trend.py
+index 84634d85..dc70a4dd 100644
+--- a/src/strategies/adaptive_trend.py
++++ b/src/strategies/adaptive_trend.py
+@@ -297,6 +297,7 @@ def create_adaptive_trend_strategy(
+             "max_fraction": max_position_pct,
+             "stop_loss_pct": stop_loss_pct,
+             "take_profit_pct": take_profit_pct,
++            "enable_dynamic_risk": False,
+         }
+     )
+ 
+diff --git a/src/strategies/components/adaptive_trend_signal_generator.py b/src/strategies/components/adaptive_trend_signal_generator.py
+index c9e9edd3..7ab8e3a3 100644
+--- a/src/strategies/components/adaptive_trend_signal_generator.py
++++ b/src/strategies/components/adaptive_trend_signal_generator.py
+@@ -95,10 +95,13 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
+         self.momentum_lookback = momentum_lookback
+         self.atr_period = atr_period
+ 
+-        # Cache for precomputed EMA values (avoids recalculating every bar)
++        # Cache for precomputed EMA values (avoids recalculating every bar).
++        # Uses incremental extension: on each new bar, extends by one element
++        # using the EMA recurrence (O(1) per bar instead of O(N) recomputation).
++        # The buffer is pre-allocated to avoid per-bar copying from concatenation.
+         self._cached_ema: np.ndarray | None = None
+         self._cached_ema_length: int = 0
+-        self._cached_data_hash: int | None = None
++        self._cached_close_snapshot: np.ndarray | None = None
+ 
+     @property
+     def warmup_period(self) -> int:
+@@ -216,7 +219,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
+ 
+             strength = min(1.0, abs(price_vs_ema_pct) * 10)
+             confidence = self._calculate_entry_confidence(
+-                price_vs_ema_pct, momentum, days_above, atr_pct, regime
++                price_vs_ema_pct, momentum, days_above, regime
+             )
+             metadata["signal_reason"] = "price_above_ema_confirmed"
+             return Signal(
+@@ -263,31 +266,62 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
+         return params
+ 
+     def _compute_ema_series(self, close: np.ndarray, max_index: int) -> np.ndarray:
+-        """Compute EMA for the series up to max_index, using cache.
++        """Compute EMA for the series up to max_index, using incremental cache.
++
++        On the first call, computes the full EMA via pandas ewm. On subsequent
++        calls with the same underlying array, extends the cached EMA one element
++        at a time using the EMA recurrence relation: O(1) per bar instead of
++        recomputing the entire series.
+ 
+         Args:
+             close: Close price array.
+             max_index: Maximum index to compute EMA up to.
+ 
+         Returns:
+-            Array of EMA values.
++            Array of EMA values (length >= max_index + 1).
+         """
+         needed_length = max_index + 1
+-        data_hash = hash(close[:needed_length].tobytes())
+ 
+-        if (
+-            self._cached_ema is not None
+-            and self._cached_ema_length >= needed_length
+-            and self._cached_data_hash == data_hash
+-        ):
++        # Validate full input identity against a snapshot to prevent stale EMA
++        # reuse when a new series has the same length/first value.
++        n = len(close)
++        data_changed = (
++            self._cached_close_snapshot is None
++            or close.shape != self._cached_close_snapshot.shape
++            or not np.array_equal(close, self._cached_close_snapshot)
++        )
++
++        if data_changed:
++            self._cached_ema = None
++            self._cached_ema_length = 0
++            self._cached_close_snapshot = close.copy()
++
++        if self._cached_ema is not None and self._cached_ema_length >= needed_length:
+             return self._cached_ema
+ 
+-        series = pd.Series(close[:needed_length])
+-        ema_values = series.ewm(span=self.trend_ema_period, adjust=False).mean().values
+-        self._cached_ema = ema_values
+-        self._cached_ema_length = needed_length
+-        self._cached_data_hash = data_hash
+-        return ema_values
++        alpha = 2.0 / (self.trend_ema_period + 1)
++
++        if self._cached_ema is None or self._cached_ema_length == 0:
++            # Cold start: compute full EMA via pandas (one-time cost),
++            # then pre-allocate buffer to array length to avoid future copies.
++            series = pd.Series(close[:needed_length])
++            ema_values = series.ewm(span=self.trend_ema_period, adjust=False).mean().values
++            buf = np.empty(n)
++            buf[:needed_length] = ema_values
++            self._cached_ema = buf
++            self._cached_ema_length = needed_length
++        else:
++            # Incremental extension: fill new EMA values into the
++            # pre-allocated buffer using the recurrence relation.
++            # O(k) where k = new bars since last call (typically 1).
++            prev_length = self._cached_ema_length
++            prev_ema = float(self._cached_ema[prev_length - 1])
++            for i in range(prev_length, needed_length):
++                prev_ema = alpha * float(close[i]) + (1 - alpha) * prev_ema
++                self._cached_ema[i] = prev_ema
++            self._cached_ema_length = needed_length
++
++        return self._cached_ema
+ 
+     def _count_consecutive_days_above(
+         self, close: np.ndarray, ema: np.ndarray, index: int, buffer_pct: float = 0.0
+@@ -400,26 +434,22 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
+         close: np.ndarray,
+         index: int,
+     ) -> float:
+-        """Calculate Average True Range at the given index."""
++        """Calculate Average True Range at the given index using vectorized numpy."""
+         if index < self.atr_period:
+             return float(np.mean(high[: index + 1] - low[: index + 1]))
+ 
+         start = index - self.atr_period + 1
+-        tr_values = []
+-        for i in range(start, index + 1):
+-            hl = float(high[i]) - float(low[i])
+-            hc = abs(float(high[i]) - float(close[i - 1])) if i > 0 else hl
+-            lc = abs(float(low[i]) - float(close[i - 1])) if i > 0 else hl
+-            tr_values.append(max(hl, hc, lc))
+-
+-        return float(np.mean(tr_values))
++        h = high[start : index + 1]
++        lo = low[start : index + 1]
++        prev_c = close[start - 1 : index]
++        tr = np.maximum(h - lo, np.maximum(np.abs(h - prev_c), np.abs(lo - prev_c)))
++        return float(np.mean(tr))
+ 
+     def _calculate_entry_confidence(
+         self,
+         price_vs_ema_pct: float,
+         momentum: float,
+         days_above: int,
+-        atr_pct: float,
+         regime: RegimeContext | None,
+     ) -> float:
+         """Calculate confidence for BUY signal."""
+diff --git a/src/strategies/components/emergency_controls.py b/src/strategies/components/emergency_controls.py
+index a0436d8e..f5e1c3f9 100644
+--- a/src/strategies/components/emergency_controls.py
++++ b/src/strategies/components/emergency_controls.py
+@@ -12,6 +12,7 @@ from collections.abc import Callable
+ from dataclasses import dataclass
+ from datetime import UTC, datetime, timedelta
+ from enum import Enum
++from functools import total_ordering
+ from typing import Any
+ 
+ from .performance_tracker import PerformanceMetrics, PerformanceTracker
+@@ -25,6 +26,7 @@ from .strategy_switcher import (
+ )
+ 
+ 
++@total_ordering
+ class EmergencyLevel(Enum):
+     """Emergency severity levels"""
+ 
+@@ -39,21 +41,6 @@ class EmergencyLevel(Enum):
+             return self.value < other.value
+         return NotImplemented
+ 
+-    def __le__(self, other):
+-        if self.__class__ is other.__class__:
+-            return self.value <= other.value
+-        return NotImplemented
+-
+-    def __gt__(self, other):
+-        if self.__class__ is other.__class__:
+-            return self.value > other.value
+-        return NotImplemented
+-
+-    def __ge__(self, other):
+-        if self.__class__ is other.__class__:
+-            return self.value >= other.value
+-        return NotImplemented
+-
+ 
+ class ConservativeMode(Enum):
+     """Conservative mode settings"""
+diff --git a/src/strategies/components/strategy_lineage.py b/src/strategies/components/strategy_lineage.py
+index 87e0e7ea..d7a55e1e 100644
+--- a/src/strategies/components/strategy_lineage.py
++++ b/src/strategies/components/strategy_lineage.py
+@@ -215,7 +215,7 @@ class StrategyLineageTracker:
+             **(metadata or {}),
+         }
+ 
+-        # Add parent relationship if specified
++        # Add parent relationship if specified and parent already registered
+         if parent_id and parent_id in self.strategies:
+             self.lineage_graph[parent_id].append(strategy_id)
+             edge_key = f"{parent_id}->{strategy_id}"
+@@ -229,6 +229,47 @@ class StrategyLineageTracker:
+             parent_generation = self.strategies[parent_id]["generation"]
+             self.strategies[strategy_id]["generation"] = parent_generation + 1
+ 
++        # Backfill edges for any previously-registered strategies that claim
++        # this strategy as their parent. Handles out-of-order registration
++        # where a child is registered before its parent.
++        for existing_id, existing_meta in self.strategies.items():
++            if existing_id == strategy_id:
++                continue
++            if existing_meta.get("parent_id") == strategy_id:
++                edge_key = f"{strategy_id}->{existing_id}"
++                if edge_key not in self.graph_edges:
++                    self.lineage_graph[strategy_id].append(existing_id)
++                    self.graph_edges[edge_key] = {
++                        "relationship_type": RelationshipType.PARENT,
++                        "source": strategy_id,
++                        "target": existing_id,
++                    }
++
++        # Propagate correct generation numbers through the subtree via BFS.
++        # This handles chains registered out of order (e.g., grandchild before
++        # child before parent) where intermediate generations were initially 0.
++        # The visited set includes strategy_id AND parent_id to guard against
++        # cycles: strategy_id prevents re-enqueueing ourselves, parent_id
++        # prevents backward traversal that would inflate ancestor generations.
++        propagation_queue = deque()
++        visited_propagation: set[str] = {strategy_id}
++        if parent_id and parent_id in self.strategies:
++            visited_propagation.add(parent_id)
++        for child_id in self.lineage_graph.get(strategy_id, []):
++            if child_id not in visited_propagation:
++                propagation_queue.append((strategy_id, child_id))
++                visited_propagation.add(child_id)
++
++        while propagation_queue:
++            parent, child = propagation_queue.popleft()
++            correct_gen = self.strategies[parent]["generation"] + 1
++            if self.strategies[child]["generation"] != correct_gen:
++                self.strategies[child]["generation"] = correct_gen
++            for grandchild in self.lineage_graph.get(child, []):
++                if grandchild not in visited_propagation:
++                    visited_propagation.add(grandchild)
++                    propagation_queue.append((child, grandchild))
++
+         # Clear caches
+         self._invalidate_caches()
+ 
+@@ -754,29 +795,30 @@ class StrategyLineageTracker:
+         raise ValueError(f"Unsupported format: {format}")
+ 
+     def _get_descendants(self, strategy_id: str) -> list[dict[str, Any]]:
+-        """Get all descendants of a strategy"""
++        """Get all descendants of a strategy using the adjacency list"""
+         descendants = []
+ 
+-        # Use BFS to find all descendants
++        # Use BFS with the lineage_graph adjacency list instead of scanning all strategies
+         queue = deque([strategy_id])
+         visited = {strategy_id}
+ 
+         while queue:
+             current_id = queue.popleft()
+ 
+-            # Find direct children
+-            for sid, strategy_data in self.strategies.items():
+-                if strategy_data["parent_id"] == current_id and sid not in visited:
++            # Find direct children via adjacency list (O(children) instead of O(all strategies))
++            for child_id in self.lineage_graph.get(current_id, []):
++                if child_id not in visited:
++                    strategy_data = self.strategies[child_id]
+                     descendants.append(
+                         {
+-                            "id": sid,
++                            "id": child_id,
+                             "generation": strategy_data["generation"],
+                             "created_at": strategy_data["created_at"].isoformat(),
+                             "branch_id": strategy_data.get("branch_id"),
+                         }
+                     )
+-                    queue.append(sid)
+-                    visited.add(sid)
++                    queue.append(child_id)
++                    visited.add(child_id)
+ 
+         return descendants
+ 
+@@ -887,18 +929,32 @@ class StrategyLineageTracker:
+         return "\n".join(dot)
+ 
+     def _find_path(self, start: str, end: str) -> list[str]:
+-        """Find path between two strategies using BFS"""
++        """Find path between two strategies using BFS on undirected edges
++
++        Traverses both parent-to-child and child-to-parent edges so paths
++        can be found between any two related strategies (e.g., sibling to
++        sibling via common ancestor, or descendant back to ancestor).
++        """
+         if start == end:
+             return [start]
+ 
++        # Build reverse adjacency (child -> parent) for bidirectional traversal
++        reverse_graph: dict[str, list[str]] = defaultdict(list)
++        for parent, children in self.lineage_graph.items():
++            for child in children:
++                reverse_graph[child].append(parent)
++
+         queue = deque([(start, [start])])
+         visited = {start}
+ 
+         while queue:
+             current, path = queue.popleft()
+ 
+-            # Check all outgoing edges from current strategy
+-            for neighbor in self.lineage_graph.get(current, []):
++            # Traverse both forward (children) and reverse (parent) edges
++            neighbors = list(self.lineage_graph.get(current, []))
++            neighbors.extend(reverse_graph.get(current, []))
++
++            for neighbor in neighbors:
+                 if neighbor == end:
+                     return [*path, neighbor]
+ 
+diff --git a/src/strategies/components/strategy_switcher.py b/src/strategies/components/strategy_switcher.py
+index 0a5f4a0b..215a038a 100644
+--- a/src/strategies/components/strategy_switcher.py
++++ b/src/strategies/components/strategy_switcher.py
+@@ -6,12 +6,10 @@ cooling-off periods, audit trails, and performance impact analysis.
+ """
+ 
+ import logging
+-import threading
+ from collections import deque
+ from collections.abc import Callable
+ from concurrent.futures import ThreadPoolExecutor
+ from concurrent.futures import TimeoutError as FutureTimeoutError
+-from contextlib import contextmanager
+ from dataclasses import dataclass
+ from datetime import UTC, datetime, timedelta
+ from enum import Enum
+@@ -64,50 +62,6 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
+         executor.shutdown(wait=False, cancel_futures=True)
+ 
+ 
+-@contextmanager
+-def timeout_context(seconds: int):
+-    """
+-    Context manager for executing code with a timeout using thread-safe mechanism
+-
+-    This implementation uses threading.Timer with proper thread safety
+-    to ensure compatibility with worker threads and Windows systems.
+-
+-    Args:
+-        seconds: Maximum execution time in seconds
+-
+-    Raises:
+-        ExecutionTimeoutError: If execution exceeds the specified timeout
+-    """
+-    timeout_occurred = threading.Event()
+-    original_exception = None
+-
+-    def timeout_handler():
+-        """Handler that sets the timeout event"""
+-        timeout_occurred.set()
+-
+-    # Start the timeout timer
+-    timer = threading.Timer(seconds, timeout_handler)
+-    timer.start()
+-
+-    try:
+-        yield
+-    except Exception as e:
+-        # Store the original exception
+-        original_exception = e
+-        raise
+-    finally:
+-        # Cancel the timer
+-        timer.cancel()
+-
+-        # Check if timeout occurred
+-        if timeout_occurred.is_set():
+-            # If we had an original exception, preserve it
+-            if original_exception:
+-                raise original_exception
+-            else:
+-                raise ExecutionTimeoutError(f"Execution timed out after {seconds} seconds")
+-
+-
+ class SwitchTrigger(Enum):
+     """Triggers for strategy switching"""
+ 
+diff --git a/src/tech/adapters/row_extractors.py b/src/tech/adapters/row_extractors.py
+index 61ff6032..8ba8f436 100644
+--- a/src/tech/adapters/row_extractors.py
++++ b/src/tech/adapters/row_extractors.py
+@@ -6,6 +6,8 @@ from typing import Any
+ 
+ import pandas as pd
+ 
++_ML_COLUMNS = ["onnx_pred", "ml_prediction", "prediction_confidence"]
++
+ _INDICATOR_COLUMNS = [
+     "rsi",
+     "macd",
+@@ -22,10 +24,7 @@ _INDICATOR_COLUMNS = [
+     "body_size",
+     "upper_wick",
+     "lower_wick",
+-    "onnx_pred",
+-    "ml_prediction",
+-    "prediction_confidence",
+-]
++] + _ML_COLUMNS
+ 
+ _SENTIMENT_COLUMNS = [
+     "sentiment_score",
+@@ -35,8 +34,6 @@ _SENTIMENT_COLUMNS = [
+     "sentiment_confidence",
+     "sentiment_freshness",
+ ]
+-
+-_ML_COLUMNS = ["onnx_pred", "ml_prediction", "prediction_confidence"]
+ _OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
+ 
+ 
+diff --git a/tests/unit/ml/__init__.py b/tests/unit/ml/__init__.py
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/tests/unit/ml/training_pipeline/__init__.py b/tests/unit/ml/training_pipeline/__init__.py
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/tests/unit/ml/training_pipeline/test_models_tft.py b/tests/unit/ml/training_pipeline/test_models_tft.py
+new file mode 100644
+index 00000000..ad5243f2
+--- /dev/null
++++ b/tests/unit/ml/training_pipeline/test_models_tft.py
+@@ -0,0 +1,298 @@
++"""Tests for Temporal Fusion Transformer (TFT) model architecture."""
++
++import numpy as np
++import pytest
++
++try:
++    import tensorflow as tf
++
++    _TENSORFLOW_AVAILABLE = True
++except ImportError:
++    _TENSORFLOW_AVAILABLE = False
++
++pytestmark = pytest.mark.skipif(
++    not _TENSORFLOW_AVAILABLE,
++    reason="TensorFlow not available",
++)
++
++
++@pytest.fixture
++def input_shape():
++    """Standard input shape for tests."""
++    return (30, 10)
++
++
++@pytest.fixture
++def sample_input(input_shape):
++    """Sample input tensor for forward pass tests."""
++    batch_size = 4
++    return np.random.randn(batch_size, *input_shape).astype(np.float32)
++
++
++class TestGatedResidualNetwork:
++    """Tests for the GRN layer."""
++
++    def test_output_shape_same_dims(self):
++        """GRN preserves shape when input and output dimensions match."""
++        from src.ml.training_pipeline.models_tft import GatedResidualNetwork
++
++        grn = GatedResidualNetwork(hidden_size=32, output_size=10)
++        x = tf.random.normal((4, 30, 10))
++        output = grn(x)
++        assert output.shape == (4, 30, 10)
++
++    def test_output_shape_different_dims(self):
++        """GRN projects to output_size when different from input dim."""
++        from src.ml.training_pipeline.models_tft import GatedResidualNetwork
++
++        grn = GatedResidualNetwork(hidden_size=32, output_size=64)
++        x = tf.random.normal((4, 30, 10))
++        output = grn(x)
++        assert output.shape == (4, 30, 64)
++
++    def test_output_shape_2d_input(self):
++        """GRN works with 2D input (batch, features)."""
++        from src.ml.training_pipeline.models_tft import GatedResidualNetwork
++
++        grn = GatedResidualNetwork(hidden_size=16, output_size=8)
++        x = tf.random.normal((4, 10))
++        output = grn(x)
++        assert output.shape == (4, 8)
++
++    def test_serialization(self):
++        """GRN config can be serialized and deserialized."""
++        from src.ml.training_pipeline.models_tft import GatedResidualNetwork
++
++        grn = GatedResidualNetwork(hidden_size=32, output_size=16, dropout=0.2)
++        config = grn.get_config()
++        assert config["hidden_size"] == 32
++        assert config["output_size"] == 16
++        assert config["dropout"] == 0.2
++
++
++class TestVariableSelectionNetwork:
++    """Tests for the VSN layer."""
++
++    def test_output_shape(self):
++        """VSN produces correct output shape."""
++        from src.ml.training_pipeline.models_tft import VariableSelectionNetwork
++
++        vsn = VariableSelectionNetwork(n_features=10, hidden_size=32)
++        x = tf.random.normal((4, 30, 10))
++        output = vsn(x)
++        assert output.shape == (4, 30, 32)
++
++    def test_feature_weights_sum_to_one(self):
++        """VSN selection weights sum to 1 across features (softmax)."""
++        from src.ml.training_pipeline.models_tft import VariableSelectionNetwork
++
++        vsn = VariableSelectionNetwork(n_features=10, hidden_size=32)
++        x = tf.random.normal((4, 30, 10))
++        _, weights = vsn(x, return_weights=True)
++
++        # Weights shape: (batch, timesteps, n_features)
++        assert weights.shape == (4, 30, 10)
++
++        # Weights should sum to 1 across features dimension
++        weight_sums = tf.reduce_sum(weights, axis=-1)
++        np.testing.assert_allclose(weight_sums.numpy(), 1.0, atol=1e-5)
++
++    def test_weights_are_positive(self):
++        """VSN weights are non-negative (softmax output)."""
++        from src.ml.training_pipeline.models_tft import VariableSelectionNetwork
++
++        vsn = VariableSelectionNetwork(n_features=5, hidden_size=16)
++        x = tf.random.normal((2, 10, 5))
++        _, weights = vsn(x, return_weights=True)
++        assert tf.reduce_all(weights >= 0).numpy()
++
++    def test_serialization(self):
++        """VSN config can be serialized."""
++        from src.ml.training_pipeline.models_tft import VariableSelectionNetwork
++
++        vsn = VariableSelectionNetwork(n_features=10, hidden_size=32, dropout=0.15)
++        config = vsn.get_config()
++        assert config["n_features"] == 10
++        assert config["hidden_size"] == 32
++        assert config["dropout"] == 0.15
++
++
++class TestTemporalFusionDecoder:
++    """Tests for the attention decoder layer."""
++
++    def test_output_shape(self):
++        """Decoder preserves input shape."""
++        from src.ml.training_pipeline.models_tft import TemporalFusionDecoder
++
++        decoder = TemporalFusionDecoder(n_heads=4, hidden_size=64)
++        x = tf.random.normal((4, 30, 64))
++        output = decoder(x)
++        assert output.shape == (4, 30, 64)
++
++    def test_attention_scores_shape(self):
++        """Decoder returns attention scores with correct shape."""
++        from src.ml.training_pipeline.models_tft import TemporalFusionDecoder
++
++        decoder = TemporalFusionDecoder(n_heads=4, hidden_size=64)
++        x = tf.random.normal((4, 30, 64))
++        output, scores = decoder(x, return_attention_scores=True)
++        assert output.shape == (4, 30, 64)
++        # Attention scores: (batch, n_heads, timesteps, timesteps)
++        assert scores.shape == (4, 4, 30, 30)
++
++    def test_serialization(self):
++        """Decoder config can be serialized."""
++        from src.ml.training_pipeline.models_tft import TemporalFusionDecoder
++
++        decoder = TemporalFusionDecoder(n_heads=8, hidden_size=128, dropout=0.2)
++        config = decoder.get_config()
++        assert config["n_heads"] == 8
++        assert config["hidden_size"] == 128
++        assert config["dropout"] == 0.2
++
++
++class TestCreateTFTModel:
++    """Tests for the full TFT model factory function."""
++
++    def test_default_params(self, input_shape):
++        """Model creates successfully with default parameters."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        model = create_tft_model(input_shape)
++        assert model is not None
++        assert model.name == "tft"
++
++    def test_custom_params(self):
++        """Model creates successfully with custom parameters."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        model = create_tft_model(
++            input_shape=(20, 8),
++            n_heads=2,
++            hidden_size=32,
++            dropout=0.2,
++            num_lstm_layers=2,
++        )
++        assert model is not None
++
++    def test_forward_pass_output_shape(self, input_shape, sample_input):
++        """Model forward pass produces correct output shape."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        model = create_tft_model(input_shape)
++        output = model.predict(sample_input, verbose=0)
++
++        # Output: (batch_size, 1) - directional prediction
++        assert output.shape == (4, 1)
++
++    def test_output_in_sigmoid_range(self, input_shape, sample_input):
++        """Model output is in [0, 1] range (sigmoid activation)."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        model = create_tft_model(input_shape)
++        output = model.predict(sample_input, verbose=0)
++
++        assert np.all(output >= 0.0)
++        assert np.all(output <= 1.0)
++
++    def test_invalid_n_features(self):
++        """Raise ValueError for non-positive n_features."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        with pytest.raises(ValueError, match="n_features must be positive"):
++            create_tft_model((30, 0))
++
++    def test_invalid_n_heads(self, input_shape):
++        """Raise ValueError for non-positive n_heads."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        with pytest.raises(ValueError, match="n_heads must be positive"):
++            create_tft_model(input_shape, n_heads=0)
++
++    def test_invalid_hidden_size(self, input_shape):
++        """Raise ValueError for non-positive hidden_size."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        with pytest.raises(ValueError, match="hidden_size must be positive"):
++            create_tft_model(input_shape, hidden_size=0)
++
++    def test_hidden_size_not_divisible_by_heads(self, input_shape):
++        """Raise ValueError when hidden_size not divisible by n_heads."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        with pytest.raises(ValueError, match="divisible by n_heads"):
++            create_tft_model(input_shape, n_heads=3, hidden_size=64)
++
++    def test_invalid_dropout(self, input_shape):
++        """Raise ValueError for dropout outside [0, 1)."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        with pytest.raises(ValueError, match="dropout"):
++            create_tft_model(input_shape, dropout=1.0)
++
++    def test_invalid_lstm_layers(self, input_shape):
++        """Raise ValueError for non-positive num_lstm_layers."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        with pytest.raises(ValueError, match="num_lstm_layers must be positive"):
++            create_tft_model(input_shape, num_lstm_layers=0)
++
++    def test_model_is_compiled(self, input_shape):
++        """Model is compiled with optimizer and loss."""
++        from src.ml.training_pipeline.models_tft import create_tft_model
++
++        model = create_tft_model(input_shape)
++        assert model.optimizer is not None
++        assert model.loss is not None
++
++
++class TestModelFactoryIntegration:
++    """Test TFT integration with the model factory."""
++
++    def test_create_model_tft(self, input_shape):
++        """TFT is accessible through create_model factory."""
++        from src.ml.training_pipeline.models import create_model
++
++        model = create_model("tft", input_shape)
++        assert model is not None
++        assert model.name == "tft"
++
++    def test_create_model_tft_case_insensitive(self, input_shape):
++        """Factory handles case-insensitive model type."""
++        from src.ml.training_pipeline.models import create_model
++
++        model = create_model("TFT", input_shape)
++        assert model is not None
++
++    def test_available_models_includes_tft(self):
++        """TFT is listed in AVAILABLE_MODELS registry."""
++        from src.ml.training_pipeline.models import AVAILABLE_MODELS
++
++        assert "tft" in AVAILABLE_MODELS
++
++    def test_get_model_callbacks_tft(self):
++        """TFT callbacks are returned by get_model_callbacks."""
++        from src.ml.training_pipeline.models import get_model_callbacks
++
++        cbs = get_model_callbacks("tft", patience=15)
++        assert len(cbs) == 2  # EarlyStopping + ReduceLROnPlateau
++
++
++class TestTFTCallbacks:
++    """Tests for TFT-specific callbacks."""
++
++    def test_tft_callbacks_default(self):
++        """Default TFT callbacks create correctly."""
++        from src.ml.training_pipeline.models_tft import tft_callbacks
++
++        cbs = tft_callbacks()
++        assert len(cbs) == 2
++
++    def test_tft_callbacks_custom_patience(self):
++        """TFT callbacks respect custom patience."""
++        from src.ml.training_pipeline.models_tft import tft_callbacks
++
++        cbs = tft_callbacks(patience=30)
++        # EarlyStopping should have patience=30
++        early_stopping = cbs[0]
++        assert early_stopping.patience == 30
+diff --git a/tests/unit/strategies/components/test_adaptive_trend_signal_generator.py b/tests/unit/strategies/components/test_adaptive_trend_signal_generator.py
+index 004df1c0..6fb0d9ea 100644
+--- a/tests/unit/strategies/components/test_adaptive_trend_signal_generator.py
++++ b/tests/unit/strategies/components/test_adaptive_trend_signal_generator.py
+@@ -466,3 +466,116 @@ class TestInputValidation:
+         df = create_test_dataframe(length=100)
+         with pytest.raises(IndexError):
+             gen.generate_signal(df, 100)
++
++
++class TestEmaCacheInvalidation:
++    """Test EMA cache invalidates when source data identity changes."""
++
++    def test_cache_invalidates_on_different_array(self):
++        """Test that passing a different array invalidates the cache."""
++        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
++
++        # Arrange: two distinct arrays with different content
++        arr1 = np.linspace(100, 200, 50)
++        arr2 = np.linspace(200, 300, 50)
++
++        # Act: compute EMA for both
++        ema1 = gen._compute_ema_series(arr1, 49)
++        ema2 = gen._compute_ema_series(arr2, 49)
++
++        # Assert: results should differ because arrays differ
++        assert not np.allclose(ema1, ema2)
++
++    def test_cache_invalidates_on_same_length_same_first_value(self):
++        """Test regression: arrays sharing len/first value still invalidate cache."""
++        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
++
++        # Arrange: same length and first element, different remaining series
++        arr1 = np.linspace(100, 200, 50)
++        arr2 = arr1.copy()
++        arr2[1:] = np.linspace(300, 400, 49)
++
++        # Act
++        ema1 = gen._compute_ema_series(arr1, 49).copy()
++        ema2 = gen._compute_ema_series(arr2, 49)
++
++        # Assert: second call must recompute against new series
++        assert not np.allclose(ema1, ema2)
++
++    def test_cache_invalidates_on_inplace_mutation(self):
++        """Test that in-place mutation of the array invalidates the cache."""
++        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
++
++        # Arrange
++        arr = np.linspace(100, 200, 50)
++        ema_before = gen._compute_ema_series(arr, 49).copy()
++
++        # Act: mutate the array in-place (same object id, different content)
++        arr[0] = 999.0
++        arr[-1] = 999.0
++        ema_after = gen._compute_ema_series(arr, 49)
++
++        # Assert: cache should have been invalidated due to content change
++        assert not np.allclose(ema_before, ema_after)
++
++    def test_cache_reuse_on_incremental_extension(self):
++        """Test that cache extends incrementally for the same data."""
++        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
++
++        # Arrange
++        arr = np.linspace(100, 200, 50)
++
++        # Act: compute EMA to index 30, then extend to 49
++        ema_partial = gen._compute_ema_series(arr, 30).copy()
++        ema_full = gen._compute_ema_series(arr, 49)
++
++        # Assert: the first 31 values should be identical (cache reused)
++        assert np.allclose(ema_partial[:31], ema_full[:31])
++
++    def test_cache_detects_reused_object_id(self):
++        """Test that a new array reusing the same id() is not stale-cached."""
++        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
++
++        # Arrange: compute EMA and store result
++        arr1 = np.linspace(100, 200, 50)
++        ema1 = gen._compute_ema_series(arr1, 49).copy()
++
++        # Act: delete arr1, create new array (may reuse same id)
++        del arr1
++        arr2 = np.linspace(300, 400, 50)
++        ema2 = gen._compute_ema_series(arr2, 49)
++
++        # Assert: even if id(arr2) == old id(arr1), content differs
++        assert not np.allclose(ema1, ema2)
++
++    def test_cache_invalidates_on_different_length(self):
++        """Test that a shorter or longer array invalidates the cache."""
++        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
++
++        # Arrange
++        arr1 = np.linspace(100, 200, 50)
++        ema1 = gen._compute_ema_series(arr1, 49).copy()
++
++        # Act: new array with different length but same starting value
++        arr2 = np.linspace(100, 200, 60)
++        ema2 = gen._compute_ema_series(arr2, 49)
++
++        # Assert: cache should be invalidated due to length change
++        assert not np.allclose(ema1[:50], ema2[:50])
++
++    def test_preallocated_buffer_reused_across_incremental_calls(self):
++        """Test that incremental extension reuses the same buffer (no copy)."""
++        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
++
++        # Arrange: cold-start allocates buffer sized to array length
++        arr = np.linspace(100, 200, 50)
++        ema_first = gen._compute_ema_series(arr, 30)
++        buf_id = id(ema_first)
++
++        # Act: incremental extension fills into same pre-allocated buffer
++        ema_second = gen._compute_ema_series(arr, 40)
++        ema_third = gen._compute_ema_series(arr, 49)
++
++        # Assert: same buffer object throughout (no concatenation copies)
++        assert id(ema_second) == buf_id
++        assert id(ema_third) == buf_id
+diff --git a/tests/unit/strategies/components/test_strategy_lineage.py b/tests/unit/strategies/components/test_strategy_lineage.py
+index 882b89a3..7c1f0f9c 100644
+--- a/tests/unit/strategies/components/test_strategy_lineage.py
++++ b/tests/unit/strategies/components/test_strategy_lineage.py
+@@ -590,6 +590,123 @@ class TestStrategyLineageTracker:
+         tracker.register_strategy("strategy2", metadata={"name": "Test2"})
+         assert "strategy2" in tracker.strategies  # Should still be registered locally
+ 
++    def test_register_strategy_out_of_order(self, tracker):
++        """Test that registering a child before its parent backfills edges correctly"""
++        # Arrange: register child first with a parent_id that doesn't exist yet
++        tracker.register_strategy("child", parent_id="parent", metadata={"name": "Child"})
++
++        # At this point, child has parent_id="parent" in metadata but no edge exists
++        assert "parent" not in tracker.lineage_graph
++
++        # Act: now register the parent
++        tracker.register_strategy("parent", metadata={"name": "Parent"})
++
++        # Assert: backfill should have created the edge parent -> child
++        assert "child" in tracker.lineage_graph["parent"]
++        edge_key = "parent->child"
++        assert edge_key in tracker.graph_edges
++        assert tracker.graph_edges[edge_key]["relationship_type"] == RelationshipType.PARENT
++
++        # Child's generation should be updated (parent=0, child=1)
++        assert tracker.strategies["parent"]["generation"] == 0
++        assert tracker.strategies["child"]["generation"] == 1
++
++        # _get_descendants should find the child
++        descendants = tracker._get_descendants("parent")
++        assert len(descendants) == 1
++        assert descendants[0]["id"] == "child"
++
++        # get_lineage should work correctly
++        lineage = tracker.get_lineage("parent")
++        assert len(lineage["descendants"]) == 1
++        assert lineage["descendants"][0]["id"] == "child"
++
++    def test_register_strategy_out_of_order_chain(self, tracker):
++        """Test out-of-order registration for a multi-level chain"""
++        # Arrange: register grandchild, then child, then parent (fully reversed)
++        tracker.register_strategy("grandchild", parent_id="child", metadata={"name": "GC"})
++        tracker.register_strategy("child", parent_id="parent", metadata={"name": "Child"})
++        tracker.register_strategy("parent", metadata={"name": "Parent"})
++
++        # Assert: all edges should exist
++        assert "child" in tracker.lineage_graph["parent"]
++        assert "grandchild" in tracker.lineage_graph["child"]
++
++        # Generations should be correct
++        assert tracker.strategies["parent"]["generation"] == 0
++        assert tracker.strategies["child"]["generation"] == 1
++        assert tracker.strategies["grandchild"]["generation"] == 2
++
++        # Full descendant traversal from root should find both
++        descendants = tracker._get_descendants("parent")
++        desc_ids = {d["id"] for d in descendants}
++        assert desc_ids == {"child", "grandchild"}
++
++    def test_register_strategy_cyclic_parent_does_not_hang(self, tracker):
++        """Test that cyclic parent references don't cause infinite BFS loop"""
++        # Arrange: create a mutual parent cycle (a -> b -> a)
++        tracker.register_strategy("a", parent_id="b", metadata={"name": "A"})
++
++        # Act: registering b with parent a creates a cycle in the graph.
++        # This must terminate (not hang) thanks to the visited set.
++        tracker.register_strategy("b", parent_id="a", metadata={"name": "B"})
++
++        # Assert: both strategies are registered and reachable
++        assert "a" in tracker.strategies
++        assert "b" in tracker.strategies
++
++        # Descendant traversal should terminate without infinite loop
++        descendants_a = tracker._get_descendants("a")
++        descendants_b = tracker._get_descendants("b")
++        assert len(descendants_a) <= 1
++        assert len(descendants_b) <= 1
++
++    def test_cyclic_parent_does_not_corrupt_generations(self, tracker):
++        """Test that cyclic parent references don't inflate generation numbers.
++
++        Regression: if strategy_id is missing from visited_propagation, the BFS
++        re-enqueues the root through the cycle and overwrites its generation
++        from its child, producing inflated/unstable generation numbers.
++        """
++        # Arrange: create a->b->c chain, then add c->a cycle
++        tracker.register_strategy("a", metadata={"name": "A"})
++        tracker.register_strategy("b", parent_id="a", metadata={"name": "B"})
++        tracker.register_strategy("c", parent_id="b", metadata={"name": "C"})
++
++        # Assert: correct generation numbers before any cycle
++        assert tracker.strategies["a"]["generation"] == 0
++        assert tracker.strategies["b"]["generation"] == 1
++        assert tracker.strategies["c"]["generation"] == 2
++
++        # Act: register d with parent c, but also introduce a back-edge
++        # by modifying a's parent to c (simulates malformed input)
++        tracker.strategies["a"]["parent_id"] = "c"
++        # Re-register to trigger propagation with the cycle present
++        tracker.register_strategy("d", parent_id="c", metadata={"name": "D"})
++
++        # Assert: a's generation must NOT have been overwritten by the cycle
++        assert tracker.strategies["a"]["generation"] == 0
++        assert tracker.strategies["b"]["generation"] == 1
++        assert tracker.strategies["c"]["generation"] == 2
++        assert tracker.strategies["d"]["generation"] == 3
++
++    def test_cyclic_parent_does_not_inflate_generations(self, tracker):
++        """Test that cycles don't corrupt generation numbers.
++
++        Regression: if strategy_id is not in visited_propagation, BFS
++        re-enqueues the root from its child cycle and inflates generations.
++        """
++        # Arrange: register a with parent b (b doesn't exist yet → gen 0)
++        tracker.register_strategy("a", parent_id="b", metadata={"name": "A"})
++
++        # Act: register b with parent a, creating a cycle (a -> b -> a)
++        tracker.register_strategy("b", parent_id="a", metadata={"name": "B"})
++
++        # Assert: generation of "a" must remain 0 (root), not be inflated
++        # by the cycle traversal back through b.
++        assert tracker.strategies["a"]["generation"] == 0
++        assert tracker.strategies["b"]["generation"] == 1
++
+     def test_complex_branching_and_merging(self, tracker):
+         """Test complex branching and merging scenario"""
+         # Create main line
