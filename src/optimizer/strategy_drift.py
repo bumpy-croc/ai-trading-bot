@@ -25,8 +25,11 @@ class DriftConfig:
         critical_z: Z-score threshold for CRITICAL drift (recommend pausing).
     """
 
+    # 1.5σ ≈ 7% tail probability — early warning before significant degradation
     mild_z: float = 1.5
+    # 2.0σ ≈ 2.3% tail probability — statistically significant performance drop
     severe_z: float = 2.0
+    # 2.5σ ≈ 0.6% tail probability — extreme deviation, recommend pausing live trading
     critical_z: float = 2.5
 
 
