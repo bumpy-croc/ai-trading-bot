@@ -346,7 +346,7 @@ class TestWalkForwardRun:
 
         # Robustness should be acceptable (0.8/1.2 ≈ 0.67, 0.7/1.0 = 0.7, 1.0/1.5 ≈ 0.67)
         assert result.mean_robustness_ratio > 0.5
-        assert result.robustness_label in ("ACCEPTABLE", "ROBUST")
+        assert result.robustness_label == "ACCEPTABLE"
 
     def test_run_detects_overfitting(self):
         """High IS Sharpe with low OOS Sharpe triggers overfitting flag."""
@@ -370,4 +370,4 @@ class TestWalkForwardRun:
         result = analyzer.run(end=datetime(2025, 12, 31, tzinfo=UTC))
 
         assert result.overfitting_detected is True
-        assert result.robustness_label in ("POOR", "WEAK")
+        assert result.robustness_label == "WEAK"

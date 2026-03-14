@@ -6,13 +6,14 @@ import sys
 from pathlib import Path
 
 from src.infrastructure.runtime.paths import get_project_root
+from src.optimizer.walk_forward import FoldResult, WalkForwardResult
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def _print_fold_table(folds: list) -> None:
+def _print_fold_table(folds: list[FoldResult]) -> None:
     """Pretty-print a per-fold results table."""
     header = (
         f"{'Fold':>4}  {'IS Sharpe':>10}  {'OOS Sharpe':>11}  {'Ratio':>7}  "
@@ -30,7 +31,7 @@ def _print_fold_table(folds: list) -> None:
         )
 
 
-def _print_summary(result) -> None:
+def _print_summary(result: WalkForwardResult) -> None:
     """Print the overall robustness assessment."""
     print()
     print("=" * 60)

@@ -45,6 +45,14 @@ class WalkForwardConfig:
     robustness_good: float = 0.5
     robustness_strong: float = 0.7
 
+    def __post_init__(self) -> None:
+        if self.train_days <= 0:
+            raise ValueError(f"train_days must be positive, got {self.train_days}")
+        if self.test_days <= 0:
+            raise ValueError(f"test_days must be positive, got {self.test_days}")
+        if self.initial_balance <= 0:
+            raise ValueError(f"initial_balance must be positive, got {self.initial_balance}")
+
 
 @dataclass
 class FoldResult:
