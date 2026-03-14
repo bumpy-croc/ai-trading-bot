@@ -636,7 +636,7 @@ class DynamicRiskManager:
             entry_balance = pos.get("entry_balance")
             entry_price = pos.get("entry_price")
             quantity = pos.get("quantity")
-            if entry_balance and entry_price and quantity:
+            if entry_balance and entry_price and quantity and float(entry_balance) > 0:
                 size = float(quantity) * float(entry_price) / float(entry_balance)
             else:
                 logger.warning(

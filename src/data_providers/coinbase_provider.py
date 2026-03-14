@@ -324,8 +324,23 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         logger.info("get_positions not implemented for Coinbase spot API (only holdings)")
         return []
 
+    @staticmethod
+    def _safe_parse_iso(value: str | None, fallback: datetime) -> datetime:
+        """Parse an ISO-8601 timestamp string, returning a fallback on failure.
+
+        Handles None values and malformed strings from external APIs gracefully.
+        """
+        if not value:
+            return fallback
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            logger.warning("Could not parse timestamp %r, using fallback", value)
+            return fallback
+
     def _parse_order_data(self, od: dict[str, Any]) -> Order:
         """Parse a Coinbase order response dict into an Order object."""
+        now = datetime.now(UTC)
         return Order(
             order_id=od.get("id"),
             symbol=od.get("product_id"),
@@ -342,12 +357,8 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             ),
             commission=0.0,
             commission_asset="",
-            create_time=datetime.fromisoformat(od.get("created_at")),
-            update_time=(
-                datetime.fromisoformat(od.get("done_at"))
-                if od.get("done_at")
-                else datetime.now(UTC)
-            ),
+            create_time=self._safe_parse_iso(od.get("created_at"), now),
+            update_time=self._safe_parse_iso(od.get("done_at"), now),
             stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
             time_in_force=od.get("time_in_force", "GTC"),
         )

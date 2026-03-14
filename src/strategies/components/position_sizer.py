@@ -6,12 +6,24 @@ for calculating position sizes based on various factors in the component-based
 strategy architecture.
 """
 
+import threading
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
+from src.config.constants import (
+    DEFAULT_KELLY_EXPECTED_REWARD_RISK,
+    DEFAULT_KELLY_EXPECTED_WIN_RATE,
+    DEFAULT_KELLY_FALLBACK_FRACTION,
+    DEFAULT_KELLY_FRACTION,
+    DEFAULT_KELLY_LOOKBACK_TRADES,
+    DEFAULT_KELLY_MAX_FRACTION,
+    DEFAULT_KELLY_MIN_TRADES,
+    DEFAULT_KELLY_OVERFITTING_THRESHOLD,
+)
 from src.utils.bounds import clamp_position_size, validate_non_negative, validate_positive
 
 from .regime_utils import RegimeMultiplierCalculator, RegimeMultiplierConfig
@@ -486,6 +498,312 @@ class KellySizer(PositionSizer):
                 "kelly_fraction": self.kelly_fraction,
                 "lookback_period": self.lookback_period,
                 "trade_count": len(self.trade_history),
+            }
+        )
+        return params
+
+
+# Minimum signal adjustment floor - prevents Kelly fraction from being scaled
+# below 30% of its computed value, maintaining meaningful position sizes even
+# with weak signals.
+MIN_SIGNAL_ADJUSTMENT = 0.3
+
+
+class KellyCriterionSizer(PositionSizer):
+    """
+    Kelly Criterion position sizer with adaptive trade tracking.
+
+    Computes optimal position sizes using the Kelly formula f* = (bp - q) / b
+    where b = mean(win_amounts) / mean(loss_amounts), p = win rate, q = 1 - p.
+    Uses a deque ring buffer to track rolling trade statistics and supports
+    fractional Kelly, regime-aware scaling, overfitting detection, and cold
+    start fallback.
+    """
+
+    def __init__(
+        self,
+        kelly_fraction: float = DEFAULT_KELLY_FRACTION,
+        min_trades: int = DEFAULT_KELLY_MIN_TRADES,
+        lookback_trades: int = DEFAULT_KELLY_LOOKBACK_TRADES,
+        fallback_fraction: float = DEFAULT_KELLY_FALLBACK_FRACTION,
+        expected_win_rate: float = DEFAULT_KELLY_EXPECTED_WIN_RATE,
+        expected_reward_risk: float = DEFAULT_KELLY_EXPECTED_REWARD_RISK,
+        overfitting_threshold: float = DEFAULT_KELLY_OVERFITTING_THRESHOLD,
+        max_fraction: float = DEFAULT_KELLY_MAX_FRACTION,
+    ):
+        """
+        Initialize Kelly Criterion sizer.
+
+        Args:
+            kelly_fraction: Fraction of full Kelly to use (0.25 = quarter, 0.5 = half)
+            min_trades: Minimum trades before Kelly activates
+            lookback_trades: Rolling window size for trade statistics
+            fallback_fraction: Fixed fraction used during cold start
+            expected_win_rate: Backtested win rate for overfitting comparison
+            expected_reward_risk: Backtested reward-to-risk for overfitting comparison
+            overfitting_threshold: Deviation threshold before reducing position size
+            max_fraction: Maximum position size as fraction of balance
+        """
+        super().__init__("kelly_criterion_sizer")
+
+        if not 0.01 <= kelly_fraction <= 1.0:
+            raise ValueError(
+                f"kelly_fraction must be between 0.01 and 1.0, got {kelly_fraction}"
+            )
+        if min_trades < 1:
+            raise ValueError(f"min_trades must be >= 1, got {min_trades}")
+        if lookback_trades < min_trades:
+            raise ValueError(
+                f"lookback_trades ({lookback_trades}) must be >= min_trades ({min_trades})"
+            )
+        if not 0.001 <= fallback_fraction <= 0.5:
+            raise ValueError(
+                f"fallback_fraction must be between 0.001 and 0.5, got {fallback_fraction}"
+            )
+        if not 0.0 < expected_win_rate < 1.0:
+            raise ValueError(
+                f"expected_win_rate must be between 0 and 1 exclusive, got {expected_win_rate}"
+            )
+        if expected_reward_risk <= 0:
+            raise ValueError(
+                f"expected_reward_risk must be positive, got {expected_reward_risk}"
+            )
+        if not 0.0 < overfitting_threshold <= 1.0:
+            raise ValueError(
+                f"overfitting_threshold must be between 0 and 1 inclusive, got {overfitting_threshold}"
+            )
+        if not 0.01 <= max_fraction <= 1.0:
+            raise ValueError(
+                f"max_fraction must be between 0.01 and 1.0, got {max_fraction}"
+            )
+
+        self.kelly_fraction = kelly_fraction
+        self.min_trades = min_trades
+        self.lookback_trades = lookback_trades
+        self.fallback_fraction = fallback_fraction
+        self.expected_win_rate = expected_win_rate
+        self.expected_reward_risk = expected_reward_risk
+        self.overfitting_threshold = overfitting_threshold
+        self.max_fraction = max_fraction
+
+        # Ring buffer: each entry is (win: bool, profit_pct: float, loss_risk_pct: float)
+        self._trades: deque[tuple[bool, float, float]] = deque(maxlen=lookback_trades)
+        self._trades_lock = threading.Lock()
+
+        # Cache regime multiplier objects (config is static)
+        self._regime_config = RegimeMultiplierConfig(
+            bull_high_conf_multiplier=1.0,  # No boost in bull markets
+            min_multiplier=0.2,  # 20% floor
+        )
+        self._regime_calculator = RegimeMultiplierCalculator(self._regime_config)
+
+    @property
+    def trade_count(self) -> int:
+        """Return the number of trades in the ring buffer."""
+        return len(self._trades)
+
+    @property
+    def has_sufficient_history(self) -> bool:
+        """Return True when enough trades have been recorded for Kelly."""
+        return self.trade_count >= self.min_trades
+
+    def record_trade(self, win: bool, profit_pct: float, loss_risk_pct: float) -> None:
+        """
+        Record a trade outcome for rolling statistics.
+
+        Args:
+            win: Whether the trade was profitable
+            profit_pct: Absolute profit percentage (always positive)
+            loss_risk_pct: Risk amount as percentage (always positive)
+        """
+        if loss_risk_pct <= 0:
+            return  # Cannot compute reward-to-risk without valid risk
+        # Guard against NaN/Infinity corrupting rolling statistics
+        if not (np.isfinite(profit_pct) and np.isfinite(loss_risk_pct)):
+            return
+        with self._trades_lock:
+            self._trades.append((win, abs(profit_pct), loss_risk_pct))
+
+    def _compute_statistics(self) -> tuple[float, float]:
+        """
+        Compute live win rate and average reward-to-risk from the ring buffer.
+
+        Takes a snapshot under lock then delegates to _compute_statistics_from.
+
+        Returns:
+            Tuple of (win_rate, avg_reward_risk). Falls back to expected values
+            when the buffer has insufficient data.
+        """
+        with self._trades_lock:
+            trades_snapshot = list(self._trades)
+        return self._compute_statistics_from(trades_snapshot)
+
+    def _compute_statistics_from(
+        self, trades_snapshot: list[tuple[bool, float, float]]
+    ) -> tuple[float, float]:
+        """
+        Compute win rate and average reward-to-risk from a pre-taken snapshot.
+
+        Computes b = mean(win_amounts) / mean(loss_amounts) to include loss
+        magnitude in the reward-to-risk ratio.
+
+        Args:
+            trades_snapshot: List of (win, profit_pct, loss_risk_pct) tuples.
+
+        Returns:
+            Tuple of (win_rate, avg_reward_risk). Falls back to expected values
+            when the snapshot is empty.
+        """
+        if not trades_snapshot:
+            return self.expected_win_rate, self.expected_reward_risk
+
+        win_amounts = [profit for win, profit, _ in trades_snapshot if win]
+        loss_amounts = [profit for win, profit, _ in trades_snapshot if not win]
+        total = len(trades_snapshot)
+        win_rate = len(win_amounts) / total
+
+        # b = mean(win_amounts) / mean(loss_amounts)
+        if win_amounts and loss_amounts:
+            avg_rr = float(np.mean(win_amounts)) / float(np.mean(loss_amounts))
+        elif win_amounts:
+            # No losses yet — fall back to expected reward-to-risk
+            avg_rr = self.expected_reward_risk
+        else:
+            # No wins — ratio is effectively zero
+            avg_rr = 0.0
+
+        return win_rate, avg_rr
+
+    def _kelly_percentage(self, win_rate: float, reward_risk: float) -> float:
+        """
+        Compute raw Kelly percentage: f* = (b*p - q) / b.
+
+        Args:
+            win_rate: Probability of winning (p)
+            reward_risk: Average reward-to-risk ratio (b)
+
+        Returns:
+            Kelly fraction capped to [0.0, 0.5]
+        """
+        if reward_risk <= 0:
+            return 0.0
+        p = win_rate
+        q = 1.0 - p
+        kelly_f = (reward_risk * p - q) / reward_risk
+        return max(0.0, min(0.5, kelly_f))
+
+    def _overfitting_adjustment(self, live_win_rate: float, live_rr: float) -> float:
+        """
+        Compute position size multiplier based on live vs expected performance.
+
+        Reduces position size linearly when live performance deviates below
+        expected by more than the overfitting threshold. Floored at 0.5.
+
+        Args:
+            live_win_rate: Live win rate from trade buffer
+            live_rr: Live average reward-to-risk from trade buffer
+
+        Returns:
+            Multiplier in [0.5, 1.0]
+        """
+        # Compute normalized deviation for each metric
+        wr_deviation = max(0.0, (self.expected_win_rate - live_win_rate) / self.expected_win_rate)
+        rr_deviation = max(0.0, (self.expected_reward_risk - live_rr) / self.expected_reward_risk)
+        avg_deviation = (wr_deviation + rr_deviation) / 2.0
+
+        if avg_deviation <= self.overfitting_threshold:
+            return 1.0
+
+        # Linear reduction beyond threshold, floored at 0.5
+        excess = avg_deviation - self.overfitting_threshold
+        reduction = min(excess / self.overfitting_threshold, 1.0)
+        return max(0.5, 1.0 - 0.5 * reduction)
+
+    def calculate_size(
+        self,
+        signal: "Signal",
+        balance: float,
+        risk_amount: float,
+        regime: Optional["RegimeContext"] = None,
+    ) -> float:
+        """Calculate position size using Kelly Criterion with adaptive tracking."""
+        self.validate_inputs(balance, risk_amount)
+
+        if signal.direction.value == "hold":
+            return 0.0
+
+        if risk_amount <= 0:
+            return 0.0
+
+        # Snapshot trades under lock to avoid TOCTOU race between
+        # has_sufficient_history check and _compute_statistics
+        with self._trades_lock:
+            trades_snapshot = list(self._trades)
+            sufficient = len(trades_snapshot) >= self.min_trades
+
+        if sufficient:
+            win_rate, avg_rr = self._compute_statistics_from(trades_snapshot)
+            kelly_pct = self._kelly_percentage(win_rate, avg_rr)
+            base_fraction = kelly_pct * self.kelly_fraction
+
+            # Apply overfitting adjustment
+            overfit_mult = self._overfitting_adjustment(win_rate, avg_rr)
+            base_fraction *= overfit_mult
+        else:
+            base_fraction = self.fallback_fraction
+
+        # Apply signal-based adjustments
+        confidence_adj = max(MIN_SIGNAL_ADJUSTMENT, signal.confidence)
+        strength_adj = max(MIN_SIGNAL_ADJUSTMENT, signal.strength)
+        adjusted_fraction = base_fraction * confidence_adj * strength_adj
+
+        # Apply regime scaling
+        if regime is not None:
+            regime_mult = self._get_regime_multiplier(regime)
+            adjusted_fraction *= regime_mult
+
+        # Calculate position size
+        position_size = balance * adjusted_fraction
+
+        # Respect risk amount limit
+        if risk_amount > 0:
+            position_size = min(position_size, risk_amount)
+
+        # Kelly says don't trade — return 0 before bounds checking
+        # can inflate it to min_fraction
+        if position_size <= 0:
+            return 0.0
+
+        # Apply bounds checking with min_fraction=0.0 so that near-zero Kelly
+        # recommendations are not inflated to the default 0.1% floor
+        return self.apply_bounds_checking(
+            position_size, balance, min_fraction=0.0, max_fraction=self.max_fraction
+        )
+
+    def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
+        """Get position size multiplier based on regime.
+
+        Uses conservative config (no bull boost) to avoid amplifying
+        position sizes in favorable conditions beyond Kelly's recommendation.
+        """
+        return self._regime_calculator.calculate_conservative(regime)
+
+    def get_parameters(self) -> dict[str, Any]:
+        """Get Kelly Criterion sizer parameters."""
+        params = super().get_parameters()
+        win_rate, avg_rr = self._compute_statistics()
+        params.update(
+            {
+                "kelly_fraction": self.kelly_fraction,
+                "min_trades": self.min_trades,
+                "lookback_trades": self.lookback_trades,
+                "fallback_fraction": self.fallback_fraction,
+                "trade_count": self.trade_count,
+                "has_sufficient_history": self.has_sufficient_history,
+                "live_win_rate": win_rate,
+                "live_avg_reward_risk": avg_rr,
+                "expected_win_rate": self.expected_win_rate,
+                "expected_reward_risk": self.expected_reward_risk,
             }
         )
         return params
