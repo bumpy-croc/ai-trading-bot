@@ -32,6 +32,18 @@ class DriftConfig:
     # 2.5σ ≈ 0.6% tail probability — extreme deviation, recommend pausing live trading
     critical_z: float = 2.5
 
+    def __post_init__(self) -> None:
+        if self.mild_z <= 0 or self.severe_z <= 0 or self.critical_z <= 0:
+            raise ValueError(
+                f"All z-score thresholds must be positive, got "
+                f"mild_z={self.mild_z}, severe_z={self.severe_z}, critical_z={self.critical_z}"
+            )
+        if not (self.mild_z <= self.severe_z <= self.critical_z):
+            raise ValueError(
+                f"Thresholds must be ordered mild_z <= severe_z <= critical_z, got "
+                f"{self.mild_z} <= {self.severe_z} <= {self.critical_z}"
+            )
+
 
 @dataclass
 class DriftReport:

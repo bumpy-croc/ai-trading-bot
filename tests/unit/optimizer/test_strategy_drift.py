@@ -104,6 +104,61 @@ class TestDriftSeverityCritical:
 
 
 # ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+class TestInputValidation:
+    def test_nan_live_sharpe_raises(self):
+        detector = StrategyDriftDetector()
+        with pytest.raises(ValueError, match="live_sharpe must be finite"):
+            detector.detect(
+                **_baseline_kwargs(),
+                live_sharpe=float("nan"),
+                live_win_rate=54.0,
+                live_max_drawdown=10.0,
+            )
+
+    def test_inf_live_win_rate_raises(self):
+        detector = StrategyDriftDetector()
+        with pytest.raises(ValueError, match="live_win_rate must be finite"):
+            detector.detect(
+                **_baseline_kwargs(),
+                live_sharpe=0.9,
+                live_win_rate=float("inf"),
+                live_max_drawdown=10.0,
+            )
+
+    def test_neg_inf_live_max_drawdown_raises(self):
+        detector = StrategyDriftDetector()
+        with pytest.raises(ValueError, match="live_max_drawdown must be finite"):
+            detector.detect(
+                **_baseline_kwargs(),
+                live_sharpe=0.9,
+                live_win_rate=54.0,
+                live_max_drawdown=float("-inf"),
+            )
+
+
+# ---------------------------------------------------------------------------
+# DriftConfig validation
+# ---------------------------------------------------------------------------
+
+class TestDriftConfigValidation:
+    def test_negative_threshold_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            DriftConfig(mild_z=-1.0)
+
+    def test_misordered_thresholds_raises(self):
+        with pytest.raises(ValueError, match="ordered"):
+            DriftConfig(mild_z=3.0, severe_z=2.0, critical_z=2.5)
+
+    def test_valid_equal_thresholds_accepted(self):
+        """Equal thresholds are valid (mild_z <= severe_z <= critical_z)."""
+        cfg = DriftConfig(mild_z=2.0, severe_z=2.0, critical_z=2.0)
+        assert cfg.mild_z == 2.0
+
+
+# ---------------------------------------------------------------------------
 # Z-score edge cases
 # ---------------------------------------------------------------------------
 
