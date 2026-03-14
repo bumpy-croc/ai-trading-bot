@@ -85,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
         test,
         tests,
         train,
+        walk_forward,
     )
     from cli.commands import (
         docs as docs_cmd,
@@ -95,6 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     live_health.register(subparsers)
     backtest.register(subparsers)
     optimizer.register(subparsers)
+    walk_forward.register(subparsers)
 
     # Strategy and model management
     strategies.register(subparsers)

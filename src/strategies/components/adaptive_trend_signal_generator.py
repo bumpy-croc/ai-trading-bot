@@ -26,6 +26,9 @@ from .signal_generator import Signal, SignalDirection, SignalGenerator
 
 logger = logging.getLogger(__name__)
 
+# Filters out decelerating trends to avoid entering during momentum decay
+DECLINING_TREND_MOMENTUM_THRESHOLD = -0.05
+
 
 class AdaptiveTrendSignalGenerator(SignalGenerator):
     """Trend-following signal generator using single-EMA trend detection.
@@ -219,7 +222,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
                 return self._hold_signal(index, "declining_ema", metadata)
 
             # Require non-negative momentum to avoid late-cycle entries
-            if momentum <= -0.05:
+            if momentum <= DECLINING_TREND_MOMENTUM_THRESHOLD:
                 return self._hold_signal(index, "negative_momentum", metadata)
 
             strength = min(1.0, abs(price_vs_ema_pct) * 10)

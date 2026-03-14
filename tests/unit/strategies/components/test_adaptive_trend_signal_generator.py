@@ -244,12 +244,9 @@ class TestSignalGeneration:
         )
 
         signal = gen.generate_signal(df, index=185)
-        # Should not be BUY with negative momentum
-        if signal.direction == SignalDirection.BUY:
-            # If it did buy, the momentum filter may not have triggered
-            pass  # This is acceptable if momentum > -0.05
-        else:
-            assert signal.direction in (SignalDirection.HOLD, SignalDirection.SELL)
+        # With 50 bars of -0.2% decline, momentum over 30 bars is approximately
+        # -6%, which exceeds the -5% threshold. Signal should be HOLD or SELL.
+        assert signal.direction in (SignalDirection.HOLD, SignalDirection.SELL)
 
     def test_metadata_contains_required_fields(self):
         """Test that signal metadata includes all expected fields."""
