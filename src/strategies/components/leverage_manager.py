@@ -63,7 +63,19 @@ class LeverageManager:
             begins increasing leverage toward target.
         leverage_map: Override default regime-to-leverage mapping.
             Keys are (TrendLabel, VolLabel) tuples, values are target leverage.
+
+    Thread-Safety:
+        This class is NOT thread-safe. It maintains mutable state that is
+        modified on every call to get_leverage_multiplier(). Designed for
+        single-threaded use per instance. In the standard architecture,
+        each strategy owns a separate LeverageManager and runs in a single
+        trading thread. If shared across threads, callers must synchronize
+        with external locking.
     """
+
+    # Maximum excess bars for conviction scaling plateau - prevents
+    # over-leveraging in extended regimes
+    MAX_REGIME_EXCESS_BARS = 100
 
     def __init__(
         self,
@@ -180,7 +192,7 @@ class LeverageManager:
             # Beyond minimum: logarithmic ramp toward 1.0
             excess = duration - self.min_regime_bars
             # log2(x+2)/log2(max+2) gives a nice curve from ~0.5 to 1.0
-            max_excess = 100  # Plateau after ~100 bars beyond minimum
+            max_excess = self.MAX_REGIME_EXCESS_BARS
             base_conviction = 0.5 + 0.5 * math.log2(excess + 2) / math.log2(
                 max_excess + 2
             )
