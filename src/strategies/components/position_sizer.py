@@ -737,6 +737,10 @@ class LeveragedPositionSizer(PositionSizer):
         max_leveraged_fraction: float = 0.50,
     ) -> None:
         super().__init__("leveraged_position_sizer")
+        if not (0.0 < max_leveraged_fraction <= 1.0):
+            raise ValueError(
+                f"max_leveraged_fraction must be in (0, 1], got {max_leveraged_fraction}"
+            )
         self.base_sizer = base_sizer
         self.leverage_manager = leverage_manager
         self.max_leveraged_fraction = max_leveraged_fraction
@@ -762,6 +766,7 @@ class LeveragedPositionSizer(PositionSizer):
         Returns:
             Leveraged position size in base currency.
         """
+        self.validate_inputs(balance, risk_amount)
         base_size = self.base_sizer.calculate_size(signal, balance, risk_amount, regime)
         if base_size <= 0 or regime is None:
             return base_size
