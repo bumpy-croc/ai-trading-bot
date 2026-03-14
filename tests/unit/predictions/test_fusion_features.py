@@ -56,7 +56,7 @@ class TestFeatureFusionPipeline:
 
     @patch(
         "src.prediction.features.enhanced_sentiment.FearGreedProvider",
-        side_effect=Exception("no network"),
+        side_effect=ConnectionError("no network"),
     )
     def test_enhanced_sentiment_only(self, mock_provider, sample_ohlcv):
         """Pipeline with only enhanced sentiment features enabled."""
@@ -69,7 +69,7 @@ class TestFeatureFusionPipeline:
 
     @patch(
         "src.prediction.features.enhanced_sentiment.FearGreedProvider",
-        side_effect=Exception("no network"),
+        side_effect=ConnectionError("no network"),
     )
     def test_all_extractors_enabled(self, mock_provider, sample_ohlcv):
         """Pipeline with all feature groups enabled."""
