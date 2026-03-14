@@ -52,6 +52,10 @@ class WalkForwardConfig:
             raise ValueError(f"test_days must be positive, got {self.test_days}")
         if self.initial_balance <= 0:
             raise ValueError(f"initial_balance must be positive, got {self.initial_balance}")
+        if self.num_folds is not None and self.num_folds <= 0:
+            raise ValueError(f"num_folds must be positive, got {self.num_folds}")
+        if self.step_days is not None and self.step_days <= 0:
+            raise ValueError(f"step_days must be positive, got {self.step_days}")
 
 
 @dataclass

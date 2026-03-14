@@ -108,6 +108,15 @@ class StrategyDriftDetector:
         Returns:
             DriftReport with severity classification and per-metric z-scores.
         """
+        # Validate live metric inputs are finite to prevent NaN/Inf propagation
+        for name, val in [
+            ("live_sharpe", live_sharpe),
+            ("live_win_rate", live_win_rate),
+            ("live_max_drawdown", live_max_drawdown),
+        ]:
+            if not math.isfinite(val):
+                raise ValueError(f"{name} must be finite, got {val}")
+
         sharpe_z = self._z_score(live_sharpe, baseline_sharpe_mean, baseline_sharpe_std)
         win_rate_z = self._z_score(live_win_rate, baseline_win_rate_mean, baseline_win_rate_std)
         # For drawdown, *higher* is worse, so invert the sign

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from pathlib import Path
 
 from src.infrastructure.runtime.paths import get_project_root
 from src.optimizer.walk_forward import FoldResult, WalkForwardResult
@@ -55,7 +54,7 @@ def _print_summary(result: WalkForwardResult) -> None:
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
-        from datetime import UTC, datetime, timedelta
+        from datetime import UTC, datetime
 
         from src.optimizer.walk_forward import WalkForwardAnalyzer, WalkForwardConfig
 
