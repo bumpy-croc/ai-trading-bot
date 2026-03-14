@@ -98,26 +98,44 @@ def create_kelly_momentum_strategy(
         {
             "position_sizer": "kelly_criterion",
             "kelly_fraction": kelly_fraction,
+            # Floor at 1% to avoid dust positions; cap at 20% to limit
+            # single-trade exposure even when Kelly suggests higher sizing
             "min_fraction": 0.01,
             "max_fraction": 0.20,
             "stop_loss_pct": base_risk,
             "take_profit_pct": take_profit_pct,
             "dynamic_risk": {
                 "enabled": True,
+                # Tiered drawdown response: 10% mild, 20% moderate, 30% severe
+                # Matches standard institutional risk frameworks for crypto
                 "drawdown_thresholds": [0.10, 0.20, 0.30],
+                # Reduce risk by 20%/40%/60% at each tier — progressive
+                # de-risking preserves some upside while limiting further losses
                 "risk_reduction_factors": [0.8, 0.6, 0.4],
+                # Resume full sizing after 5%/10% recovery from drawdown trough
                 "recovery_thresholds": [0.05, 0.10],
             },
             "partial_operations": {
+                # Take profits at 5%/10%/20% gains — front-loaded exits lock
+                # in early profits while leaving a runner for large moves
                 "exit_targets": [0.05, 0.10, 0.20],
+                # Exit 25%/25%/50% at each target — keep half the position
+                # for the largest target to capture momentum tail
                 "exit_sizes": [0.25, 0.25, 0.50],
+                # Scale in at 2%/4% favorable move to confirm trend direction
                 "scale_in_thresholds": [0.02, 0.04],
+                # Add 30%/20% — decreasing sizes as price extends further
                 "scale_in_sizes": [0.30, 0.20],
                 "max_scale_ins": 2,
             },
             "trailing_stop": {
+                # Activate trailing stop after 4% unrealized gain
                 "activation_threshold": 0.04,
+                # Trail 2% behind peak — tight enough to protect gains,
+                # wide enough to survive normal crypto volatility
                 "trailing_distance_pct": 0.02,
+                # Move stop to breakeven after 6% gain with 1% buffer
+                # to avoid premature stop-out from bid-ask spread noise
                 "breakeven_threshold": 0.06,
                 "breakeven_buffer": 0.01,
             },
