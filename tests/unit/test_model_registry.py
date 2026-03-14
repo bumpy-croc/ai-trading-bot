@@ -67,7 +67,7 @@ def test_select_many_fail_fast(tmp_path: Path, monkeypatch):
 # ---- Cache invalidation tests ----
 
 
-from unittest.mock import MagicMock, call  # noqa: E402, isort:skip
+from unittest.mock import MagicMock, call, patch  # noqa: E402, isort:skip
 
 
 def test_invalidate_cache_maps_structured_name_to_runner(tmp_path: Path, monkeypatch):
@@ -240,3 +240,143 @@ def test_registry_concurrent_select_bundle_thread_safety(tmp_path: Path, monkeyp
     # Verify both symbols were selected
     symbols_selected = set(r["symbol"] for r in results)
     assert symbols_selected == {"BTCUSDT", "ETHUSDT"}
+
+
+# ---- reload_models cache-clearing tests ----
+
+
+def _make_fake_bundle(symbol: str, model_type: str, timeframe: str, version: str):
+    """Create a mock StrategyModel bundle for reload_models tests."""
+    mock_runner = MagicMock()
+    mock_runner.close = MagicMock()
+    return StrategyModel(
+        symbol=symbol,
+        timeframe=timeframe,
+        model_type=model_type,
+        version_id=version,
+        directory=Path("/fake"),
+        metadata={"symbol": symbol},
+        feature_schema=None,
+        metrics=None,
+        runner=mock_runner,
+    )
+
+
+def test_reload_models_clears_cache_on_success(tmp_path: Path, monkeypatch):
+    """Verify cache_manager.clear() is called after a successful model swap."""
+    # Arrange
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+
+    mock_cache_manager = MagicMock()
+    mock_cache_manager.clear.return_value = 3
+    reg = PredictionModelRegistry(cfg, mock_cache_manager)
+
+    # Reset mock after initial _load to isolate reload_models behavior
+    mock_cache_manager.reset_mock()
+
+    # Patch _scan_registry to return a valid bundle so reload doesn't early-return
+    fake_bundle = _make_fake_bundle("BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+    fake_bundles = {("BTCUSDT", "1h", "basic"): fake_bundle}
+    with patch.object(reg, "_scan_registry", return_value=(fake_bundles, {})):
+        # Act
+        reg.reload_models()
+
+    # Assert: cache_manager.clear() is called once after reload
+    mock_cache_manager.clear.assert_called_once()
+
+
+@pytest.mark.fast
+def test_reload_models_warns_when_no_cache_manager(tmp_path: Path, monkeypatch, caplog):
+    """Verify a warning is logged when cache_manager is None during reload."""
+    # Arrange
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+
+    # No cache_manager provided
+    reg = PredictionModelRegistry(cfg, cache_manager=None)
+
+    # Patch _scan_registry to return a valid bundle so reload doesn't early-return
+    fake_bundle = _make_fake_bundle("BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+    fake_bundles = {("BTCUSDT", "1h", "basic"): fake_bundle}
+
+    # Act
+    import logging
+
+    with caplog.at_level(logging.WARNING), patch.object(
+        reg, "_scan_registry", return_value=(fake_bundles, {})
+    ):
+        reg.reload_models()
+
+    # Assert: warning about missing cache_manager is logged
+    assert any("No cache_manager available" in msg for msg in caplog.messages)
+
+
+@pytest.mark.fast
+def test_reload_models_handles_cache_clear_exception(tmp_path: Path, monkeypatch, caplog):
+    """Verify reload_models handles exceptions from cache_manager.clear() gracefully."""
+    # Arrange
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+
+    mock_cache_manager = MagicMock()
+    mock_cache_manager.clear.side_effect = RuntimeError("cache backend unavailable")
+    reg = PredictionModelRegistry(cfg, mock_cache_manager)
+
+    # Reset mock after initial _load
+    mock_cache_manager.reset_mock()
+    mock_cache_manager.clear.side_effect = RuntimeError("cache backend unavailable")
+
+    # Patch _scan_registry to return a valid bundle
+    fake_bundle = _make_fake_bundle("BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+    fake_bundles = {("BTCUSDT", "1h", "basic"): fake_bundle}
+
+    # Act
+    import logging
+
+    with caplog.at_level(logging.WARNING), patch.object(
+        reg, "_scan_registry", return_value=(fake_bundles, {})
+    ):
+        reg.reload_models()
+
+    # Assert: exception is caught and logged, not raised
+    assert any("Failed to clear prediction cache" in msg for msg in caplog.messages)
+
+
+@pytest.mark.fast
+def test_reload_models_cache_clear_returns_none(tmp_path: Path, monkeypatch):
+    """Verify reload_models handles cache_manager.clear() returning None."""
+    # Arrange
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+
+    mock_cache_manager = MagicMock()
+    mock_cache_manager.clear.return_value = None
+    reg = PredictionModelRegistry(cfg, mock_cache_manager)
+
+    # Reset mock after initial _load
+    mock_cache_manager.reset_mock()
+    mock_cache_manager.clear.return_value = None
+
+    # Patch _scan_registry to return a valid bundle
+    fake_bundle = _make_fake_bundle("BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+    fake_bundles = {("BTCUSDT", "1h", "basic"): fake_bundle}
+
+    with patch.object(reg, "_scan_registry", return_value=(fake_bundles, {})):
+        # Act -- should not raise despite None return value
+        reg.reload_models()
+
+    # Assert
+    mock_cache_manager.clear.assert_called_once()

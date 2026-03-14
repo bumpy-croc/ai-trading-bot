@@ -15,6 +15,7 @@ Core approach:
 """
 
 import logging
+import threading
 from typing import Any
 
 import numpy as np
@@ -24,6 +25,9 @@ from .regime_context import RegimeContext, TrendLabel
 from .signal_generator import Signal, SignalDirection, SignalGenerator
 
 logger = logging.getLogger(__name__)
+
+# Filters out decelerating trends to avoid entering during momentum decay
+DECLINING_TREND_MOMENTUM_THRESHOLD = -0.05
 
 
 class AdaptiveTrendSignalGenerator(SignalGenerator):
@@ -102,6 +106,10 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         self._cached_ema: np.ndarray | None = None
         self._cached_ema_length: int = 0
         self._cached_close_snapshot: np.ndarray | None = None
+        # RLock protects the EMA cache from concurrent access. RLock (re-entrant)
+        # allows generate_signal and get_confidence to call _compute_ema_series
+        # without deadlocking if composed in the same call chain.
+        self._ema_cache_lock = threading.RLock()
 
     @property
     def warmup_period(self) -> int:
@@ -214,7 +222,7 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
                 return self._hold_signal(index, "declining_ema", metadata)
 
             # Require non-negative momentum to avoid late-cycle entries
-            if momentum <= -0.05:
+            if momentum <= DECLINING_TREND_MOMENTUM_THRESHOLD:
                 return self._hold_signal(index, "negative_momentum", metadata)
 
             strength = min(1.0, abs(price_vs_ema_pct) * 10)
@@ -273,6 +281,9 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         at a time using the EMA recurrence relation: O(1) per bar instead of
         recomputing the entire series.
 
+        Thread-safe: Acquires ``_ema_cache_lock`` to protect shared cache state
+        from concurrent readers/writers.
+
         Args:
             close: Close price array.
             max_index: Maximum index to compute EMA up to.
@@ -280,48 +291,49 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
         Returns:
             Array of EMA values (length >= max_index + 1).
         """
-        needed_length = max_index + 1
+        with self._ema_cache_lock:
+            needed_length = max_index + 1
 
-        # Validate full input identity against a snapshot to prevent stale EMA
-        # reuse when a new series has the same length/first value.
-        n = len(close)
-        data_changed = (
-            self._cached_close_snapshot is None
-            or close.shape != self._cached_close_snapshot.shape
-            or not np.array_equal(close, self._cached_close_snapshot)
-        )
+            # Validate full input identity against a snapshot to prevent stale EMA
+            # reuse when a new series has the same length/first value.
+            n = len(close)
+            data_changed = (
+                self._cached_close_snapshot is None
+                or close.shape != self._cached_close_snapshot.shape
+                or not np.array_equal(close, self._cached_close_snapshot)
+            )
 
-        if data_changed:
-            self._cached_ema = None
-            self._cached_ema_length = 0
-            self._cached_close_snapshot = close.copy()
+            if data_changed:
+                self._cached_ema = None
+                self._cached_ema_length = 0
+                self._cached_close_snapshot = close.copy()
 
-        if self._cached_ema is not None and self._cached_ema_length >= needed_length:
+            if self._cached_ema is not None and self._cached_ema_length >= needed_length:
+                return self._cached_ema
+
+            alpha = 2.0 / (self.trend_ema_period + 1)
+
+            if self._cached_ema is None or self._cached_ema_length == 0:
+                # Cold start: compute full EMA via pandas (one-time cost),
+                # then pre-allocate buffer to array length to avoid future copies.
+                series = pd.Series(close[:needed_length])
+                ema_values = series.ewm(span=self.trend_ema_period, adjust=False).mean().values
+                buf = np.empty(n)
+                buf[:needed_length] = ema_values
+                self._cached_ema = buf
+                self._cached_ema_length = needed_length
+            else:
+                # Incremental extension: fill new EMA values into the
+                # pre-allocated buffer using the recurrence relation.
+                # O(k) where k = new bars since last call (typically 1).
+                prev_length = self._cached_ema_length
+                prev_ema = float(self._cached_ema[prev_length - 1])
+                for i in range(prev_length, needed_length):
+                    prev_ema = alpha * float(close[i]) + (1 - alpha) * prev_ema
+                    self._cached_ema[i] = prev_ema
+                self._cached_ema_length = needed_length
+
             return self._cached_ema
-
-        alpha = 2.0 / (self.trend_ema_period + 1)
-
-        if self._cached_ema is None or self._cached_ema_length == 0:
-            # Cold start: compute full EMA via pandas (one-time cost),
-            # then pre-allocate buffer to array length to avoid future copies.
-            series = pd.Series(close[:needed_length])
-            ema_values = series.ewm(span=self.trend_ema_period, adjust=False).mean().values
-            buf = np.empty(n)
-            buf[:needed_length] = ema_values
-            self._cached_ema = buf
-            self._cached_ema_length = needed_length
-        else:
-            # Incremental extension: fill new EMA values into the
-            # pre-allocated buffer using the recurrence relation.
-            # O(k) where k = new bars since last call (typically 1).
-            prev_length = self._cached_ema_length
-            prev_ema = float(self._cached_ema[prev_length - 1])
-            for i in range(prev_length, needed_length):
-                prev_ema = alpha * float(close[i]) + (1 - alpha) * prev_ema
-                self._cached_ema[i] = prev_ema
-            self._cached_ema_length = needed_length
-
-        return self._cached_ema
 
     def _count_consecutive_days_above(
         self, close: np.ndarray, ema: np.ndarray, index: int, buffer_pct: float = 0.0

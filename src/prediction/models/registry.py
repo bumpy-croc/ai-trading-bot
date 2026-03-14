@@ -363,6 +363,23 @@ class PredictionModelRegistry:
             self._bundles = new_bundles
             self._production_index = new_production_index
 
+        # Invalidate prediction caches after model swap to prevent stale
+        # features from being served with the new model weights.
+        if self.cache_manager:
+            try:
+                cleared = self.cache_manager.clear()
+                logger.info(
+                    "Cleared %d prediction cache entries after model reload",
+                    cleared or 0,
+                )
+            except Exception as e:
+                logger.warning("Failed to clear prediction cache after reload: %s", e)
+        else:
+            logger.warning(
+                "No cache_manager available — external caches should be cleared "
+                "after model reload to avoid stale predictions"
+            )
+
         # Close old runners outside lock to avoid blocking other threads
         for bundle in old_bundles.values():
             if hasattr(bundle.runner, "close"):

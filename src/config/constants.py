@@ -13,6 +13,11 @@ DEFAULT_MAX_PREDICTION_LATENCY = 0.1  # seconds
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"
 DEFAULT_ENABLE_SENTIMENT = False  # Disabled by default
 DEFAULT_ENABLE_MARKET_MICROSTRUCTURE = False  # MVP: disabled
+DEFAULT_ENABLE_ONCHAIN_FEATURES = False  # On-chain features disabled by default
+DEFAULT_ENABLE_MACRO_FEATURES = False  # Macro economic features disabled by default
+DEFAULT_ENABLE_ENHANCED_SENTIMENT = False  # Enhanced sentiment disabled by default
+DEFAULT_ONCHAIN_CACHE_TTL = 300  # 5 minutes cache for on-chain data
+DEFAULT_MACRO_CACHE_TTL = 3600  # 1 hour cache for macro data
 DEFAULT_FEATURE_CACHE_TTL = 3600  # 1 hour
 DEFAULT_MODEL_CACHE_TTL = 600  # seconds
 DEFAULT_CONFIDENCE_SCALE_FACTOR = 10.0  # Scale factor for confidence calculation
@@ -298,3 +303,9 @@ DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM = 8  # Scale factor for momentum-based 
 DEFAULT_MAX_LEVERAGE = 3.0  # Maximum leverage multiplier (safety cap)
 DEFAULT_LEVERAGE_DECAY_RATE = 0.15  # Exponential decay rate for smooth transitions
 DEFAULT_MIN_REGIME_BARS = 5  # Minimum bars in regime before conviction scaling
+
+# TFT (Temporal Fusion Transformer) Model Defaults
+DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
+DEFAULT_TFT_HIDDEN_SIZE = 64  # Hidden dimension for GRN and attention layers
+DEFAULT_TFT_DROPOUT = 0.1  # Dropout rate for regularization
+DEFAULT_TFT_NUM_LSTM_LAYERS = 1  # Number of stacked LSTM encoder layers
