@@ -142,8 +142,8 @@ _HYPER_LEVERAGE_MAP = {
 def create_hyper_growth_strategy(
     name: str = "HyperGrowth",
     signal_source: str = "ml",
-    risk_fraction: float = 0.25,
-    base_fraction: float = 0.25,
+    risk_fraction: float = 0.15,
+    base_fraction: float = 0.15,
     min_confidence: float = 0.10,
     max_leverage: float = 3.0,
     leverage_decay_rate: float = 0.20,
