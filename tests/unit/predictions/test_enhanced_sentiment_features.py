@@ -39,7 +39,7 @@ class TestEnhancedSentimentExtractor:
 
     @patch(
         "src.prediction.features.enhanced_sentiment.FearGreedProvider",
-        side_effect=Exception("Network error"),
+        side_effect=ConnectionError("Network error"),
     )
     def test_enabled_fallback_on_provider_failure(self, mock_provider, sample_ohlcv):
         """Falls back to price-derived proxy when FearGreedProvider fails."""
@@ -56,7 +56,7 @@ class TestEnhancedSentimentExtractor:
         # Patch provider to avoid network calls
         with patch(
             "src.prediction.features.enhanced_sentiment.FearGreedProvider",
-            side_effect=Exception("no network"),
+            side_effect=ConnectionError("no network"),
         ):
             extractor = EnhancedSentimentExtractor(enabled=True)
             result = extractor.extract(sample_ohlcv)
@@ -74,7 +74,7 @@ class TestEnhancedSentimentExtractor:
         """All features are clipped to [-1, 1] range."""
         with patch(
             "src.prediction.features.enhanced_sentiment.FearGreedProvider",
-            side_effect=Exception("no network"),
+            side_effect=ConnectionError("no network"),
         ):
             extractor = EnhancedSentimentExtractor(enabled=True)
             result = extractor.extract(sample_ohlcv)
@@ -87,7 +87,7 @@ class TestEnhancedSentimentExtractor:
         """Features contain no NaN or infinite values."""
         with patch(
             "src.prediction.features.enhanced_sentiment.FearGreedProvider",
-            side_effect=Exception("no network"),
+            side_effect=ConnectionError("no network"),
         ):
             extractor = EnhancedSentimentExtractor(enabled=True)
             result = extractor.extract(sample_ohlcv)
@@ -100,7 +100,7 @@ class TestEnhancedSentimentExtractor:
         """Composite sentiment is a weighted combination of components."""
         with patch(
             "src.prediction.features.enhanced_sentiment.FearGreedProvider",
-            side_effect=Exception("no network"),
+            side_effect=ConnectionError("no network"),
         ):
             extractor = EnhancedSentimentExtractor(enabled=True)
             result = extractor.extract(sample_ohlcv)
