@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from src.config.constants import (
     DEFAULT_LEVERAGE_DECAY_RATE,
@@ -84,10 +84,10 @@ class LeverageManager:
         min_regime_bars: int = DEFAULT_MIN_REGIME_BARS,
         leverage_map: dict[tuple[TrendLabel, VolLabel], float] | None = None,
     ) -> None:
-        if max_leverage <= 0:
-            raise ValueError(f"max_leverage must be positive, got {max_leverage}")
-        if not 0.0 < decay_rate <= 1.0:
-            raise ValueError(f"decay_rate must be in (0, 1], got {decay_rate}")
+        if not math.isfinite(max_leverage) or max_leverage <= 0:
+            raise ValueError(f"max_leverage must be finite and positive, got {max_leverage}")
+        if not math.isfinite(decay_rate) or not 0.0 < decay_rate <= 1.0:
+            raise ValueError(f"decay_rate must be finite and in (0, 1], got {decay_rate}")
         if min_regime_bars < 0:
             raise ValueError(
                 f"min_regime_bars must be non-negative, got {min_regime_bars}"
@@ -99,8 +99,16 @@ class LeverageManager:
         self.leverage_map = dict(leverage_map or DEFAULT_LEVERAGE_MAP)
         self._state = LeverageState()
 
-        # Clamp all leverage map values to max_leverage
+        # Validate and clamp leverage map values
         for key, value in self.leverage_map.items():
+            if value < 0.0:
+                raise ValueError(
+                    f"leverage_map values must be non-negative, got {value} for {key}"
+                )
+            if not math.isfinite(value):
+                raise ValueError(
+                    f"leverage_map values must be finite, got {value} for {key}"
+                )
             if value > self.max_leverage:
                 self.leverage_map[key] = self.max_leverage
 

@@ -54,16 +54,22 @@ class TestLeverageManagerInit:
         assert mgr.min_regime_bars == 10
 
     def test_invalid_max_leverage_raises(self) -> None:
-        with pytest.raises(ValueError, match="max_leverage must be positive"):
+        with pytest.raises(ValueError, match="max_leverage must be finite and positive"):
             LeverageManager(max_leverage=0)
-        with pytest.raises(ValueError, match="max_leverage must be positive"):
+        with pytest.raises(ValueError, match="max_leverage must be finite and positive"):
             LeverageManager(max_leverage=-1)
+        with pytest.raises(ValueError, match="max_leverage must be finite and positive"):
+            LeverageManager(max_leverage=float("inf"))
+        with pytest.raises(ValueError, match="max_leverage must be finite and positive"):
+            LeverageManager(max_leverage=float("nan"))
 
     def test_invalid_decay_rate_raises(self) -> None:
-        with pytest.raises(ValueError, match="decay_rate must be in"):
+        with pytest.raises(ValueError, match="decay_rate must be finite and in"):
             LeverageManager(decay_rate=0.0)
-        with pytest.raises(ValueError, match="decay_rate must be in"):
+        with pytest.raises(ValueError, match="decay_rate must be finite and in"):
             LeverageManager(decay_rate=1.5)
+        with pytest.raises(ValueError, match="decay_rate must be finite and in"):
+            LeverageManager(decay_rate=float("nan"))
 
     def test_invalid_min_regime_bars_raises(self) -> None:
         with pytest.raises(ValueError, match="min_regime_bars must be non-negative"):
@@ -74,6 +80,18 @@ class TestLeverageManagerInit:
         mgr = LeverageManager(max_leverage=1.5)
         for value in mgr.leverage_map.values():
             assert value <= 1.5
+
+    def test_negative_leverage_map_value_raises(self) -> None:
+        """Negative leverage map values should be rejected at init."""
+        custom = {(TrendLabel.TREND_UP, VolLabel.LOW): -1.0}
+        with pytest.raises(ValueError, match="leverage_map values must be non-negative"):
+            LeverageManager(leverage_map=custom)
+
+    def test_non_finite_leverage_map_value_raises(self) -> None:
+        """Non-finite leverage map values should be rejected at init."""
+        custom = {(TrendLabel.TREND_UP, VolLabel.LOW): float("inf")}
+        with pytest.raises(ValueError, match="leverage_map values must be finite"):
+            LeverageManager(leverage_map=custom)
 
     def test_custom_leverage_map(self) -> None:
         custom = {

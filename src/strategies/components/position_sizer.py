@@ -772,7 +772,13 @@ class LeveragedPositionSizer(PositionSizer):
             return base_size
 
         leverage = self.leverage_manager.get_leverage_multiplier(regime)
+        if leverage <= 0:
+            return 0.0
         leveraged_size = base_size * leverage
+
+        # Guard against non-finite results from floating point edge cases
+        if not np.isfinite(leveraged_size):
+            return 0.0
 
         # Cap at max_leveraged_fraction of balance
         max_size = balance * self.max_leveraged_fraction
