@@ -94,6 +94,11 @@ class FeatureFusionPipeline:
         if data is None or data.empty:
             raise ValueError("Input data is empty or None")
 
+        required_columns = ["open", "high", "low", "close", "volume"]
+        missing = [col for col in required_columns if col not in data.columns]
+        if missing:
+            raise ValueError(f"Input data missing required OHLCV columns: {missing}")
+
         result = data.copy()
 
         for name, extractor in self.extractors.items():

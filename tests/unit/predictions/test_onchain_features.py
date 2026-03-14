@@ -126,3 +126,55 @@ class TestOnChainFeatureExtractor:
         extractor.extract(sample_ohlcv)
 
         pd.testing.assert_frame_equal(sample_ohlcv, original)
+
+    def test_zero_price_raises_error(self):
+        """Zero prices are rejected by strict validation."""
+        extractor = OnChainFeatureExtractor(enabled=True)
+        df = pd.DataFrame({
+            "open": [100.0, 200.0],
+            "high": [110.0, 210.0],
+            "low": [90.0, 190.0],
+            "close": [0.0, 200.0],
+            "volume": [1000.0, 2000.0],
+        })
+        with pytest.raises(ValueError, match="prices must be positive"):
+            extractor.extract(df)
+
+    def test_negative_volume_raises_error(self):
+        """Negative volume is rejected by strict validation."""
+        extractor = OnChainFeatureExtractor(enabled=True)
+        df = pd.DataFrame({
+            "open": [100.0, 200.0],
+            "high": [110.0, 210.0],
+            "low": [90.0, 190.0],
+            "close": [105.0, 205.0],
+            "volume": [1000.0, -500.0],
+        })
+        with pytest.raises(ValueError, match="prices must be positive"):
+            extractor.extract(df)
+
+    def test_nan_price_raises_error(self):
+        """NaN prices are rejected by strict validation."""
+        extractor = OnChainFeatureExtractor(enabled=True)
+        df = pd.DataFrame({
+            "open": [100.0, float("nan")],
+            "high": [110.0, 210.0],
+            "low": [90.0, 190.0],
+            "close": [105.0, 205.0],
+            "volume": [1000.0, 2000.0],
+        })
+        with pytest.raises(ValueError, match="prices must be positive"):
+            extractor.extract(df)
+
+    def test_inf_price_raises_error(self):
+        """Infinite prices are rejected by strict validation."""
+        extractor = OnChainFeatureExtractor(enabled=True)
+        df = pd.DataFrame({
+            "open": [100.0, float("inf")],
+            "high": [110.0, 210.0],
+            "low": [90.0, 190.0],
+            "close": [105.0, 205.0],
+            "volume": [1000.0, 2000.0],
+        })
+        with pytest.raises(ValueError, match="prices must be positive"):
+            extractor.extract(df)

@@ -63,6 +63,14 @@ class OnChainFeatureExtractor(FeatureExtractor):
         if not self.validate_input(data):
             raise ValueError("Invalid input data: missing required OHLCV columns")
 
+        # Strict validation rejects non-positive prices, negative volume,
+        # and non-finite values that would produce misleading [-1, 1] signals.
+        if not self.validate_input(data, strict=True):
+            raise ValueError(
+                "Invalid input data: prices must be positive and finite, "
+                "volume must be non-negative"
+            )
+
         df = data.copy()
 
         if not self.enabled:

@@ -185,3 +185,19 @@ class TestFeatureFusionPipeline:
         config = pipeline.get_config()
 
         assert config["extractors"]["onchain"]["cache_ttl"] == 999
+
+    def test_missing_ohlcv_columns_raises_error(self):
+        """Input missing required OHLCV columns raises ValueError."""
+        pipeline = FeatureFusionPipeline(enable_onchain=True)
+        bad_df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
+
+        with pytest.raises(ValueError, match="missing required OHLCV columns"):
+            pipeline.transform(bad_df)
+
+    def test_missing_ohlcv_columns_no_extractors_raises_error(self):
+        """Input missing OHLCV columns is rejected even with no extractors enabled."""
+        pipeline = FeatureFusionPipeline()
+        bad_df = pd.DataFrame({"x": [1, 2, 3]})
+
+        with pytest.raises(ValueError, match="missing required OHLCV columns"):
+            pipeline.transform(bad_df)

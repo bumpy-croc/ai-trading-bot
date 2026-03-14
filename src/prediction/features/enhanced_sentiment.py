@@ -58,6 +58,14 @@ class EnhancedSentimentExtractor(FeatureExtractor):
         if not self.validate_input(data):
             raise ValueError("Invalid input data: missing required OHLCV columns")
 
+        # Strict validation rejects non-positive prices, negative volume,
+        # and non-finite values that would produce misleading [-1, 1] signals.
+        if not self.validate_input(data, strict=True):
+            raise ValueError(
+                "Invalid input data: prices must be positive and finite, "
+                "volume must be non-negative"
+            )
+
         df = data.copy()
 
         if not self.enabled:
@@ -134,7 +142,7 @@ class EnhancedSentimentExtractor(FeatureExtractor):
             if aligned["sentiment_primary"].isna().all():
                 return None
             return aligned["sentiment_primary"].fillna(0.5)
-        except (KeyError, TypeError) as e:
+        except (KeyError, TypeError, ValueError) as e:
             logger.warning("Failed to align fear/greed data: %s", e)
             return None
 
