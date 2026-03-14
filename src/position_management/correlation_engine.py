@@ -166,8 +166,13 @@ class CorrelationEngine:
 
         thr = float(self.config.correlation_threshold)
         for i, a in enumerate(symbols):
+            # Guard against symbol missing from correlation matrix columns
+            if a not in corr.columns:
+                continue
             for j in range(i + 1, len(symbols)):
                 b = symbols[j]
+                if b not in corr.columns:
+                    continue
                 try:
                     val = corr.at[a, b]
                     if pd.notna(val) and val >= thr:

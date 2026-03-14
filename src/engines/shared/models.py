@@ -237,11 +237,19 @@ class BasePosition:
         return str(self.side)
 
     def is_long(self) -> bool:
-        """Check if this is a long position."""
+        """Check if this is a long position.
+
+        No side_str fallback is needed because __post_init__ normalizes
+        string sides to PositionSide enum via PositionSide.from_string().
+        """
         return self.side == PositionSide.LONG
 
     def is_short(self) -> bool:
-        """Check if this is a short position."""
+        """Check if this is a short position.
+
+        No side_str fallback is needed because __post_init__ normalizes
+        string sides to PositionSide enum via PositionSide.from_string().
+        """
         return self.side == PositionSide.SHORT
 
 
@@ -313,11 +321,19 @@ class BaseTrade:
         return self.pnl > 0
 
     def is_long(self) -> bool:
-        """Check if this was a long trade."""
+        """Check if this was a long trade.
+
+        No side_str fallback is needed because __post_init__ normalizes
+        string sides to PositionSide enum via PositionSide.from_string().
+        """
         return self.side == PositionSide.LONG
 
     def is_short(self) -> bool:
-        """Check if this was a short trade."""
+        """Check if this was a short trade.
+
+        No side_str fallback is needed because __post_init__ normalizes
+        string sides to PositionSide enum via PositionSide.from_string().
+        """
         return self.side == PositionSide.SHORT
 
     def duration_seconds(self) -> float:
