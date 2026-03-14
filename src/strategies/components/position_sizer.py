@@ -498,8 +498,9 @@ class KellySizer(PositionSizer):
         return params
 
 
-# Minimum multiplier for signal confidence/strength adjustments.
-# Prevents near-zero sizing from low-confidence or low-strength signals.
+# Minimum signal adjustment floor - prevents Kelly fraction from being scaled
+# below 30% of its computed value, maintaining meaningful position sizes even
+# with weak signals.
 MIN_SIGNAL_ADJUSTMENT = 0.3
 
 
