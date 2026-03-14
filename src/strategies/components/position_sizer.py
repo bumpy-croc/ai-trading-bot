@@ -618,6 +618,9 @@ class KellyCriterionSizer(PositionSizer):
         """
         if loss_risk_pct <= 0:
             return  # Cannot compute reward-to-risk without valid risk
+        # Guard against NaN/Infinity corrupting rolling statistics
+        if not (np.isfinite(profit_pct) and np.isfinite(loss_risk_pct)):
+            return
         with self._trades_lock:
             self._trades.append((win, abs(profit_pct), loss_risk_pct))
 
@@ -771,9 +774,10 @@ class KellyCriterionSizer(PositionSizer):
         if position_size <= 0:
             return 0.0
 
-        # Apply bounds checking
+        # Apply bounds checking with min_fraction=0.0 so that near-zero Kelly
+        # recommendations are not inflated to the default 0.1% floor
         return self.apply_bounds_checking(
-            position_size, balance, max_fraction=self.max_fraction
+            position_size, balance, min_fraction=0.0, max_fraction=self.max_fraction
         )
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:

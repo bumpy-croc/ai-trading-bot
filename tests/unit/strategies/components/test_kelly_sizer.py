@@ -512,6 +512,20 @@ class TestRingBuffer:
         sizer.record_trade(win=True, profit_pct=0.03, loss_risk_pct=0.0)
         assert sizer.trade_count == 0
 
+    def test_nan_values_ignored(self):
+        """Test trades with NaN profit or risk are silently dropped."""
+        sizer = KellyCriterionSizer(min_trades=5, lookback_trades=10)
+        sizer.record_trade(win=True, profit_pct=float("nan"), loss_risk_pct=0.02)
+        sizer.record_trade(win=True, profit_pct=0.03, loss_risk_pct=float("nan"))
+        assert sizer.trade_count == 0
+
+    def test_infinity_values_ignored(self):
+        """Test trades with Infinity profit or risk are silently dropped."""
+        sizer = KellyCriterionSizer(min_trades=5, lookback_trades=10)
+        sizer.record_trade(win=True, profit_pct=float("inf"), loss_risk_pct=0.02)
+        sizer.record_trade(win=True, profit_pct=0.03, loss_risk_pct=float("inf"))
+        assert sizer.trade_count == 0
+
     def test_has_sufficient_history_threshold(self):
         """Test has_sufficient_history flag at exact threshold."""
         sizer = KellyCriterionSizer(min_trades=5, lookback_trades=10)
