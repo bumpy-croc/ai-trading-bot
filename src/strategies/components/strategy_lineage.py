@@ -522,9 +522,12 @@ class StrategyLineageTracker:
             return self._lineage_cache[strategy_id]
 
         # Get ancestors (parents, grandparents, etc.)
+        # Track visited IDs to guard against cycles in the parent chain
         ancestors = []
+        visited_ancestors: set[str] = {strategy_id}
         current_id = self.strategies[strategy_id]["parent_id"]
-        while current_id and current_id in self.strategies:
+        while current_id and current_id in self.strategies and current_id not in visited_ancestors:
+            visited_ancestors.add(current_id)
             ancestors.append(
                 {
                     "id": current_id,

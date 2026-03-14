@@ -342,9 +342,13 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             ),
             commission=0.0,
             commission_asset="",
-            create_time=datetime.fromisoformat(od.get("created_at")),
+            create_time=(
+                datetime.fromisoformat(od["created_at"])
+                if od.get("created_at")
+                else datetime.now(UTC)
+            ),
             update_time=(
-                datetime.fromisoformat(od.get("done_at"))
+                datetime.fromisoformat(od["done_at"])
                 if od.get("done_at")
                 else datetime.now(UTC)
             ),

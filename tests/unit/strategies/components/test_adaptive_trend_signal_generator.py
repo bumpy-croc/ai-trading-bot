@@ -241,10 +241,14 @@ class TestSignalGeneration:
         )
 
         signal = gen.generate_signal(df, index=185)
-        # Should not be BUY with negative momentum
+        # With 50 bars of decline after 150 bars of rise, momentum over 30 bars
+        # should be negative. If the generator still produced BUY, verify that
+        # momentum was above the -0.05 filter threshold (meaning the filter
+        # correctly allowed it through).
         if signal.direction == SignalDirection.BUY:
-            # If it did buy, the momentum filter may not have triggered
-            pass  # This is acceptable if momentum > -0.05
+            assert signal.metadata.get("momentum", 0) > -0.05, (
+                "BUY signal generated despite momentum below -0.05 threshold"
+            )
         else:
             assert signal.direction in (SignalDirection.HOLD, SignalDirection.SELL)
 
