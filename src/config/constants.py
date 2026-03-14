@@ -299,6 +299,16 @@ DEFAULT_STRATEGY_BASE_FRACTION_SMALL = 0.04  # Smaller base fraction for conserv
 # Confidence Scale Factors
 DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM = 8  # Scale factor for momentum-based confidence
 
+# Kelly Criterion Position Sizing
+DEFAULT_KELLY_FRACTION = 0.5  # Half-Kelly balances growth against drawdown risk
+DEFAULT_KELLY_MIN_TRADES = 30  # Minimum trades before Kelly activates (cold start threshold)
+DEFAULT_KELLY_LOOKBACK_TRADES = 100  # Rolling window size for trade statistics
+DEFAULT_KELLY_FALLBACK_FRACTION = 0.02  # Conservative 2% fixed sizing during cold start
+DEFAULT_KELLY_EXPECTED_WIN_RATE = 0.55  # Prior from backtested momentum strategies
+DEFAULT_KELLY_EXPECTED_REWARD_RISK = 1.5  # Prior reward:risk from backtested results
+DEFAULT_KELLY_OVERFITTING_THRESHOLD = 0.15  # Flag >15% deviation from backtest priors
+DEFAULT_KELLY_MAX_FRACTION = 0.20  # Cap single-trade exposure at 20% of balance
+
 # Leverage Manager Defaults
 DEFAULT_MAX_LEVERAGE = 3.0  # Maximum leverage multiplier (safety cap)
 DEFAULT_LEVERAGE_DECAY_RATE = 0.15  # Exponential decay rate for smooth transitions

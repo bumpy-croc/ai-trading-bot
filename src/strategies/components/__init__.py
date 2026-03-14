@@ -27,6 +27,7 @@ from .policies import (
 from .position_sizer import (
     ConfidenceWeightedSizer,
     FixedFractionSizer,
+    KellyCriterionSizer,
     KellySizer,
     LeveragedPositionSizer,
     PositionSizer,
@@ -131,6 +132,7 @@ __all__ = [
     # Position sizers
     "FixedFractionSizer",
     "ConfidenceWeightedSizer",
+    "KellyCriterionSizer",
     "KellySizer",
     "LeveragedPositionSizer",
     "RegimeAdaptiveSizer",
