@@ -11,8 +11,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import Enum
-from functools import total_ordering
+from enum import Enum, IntEnum
 from typing import Any
 
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
@@ -26,20 +25,18 @@ from .strategy_switcher import (
 )
 
 
-@total_ordering
-class EmergencyLevel(Enum):
-    """Emergency severity levels"""
+class EmergencyLevel(IntEnum):
+    """Emergency severity levels.
+
+    IntEnum provides natural ordering via integer comparison, eliminating
+    the need for @total_ordering and a custom __lt__.
+    """
 
     NONE = 0
     LOW = 1
     MEDIUM = 2
     HIGH = 3
     CRITICAL = 4
-
-    def __lt__(self, other):
-        if self.__class__ is other.__class__:
-            return self.value < other.value
-        return NotImplemented
 
 
 class ConservativeMode(Enum):
