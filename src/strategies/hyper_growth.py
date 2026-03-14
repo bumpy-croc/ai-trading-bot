@@ -233,6 +233,11 @@ def create_hyper_growth_strategy(
     strategy.base_position_size = base_fraction
     strategy.take_profit_pct = take_profit_pct
 
+    # Hold positions through signal flips — only exit on SL/TP/trailing stop.
+    # ML signals flip direction every bar, but the trend persists for days.
+    # Without this, positions are exited after 1 bar with 0.03% P&L.
+    strategy._extra_metadata = {"ignore_signal_reversal": True}
+
     # Engine-level risk overrides
     strategy.set_risk_overrides(
         {
