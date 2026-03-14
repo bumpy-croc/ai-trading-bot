@@ -15,9 +15,14 @@ from typing import TYPE_CHECKING, Any, Optional
 import numpy as np
 
 from src.config.constants import (
+    DEFAULT_KELLY_EXPECTED_REWARD_RISK,
+    DEFAULT_KELLY_EXPECTED_WIN_RATE,
+    DEFAULT_KELLY_FALLBACK_FRACTION,
     DEFAULT_KELLY_FRACTION,
     DEFAULT_KELLY_LOOKBACK_TRADES,
+    DEFAULT_KELLY_MAX_FRACTION,
     DEFAULT_KELLY_MIN_TRADES,
+    DEFAULT_KELLY_OVERFITTING_THRESHOLD,
 )
 from src.utils.bounds import clamp_position_size, validate_non_negative, validate_positive
 
@@ -520,11 +525,11 @@ class KellyCriterionSizer(PositionSizer):
         kelly_fraction: float = DEFAULT_KELLY_FRACTION,
         min_trades: int = DEFAULT_KELLY_MIN_TRADES,
         lookback_trades: int = DEFAULT_KELLY_LOOKBACK_TRADES,
-        fallback_fraction: float = 0.02,
-        expected_win_rate: float = 0.55,
-        expected_reward_risk: float = 1.5,
-        overfitting_threshold: float = 0.15,
-        max_fraction: float = 0.20,
+        fallback_fraction: float = DEFAULT_KELLY_FALLBACK_FRACTION,
+        expected_win_rate: float = DEFAULT_KELLY_EXPECTED_WIN_RATE,
+        expected_reward_risk: float = DEFAULT_KELLY_EXPECTED_REWARD_RISK,
+        overfitting_threshold: float = DEFAULT_KELLY_OVERFITTING_THRESHOLD,
+        max_fraction: float = DEFAULT_KELLY_MAX_FRACTION,
     ):
         """
         Initialize Kelly Criterion sizer.
@@ -620,8 +625,7 @@ class KellyCriterionSizer(PositionSizer):
         """
         Compute live win rate and average reward-to-risk from the ring buffer.
 
-        Computes b = mean(win_amounts) / mean(loss_amounts) to include loss
-        magnitude in the reward-to-risk ratio.
+        Takes a snapshot under lock then delegates to _compute_statistics_from.
 
         Returns:
             Tuple of (win_rate, avg_reward_risk). Falls back to expected values
@@ -629,7 +633,24 @@ class KellyCriterionSizer(PositionSizer):
         """
         with self._trades_lock:
             trades_snapshot = list(self._trades)
+        return self._compute_statistics_from(trades_snapshot)
 
+    def _compute_statistics_from(
+        self, trades_snapshot: list[tuple[bool, float, float]]
+    ) -> tuple[float, float]:
+        """
+        Compute win rate and average reward-to-risk from a pre-taken snapshot.
+
+        Computes b = mean(win_amounts) / mean(loss_amounts) to include loss
+        magnitude in the reward-to-risk ratio.
+
+        Args:
+            trades_snapshot: List of (win, profit_pct, loss_risk_pct) tuples.
+
+        Returns:
+            Tuple of (win_rate, avg_reward_risk). Falls back to expected values
+            when the snapshot is empty.
+        """
         if not trades_snapshot:
             return self.expected_win_rate, self.expected_reward_risk
 
@@ -711,9 +732,14 @@ class KellyCriterionSizer(PositionSizer):
         if risk_amount <= 0:
             return 0.0
 
-        # Compute base fraction
-        if self.has_sufficient_history:
-            win_rate, avg_rr = self._compute_statistics()
+        # Snapshot trades under lock to avoid TOCTOU race between
+        # has_sufficient_history check and _compute_statistics
+        with self._trades_lock:
+            trades_snapshot = list(self._trades)
+            sufficient = len(trades_snapshot) >= self.min_trades
+
+        if sufficient:
+            win_rate, avg_rr = self._compute_statistics_from(trades_snapshot)
             kelly_pct = self._kelly_percentage(win_rate, avg_rr)
             base_fraction = kelly_pct * self.kelly_fraction
 
