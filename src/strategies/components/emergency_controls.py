@@ -24,6 +24,11 @@ from .strategy_switcher import (
     execute_with_timeout,
 )
 
+# Timeout for user-provided alert/approval callbacks. Set to 10 seconds to allow
+# reasonable processing (e.g., HTTP webhooks) while preventing a single slow
+# callback from blocking emergency control flow indefinitely.
+_CALLBACK_TIMEOUT_SECONDS = 10
+
 
 class EmergencyLevel(IntEnum):
     """Emergency severity levels.
@@ -351,8 +356,8 @@ class EmergencyControls:
             for i, callback in enumerate(self.approval_callbacks):
                 try:
                     execute_with_timeout(
-                        callback, 10, approval_request
-                    )  # 10 second timeout for approval callbacks
+                        callback, _CALLBACK_TIMEOUT_SECONDS, approval_request
+                    )
                 except ExecutionTimeoutError as error:
                     self.logger.warning("Approval callback #%d timed out: %s", i, error)
                 except Exception:
@@ -671,7 +676,7 @@ class EmergencyControls:
         # Notify callbacks
         for i, callback in enumerate(self.alert_callbacks):
             try:
-                execute_with_timeout(callback, 10, alert)  # 10 second timeout for alert callbacks
+                execute_with_timeout(callback, _CALLBACK_TIMEOUT_SECONDS, alert)
             except ExecutionTimeoutError as error:
                 self.logger.warning("Alert callback #%d timed out: %s", i, error)
             except Exception:

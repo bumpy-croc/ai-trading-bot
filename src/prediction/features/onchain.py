@@ -5,7 +5,6 @@ Extracts blockchain-derived features for crypto market analysis.
 Uses simulated data with clear interfaces for real API integration later.
 """
 
-import hashlib
 import logging
 
 import numpy as np

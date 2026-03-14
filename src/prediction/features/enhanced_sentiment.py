@@ -102,7 +102,7 @@ class EnhancedSentimentExtractor(FeatureExtractor):
         if self._provider is None:
             try:
                 self._provider = FearGreedProvider()
-            except Exception as e:
+            except (ImportError, OSError, ConnectionError) as e:
                 logger.warning("FearGreedProvider init failed: %s", e)
                 return None
 
@@ -134,7 +134,7 @@ class EnhancedSentimentExtractor(FeatureExtractor):
             if aligned["sentiment_primary"].isna().all():
                 return None
             return aligned["sentiment_primary"].fillna(0.5)
-        except Exception as e:
+        except (KeyError, TypeError) as e:
             logger.warning("Failed to align fear/greed data: %s", e)
             return None
 

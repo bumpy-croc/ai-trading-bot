@@ -22,6 +22,7 @@ def sample_ohlcv():
     })
 
 
+@pytest.mark.fast
 class TestOnChainFeatureExtractor:
     """Tests for OnChainFeatureExtractor."""
 

@@ -24,6 +24,7 @@ def sample_ohlcv():
     })
 
 
+@pytest.mark.fast
 class TestFeatureFusionPipeline:
     """Tests for FeatureFusionPipeline."""
 

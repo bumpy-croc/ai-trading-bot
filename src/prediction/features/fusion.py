@@ -7,6 +7,7 @@ unified feature matrix for model input.
 
 import logging
 import time
+from collections import deque
 from typing import Any
 
 import pandas as pd
@@ -101,7 +102,7 @@ class FeatureFusionPipeline:
             elapsed = time.time() - start
 
             if name not in self.stats["extraction_times"]:
-                self.stats["extraction_times"][name] = []
+                self.stats["extraction_times"][name] = deque(maxlen=1000)
             self.stats["extraction_times"][name].append(elapsed)
 
         self.stats["total_transforms"] += 1
