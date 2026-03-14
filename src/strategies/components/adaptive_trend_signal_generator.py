@@ -213,7 +213,9 @@ class AdaptiveTrendSignalGenerator(SignalGenerator):
             if ema_slope < 0:
                 return self._hold_signal(index, "declining_ema", metadata)
 
-            # Require non-negative momentum to avoid late-cycle entries
+            # Require non-negative momentum to avoid late-cycle entries.
+            # Threshold of -5% filters out decelerating trends where price is
+            # still above EMA but has lost upward momentum.
             if momentum <= -0.05:
                 return self._hold_signal(index, "negative_momentum", metadata)
 
