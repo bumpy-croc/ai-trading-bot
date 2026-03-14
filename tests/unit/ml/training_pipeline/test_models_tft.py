@@ -237,6 +237,27 @@ class TestCreateTFTModel:
         with pytest.raises(ValueError, match="num_lstm_layers must be positive"):
             create_tft_model(input_shape, num_lstm_layers=0)
 
+    def test_invalid_learning_rate(self, input_shape):
+        """Raise ValueError for non-positive learning_rate."""
+        from src.ml.training_pipeline.models_tft import create_tft_model
+
+        with pytest.raises(ValueError, match="learning_rate must be positive"):
+            create_tft_model(input_shape, learning_rate=0)
+
+    def test_invalid_learning_rate_negative(self, input_shape):
+        """Raise ValueError for negative learning_rate."""
+        from src.ml.training_pipeline.models_tft import create_tft_model
+
+        with pytest.raises(ValueError, match="learning_rate must be positive"):
+            create_tft_model(input_shape, learning_rate=-0.001)
+
+    def test_invalid_sequence_length(self):
+        """Raise ValueError for non-positive sequence_length."""
+        from src.ml.training_pipeline.models_tft import create_tft_model
+
+        with pytest.raises(ValueError, match="sequence_length must be positive"):
+            create_tft_model((0, 10))
+
     def test_model_is_compiled(self, input_shape):
         """Model is compiled with optimizer and loss."""
         from src.ml.training_pipeline.models_tft import create_tft_model

@@ -89,6 +89,8 @@ class GatedResidualNetwork(layers.Layer):
         self.dense_skip = None
         self.dropout_layer = None
         self.layer_norm = None
+        self.multiply = None
+        self.add = None
 
     def build(self, input_shape: Any) -> None:
         """Build GRN layers based on input shape."""
@@ -112,6 +114,8 @@ class GatedResidualNetwork(layers.Layer):
             self.dense_skip = None
 
         self.layer_norm = layers.LayerNormalization(name="grn_layer_norm")
+        self.multiply = layers.Multiply(name="grn_glu_gate")
+        self.add = layers.Add(name="grn_residual_add")
 
         super().build(input_shape)
 
@@ -132,7 +136,7 @@ class GatedResidualNetwork(layers.Layer):
         # GLU gate: element-wise product of linear and sigmoid paths
         gate_linear = self.dense_gate_linear(hidden)
         gate_sigmoid = self.dense_gate_sigmoid(hidden)
-        gated = layers.Multiply()([gate_linear, gate_sigmoid])
+        gated = self.multiply([gate_linear, gate_sigmoid])
 
         # Residual connection
         if self.dense_skip is not None:
@@ -140,7 +144,7 @@ class GatedResidualNetwork(layers.Layer):
         else:
             residual = inputs
 
-        output = layers.Add()([gated, residual])
+        output = self.add([gated, residual])
         output = self.layer_norm(output)
 
         return output
@@ -303,6 +307,7 @@ class TemporalFusionDecoder(layers.Layer):
         self.attention_dropout = None
         self.attention_norm = None
         self.post_attention_grn = None
+        self.residual_add = None
 
     def build(self, input_shape: Any) -> None:
         """Build decoder layers."""
@@ -319,6 +324,7 @@ class TemporalFusionDecoder(layers.Layer):
             dropout=self.dropout_rate,
             name="post_attention_grn",
         )
+        self.residual_add = layers.Add(name="attention_residual_add")
 
         super().build(input_shape)
 
@@ -351,7 +357,7 @@ class TemporalFusionDecoder(layers.Layer):
         attended = self.attention_dropout(attended, training=training)
 
         # Add & Norm residual connection
-        x = layers.Add()([inputs, attended])
+        x = self.residual_add([inputs, attended])
         x = self.attention_norm(x)
 
         # Post-attention GRN for additional processing
@@ -413,6 +419,8 @@ def create_tft_model(
     sequence_length, n_features = input_shape
 
     # Validate parameters
+    if sequence_length <= 0:
+        raise ValueError(f"sequence_length must be positive, got {sequence_length}")
     if n_features <= 0:
         raise ValueError(f"n_features must be positive, got {n_features}")
     if n_heads <= 0:
@@ -420,13 +428,13 @@ def create_tft_model(
     if hidden_size <= 0:
         raise ValueError(f"hidden_size must be positive, got {hidden_size}")
     if hidden_size % n_heads != 0:
-        raise ValueError(
-            f"hidden_size ({hidden_size}) must be divisible by n_heads ({n_heads})"
-        )
+        raise ValueError(f"hidden_size ({hidden_size}) must be divisible by n_heads ({n_heads})")
     if not 0.0 <= dropout < 1.0:
         raise ValueError(f"dropout must be in [0.0, 1.0), got {dropout}")
     if num_lstm_layers <= 0:
         raise ValueError(f"num_lstm_layers must be positive, got {num_lstm_layers}")
+    if learning_rate <= 0:
+        raise ValueError(f"learning_rate must be positive, got {learning_rate}")
 
     inputs = layers.Input(shape=input_shape, name="sequence_input")
 
