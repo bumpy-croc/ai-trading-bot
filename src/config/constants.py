@@ -13,6 +13,11 @@ DEFAULT_MAX_PREDICTION_LATENCY = 0.1  # seconds
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"
 DEFAULT_ENABLE_SENTIMENT = False  # Disabled by default
 DEFAULT_ENABLE_MARKET_MICROSTRUCTURE = False  # MVP: disabled
+DEFAULT_ENABLE_ONCHAIN_FEATURES = False  # On-chain features disabled by default
+DEFAULT_ENABLE_MACRO_FEATURES = False  # Macro economic features disabled by default
+DEFAULT_ENABLE_ENHANCED_SENTIMENT = False  # Enhanced sentiment disabled by default
+DEFAULT_ONCHAIN_CACHE_TTL = 300  # 5 minutes cache for on-chain data
+DEFAULT_MACRO_CACHE_TTL = 3600  # 1 hour cache for macro data
 DEFAULT_FEATURE_CACHE_TTL = 3600  # 1 hour
 DEFAULT_MODEL_CACHE_TTL = 600  # seconds
 DEFAULT_CONFIDENCE_SCALE_FACTOR = 10.0  # Scale factor for confidence calculation
@@ -303,3 +308,9 @@ DEFAULT_KELLY_EXPECTED_WIN_RATE = 0.55  # Prior from backtested momentum strateg
 DEFAULT_KELLY_EXPECTED_REWARD_RISK = 1.5  # Prior reward:risk from backtested results
 DEFAULT_KELLY_OVERFITTING_THRESHOLD = 0.15  # Flag >15% deviation from backtest priors
 DEFAULT_KELLY_MAX_FRACTION = 0.20  # Cap single-trade exposure at 20% of balance
+
+# TFT (Temporal Fusion Transformer) Model Defaults
+DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
+DEFAULT_TFT_HIDDEN_SIZE = 64  # Hidden dimension for GRN and attention layers
+DEFAULT_TFT_DROPOUT = 0.1  # Dropout rate for regularization
+DEFAULT_TFT_NUM_LSTM_LAYERS = 1  # Number of stacked LSTM encoder layers

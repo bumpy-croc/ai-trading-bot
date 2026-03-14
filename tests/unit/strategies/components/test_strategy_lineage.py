@@ -655,11 +655,15 @@ class TestStrategyLineageTracker:
         assert "a" in tracker.strategies
         assert "b" in tracker.strategies
 
-        # Descendant traversal should terminate without infinite loop
+        # Descendant traversal should terminate without infinite loop.
+        # In the cycle a->b->a, b is registered as child of a, and a as child of b.
+        # BFS with visited set finds exactly one descendant for each.
         descendants_a = tracker._get_descendants("a")
         descendants_b = tracker._get_descendants("b")
-        assert len(descendants_a) <= 1
-        assert len(descendants_b) <= 1
+        assert len(descendants_a) == 1
+        assert descendants_a[0]["id"] == "b"
+        assert len(descendants_b) == 1
+        assert descendants_b[0]["id"] == "a"
 
     def test_cyclic_parent_does_not_corrupt_generations(self, tracker):
         """Test that cyclic parent references don't inflate generation numbers.

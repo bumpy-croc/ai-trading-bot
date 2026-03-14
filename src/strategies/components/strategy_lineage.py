@@ -903,7 +903,7 @@ class StrategyLineageTracker:
             mermaid.extend(
                 [
                     f"    {node['id']}[{node['id']}]",
-                    f"    {node['id']} --> {node_style}",
+                    f"    style {node['id']} {node_style}",
                 ]
             )
 

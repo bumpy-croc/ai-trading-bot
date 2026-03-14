@@ -1,8 +1,11 @@
 """Tests for AdaptiveTrendSignalGenerator.
 
 Validates trend detection, entry/exit signal generation, EMA slope filtering,
-and ratio-based exit counting for the adaptive trend-following strategy.
+ratio-based exit counting, EMA computation correctness, and thread safety
+for the adaptive trend-following strategy.
 """
+
+import threading
 
 import numpy as np
 import pandas as pd
@@ -241,16 +244,9 @@ class TestSignalGeneration:
         )
 
         signal = gen.generate_signal(df, index=185)
-        # With 50 bars of decline after 150 bars of rise, momentum over 30 bars
-        # should be negative. If the generator still produced BUY, verify that
-        # momentum was above the -0.05 filter threshold (meaning the filter
-        # correctly allowed it through).
-        if signal.direction == SignalDirection.BUY:
-            assert signal.metadata.get("momentum", 0) > -0.05, (
-                "BUY signal generated despite momentum below -0.05 threshold"
-            )
-        else:
-            assert signal.direction in (SignalDirection.HOLD, SignalDirection.SELL)
+        # With 50 bars of -0.2% decline, momentum over 30 bars is approximately
+        # -6%, which exceeds the -5% threshold. Signal should be HOLD or SELL.
+        assert signal.direction in (SignalDirection.HOLD, SignalDirection.SELL)
 
     def test_metadata_contains_required_fields(self):
         """Test that signal metadata includes all expected fields."""
@@ -583,3 +579,150 @@ class TestEmaCacheInvalidation:
         # Assert: same buffer object throughout (no concatenation copies)
         assert id(ema_second) == buf_id
         assert id(ema_third) == buf_id
+
+
+class TestEMAComputationCorrectness:
+    """Verify EMA values match pandas ewm reference implementation."""
+
+    @pytest.mark.fast
+    def test_ema_matches_pandas_ewm(self):
+        """Verify _compute_ema_series produces the same values as pandas ewm."""
+        # Arrange
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=20)
+        np.random.seed(123)
+        close = np.cumsum(np.random.randn(100)) + 500.0
+
+        # Act
+        ema = gen._compute_ema_series(close, 99)
+
+        # Assert: compare against pandas reference
+        expected = pd.Series(close).ewm(span=20, adjust=False).mean().values
+        np.testing.assert_allclose(ema[:100], expected, rtol=1e-10)
+
+    @pytest.mark.fast
+    def test_incremental_ema_matches_full_recompute(self):
+        """Verify incremental extension produces identical values to full computation."""
+        # Arrange
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=15)
+        np.random.seed(456)
+        close = np.cumsum(np.random.randn(80)) + 1000.0
+
+        # Act: compute partially, then extend
+        gen._compute_ema_series(close, 40)
+        ema_incremental = gen._compute_ema_series(close, 79).copy()
+
+        # Fresh generator: compute the full range in one shot
+        gen2 = AdaptiveTrendSignalGenerator(trend_ema_period=15)
+        ema_full = gen2._compute_ema_series(close, 79)
+
+        # Assert: incremental and full must be identical
+        np.testing.assert_allclose(ema_incremental[:80], ema_full[:80], rtol=1e-10)
+
+    @pytest.mark.fast
+    def test_ema_constant_series(self):
+        """Verify EMA of a constant series equals the constant value."""
+        # Arrange
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+        close = np.full(50, 42.0)
+
+        # Act
+        ema = gen._compute_ema_series(close, 49)
+
+        # Assert: EMA of constant series converges to that constant
+        np.testing.assert_allclose(ema[:50], 42.0, atol=1e-10)
+
+    @pytest.mark.fast
+    def test_ema_single_element(self):
+        """Verify EMA with a single element returns that element."""
+        # Arrange
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+        close = np.array([100.0])
+
+        # Act
+        ema = gen._compute_ema_series(close, 0)
+
+        # Assert
+        assert float(ema[0]) == pytest.approx(100.0)
+
+
+class TestEMAThreadSafety:
+    """Verify _compute_ema_series is thread-safe with RLock protection."""
+
+    @pytest.mark.fast
+    def test_concurrent_ema_computation_no_corruption(self):
+        """Verify concurrent calls to _compute_ema_series produce correct values."""
+        # Arrange
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=20)
+        np.random.seed(789)
+        close = np.cumsum(np.random.randn(200)) + 1000.0
+        expected = pd.Series(close).ewm(span=20, adjust=False).mean().values
+
+        errors: list[str] = []
+        num_threads = 6
+        iterations = 20
+
+        def worker(thread_id: int) -> None:
+            """Compute EMA and verify correctness."""
+            try:
+                for i in range(iterations):
+                    idx = 50 + (thread_id * 3 + i) % 150
+                    ema = gen._compute_ema_series(close, idx)
+                    # Verify the value at the requested index matches reference
+                    if not np.isclose(ema[idx], expected[idx], rtol=1e-8):
+                        errors.append(
+                            f"Thread {thread_id} iter {i}: "
+                            f"ema[{idx}]={ema[idx]} != expected {expected[idx]}"
+                        )
+            except Exception as e:
+                errors.append(f"Thread {thread_id} exception: {e}")
+
+        # Act
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Assert
+        assert len(errors) == 0, f"Thread safety errors: {errors}"
+
+    @pytest.mark.fast
+    def test_concurrent_different_arrays_no_corruption(self):
+        """Verify thread safety when different threads pass different arrays."""
+        # Arrange: each thread has its own generator to avoid cache contention
+        # but we test the single-generator case here intentionally
+        gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
+        np.random.seed(101)
+        arrays = [np.cumsum(np.random.randn(50)) + 500.0 for _ in range(4)]
+        expected = [
+            pd.Series(arr).ewm(span=10, adjust=False).mean().values for arr in arrays
+        ]
+
+        errors: list[str] = []
+
+        def worker(arr_idx: int) -> None:
+            """Compute EMA for a specific array and check last value."""
+            try:
+                for _ in range(10):
+                    ema = gen._compute_ema_series(arrays[arr_idx], 49)
+                    # The final value must match expected for *some* array
+                    # (cache may be swapped by another thread, but the returned
+                    # EMA must be internally consistent with the current snapshot)
+                    val = float(ema[49])
+                    valid = any(np.isclose(val, exp[49], rtol=1e-8) for exp in expected)
+                    if not valid:
+                        errors.append(
+                            f"arr_idx={arr_idx}: ema[49]={val} matches no expected value"
+                        )
+            except Exception as e:
+                errors.append(f"arr_idx={arr_idx} exception: {e}")
+
+        # Act
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Assert
+        assert len(errors) == 0, f"Thread safety errors: {errors}"
