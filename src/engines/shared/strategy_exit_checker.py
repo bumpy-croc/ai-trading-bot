@@ -116,7 +116,7 @@ class StrategyExitChecker:
             from src.strategies.components import SignalDirection
 
             # Allow strategies to opt out of signal-reversal exits via metadata.
-            # Hyper-growth strategies hold through signal flips and rely on
+            # Some strategies hold through signal flips and rely on
             # SL/TP/trailing stops instead of per-bar signal direction.
             metadata = getattr(runtime_decision, "metadata", None) or {}
             if metadata.get("ignore_signal_reversal"):
