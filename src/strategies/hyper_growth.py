@@ -3,8 +3,14 @@ Hyper Growth Strategy - Aggressive Component-Based Implementation
 
 Targets 500% annual returns by combining three key mechanisms from research:
 1. ML-driven signal generation for directional alpha (66%+ win rate)
-2. High base position sizing with regime-based leverage (up to 3x in bulls)
+2. High base position sizing (20% of balance per trade)
 3. Aggressive risk overrides: wider stops, deeper drawdown tolerance
+
+NOTE: Leverage is DISABLED by default (max_leverage=1.0). Backtesting showed
+that enabling leverage (e.g. 3x) hurt overall returns by -32% due to amplified
+losses during volatile regime transitions. The LeverageManager infrastructure
+and _HYPER_LEVERAGE_MAP remain in place for future experimentation — callers
+can pass max_leverage > 1.0 to re-enable it.
 
 Key architectural decision: ML models produce very low raw confidence values
 (0.01-0.05 per bar) even when their directional accuracy is high (66%+).
@@ -131,6 +137,9 @@ class FlatRiskManager(RiskManager):
 
 # Aggressive leverage map: amplify in bulls, protect in bears.
 # Keys are (TrendLabel, VolLabel) tuples matching LeverageManager.get_leverage_multiplier() lookups.
+# NOTE: These raw multipliers are clamped by LeverageManager's max_leverage cap.
+# With the default max_leverage=1.0 none of these values take effect — they exist
+# so that callers who pass max_leverage > 1.0 get regime-aware scaling automatically.
 _HYPER_LEVERAGE_MAP: dict[tuple[TrendLabel, VolLabel], float] = {
     (TrendLabel.TREND_UP, VolLabel.LOW): 3.0,      # Full leverage in confirmed bull + low vol
     (TrendLabel.TREND_UP, VolLabel.HIGH): 2.0,      # Moderate leverage in bull + high vol
@@ -155,9 +164,14 @@ def create_hyper_growth_strategy(
 ) -> Strategy:
     """Create hyper-growth strategy targeting 500% annual returns.
 
-    Combines ML signal generation with aggressive position sizing and
-    regime-based leverage to maximize compounding during favorable
-    conditions while preserving capital during drawdowns.
+    Combines ML signal generation with aggressive position sizing to
+    maximize compounding during favorable conditions while preserving
+    capital during drawdowns.
+
+    Leverage is DISABLED by default (max_leverage=1.0) because testing
+    showed it reduces returns by -32%. The LeverageManager infrastructure
+    is wired up so callers can pass max_leverage > 1.0 to experiment,
+    but the default configuration runs without leverage amplification.
 
     Args:
         name: Strategy name.
@@ -165,14 +179,15 @@ def create_hyper_growth_strategy(
         risk_fraction: Fraction of balance the risk manager allocates per trade.
         base_fraction: Base position size as fraction of balance.
         min_confidence: Minimum signal confidence to allow a trade.
-        max_leverage: Maximum leverage multiplier safety cap.
+        max_leverage: Maximum leverage multiplier safety cap (default 1.0 =
+            leverage disabled). Set > 1.0 to re-enable regime-based leverage.
         leverage_decay_rate: Exponential decay for smooth transitions.
         min_regime_bars: Bars before conviction scaling begins.
         take_profit_pct: Target profit percentage for scaling out.
         stop_loss_pct: Stop loss percentage.
 
     Returns:
-        Configured Strategy instance with leverage.
+        Configured Strategy instance.
     """
     # Signal generator
     if signal_source == "momentum":

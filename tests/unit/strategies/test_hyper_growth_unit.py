@@ -265,16 +265,16 @@ class TestHyperGrowthStrategy:
 
         assert overrides["position_sizer"] == "leveraged_fixed_fraction"
         assert overrides["base_fraction"] == 0.20
-        assert overrides["max_fraction"] == 0.50  # 0.20 * 3.0 leverage, capped at 0.50
+        assert overrides["max_fraction"] == 0.20  # 0.20 * 1.0 (leverage disabled by default)
         assert overrides["stop_loss_pct"] == 0.20
         assert overrides["take_profit_pct"] == 0.30
 
     def test_strategy_leverage_configured(self):
-        """Test strategy has leverage enabled."""
+        """Test strategy has leverage disabled by default (max_leverage=1.0)."""
         strategy = create_hyper_growth_strategy()
 
         assert strategy._risk_overrides["leverage"]["enabled"] is True
-        assert strategy._risk_overrides["leverage"]["max_leverage"] == 3.0
+        assert strategy._risk_overrides["leverage"]["max_leverage"] == 1.0
 
     def test_strategy_dynamic_risk_configured(self):
         """Test strategy has dynamic risk management enabled."""
