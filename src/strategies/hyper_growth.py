@@ -147,7 +147,7 @@ def create_hyper_growth_strategy(
     risk_fraction: float = 0.20,
     base_fraction: float = 0.20,
     min_confidence: float = 0.05,
-    max_leverage: float = 3.0,
+    max_leverage: float = 1.0,
     leverage_decay_rate: float = 0.20,
     min_regime_bars: int = 3,
     take_profit_pct: float = 0.30,
