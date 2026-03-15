@@ -6,14 +6,15 @@ stop-loss/take-profit percentages to keep entry logic consistent across engines.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Protocol
 
 from src.config.constants import (
-    DEFAULT_TAKE_PROFIT_PCT,
-    DEFAULT_STOP_LOSS_PCT,
-    DEFAULT_MIN_STOP_LOSS_PCT,
     DEFAULT_MAX_STOP_LOSS_PCT,
+    DEFAULT_MIN_STOP_LOSS_PCT,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
 )
 from src.engines.shared.models import PositionSide
 from src.engines.shared.side_utils import to_side_string
@@ -136,23 +137,40 @@ def resolve_stop_loss_take_profit_pct(
         Tuple of (stop_loss_pct, take_profit_pct).
     """
     sl_pct = default_stop_loss_pct
+    tp_pct = default_take_profit_pct
+
+    # Check strategy risk_overrides first (highest priority)
     if component_strategy is not None:
+        risk_overrides = getattr(component_strategy, "get_risk_overrides", lambda: None)()
+        if risk_overrides:
+            override_sl = risk_overrides.get("stop_loss_pct")
+            override_tp = risk_overrides.get("take_profit_pct")
+            if override_sl is not None:
+                sl_pct = float(override_sl)
+            if override_tp is not None:
+                tp_pct = float(override_tp)
+
+    # Stop loss: use strategy.get_stop_loss_price() if not already set from overrides
+    if sl_pct == default_stop_loss_pct and component_strategy is not None:
         try:
             signal = runtime_decision.signal if runtime_decision else None
             regime = runtime_decision.regime if runtime_decision else None
             stop_loss_price = component_strategy.get_stop_loss_price(current_price, signal, regime)
-            sl_pct = _calculate_stop_loss_pct(current_price, stop_loss_price, entry_side)
+            calculated_sl_pct = _calculate_stop_loss_pct(current_price, stop_loss_price, entry_side)
             sl_pct = clamp_stop_loss_pct(
-                sl_pct,
+                calculated_sl_pct,
                 min_pct=min_stop_loss_pct,
                 max_pct=max_stop_loss_pct,
             )
         except stop_loss_exceptions:
             pass
 
-    tp_pct = default_take_profit_pct
+    # Take profit: use strategy attribute if enabled and not already set from overrides
     if use_strategy_take_profit and tp_pct is None and component_strategy is not None:
-        tp_pct = getattr(component_strategy, "take_profit_pct", None)
+        strategy_tp = getattr(component_strategy, "take_profit_pct", None)
+        if strategy_tp is not None:
+            tp_pct = float(strategy_tp)
+
     if tp_pct is None:
         tp_pct = DEFAULT_TAKE_PROFIT_PCT
 

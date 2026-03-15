@@ -150,3 +150,68 @@ def test_resolve_stop_loss_take_profit_pct_falls_back_on_error() -> None:
     # Assert
     assert sl_pct == pytest.approx(0.03)
     assert tp_pct == pytest.approx(DEFAULT_TAKE_PROFIT_PCT)
+
+
+def test_resolve_sl_tp_uses_risk_overrides_highest_priority() -> None:
+    """Strategy risk_overrides take priority over get_stop_loss_price() and attributes."""
+    # Arrange
+    decision = _decision(SignalDirection.BUY, position_size=100.0)
+
+    # Create a strategy with both risk overrides and get_stop_loss_price
+    class StrategyWithOverrides(StubStrategy):
+        def __init__(self):
+            super().__init__(stop_loss_price=95.0, take_profit_pct=0.04)  # 5% SL, 4% TP
+            self._risk_overrides = {
+                "stop_loss_pct": 0.20,
+                "take_profit_pct": 0.30,
+            }  # 20% SL, 30% TP
+
+        def get_risk_overrides(self):
+            return self._risk_overrides
+
+    strategy = StrategyWithOverrides()
+
+    # Act
+    sl_pct, tp_pct = resolve_stop_loss_take_profit_pct(
+        current_price=100.0,
+        entry_side=PositionSide.LONG,
+        runtime_decision=decision,
+        component_strategy=strategy,
+        default_take_profit_pct=None,
+        use_strategy_take_profit=True,
+    )
+
+    # Assert - risk_overrides should take priority (20% SL, 30% TP)
+    # NOT the get_stop_loss_price() value (5%) or attribute (4%)
+    assert sl_pct == pytest.approx(0.20), f"Expected 20% SL from risk_overrides, got {sl_pct}"
+    assert tp_pct == pytest.approx(0.30), f"Expected 30% TP from risk_overrides, got {tp_pct}"
+
+
+def test_resolve_sl_tp_partial_overrides() -> None:
+    """When only stop_loss_pct is in risk_overrides, take_profit uses attribute."""
+    # Arrange
+    decision = _decision(SignalDirection.BUY, position_size=100.0)
+
+    class StrategyWithPartialOverride(StubStrategy):
+        def __init__(self):
+            super().__init__(stop_loss_price=95.0, take_profit_pct=0.04)
+            self._risk_overrides = {"stop_loss_pct": 0.15}  # Only SL override
+
+        def get_risk_overrides(self):
+            return self._risk_overrides
+
+    strategy = StrategyWithPartialOverride()
+
+    # Act
+    sl_pct, tp_pct = resolve_stop_loss_take_profit_pct(
+        current_price=100.0,
+        entry_side=PositionSide.LONG,
+        runtime_decision=decision,
+        component_strategy=strategy,
+        default_take_profit_pct=None,
+        use_strategy_take_profit=True,
+    )
+
+    # Assert - SL from risk_overrides (15%), TP from attribute (4%)
+    assert sl_pct == pytest.approx(0.15), f"Expected 15% SL from risk_overrides, got {sl_pct}"
+    assert tp_pct == pytest.approx(0.04), f"Expected 4% TP from attribute, got {tp_pct}"
