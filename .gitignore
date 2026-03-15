@@ -47,5 +47,4 @@ cache/*
 **/CLAUDE.md
 !/CLAUDE.md
 .claude/claudeclaw/
-.claude/plans/
 .gemini-reviews/
