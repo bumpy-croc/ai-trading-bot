@@ -35,7 +35,7 @@ class TestFlatRiskManager:
 
         signal = Signal(
             direction=SignalDirection.BUY,
-            confidence=0.05,  # Low confidence but above threshold
+            confidence=0.30,  # Above min_confidence threshold of 0.20
             strength=0.3,
             metadata={},
         )
@@ -94,7 +94,7 @@ class TestFlatRiskManager:
 
         sell_signal = Signal(
             direction=SignalDirection.SELL,
-            confidence=0.08,
+            confidence=0.30,  # Above min_confidence threshold of 0.20
             strength=0.4,
             metadata={},
         )
