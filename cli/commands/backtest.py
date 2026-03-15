@@ -20,6 +20,9 @@ from src.infrastructure.logging.config import configure_logging
 from src.strategies import (
     create_adaptive_trend_strategy,
     create_ensemble_weighted_strategy,
+    create_hyper_growth_strategy,
+    create_kelly_momentum_strategy,
+    create_leveraged_regime_strategy,
     create_ml_adaptive_strategy,
     create_ml_basic_strategy,
     create_ml_sentiment_strategy,
@@ -39,6 +42,9 @@ def _load_strategy(strategy_name: str):
         "ensemble_weighted": create_ensemble_weighted_strategy,
         "momentum_leverage": create_momentum_leverage_strategy,
         "adaptive_trend": create_adaptive_trend_strategy,
+        "kelly_momentum": create_kelly_momentum_strategy,
+        "leveraged_regime": create_leveraged_regime_strategy,
+        "hyper_growth": create_hyper_growth_strategy,
     }
 
     try:

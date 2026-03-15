@@ -46,3 +46,6 @@ cache/*
 
 **/CLAUDE.md
 !/CLAUDE.md
+.claude/claudeclaw/
+.claude/statusline.cjs
+.gemini-reviews/

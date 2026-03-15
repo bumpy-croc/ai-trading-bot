@@ -15,6 +15,7 @@ from src.engines.backtest.engine import Backtester
 from src.optimizer.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import Strategy
+from src.strategies.hyper_growth import create_hyper_growth_strategy
 from src.strategies.ml_basic import create_ml_basic_strategy
 
 
@@ -158,8 +159,13 @@ class ExperimentRunner:
         return provider
 
     def _load_strategy(self, strategy_name: str) -> Strategy:
-        if strategy_name == "ml_basic":
-            return create_ml_basic_strategy()
+        strategies = {
+            "ml_basic": create_ml_basic_strategy,
+            "hyper_growth": create_hyper_growth_strategy,
+        }
+        builder = strategies.get(strategy_name)
+        if builder is not None:
+            return builder()
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
     def _apply_parameter_overrides(self, strategy: Strategy, config: ExperimentConfig) -> None:

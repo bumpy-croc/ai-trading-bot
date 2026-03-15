@@ -115,6 +115,13 @@ class StrategyExitChecker:
         try:
             from src.strategies.components import SignalDirection
 
+            # Allow strategies to opt out of signal-reversal exits via metadata.
+            # Some strategies hold through signal flips and rely on
+            # SL/TP/trailing stops instead of per-bar signal direction.
+            metadata = getattr(runtime_decision, "metadata", None) or {}
+            if metadata.get("ignore_signal_reversal"):
+                return StrategyExitResult(should_exit=False)
+
             side_str = normalize_side(getattr(position, "side", None))
 
             if side_str == "long" and runtime_decision.signal.direction == SignalDirection.SELL:

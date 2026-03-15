@@ -877,6 +877,11 @@ class Strategy:
                 "strength": regime.strength,
             }
 
+        # Allow strategies to inject custom metadata via _extra_metadata dict.
+        extra = getattr(self, "_extra_metadata", None)
+        if extra:
+            metadata.update(extra)
+
         return metadata
 
     def _record_decision(self, decision: TradingDecision) -> None:

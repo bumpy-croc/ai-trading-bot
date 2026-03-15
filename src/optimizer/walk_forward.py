@@ -44,6 +44,7 @@ class WalkForwardConfig:
     random_seed: int | None = None
     robustness_good: float = 0.5
     robustness_strong: float = 0.7
+    risk_parameters: dict | None = None
 
     def __post_init__(self) -> None:
         if self.train_days <= 0:
@@ -189,6 +190,7 @@ class WalkForwardAnalyzer:
             provider=self.config.provider,
             use_cache=self.config.use_cache,
             random_seed=self.config.random_seed,
+            risk_parameters=self.config.risk_parameters or {},
         )
 
     @staticmethod
