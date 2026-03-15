@@ -138,6 +138,7 @@ def resolve_stop_loss_take_profit_pct(
     """
     sl_pct = default_stop_loss_pct
     tp_pct = default_take_profit_pct
+    sl_from_override = False
 
     # Check strategy risk_overrides first (highest priority)
     if component_strategy is not None:
@@ -147,11 +148,12 @@ def resolve_stop_loss_take_profit_pct(
             override_tp = risk_overrides.get("take_profit_pct")
             if override_sl is not None:
                 sl_pct = float(override_sl)
+                sl_from_override = True
             if override_tp is not None:
                 tp_pct = float(override_tp)
 
-    # Stop loss: use strategy.get_stop_loss_price() if not already set from overrides
-    if sl_pct == default_stop_loss_pct and component_strategy is not None:
+    # Stop loss: use strategy.get_stop_loss_price() only if no explicit override was set
+    if not sl_from_override and component_strategy is not None:
         try:
             signal = runtime_decision.signal if runtime_decision else None
             regime = runtime_decision.regime if runtime_decision else None
