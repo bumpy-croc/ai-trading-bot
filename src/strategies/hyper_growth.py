@@ -29,6 +29,7 @@ from src.strategies.components import (
 )
 from src.strategies.components.leverage_manager import LeverageManager
 from src.strategies.components.position_sizer import LeveragedPositionSizer
+from src.strategies.components.regime_context import TrendLabel, VolLabel
 from src.strategies.components.risk_manager import RiskManager
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ class FlatRiskManager(RiskManager):
         self,
         risk_fraction: float = 0.10,
         stop_loss_pct: float = 0.10,
-        min_confidence: float = 0.03,
+        min_confidence: float = 0.05,
     ):
         """Initialize flat risk manager.
 
@@ -128,14 +129,15 @@ class FlatRiskManager(RiskManager):
         }
 
 
-# Aggressive leverage map: amplify in bulls, protect in bears
-_HYPER_LEVERAGE_MAP = {
-    "bull_high_conf": 3.0,   # Full leverage in confirmed bull trends
-    "bull_low_conf": 2.0,    # Moderate leverage in early/uncertain bulls
-    "range_high_conf": 1.5,  # Slight leverage in confirmed ranges
-    "range_low_conf": 1.0,   # No leverage in uncertain ranges
-    "bear_low_conf": 0.5,    # Minimal exposure in uncertain bears
-    "bear_high_conf": 0.0,   # Cash in confirmed bears
+# Aggressive leverage map: amplify in bulls, protect in bears.
+# Keys are (TrendLabel, VolLabel) tuples matching LeverageManager.get_leverage_multiplier() lookups.
+_HYPER_LEVERAGE_MAP: dict[tuple[TrendLabel, VolLabel], float] = {
+    (TrendLabel.TREND_UP, VolLabel.LOW): 3.0,      # Full leverage in confirmed bull + low vol
+    (TrendLabel.TREND_UP, VolLabel.HIGH): 2.0,      # Moderate leverage in bull + high vol
+    (TrendLabel.RANGE, VolLabel.LOW): 1.5,           # Slight leverage in confirmed range + low vol
+    (TrendLabel.RANGE, VolLabel.HIGH): 1.0,          # No leverage in range + high vol
+    (TrendLabel.TREND_DOWN, VolLabel.LOW): 0.5,      # Minimal exposure in bear + low vol
+    (TrendLabel.TREND_DOWN, VolLabel.HIGH): 0.0,     # Cash in confirmed bear + high vol
 }
 
 
@@ -162,6 +164,7 @@ def create_hyper_growth_strategy(
         signal_source: "ml" for ML predictions, "momentum" for breakouts.
         risk_fraction: Fraction of balance the risk manager allocates per trade.
         base_fraction: Base position size as fraction of balance.
+        min_confidence: Minimum signal confidence to allow a trade.
         max_leverage: Maximum leverage multiplier safety cap.
         leverage_decay_rate: Exponential decay for smooth transitions.
         min_regime_bars: Bars before conviction scaling begins.
@@ -183,28 +186,20 @@ def create_hyper_growth_strategy(
         # but per-bar confidence is very low (0.01-0.10)
         signal_generator = MLBasicSignalGenerator(name=f"{name}_signals")
 
-    # Override: also register momentum as secondary for regime changes
-    # This lets us leverage momentum breakouts in addition to ML
-
-    # Flat risk manager: returns full risk_fraction without confidence scaling
-    # min_confidence filters out noise — only trade when ML has some conviction
     risk_manager = FlatRiskManager(
         risk_fraction=risk_fraction,
         stop_loss_pct=stop_loss_pct,
         min_confidence=min_confidence,
     )
 
-    # Fixed fraction sizer WITHOUT confidence/strength scaling
     base_sizer = FixedFractionSizer(
         fraction=base_fraction,
         adjust_for_confidence=False,
         adjust_for_strength=False,
     )
 
-    # Regime detector
     regime_detector = EnhancedRegimeDetector()
 
-    # Leverage manager: amplify in bulls, cash in bears
     leverage_manager = LeverageManager(
         max_leverage=max_leverage,
         decay_rate=leverage_decay_rate,
@@ -212,14 +207,12 @@ def create_hyper_growth_strategy(
         leverage_map=_HYPER_LEVERAGE_MAP,
     )
 
-    # Wrap base sizer with leverage multiplier
     position_sizer = LeveragedPositionSizer(
         base_sizer=base_sizer,
         leverage_manager=leverage_manager,
         max_leveraged_fraction=0.50,
     )
 
-    # Compose strategy
     strategy = Strategy(
         name=name,
         signal_generator=signal_generator,
@@ -228,10 +221,12 @@ def create_hyper_growth_strategy(
         regime_detector=regime_detector,
     )
 
-    # Expose components for introspection
     strategy.leverage_manager = leverage_manager
     strategy.base_position_size = base_fraction
     strategy.take_profit_pct = take_profit_pct
+    # Override default 25% cap to match max_leveraged_fraction (50%),
+    # otherwise _validate_position_size() clamps leveraged positions to 25%
+    strategy._max_position_pct = 0.50
 
     # Hold positions through signal flips — only exit on SL/TP/trailing stop.
     # ML signals flip direction every bar, but the trend persists for days.

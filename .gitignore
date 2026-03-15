@@ -46,7 +46,6 @@ cache/*
 
 **/CLAUDE.md
 !/CLAUDE.md
-.claude/claudeclaw/whisper/
-.claude/claudeclaw/daemon.pid
-.claude/claudeclaw/state.json
-.claude/claudeclaw/session.json
+.claude/claudeclaw/
+.claude/plans/
+.gemini-reviews/
