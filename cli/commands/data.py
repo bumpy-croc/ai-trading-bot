@@ -31,6 +31,29 @@ def _normalize_symbols(raw: list[str]) -> list[str]:
     return normalized
 
 
+def _parse_date_string(date_str: str) -> datetime:
+    """Parse date string supporting multiple formats.
+
+    Handles:
+    - YYYY-MM-DD (date only)
+    - YYYY-MM-DDTHH:MM:SSZ (ISO datetime with timezone)
+
+    Returns UTC-aware datetime.
+    """
+    date_str = date_str.strip()
+    formats = [
+        "%Y-%m-%d",  # Date only
+        "%Y-%m-%dT%H:%M:%SZ",  # ISO datetime with Z suffix
+        "%Y-%m-%dT%H:%M:%S.%fZ",  # ISO datetime with microseconds
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    raise ValueError(f"Unrecognized date format: {date_str}. Expected YYYY-MM-DD or ISO datetime.")
+
+
 def _download(ns: argparse.Namespace) -> int:
     """Download historical price data using automatic Binance → CoinGecko failover."""
     from src.data_providers.provider_factory import create_data_provider
@@ -40,8 +63,8 @@ def _download(ns: argparse.Namespace) -> int:
 
     try:
         # Parse dates (UTC-aware to match provider expectations)
-        start_date = datetime.strptime(ns.start_date, "%Y-%m-%d").replace(tzinfo=UTC) if ns.start_date else None
-        end_date = datetime.strptime(ns.end_date, "%Y-%m-%d").replace(tzinfo=UTC) if ns.end_date else None
+        start_date = _parse_date_string(ns.start_date) if ns.start_date else None
+        end_date = _parse_date_string(ns.end_date) if ns.end_date else None
 
         if not start_date or not end_date:
             print("Both --start-date and --end-date are required")
@@ -104,9 +127,9 @@ def _prefill(ns: argparse.Namespace) -> int:
             cur = datetime(y + 1, 1, 1, tzinfo=UTC)
         return chunks
 
-    end = datetime.strptime(ns.end, "%Y-%m-%d").replace(tzinfo=UTC) if ns.end else datetime.now(UTC)
+    end = _parse_date_string(ns.end) if ns.end else datetime.now(UTC)
     if ns.start:
-        start = datetime.strptime(ns.start, "%Y-%m-%d").replace(tzinfo=UTC)
+        start = _parse_date_string(ns.start)
     else:
         cy = end.year
         start = datetime(cy - ns.years, 1, 1, tzinfo=UTC)
