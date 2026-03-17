@@ -199,7 +199,8 @@ def create_hyper_growth_strategy(
     else:
         # ML signals — the model predicts direction with ~65% accuracy
         # but per-bar confidence is very low (0.01-0.10)
-        signal_generator = MLBasicSignalGenerator(name=f"{name}_signals")
+        # Uses sentiment model type since only a sentiment bundle is available for BTCUSDT
+        signal_generator = MLBasicSignalGenerator(name=f"{name}_signals", model_type="sentiment")
 
     risk_manager = FlatRiskManager(
         risk_fraction=risk_fraction,

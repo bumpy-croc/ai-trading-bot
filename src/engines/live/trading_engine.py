@@ -1315,37 +1315,45 @@ class LiveTradingEngine:
             self.order_tracker.stop()
             logger.info("📡 Order tracker stopped")
 
-        # Close all open positions
+        # Close or preserve open positions depending on trading mode
         positions_snapshot = self.live_position_tracker.positions
         if positions_snapshot:
-            logger.info("Closing %s open positions...", len(positions_snapshot))
-            for position in list(positions_snapshot.values()):
-                try:
-                    # Get current price for position closure - MUST be valid
-                    current_price = self.data_provider.get_current_price(position.symbol)
-                    if current_price is None or current_price <= 0:
-                        logger.critical(
-                            "Cannot close position %s during shutdown - invalid price %s. "
-                            "Position will remain open! Manual intervention required.",
-                            position.symbol,
-                            current_price,
+            if self.enable_live_trading:
+                # LIVE: close all positions on exchange before shutdown.
+                logger.info("Closing %s open live positions...", len(positions_snapshot))
+                for position in list(positions_snapshot.values()):
+                    try:
+                        current_price = self.data_provider.get_current_price(position.symbol)
+                        if current_price is None or current_price <= 0:
+                            logger.critical(
+                                "Cannot close live position %s during shutdown — invalid price %s. "
+                                "Manual intervention required.",
+                                position.symbol,
+                                current_price,
+                            )
+                            continue
+                        self._execute_exit(
+                            position,
+                            "Engine shutdown",
+                            None,
+                            float(current_price),
+                            None,
+                            None,
+                            None,
                         )
-                        continue
-
-                    self._execute_exit(
-                        position,
-                        "Engine shutdown",
-                        None,
-                        float(current_price),
-                        None,
-                        None,
-                        None,
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Failed to close position %s: %s", position.order_id, e, exc_info=True
-                    )
-                    self.live_position_tracker.remove_position(position.order_id)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to close position %s: %s", position.order_id, e, exc_info=True
+                        )
+                        self.live_position_tracker.remove_position(position.order_id)
+            else:
+                # PAPER: preserve open positions in DB so they survive restart.
+                # _recover_active_positions() will reload them on next start().
+                # The first candle evaluation after recovery will check SL/TP.
+                logger.info(
+                    "Paper mode: preserving %s open positions for restart recovery",
+                    len(positions_snapshot),
+                )
 
         # Wait for main thread to finish (avoid joining current thread)
         if (
@@ -2284,6 +2292,15 @@ class LiveTradingEngine:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         try:
+            # Prevent duplicate positions on the same symbol (guards against multi-slot
+            # risk managers with max_concurrent_positions > 1).
+            if self.live_position_tracker.has_position_for_symbol(symbol):
+                logger.info(
+                    "Position already open for %s — skipping duplicate entry.",
+                    symbol,
+                )
+                return
+
             # Check max concurrent positions limit (defense-in-depth, also checked in loop)
             max_concurrent = self.risk_manager.get_max_concurrent_positions()
             if self.live_position_tracker.position_count >= max_concurrent:
@@ -3326,8 +3343,7 @@ class LiveTradingEngine:
             [
                 p
                 for p in self.live_position_tracker.positions.values()
-                if p.entry_time is not None
-                and p.entry_time.replace(tzinfo=None) > one_hour_ago
+                if p.entry_time is not None and p.entry_time.replace(tzinfo=None) > one_hour_ago
             ]
         )
         if recent_trades > 0:
@@ -3453,28 +3469,49 @@ class LiveTradingEngine:
         }
 
     def _recover_existing_session(self) -> float | None:
-        """Try to recover from an existing active session"""
+        """Try to recover balance from an existing session.
+
+        Checks for an active session first (crash recovery). If none exists —
+        clean restart after graceful shutdown — falls back to the most recent
+        matching session within 24 hours. Skipped entirely when
+        TRADING_FRESH_START=true is set in the environment.
+        """
+        if os.environ.get("TRADING_FRESH_START", "").lower() == "true":
+            logger.info("TRADING_FRESH_START=true — skipping session recovery")
+            return None
+
         try:
-            # Check if there's an active session
-            active_session_id = self.db_manager.get_active_session_id()
-            if active_session_id:
-                logger.info("🔍 Found active session #%s", active_session_id)
+            # Prefer an active session (crash recovery path).
+            session_id = self.db_manager.get_active_session_id()
+            source = "active"
 
-                # Try to recover balance
-                recovered_balance = self.db_manager.recover_last_balance(active_session_id)
-                if recovered_balance and recovered_balance > 0:
-                    self.trading_session_id = active_session_id
-                    logger.info(
-                        "🎯 Recovered session #%s with balance $%.2f",
-                        active_session_id,
-                        recovered_balance,
-                    )
-                    return recovered_balance
-                else:
-                    logger.warning("⚠️  Active session found but no balance to recover")
-            else:
-                logger.info("🆕 No active session found")
+            # Fallback: most recent matching session within 24h (clean-restart path).
+            if session_id is None:
+                strategy = self._strategy_name()
+                session_id = self.db_manager.get_last_session_id(
+                    within_hours=24,
+                    strategy_name=strategy,
+                    symbol=self._active_symbol,
+                )
+                source = "recent inactive"
 
+            if session_id is None:
+                logger.info("🆕 No recent session found, starting fresh")
+                return None
+
+            logger.info("🔍 Found %s session #%s", source, session_id)
+            recovered_balance = self.db_manager.recover_last_balance(session_id)
+            if recovered_balance and recovered_balance > 0:
+                self.trading_session_id = session_id
+                logger.info(
+                    "💾 Recovered balance $%.2f from %s session #%s",
+                    recovered_balance,
+                    source,
+                    session_id,
+                )
+                return recovered_balance
+
+            logger.warning("⚠️  Session #%s found but no balance to recover", session_id)
             return None
         except Exception as e:
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
