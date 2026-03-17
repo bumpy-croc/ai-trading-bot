@@ -3468,8 +3468,6 @@ class LiveTradingEngine:
         matching session within 24 hours. Skipped entirely when
         TRADING_FRESH_START=true is set in the environment.
         """
-        import os
-
         if os.environ.get("TRADING_FRESH_START", "").lower() == "true":
             logger.info("TRADING_FRESH_START=true — skipping session recovery")
             return None

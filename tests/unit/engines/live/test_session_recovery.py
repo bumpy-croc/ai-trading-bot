@@ -101,3 +101,15 @@ def test_fresh_start_env_var_bypasses_recovery(monkeypatch):
 
     assert result is None
     engine.db_manager.get_active_session_id.assert_not_called()
+
+
+@pytest.mark.fast
+def test_recovery_returns_none_when_session_found_but_no_balance():
+    """A session exists but recover_last_balance returns None → start fresh."""
+    engine = make_engine()
+    engine.db_manager.get_active_session_id = MagicMock(return_value=10)
+    engine.db_manager.recover_last_balance = MagicMock(return_value=None)
+
+    result = engine._recover_existing_session()
+
+    assert result is None
