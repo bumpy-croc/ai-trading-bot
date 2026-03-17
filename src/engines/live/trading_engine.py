@@ -1315,37 +1315,45 @@ class LiveTradingEngine:
             self.order_tracker.stop()
             logger.info("📡 Order tracker stopped")
 
-        # Close all open positions
+        # Close or preserve open positions depending on trading mode
         positions_snapshot = self.live_position_tracker.positions
         if positions_snapshot:
-            logger.info("Closing %s open positions...", len(positions_snapshot))
-            for position in list(positions_snapshot.values()):
-                try:
-                    # Get current price for position closure - MUST be valid
-                    current_price = self.data_provider.get_current_price(position.symbol)
-                    if current_price is None or current_price <= 0:
-                        logger.critical(
-                            "Cannot close position %s during shutdown - invalid price %s. "
-                            "Position will remain open! Manual intervention required.",
-                            position.symbol,
-                            current_price,
+            if self.enable_live_trading:
+                # LIVE: close all positions on exchange before shutdown.
+                logger.info("Closing %s open live positions...", len(positions_snapshot))
+                for position in list(positions_snapshot.values()):
+                    try:
+                        current_price = self.data_provider.get_current_price(position.symbol)
+                        if current_price is None or current_price <= 0:
+                            logger.critical(
+                                "Cannot close live position %s during shutdown — invalid price %s. "
+                                "Manual intervention required.",
+                                position.symbol,
+                                current_price,
+                            )
+                            continue
+                        self._execute_exit(
+                            position,
+                            "Engine shutdown",
+                            None,
+                            float(current_price),
+                            None,
+                            None,
+                            None,
                         )
-                        continue
-
-                    self._execute_exit(
-                        position,
-                        "Engine shutdown",
-                        None,
-                        float(current_price),
-                        None,
-                        None,
-                        None,
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Failed to close position %s: %s", position.order_id, e, exc_info=True
-                    )
-                    self.live_position_tracker.remove_position(position.order_id)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to close position %s: %s", position.order_id, e, exc_info=True
+                        )
+                        self.live_position_tracker.remove_position(position.order_id)
+            else:
+                # PAPER: preserve open positions in DB so they survive restart.
+                # _recover_active_positions() will reload them on next start().
+                # The first candle evaluation after recovery will check SL/TP.
+                logger.info(
+                    "Paper mode: preserving %s open positions for restart recovery",
+                    len(positions_snapshot),
+                )
 
         # Wait for main thread to finish (avoid joining current thread)
         if (

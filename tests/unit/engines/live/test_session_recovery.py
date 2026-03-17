@@ -16,7 +16,7 @@ from src.strategies.ml_basic import create_ml_basic_strategy
 # ---------------------------------------------------------------------------
 
 
-def make_engine() -> LiveTradingEngine:
+def make_engine(enable_live_trading: bool = False) -> LiveTradingEngine:
     """Return a minimal LiveTradingEngine with all external I/O mocked out.
 
     The DatabaseManager is replaced with a MagicMock so tests can configure
@@ -32,7 +32,7 @@ def make_engine() -> LiveTradingEngine:
             strategy=strategy,
             data_provider=mock_data_provider,
             initial_balance=1000.0,
-            enable_live_trading=False,
+            enable_live_trading=enable_live_trading,
         )
 
     # Replace the db_manager created during __init__ with a fresh MagicMock
@@ -113,3 +113,36 @@ def test_recovery_returns_none_when_session_found_but_no_balance():
     result = engine._recover_existing_session()
 
     assert result is None
+
+
+@pytest.mark.fast
+def test_paper_mode_stop_preserves_open_positions():
+    """In paper trading, stop() must NOT force-close positions."""
+    engine = make_engine(enable_live_trading=False)
+    engine.is_running = True  # simulate a running engine
+    engine._execute_exit = MagicMock()  # inject BEFORE stop()
+    mock_pos = MagicMock()
+    mock_pos.symbol = "BTCUSDT"
+    mock_pos.order_id = "paper_order_1"
+    engine.live_position_tracker._positions["paper_order_1"] = mock_pos
+
+    engine.stop()
+
+    engine._execute_exit.assert_not_called()
+
+
+@pytest.mark.fast
+def test_live_mode_stop_closes_positions():
+    """In live trading, stop() must close all positions."""
+    engine = make_engine(enable_live_trading=True)
+    engine.is_running = True  # simulate a running engine
+    mock_pos = MagicMock()
+    mock_pos.symbol = "BTCUSDT"
+    mock_pos.order_id = "live_order_1"
+    engine.live_position_tracker._positions["live_order_1"] = mock_pos
+    engine.data_provider.get_current_price = MagicMock(return_value=90000.0)
+    engine._execute_exit = MagicMock()
+
+    engine.stop()
+
+    engine._execute_exit.assert_called_once()
