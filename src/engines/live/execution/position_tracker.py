@@ -146,6 +146,16 @@ class LivePositionTracker:
         with self._positions_lock:
             return order_id in self._positions
 
+    def has_position_for_symbol(self, symbol: str) -> bool:
+        """Check if any active position exists for the given symbol.
+
+        Prevents opening duplicate positions on the same asset when
+        max_concurrent_positions > 1. Symbol matching is exact — callers must
+        normalize to uppercase before calling (e.g. 'BTCUSDT', not 'btcusdt').
+        """
+        with self._positions_lock:
+            return any(pos.symbol == symbol for pos in self._positions.values())
+
     def get_position(self, order_id: str) -> LivePosition | None:
         """Get a position by order_id."""
         with self._positions_lock:

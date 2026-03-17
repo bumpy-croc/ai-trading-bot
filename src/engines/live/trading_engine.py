@@ -2284,6 +2284,15 @@ class LiveTradingEngine:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         try:
+            # Prevent duplicate positions on the same symbol (guards against multi-slot
+            # risk managers with max_concurrent_positions > 1).
+            if self.live_position_tracker.has_position_for_symbol(symbol):
+                logger.info(
+                    "Position already open for %s — skipping duplicate entry.",
+                    symbol,
+                )
+                return
+
             # Check max concurrent positions limit (defense-in-depth, also checked in loop)
             max_concurrent = self.risk_manager.get_max_concurrent_positions()
             if self.live_position_tracker.position_count >= max_concurrent:
@@ -3326,8 +3335,7 @@ class LiveTradingEngine:
             [
                 p
                 for p in self.live_position_tracker.positions.values()
-                if p.entry_time is not None
-                and p.entry_time.replace(tzinfo=None) > one_hour_ago
+                if p.entry_time is not None and p.entry_time.replace(tzinfo=None) > one_hour_ago
             ]
         )
         if recent_trades > 0:
