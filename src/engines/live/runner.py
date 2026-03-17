@@ -24,6 +24,7 @@ from src.risk.risk_manager import RiskParameters
 
 # Import strategies
 from src.strategies.ml_basic import create_ml_basic_strategy
+from src.strategies.hyper_growth import create_hyper_growth_strategy
 
 # Configure logging
 configure_logging()
@@ -34,6 +35,7 @@ def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
         "ml_basic": create_ml_basic_strategy,
+        "hyper_growth": create_hyper_growth_strategy,
     }
 
     # Lazy import for optional strategies to keep startup fast
