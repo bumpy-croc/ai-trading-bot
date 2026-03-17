@@ -1,0 +1,103 @@
+"""Unit tests for LiveTradingEngine session recovery logic.
+
+Covers the _recover_existing_session() method which restores balance across
+both crash restarts (active session) and clean restarts (recent inactive session).
+"""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from src.engines.live.trading_engine import LiveTradingEngine
+from src.strategies.ml_basic import create_ml_basic_strategy
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def make_engine() -> LiveTradingEngine:
+    """Return a minimal LiveTradingEngine with all external I/O mocked out.
+
+    The DatabaseManager is replaced with a MagicMock so tests can configure
+    return values without touching a real database.  The data provider is
+    similarly mocked.  _active_symbol is pre-set to mimic what start() does
+    before calling _recover_existing_session().
+    """
+    mock_data_provider = MagicMock()
+    strategy = create_ml_basic_strategy()
+
+    with patch("src.engines.live.trading_engine.DatabaseManager"):
+        engine = LiveTradingEngine(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=1000.0,
+            enable_live_trading=False,
+        )
+
+    # Replace the db_manager created during __init__ with a fresh MagicMock
+    # so each test gets a clean, unconfigured mock to assert against.
+    engine.db_manager = MagicMock()
+    # Simulate what start() sets before calling _recover_existing_session().
+    engine._active_symbol = "BTCUSDT"
+    return engine
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_recovery_falls_back_to_recent_inactive_session():
+    """No active session → falls back to most-recent session within 24 hours."""
+    engine = make_engine()
+    engine.db_manager.get_active_session_id = MagicMock(return_value=None)
+    engine.db_manager.get_last_session_id = MagicMock(return_value=42)
+    engine.db_manager.recover_last_balance = MagicMock(return_value=1234.56)
+
+    result = engine._recover_existing_session()
+
+    assert result == 1234.56
+    engine.db_manager.get_last_session_id.assert_called_once()
+
+
+@pytest.mark.fast
+def test_recovery_ignores_sessions_older_than_24h():
+    """Stale sessions (> 24 hours) are not recovered."""
+    engine = make_engine()
+    engine.db_manager.get_active_session_id = MagicMock(return_value=None)
+    # get_last_session_id returns None — no session within the time window.
+    engine.db_manager.get_last_session_id = MagicMock(return_value=None)
+
+    result = engine._recover_existing_session()
+
+    assert result is None
+
+
+@pytest.mark.fast
+def test_recovery_prefers_active_session_over_recent():
+    """An active session always wins over recent inactive fallback."""
+    engine = make_engine()
+    engine.db_manager.get_active_session_id = MagicMock(return_value=10)
+    engine.db_manager.recover_last_balance = MagicMock(return_value=999.0)
+    engine.db_manager.get_last_session_id = MagicMock()
+
+    result = engine._recover_existing_session()
+
+    assert result == 999.0
+    engine.db_manager.get_last_session_id.assert_not_called()
+
+
+@pytest.mark.fast
+def test_fresh_start_env_var_bypasses_recovery(monkeypatch):
+    """TRADING_FRESH_START=true skips all session recovery."""
+    monkeypatch.setenv("TRADING_FRESH_START", "true")
+    engine = make_engine()
+    engine.db_manager.get_active_session_id = MagicMock(return_value=10)
+    engine.db_manager.recover_last_balance = MagicMock(return_value=999.0)
+
+    result = engine._recover_existing_session()
+
+    assert result is None
+    engine.db_manager.get_active_session_id.assert_not_called()

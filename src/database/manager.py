@@ -2049,6 +2049,34 @@ class DatabaseManager:
 
             return active_session.id if active_session else None
 
+    def get_last_session_id(
+        self,
+        within_hours: int = 24,
+        strategy_name: str | None = None,
+        symbol: str | None = None,
+    ) -> int | None:
+        """Get the most recent session ID within the given time window.
+
+        Used as fallback when no active session exists (clean restart after
+        graceful shutdown). Filters by strategy and symbol to avoid inheriting
+        balance from a different trading configuration.
+
+        Args:
+            within_hours: Only consider sessions started within this many hours.
+            strategy_name: Only match sessions with this strategy (optional).
+            symbol: Only match sessions with this symbol (optional).
+        """
+        # TradingSession.start_time is stored as datetime.now(UTC) — UTC-aware.
+        cutoff = datetime.now(UTC) - timedelta(hours=within_hours)
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
+            query = session.query(TradingSession).filter(TradingSession.start_time >= cutoff)
+            if strategy_name:
+                query = query.filter(TradingSession.strategy_name == strategy_name)
+            if symbol:
+                query = query.filter(TradingSession.symbol == symbol)
+            last_session = query.order_by(TradingSession.start_time.desc()).first()
+            return last_session.id if last_session else None
+
     def manual_balance_adjustment(
         self, new_balance: float, reason: str, updated_by: str = "user"
     ) -> bool:

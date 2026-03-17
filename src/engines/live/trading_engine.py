@@ -3461,28 +3461,51 @@ class LiveTradingEngine:
         }
 
     def _recover_existing_session(self) -> float | None:
-        """Try to recover from an existing active session"""
+        """Try to recover balance from an existing session.
+
+        Checks for an active session first (crash recovery). If none exists —
+        clean restart after graceful shutdown — falls back to the most recent
+        matching session within 24 hours. Skipped entirely when
+        TRADING_FRESH_START=true is set in the environment.
+        """
+        import os
+
+        if os.environ.get("TRADING_FRESH_START", "").lower() == "true":
+            logger.info("TRADING_FRESH_START=true — skipping session recovery")
+            return None
+
         try:
-            # Check if there's an active session
-            active_session_id = self.db_manager.get_active_session_id()
-            if active_session_id:
-                logger.info("🔍 Found active session #%s", active_session_id)
+            # Prefer an active session (crash recovery path).
+            session_id = self.db_manager.get_active_session_id()
+            source = "active"
 
-                # Try to recover balance
-                recovered_balance = self.db_manager.recover_last_balance(active_session_id)
-                if recovered_balance and recovered_balance > 0:
-                    self.trading_session_id = active_session_id
-                    logger.info(
-                        "🎯 Recovered session #%s with balance $%.2f",
-                        active_session_id,
-                        recovered_balance,
-                    )
-                    return recovered_balance
-                else:
-                    logger.warning("⚠️  Active session found but no balance to recover")
-            else:
-                logger.info("🆕 No active session found")
+            # Fallback: most recent matching session within 24h (clean-restart path).
+            if session_id is None:
+                strategy = self._strategy_name()
+                session_id = self.db_manager.get_last_session_id(
+                    within_hours=24,
+                    strategy_name=strategy,
+                    symbol=self._active_symbol,
+                )
+                source = "recent inactive"
 
+            if session_id is None:
+                logger.info("🆕 No recent session found, starting fresh")
+                return None
+
+            logger.info("🔍 Found %s session #%s", source, session_id)
+            recovered_balance = self.db_manager.recover_last_balance(session_id)
+            if recovered_balance and recovered_balance > 0:
+                self.trading_session_id = session_id
+                logger.info(
+                    "💾 Recovered balance $%.2f from %s session #%s",
+                    recovered_balance,
+                    source,
+                    session_id,
+                )
+                return recovered_balance
+
+            logger.warning("⚠️  Session #%s found but no balance to recover", session_id)
             return None
         except Exception as e:
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
