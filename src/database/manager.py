@@ -2069,7 +2069,13 @@ class DatabaseManager:
         # TradingSession.start_time is stored as datetime.now(UTC) — UTC-aware.
         cutoff = datetime.now(UTC) - timedelta(hours=within_hours)
         with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
-            query = session.query(TradingSession).filter(TradingSession.start_time >= cutoff)
+            query = session.query(TradingSession).filter(
+                TradingSession.start_time >= cutoff,
+                # Exclude sessions still marked active — those are handled by
+                # get_active_session_id(). Including them here risks two engine
+                # instances sharing the same session row on concurrent start.
+                ~TradingSession.is_active,
+            )
             if strategy_name:
                 query = query.filter(TradingSession.strategy_name == strategy_name)
             if symbol:
