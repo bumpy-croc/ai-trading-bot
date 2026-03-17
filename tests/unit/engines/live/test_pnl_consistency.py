@@ -41,10 +41,8 @@ CONCLUSION on the DB sign discrepancy (trade #246):
 
 import pytest
 
-from src.performance.metrics import Side
-from src.performance.metrics import cash_pnl
+from src.performance.metrics import Side, cash_pnl
 from src.performance.metrics import pnl_percent as compute_pnl_pct
-
 
 # ---------------------------------------------------------------------------
 # Winning SHORT — price fell
@@ -68,14 +66,14 @@ def test_winning_short_pnl_and_pnl_pct_are_both_positive() -> None:
 
     # Verify cash_pnl is consistent with the pct calculation
     dollar_via_cash_pnl = cash_pnl(pct, balance)
-    assert dollar_via_cash_pnl > 0, (
-        f"cash_pnl should be positive for winning SHORT, got {dollar_via_cash_pnl}"
-    )
+    assert (
+        dollar_via_cash_pnl > 0
+    ), f"cash_pnl should be positive for winning SHORT, got {dollar_via_cash_pnl}"
 
     # pct and dollar sign must agree
-    assert (pct > 0) == (dollar_via_cash_pnl > 0), (
-        f"pnl_pct sign ({pct}) and dollar pnl sign ({dollar_via_cash_pnl}) must match"
-    )
+    assert (pct > 0) == (
+        dollar_via_cash_pnl > 0
+    ), f"pnl_pct sign ({pct}) and dollar pnl sign ({dollar_via_cash_pnl}) must match"
 
 
 # ---------------------------------------------------------------------------
@@ -99,13 +97,13 @@ def test_losing_short_pnl_and_pnl_pct_are_both_negative() -> None:
     assert gross < 0, f"gross pnl should be negative for losing SHORT, got {gross}"
 
     dollar_via_cash_pnl = cash_pnl(pct, balance)
-    assert dollar_via_cash_pnl < 0, (
-        f"cash_pnl should be negative for losing SHORT, got {dollar_via_cash_pnl}"
-    )
+    assert (
+        dollar_via_cash_pnl < 0
+    ), f"cash_pnl should be negative for losing SHORT, got {dollar_via_cash_pnl}"
 
-    assert (pct < 0) == (dollar_via_cash_pnl < 0), (
-        f"pnl_pct sign ({pct}) and dollar pnl sign ({dollar_via_cash_pnl}) must match"
-    )
+    assert (pct < 0) == (
+        dollar_via_cash_pnl < 0
+    ), f"pnl_pct sign ({pct}) and dollar pnl sign ({dollar_via_cash_pnl}) must match"
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +123,9 @@ def test_winning_long_pnl_and_pnl_pct_are_both_positive() -> None:
     assert pct > 0, f"pnl_pct should be positive for winning LONG, got {pct}"
 
     dollar_via_cash_pnl = cash_pnl(pct, balance)
-    assert dollar_via_cash_pnl > 0, (
-        f"cash_pnl should be positive for winning LONG, got {dollar_via_cash_pnl}"
-    )
+    assert (
+        dollar_via_cash_pnl > 0
+    ), f"cash_pnl should be positive for winning LONG, got {dollar_via_cash_pnl}"
 
     assert (pct > 0) == (dollar_via_cash_pnl > 0)
 
@@ -149,9 +147,9 @@ def test_losing_long_pnl_and_pnl_pct_are_both_negative() -> None:
     assert pct < 0, f"pnl_pct should be negative for losing LONG, got {pct}"
 
     dollar_via_cash_pnl = cash_pnl(pct, balance)
-    assert dollar_via_cash_pnl < 0, (
-        f"cash_pnl should be negative for losing LONG, got {dollar_via_cash_pnl}"
-    )
+    assert (
+        dollar_via_cash_pnl < 0
+    ), f"cash_pnl should be negative for losing LONG, got {dollar_via_cash_pnl}"
 
     assert (pct < 0) == (dollar_via_cash_pnl < 0)
 
