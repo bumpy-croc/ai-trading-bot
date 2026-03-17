@@ -124,7 +124,8 @@ def test_paper_mode_stop_preserves_open_positions():
     mock_pos = MagicMock()
     mock_pos.symbol = "BTCUSDT"
     mock_pos.order_id = "paper_order_1"
-    engine.live_position_tracker._positions["paper_order_1"] = mock_pos
+    # Use the public API to inject the position so _position_db_ids stays consistent.
+    engine.live_position_tracker.track_recovered_position(mock_pos, db_id=None)
 
     engine.stop()
 
@@ -139,10 +140,31 @@ def test_live_mode_stop_closes_positions():
     mock_pos = MagicMock()
     mock_pos.symbol = "BTCUSDT"
     mock_pos.order_id = "live_order_1"
-    engine.live_position_tracker._positions["live_order_1"] = mock_pos
+    # Use the public API to inject the position so _position_db_ids stays consistent.
+    engine.live_position_tracker.track_recovered_position(mock_pos, db_id=None)
     engine.data_provider.get_current_price = MagicMock(return_value=90000.0)
     engine._execute_exit = MagicMock()
 
     engine.stop()
 
-    engine._execute_exit.assert_called_once()
+    engine._execute_exit.assert_called_once_with(
+        mock_pos, "Engine shutdown", None, 90000.0, None, None, None
+    )
+
+
+@pytest.mark.fast
+def test_live_mode_stop_with_invalid_price_skips_execute_exit():
+    """In live mode, stop() logs critical but does NOT call _execute_exit if price is None."""
+    engine = make_engine(enable_live_trading=True)
+    engine.is_running = True  # simulate a running engine
+    mock_pos = MagicMock()
+    mock_pos.symbol = "BTCUSDT"
+    mock_pos.order_id = "live_order_1"
+    # Use the public API to inject the position so _position_db_ids stays consistent.
+    engine.live_position_tracker.track_recovered_position(mock_pos, db_id=None)
+    engine.data_provider.get_current_price = MagicMock(return_value=None)
+    engine._execute_exit = MagicMock()
+
+    engine.stop()
+
+    engine._execute_exit.assert_not_called()
