@@ -50,7 +50,12 @@ def make_engine(enable_live_trading: bool = False) -> LiveTradingEngine:
 
 @pytest.mark.fast
 def test_recovery_falls_back_to_recent_inactive_session():
-    """No active session → falls back to most-recent session within 24 hours."""
+    """No active session → falls back to most-recent session within 24 hours.
+
+    Critically: trading_session_id must remain None so start() creates a
+    fresh session. Reusing the closed session ID would cause every balance
+    update to fail with "No active trading session".
+    """
     engine = make_engine()
     engine.db_manager.get_active_session_id = MagicMock(return_value=None)
     engine.db_manager.get_last_session_id = MagicMock(return_value=42)
@@ -60,6 +65,25 @@ def test_recovery_falls_back_to_recent_inactive_session():
 
     assert result == 1234.56
     engine.db_manager.get_last_session_id.assert_called_once()
+    # Session ID must NOT be set — start() must create a new active session.
+    assert engine.trading_session_id is None
+
+
+@pytest.mark.fast
+def test_active_session_recovery_reuses_session_id():
+    """Crash recovery (active session) reuses the existing session ID.
+
+    This ensures trades after a crash are still attributed to the same
+    session row rather than opening a duplicate.
+    """
+    engine = make_engine()
+    engine.db_manager.get_active_session_id = MagicMock(return_value=77)
+    engine.db_manager.recover_last_balance = MagicMock(return_value=850.0)
+
+    result = engine._recover_existing_session()
+
+    assert result == 850.0
+    assert engine.trading_session_id == 77
 
 
 @pytest.mark.fast
