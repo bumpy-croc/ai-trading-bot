@@ -74,6 +74,7 @@ from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
+from src.engines.shared.validation import is_same_bar_entry
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import (
     log_data_event,
@@ -1535,17 +1536,12 @@ class LiveTradingEngine:
                 # Pass current candle time so positions entered on this bar
                 # are skipped, matching backtest same-bar protection.
                 if not safety_mode:
-                    _candle_time = (
-                        df.index[current_index]
-                        if df is not None and current_index < len(df)
-                        else None
-                    )
                     self.live_exit_handler.check_partial_operations(
                         df,
                         current_index,
                         float(current_price),
                         self.current_balance,
-                        candle_time=_candle_time,
+                        candle_time=current_time,
                     )
                 # Check entry conditions if not at maximum positions
                 if (not safety_mode) and (
@@ -1905,38 +1901,16 @@ class LiveTradingEngine:
             candle_time = df.index[current_index]
 
         for position in positions_snapshot.values():
-            # Same-bar exit protection: skip exit evaluation for positions
-            # entered on the current candle. The candle's high/low may include
-            # extremes that occurred before the entry fill, so evaluating SL/TP
-            # against them would be unrealistic. This matches backtest behavior
-            # where entered_this_candle prevents same-bar exits.
-            if candle_time is not None and position.entry_time is not None:
-                try:
-                    entry_ts = position.entry_time
-                    # Normalize both timestamps to UTC-aware for safe comparison.
-                    # All timestamps in this system are UTC; if one is naive,
-                    # localize it rather than stripping tzinfo from the other.
-                    entry_cmp = entry_ts
-                    candle_cmp = candle_time
-                    entry_aware = getattr(entry_cmp, "tzinfo", None) is not None
-                    candle_aware = getattr(candle_cmp, "tzinfo", None) is not None
-                    if entry_aware and not candle_aware:
-                        candle_cmp = candle_cmp.replace(tzinfo=UTC)
-                    elif candle_aware and not entry_aware:
-                        entry_cmp = entry_cmp.replace(tzinfo=UTC)
-                    if entry_cmp >= candle_cmp:
-                        logger.debug(
-                            "Skipping exit check for %s: entered on current bar",
-                            position.symbol,
-                        )
-                        continue
-                except (TypeError, ValueError, AttributeError) as exc:
-                    logger.warning(
-                        "Same-bar exit comparison failed for %s, "
-                        "proceeding with exit check: %s",
-                        position.symbol,
-                        exc,
-                    )
+            # Same-bar exit protection: skip positions entered on the current
+            # candle. The candle's high/low may include extremes before the
+            # entry fill, making SL/TP evaluation unrealistic. Matches backtest
+            # behavior where entered_this_candle prevents same-bar exits.
+            if is_same_bar_entry(position.entry_time, candle_time):
+                logger.debug(
+                    "Skipping exit check for %s: entered on current bar",
+                    position.symbol,
+                )
+                continue
 
             exit_check = self.live_exit_handler.check_exit_conditions(
                 position=position,
@@ -3624,6 +3598,22 @@ class LiveTradingEngine:
                     order_id=str(pos_data["id"]),  # Use database ID as order_id
                     stop_loss_order_id=pos_data.get("stop_loss_order_id"),
                 )
+
+                # Validate recovered entry_price before tracking. Positions
+                # with invalid entry_price cannot be closed properly and would
+                # become orphaned in the tracker.
+                if (
+                    position.entry_price <= 0
+                    or not math.isfinite(position.entry_price)
+                ):
+                    logger.critical(
+                        "SKIPPING recovery of position %s (%s): invalid entry_price %.8f. "
+                        "MANUAL RECONCILIATION REQUIRED.",
+                        position.symbol,
+                        position.order_id,
+                        position.entry_price,
+                    )
+                    continue
 
                 if position.order_id:
                     self.live_position_tracker.track_recovered_position(

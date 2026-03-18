@@ -5,12 +5,9 @@ exit evaluation, while positions from previous candles are evaluated normally.
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
-
-import pandas as pd
-import pytest
 
 from src.engines.shared.models import BasePosition, PositionSide
+from src.engines.shared.validation import is_same_bar_entry
 
 
 def _make_position(
@@ -31,44 +28,6 @@ def _make_position(
     )
 
 
-def _make_df(timestamps: list[datetime], close: float = 50500.0) -> pd.DataFrame:
-    """Create a minimal OHLCV DataFrame indexed by timestamps."""
-    data = {
-        "open": [close] * len(timestamps),
-        "high": [close + 500] * len(timestamps),
-        "low": [close - 500] * len(timestamps),
-        "close": [close] * len(timestamps),
-        "volume": [100.0] * len(timestamps),
-    }
-    return pd.DataFrame(data, index=pd.DatetimeIndex(timestamps))
-
-
-def _apply_same_bar_logic(
-    position: BasePosition,
-    candle_time: datetime | None,
-) -> bool:
-    """Reproduce the same-bar exit protection logic from the live engine.
-
-    Returns True if the position should be SKIPPED (not evaluated for exit).
-    This mirrors the exact branching logic at lines 1896-1928 of trading_engine.py.
-    """
-    if candle_time is not None and position.entry_time is not None:
-        try:
-            entry_cmp = position.entry_time
-            candle_cmp = candle_time
-            entry_aware = getattr(entry_cmp, "tzinfo", None) is not None
-            candle_aware = getattr(candle_cmp, "tzinfo", None) is not None
-            if entry_aware and not candle_aware:
-                candle_cmp = candle_cmp.replace(tzinfo=UTC)
-            elif candle_aware and not entry_aware:
-                entry_cmp = entry_cmp.replace(tzinfo=UTC)
-            if entry_cmp >= candle_cmp:
-                return True  # Skip exit evaluation
-        except (TypeError, ValueError, AttributeError):
-            pass  # Fall through to evaluate exit normally
-    return False  # Evaluate exit normally
-
-
 class TestSameBarExitProtection:
     """Test same-bar exit protection in the live engine."""
 
@@ -79,7 +38,7 @@ class TestSameBarExitProtection:
         position = _make_position(entry_time=candle_time)
 
         # Act
-        skipped = _apply_same_bar_logic(position, candle_time)
+        skipped = is_same_bar_entry(position.entry_time, candle_time)
 
         # Assert
         assert skipped is True
@@ -93,7 +52,7 @@ class TestSameBarExitProtection:
         position = _make_position(entry_time=entry_time)
 
         # Act
-        skipped = _apply_same_bar_logic(position, candle_time)
+        skipped = is_same_bar_entry(position.entry_time, candle_time)
 
         # Assert
         assert skipped is True
@@ -106,7 +65,7 @@ class TestSameBarExitProtection:
         position = _make_position(entry_time=entry_time)
 
         # Act
-        skipped = _apply_same_bar_logic(position, candle_time)
+        skipped = is_same_bar_entry(position.entry_time, candle_time)
 
         # Assert
         assert skipped is False
@@ -119,7 +78,7 @@ class TestSameBarExitProtection:
         position = _make_position(entry_time=entry_time)
 
         # Act
-        skipped = _apply_same_bar_logic(position, candle_time)
+        skipped = is_same_bar_entry(position.entry_time, candle_time)
 
         # Assert
         assert skipped is False
@@ -132,7 +91,7 @@ class TestSameBarExitProtection:
         )
 
         # Act
-        skipped = _apply_same_bar_logic(position, candle_time=None)
+        skipped = is_same_bar_entry(position.entry_time, candle_time=None)
 
         # Assert
         assert skipped is False
@@ -148,7 +107,7 @@ class TestSameBarExitProtection:
         candle_time = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
 
         # Act
-        skipped = _apply_same_bar_logic(position, candle_time)
+        skipped = is_same_bar_entry(position.entry_time, candle_time)
 
         # Assert
         assert skipped is False
@@ -161,7 +120,7 @@ class TestSameBarExitProtection:
         position = _make_position(entry_time=aware_entry)
 
         # Act
-        skipped = _apply_same_bar_logic(position, naive_candle)
+        skipped = is_same_bar_entry(position.entry_time, naive_candle)
 
         # Assert - same timestamp, should be skipped
         assert skipped is True
@@ -174,7 +133,7 @@ class TestSameBarExitProtection:
         position = _make_position(entry_time=naive_entry)
 
         # Act
-        skipped = _apply_same_bar_logic(position, aware_candle)
+        skipped = is_same_bar_entry(position.entry_time, aware_candle)
 
         # Assert - entry is before candle, should be evaluated
         assert skipped is False
@@ -187,7 +146,7 @@ class TestSameBarExitProtection:
         position = _make_position(entry_time=naive_entry)
 
         # Act
-        skipped = _apply_same_bar_logic(position, aware_candle)
+        skipped = is_same_bar_entry(position.entry_time, aware_candle)
 
         # Assert
         assert skipped is True
@@ -200,7 +159,7 @@ class TestSameBarExitProtection:
         position = _make_position(entry_time=naive_entry)
 
         # Act
-        skipped = _apply_same_bar_logic(position, naive_candle)
+        skipped = is_same_bar_entry(position.entry_time, naive_candle)
 
         # Assert
         assert skipped is True

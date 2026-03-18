@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
 
 from src.config.constants import DEFAULT_EPSILON
 
@@ -340,3 +341,38 @@ def validate_parallel_lists(
         raise ValueError(
             f"{name1} length ({len(list1)}) must match " f"{name2} length ({len(list2)})"
         )
+
+
+def is_same_bar_entry(entry_time: datetime | None, candle_time: object | None) -> bool:
+    """Check if a position was entered on the current candle (same-bar protection).
+
+    Positions entered on or after the candle open should not be evaluated for
+    exits, because the candle's high/low may include extremes that occurred
+    before the entry fill.
+
+    Handles mixed timezone-aware and timezone-naive timestamps by promoting
+    the naive side to UTC, since all timestamps in this system are UTC.
+
+    Args:
+        entry_time: When the position was entered.
+        candle_time: The current candle's open timestamp.
+
+    Returns:
+        True if the position was entered on the current bar (should be skipped),
+        False if it should be evaluated for exit normally.
+    """
+    if candle_time is None or entry_time is None:
+        return False
+
+    try:
+        entry_cmp = entry_time
+        candle_cmp = candle_time
+        entry_aware = getattr(entry_cmp, "tzinfo", None) is not None
+        candle_aware = getattr(candle_cmp, "tzinfo", None) is not None
+        if entry_aware and not candle_aware:
+            candle_cmp = candle_cmp.replace(tzinfo=UTC)  # type: ignore[union-attr]
+        elif candle_aware and not entry_aware:
+            entry_cmp = entry_cmp.replace(tzinfo=UTC)
+        return entry_cmp >= candle_cmp  # type: ignore[return-value]
+    except (TypeError, ValueError, AttributeError):
+        return False

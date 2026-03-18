@@ -42,6 +42,7 @@ from src.engines.shared.trailing_stop_manager import TrailingStopManager
 from src.engines.shared.validation import (
     convert_exit_fraction_to_current,
     is_position_fully_closed,
+    is_same_bar_entry,
 )
 
 if TYPE_CHECKING:
@@ -759,24 +760,12 @@ class LiveExitHandler:
             # Same-bar protection: skip positions entered on the current candle.
             # This matches the backtest engine where entered_this_candle guards
             # both full exits and partial operations.
-            if candle_time is not None and position.entry_time is not None:
-                try:
-                    entry_cmp = position.entry_time
-                    candle_cmp = candle_time
-                    entry_aware = getattr(entry_cmp, "tzinfo", None) is not None
-                    candle_aware = getattr(candle_cmp, "tzinfo", None) is not None
-                    if entry_aware and not candle_aware:
-                        candle_cmp = candle_cmp.replace(tzinfo=UTC)
-                    elif candle_aware and not entry_aware:
-                        entry_cmp = entry_cmp.replace(tzinfo=UTC)
-                    if entry_cmp >= candle_cmp:
-                        logger.debug(
-                            "Skipping partial ops for %s: entered on current bar",
-                            position.symbol,
-                        )
-                        continue
-                except (TypeError, ValueError, AttributeError) as exc:
-                    logger.debug("Candle-time comparison failed: %s", exc)
+            if is_same_bar_entry(position.entry_time, candle_time):
+                logger.debug(
+                    "Skipping partial ops for %s: entered on current bar",
+                    position.symbol,
+                )
+                continue
             try:
                 # Check for partial exits (loop to handle multiple exits in same cycle)
                 iteration_count = 0
