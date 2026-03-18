@@ -15,13 +15,15 @@ def sample_ohlcv():
     np.random.seed(42)
     n = 100
     close = 50000 + np.cumsum(np.random.randn(n) * 100)
-    return pd.DataFrame({
-        "open": close - np.random.rand(n) * 50,
-        "high": close + np.random.rand(n) * 100,
-        "low": close - np.random.rand(n) * 100,
-        "close": close,
-        "volume": np.random.rand(n) * 1e6 + 1e5,
-    })
+    return pd.DataFrame(
+        {
+            "open": close - np.random.rand(n) * 50,
+            "high": close + np.random.rand(n) * 100,
+            "low": close - np.random.rand(n) * 100,
+            "close": close,
+            "volume": np.random.rand(n) * 1e6 + 1e5,
+        }
+    )
 
 
 @pytest.mark.fast

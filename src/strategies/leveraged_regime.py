@@ -68,9 +68,7 @@ def create_leveraged_regime_strategy(
     # Validate signal_source parameter
     valid_sources = ("momentum", "ml")
     if signal_source not in valid_sources:
-        raise ValueError(
-            f"signal_source must be one of {valid_sources}, got '{signal_source}'"
-        )
+        raise ValueError(f"signal_source must be one of {valid_sources}, got '{signal_source}'")
 
     # Create signal generator based on source preference
     if signal_source == "ml":

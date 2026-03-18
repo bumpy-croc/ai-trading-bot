@@ -20,6 +20,7 @@ from src.optimizer.walk_forward import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_result(
     sharpe: float = 1.0,
     total_return: float = 10.0,
@@ -55,6 +56,7 @@ def _make_result(
 # ---------------------------------------------------------------------------
 # Window splitting
 # ---------------------------------------------------------------------------
+
 
 class TestComputeWindows:
     def test_single_fold(self):
@@ -100,6 +102,7 @@ class TestComputeWindows:
 # Robustness label
 # ---------------------------------------------------------------------------
 
+
 class TestRobustnessLabel:
     def test_robust(self):
         assert robustness_label(0.8, 0.5, 0.7) == "ROBUST"
@@ -126,6 +129,7 @@ class TestRobustnessLabel:
 # ---------------------------------------------------------------------------
 # Safe robustness ratio
 # ---------------------------------------------------------------------------
+
 
 class TestSafeRobustness:
     def test_normal_positive(self):
@@ -154,6 +158,7 @@ class TestSafeRobustness:
 # ---------------------------------------------------------------------------
 # Overfitting detection
 # ---------------------------------------------------------------------------
+
 
 class TestOverfittingDetection:
     def _make_analyzer(self) -> WalkForwardAnalyzer:
@@ -215,6 +220,7 @@ class TestOverfittingDetection:
 # Aggregation
 # ---------------------------------------------------------------------------
 
+
 class TestAggregation:
     def _make_analyzer(self) -> WalkForwardAnalyzer:
         cfg = WalkForwardConfig(provider="mock", random_seed=42)
@@ -263,6 +269,7 @@ class TestAggregation:
 # Fold resolution
 # ---------------------------------------------------------------------------
 
+
 class TestFoldResolution:
     def test_explicit_num_folds(self):
         cfg = WalkForwardConfig(num_folds=10, train_days=90, test_days=30)
@@ -309,6 +316,7 @@ class TestFoldResolution:
 # Integration with mock runner
 # ---------------------------------------------------------------------------
 
+
 class TestWalkForwardRun:
     def test_run_with_mock_runner(self):
         """Verify end-to-end run with a mocked ExperimentRunner."""
@@ -326,12 +334,12 @@ class TestWalkForwardRun:
         mock_runner = MagicMock()
         # Alternate IS/OOS results for 3 folds (6 calls total)
         mock_runner.run.side_effect = [
-            _make_result(sharpe=1.2),   # fold 0 IS
-            _make_result(sharpe=0.8),   # fold 0 OOS
-            _make_result(sharpe=1.0),   # fold 1 IS
-            _make_result(sharpe=0.7),   # fold 1 OOS
-            _make_result(sharpe=1.5),   # fold 2 IS
-            _make_result(sharpe=1.0),   # fold 2 OOS
+            _make_result(sharpe=1.2),  # fold 0 IS
+            _make_result(sharpe=0.8),  # fold 0 OOS
+            _make_result(sharpe=1.0),  # fold 1 IS
+            _make_result(sharpe=0.7),  # fold 1 OOS
+            _make_result(sharpe=1.5),  # fold 2 IS
+            _make_result(sharpe=1.0),  # fold 2 OOS
         ]
 
         analyzer = WalkForwardAnalyzer(cfg, runner=mock_runner)
@@ -360,10 +368,10 @@ class TestWalkForwardRun:
 
         mock_runner = MagicMock()
         mock_runner.run.side_effect = [
-            _make_result(sharpe=3.0),   # fold 0 IS  (great)
-            _make_result(sharpe=0.2),   # fold 0 OOS (terrible)
-            _make_result(sharpe=2.5),   # fold 1 IS  (great)
-            _make_result(sharpe=0.1),   # fold 1 OOS (terrible)
+            _make_result(sharpe=3.0),  # fold 0 IS  (great)
+            _make_result(sharpe=0.2),  # fold 0 OOS (terrible)
+            _make_result(sharpe=2.5),  # fold 1 IS  (great)
+            _make_result(sharpe=0.1),  # fold 1 OOS (terrible)
         ]
 
         analyzer = WalkForwardAnalyzer(cfg, runner=mock_runner)

@@ -14,6 +14,7 @@ from src.optimizer.strategy_drift import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _baseline_kwargs(
     sharpe_mean: float = 1.0,
     sharpe_std: float = 0.3,
@@ -36,6 +37,7 @@ def _baseline_kwargs(
 # ---------------------------------------------------------------------------
 # Severity classification
 # ---------------------------------------------------------------------------
+
 
 class TestDriftSeverityNone:
     def test_performance_within_range(self):
@@ -107,6 +109,7 @@ class TestDriftSeverityCritical:
 # Input validation
 # ---------------------------------------------------------------------------
 
+
 class TestInputValidation:
     def test_nan_live_sharpe_raises(self):
         detector = StrategyDriftDetector()
@@ -143,6 +146,7 @@ class TestInputValidation:
 # DriftConfig validation
 # ---------------------------------------------------------------------------
 
+
 class TestDriftConfigValidation:
     def test_negative_threshold_raises(self):
         with pytest.raises(ValueError, match="positive"):
@@ -161,6 +165,7 @@ class TestDriftConfigValidation:
 # ---------------------------------------------------------------------------
 # Z-score edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestZScore:
     def test_zero_std_no_deviation(self):
@@ -183,6 +188,7 @@ class TestZScore:
 # ---------------------------------------------------------------------------
 # Custom thresholds
 # ---------------------------------------------------------------------------
+
 
 class TestCustomConfig:
     def test_tighter_thresholds(self):
@@ -215,6 +221,7 @@ class TestCustomConfig:
 # Report details
 # ---------------------------------------------------------------------------
 
+
 class TestReportDetails:
     def test_details_contain_live_and_baseline(self):
         detector = StrategyDriftDetector()
@@ -245,6 +252,7 @@ class TestReportDetails:
 # ---------------------------------------------------------------------------
 # Drift severity enum
 # ---------------------------------------------------------------------------
+
 
 class TestDriftSeverityEnum:
     def test_values(self):

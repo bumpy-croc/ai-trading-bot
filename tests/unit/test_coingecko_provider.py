@@ -49,12 +49,7 @@ def test_get_historical_data(provider):
     start = datetime.now(UTC) - timedelta(days=7)
     end = datetime.now(UTC)
 
-    df = provider.get_historical_data(
-        symbol="BTC-USD",
-        timeframe="4h",
-        start=start,
-        end=end
-    )
+    df = provider.get_historical_data(symbol="BTC-USD", timeframe="4h", start=start, end=end)
 
     # Validate DataFrame structure
     assert isinstance(df, pd.DataFrame)
@@ -84,18 +79,15 @@ def test_get_historical_data(provider):
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="CoinGecko /ohlc endpoint returns 400 - free tier may not support this endpoint")
+@pytest.mark.skip(
+    reason="CoinGecko /ohlc endpoint returns 400 - free tier may not support this endpoint"
+)
 def test_data_persistence(provider):
     """Test that data is persisted in provider.data attribute."""
     start = datetime.now(UTC) - timedelta(days=3)
     end = datetime.now(UTC)
 
-    df = provider.get_historical_data(
-        symbol="ETH-USD",
-        timeframe="4h",
-        start=start,
-        end=end
-    )
+    df = provider.get_historical_data(symbol="ETH-USD", timeframe="4h", start=start, end=end)
 
     # provider.data should be set after fetching
     assert provider.data is not None
@@ -161,7 +153,8 @@ class TestCoinGeckoProviderMocked:
         # Mock connection error
         with (
             patch.object(
-                mock_provider._session, "get",
+                mock_provider._session,
+                "get",
                 side_effect=requests.ConnectionError("Network unreachable"),
             ),
             patch("time.sleep"),
@@ -179,7 +172,8 @@ class TestCoinGeckoProviderMocked:
         # Mock timeout error
         with (
             patch.object(
-                mock_provider._session, "get",
+                mock_provider._session,
+                "get",
                 side_effect=requests.Timeout("Request timed out"),
             ),
             patch("time.sleep"),
@@ -459,9 +453,7 @@ class TestCoinGeckoProviderMocked:
             assert isinstance(result, pd.DataFrame)
             assert not result.empty
 
-    def test_binance_coingecko_stitch_uses_candle_interval_not_full_day(
-        self, mock_provider
-    ):
+    def test_binance_coingecko_stitch_uses_candle_interval_not_full_day(self, mock_provider):
         """Test that the Binance→CoinGecko stitch advances by one candle interval.
 
         Regression guard for the P2 Codex review finding: using timedelta(days=1)

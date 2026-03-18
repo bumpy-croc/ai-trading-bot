@@ -86,9 +86,7 @@ class MacroFeatureExtractor(FeatureExtractor):
 
         return df
 
-    def _momentum_signal(
-        self, series: pd.Series, fast: int = 10, slow: int = 30
-    ) -> pd.Series:
+    def _momentum_signal(self, series: pd.Series, fast: int = 10, slow: int = 30) -> pd.Series:
         """
         Compute a normalized momentum signal from a price series.
 
@@ -180,8 +178,10 @@ class MacroFeatureExtractor(FeatureExtractor):
     def get_config(self) -> dict:
         """Get configuration parameters for this extractor."""
         config = super().get_config()
-        config.update({
-            "enabled": self.enabled,
-            "cache_ttl": self.cache_ttl,
-        })
+        config.update(
+            {
+                "enabled": self.enabled,
+                "cache_ttl": self.cache_ttl,
+            }
+        )
         return config

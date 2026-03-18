@@ -225,9 +225,15 @@ class WalkForwardAnalyzer:
 
         folds: list[FoldResult] = []
         for idx, (train_start, train_end, test_start, test_end) in enumerate(windows):
-            self.logger.info("Fold %d/%d: IS %s–%s  OOS %s–%s", idx + 1, len(windows),
-                             train_start.date(), train_end.date(),
-                             test_start.date(), test_end.date())
+            self.logger.info(
+                "Fold %d/%d: IS %s–%s  OOS %s–%s",
+                idx + 1,
+                len(windows),
+                train_start.date(),
+                train_end.date(),
+                test_start.date(),
+                test_end.date(),
+            )
 
             is_cfg = self._build_experiment(train_start, train_end)
             oos_cfg = self._build_experiment(test_start, test_end)

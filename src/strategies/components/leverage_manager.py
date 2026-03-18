@@ -40,12 +40,12 @@ class LeverageState:
 
 # Default leverage targets for each regime combination
 DEFAULT_LEVERAGE_MAP: dict[tuple[TrendLabel, VolLabel], float] = {
-    (TrendLabel.TREND_UP, VolLabel.LOW): 2.5,   # Bull: strong leverage
+    (TrendLabel.TREND_UP, VolLabel.LOW): 2.5,  # Bull: strong leverage
     (TrendLabel.TREND_UP, VolLabel.HIGH): 1.75,  # Mild bull: moderate leverage
-    (TrendLabel.RANGE, VolLabel.LOW): 1.0,       # Range: no leverage
-    (TrendLabel.RANGE, VolLabel.HIGH): 1.0,      # Range: no leverage
+    (TrendLabel.RANGE, VolLabel.LOW): 1.0,  # Range: no leverage
+    (TrendLabel.RANGE, VolLabel.HIGH): 1.0,  # Range: no leverage
     (TrendLabel.TREND_DOWN, VolLabel.LOW): 0.5,  # Mild bear: reduced exposure
-    (TrendLabel.TREND_DOWN, VolLabel.HIGH): 0.0, # Bear: cash/defensive
+    (TrendLabel.TREND_DOWN, VolLabel.HIGH): 0.0,  # Bear: cash/defensive
 }
 
 
@@ -89,9 +89,7 @@ class LeverageManager:
         if not math.isfinite(decay_rate) or not 0.0 < decay_rate <= 1.0:
             raise ValueError(f"decay_rate must be finite and in (0, 1], got {decay_rate}")
         if min_regime_bars < 0:
-            raise ValueError(
-                f"min_regime_bars must be non-negative, got {min_regime_bars}"
-            )
+            raise ValueError(f"min_regime_bars must be non-negative, got {min_regime_bars}")
 
         self.max_leverage = max_leverage
         self.decay_rate = decay_rate
@@ -102,13 +100,9 @@ class LeverageManager:
         # Validate and clamp leverage map values
         for key, value in self.leverage_map.items():
             if value < 0.0:
-                raise ValueError(
-                    f"leverage_map values must be non-negative, got {value} for {key}"
-                )
+                raise ValueError(f"leverage_map values must be non-negative, got {value} for {key}")
             if not math.isfinite(value):
-                raise ValueError(
-                    f"leverage_map values must be finite, got {value} for {key}"
-                )
+                raise ValueError(f"leverage_map values must be finite, got {value} for {key}")
             if value > self.max_leverage:
                 self.leverage_map[key] = self.max_leverage
 
@@ -127,9 +121,7 @@ class LeverageManager:
             Leverage multiplier in [0.0, max_leverage].
         """
         # Look up base target for this regime combination
-        raw_target = self.leverage_map.get(
-            (regime.trend, regime.volatility), 1.0
-        )
+        raw_target = self.leverage_map.get((regime.trend, regime.volatility), 1.0)
 
         # Apply conviction scaling based on regime duration
         conviction = self._compute_conviction(regime)
@@ -173,10 +165,7 @@ class LeverageManager:
             "max_leverage": self.max_leverage,
             "decay_rate": self.decay_rate,
             "min_regime_bars": self.min_regime_bars,
-            "leverage_map": {
-                f"{k[0].value}_{k[1].value}": v
-                for k, v in self.leverage_map.items()
-            },
+            "leverage_map": {f"{k[0].value}_{k[1].value}": v for k, v in self.leverage_map.items()},
         }
 
     def _compute_conviction(self, regime: RegimeContext) -> float:
@@ -201,9 +190,7 @@ class LeverageManager:
             excess = duration - self.min_regime_bars
             # log2(x+2)/log2(max+2) gives a nice curve from ~0.5 to 1.0
             max_excess = self.MAX_REGIME_EXCESS_BARS
-            base_conviction = 0.5 + 0.5 * math.log2(excess + 2) / math.log2(
-                max_excess + 2
-            )
+            base_conviction = 0.5 + 0.5 * math.log2(excess + 2) / math.log2(max_excess + 2)
             base_conviction = min(base_conviction, 1.0)
 
         # Weight by regime confidence

@@ -11,30 +11,32 @@ from src.config import get_config
 from src.infrastructure.logging.context import get_context
 
 # Built-in LogRecord fields that filters/formatters should skip
-_BUILTIN_RECORD_FIELDS = frozenset({
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-    "getMessage",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "message",
-})
+_BUILTIN_RECORD_FIELDS = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "getMessage",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "message",
+    }
+)
 
 
 class SensitiveDataFilter(logging.Filter):

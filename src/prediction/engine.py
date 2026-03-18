@@ -117,9 +117,7 @@ class PredictionEngine:
         # Optional helpers
         self._ensemble_aggregator = None
         if self.config.enable_ensemble:
-            self._ensemble_aggregator = SimpleEnsembleAggregator(
-                self.config.ensemble_method
-            )
+            self._ensemble_aggregator = SimpleEnsembleAggregator(self.config.ensemble_method)
         self._regime_detector = None
         if self.config.enable_regime_aware_confidence:
             self._regime_detector = RegimeDetector(RegimeConfig())

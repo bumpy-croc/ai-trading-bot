@@ -41,18 +41,14 @@ class TestFlatRiskManager:
         )
 
         balance = 10000.0
-        position_size = risk_manager.calculate_position_size(
-            signal=signal, balance=balance
-        )
+        position_size = risk_manager.calculate_position_size(signal=signal, balance=balance)
 
         # Fixed 10% of balance regardless of confidence
         assert position_size == 1000.0
 
     def test_calculate_position_size_filters_low_confidence(self):
         """Test positions below min_confidence are filtered out."""
-        risk_manager = FlatRiskManager(
-            risk_fraction=0.10, stop_loss_pct=0.10, min_confidence=0.05
-        )
+        risk_manager = FlatRiskManager(risk_fraction=0.10, stop_loss_pct=0.10, min_confidence=0.05)
 
         # Signal below min_confidence threshold
         low_conf_signal = Signal(
@@ -82,9 +78,7 @@ class TestFlatRiskManager:
         )
 
         balance = 10000.0
-        position_size = risk_manager.calculate_position_size(
-            signal=hold_signal, balance=balance
-        )
+        position_size = risk_manager.calculate_position_size(signal=hold_signal, balance=balance)
 
         assert position_size == 0.0
 
@@ -100,9 +94,7 @@ class TestFlatRiskManager:
         )
 
         balance = 5000.0
-        position_size = risk_manager.calculate_position_size(
-            signal=sell_signal, balance=balance
-        )
+        position_size = risk_manager.calculate_position_size(signal=sell_signal, balance=balance)
 
         # 20% of balance for short positions too
         assert position_size == 1000.0
@@ -212,9 +204,7 @@ class TestFlatRiskManager:
 
     def test_get_parameters(self):
         """Test get_parameters returns risk manager configuration."""
-        risk_manager = FlatRiskManager(
-            risk_fraction=0.15, stop_loss_pct=0.12, min_confidence=0.04
-        )
+        risk_manager = FlatRiskManager(risk_fraction=0.15, stop_loss_pct=0.12, min_confidence=0.04)
 
         params = risk_manager.get_parameters()
 

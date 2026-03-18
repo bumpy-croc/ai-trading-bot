@@ -95,7 +95,9 @@ class FallbackProvider(DataProvider):
 
             # Move to next exception in chain
             current_exception = (
-                current_exception.__cause__ if current_exception.__cause__ else current_exception.__context__
+                current_exception.__cause__
+                if current_exception.__cause__
+                else current_exception.__context__
             )
             depth += 1
 
@@ -157,7 +159,9 @@ class FallbackProvider(DataProvider):
                         self.data = df
                     logger.info(
                         "✓ Binance: Fetched %d candles for %s %s",
-                        len(df), binance_symbol, timeframe
+                        len(df),
+                        binance_symbol,
+                        timeframe,
                     )
                     return df
                 else:
@@ -188,7 +192,9 @@ class FallbackProvider(DataProvider):
                     self.data = df
                 logger.info(
                     "✓ CoinGecko: Fetched %d candles for %s %s",
-                    len(df), coingecko_symbol, timeframe
+                    len(df),
+                    coingecko_symbol,
+                    timeframe,
                 )
                 return df
             else:
@@ -196,9 +202,7 @@ class FallbackProvider(DataProvider):
 
         except Exception as e:
             logger.error("Both Binance and CoinGecko failed for %s: %s", symbol, e)
-            raise RuntimeError(
-                f"Failed to fetch data from both Binance and CoinGecko: {e}"
-            ) from e
+            raise RuntimeError(f"Failed to fetch data from both Binance and CoinGecko: {e}") from e
 
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         """

@@ -16,6 +16,7 @@ from src.strategies.components.regime_context import RegimeContext, TrendLabel, 
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_regime(
     trend: TrendLabel = TrendLabel.RANGE,
     vol: VolLabel = VolLabel.LOW,
@@ -249,15 +250,11 @@ class TestConviction:
     def test_low_confidence_reduces_conviction(self) -> None:
         """Low regime confidence should reduce effective leverage."""
         mgr1 = LeverageManager(decay_rate=1.0)
-        high_conf = _make_regime(
-            TrendLabel.TREND_UP, VolLabel.LOW, confidence=0.9, duration=30
-        )
+        high_conf = _make_regime(TrendLabel.TREND_UP, VolLabel.LOW, confidence=0.9, duration=30)
         lev_high = mgr1.get_leverage_multiplier(high_conf)
 
         mgr2 = LeverageManager(decay_rate=1.0)
-        low_conf = _make_regime(
-            TrendLabel.TREND_UP, VolLabel.LOW, confidence=0.2, duration=30
-        )
+        low_conf = _make_regime(TrendLabel.TREND_UP, VolLabel.LOW, confidence=0.2, duration=30)
         lev_low = mgr2.get_leverage_multiplier(low_conf)
 
         assert lev_low < lev_high
@@ -287,9 +284,7 @@ class TestBounds:
     def test_never_exceeds_max_leverage(self) -> None:
         """Leverage should never exceed max_leverage."""
         mgr = LeverageManager(max_leverage=2.0, decay_rate=1.0)
-        regime = _make_regime(
-            TrendLabel.TREND_UP, VolLabel.LOW, confidence=1.0, duration=1000
-        )
+        regime = _make_regime(TrendLabel.TREND_UP, VolLabel.LOW, confidence=1.0, duration=1000)
         for _ in range(100):
             lev = mgr.get_leverage_multiplier(regime)
             assert lev <= mgr.max_leverage + 1e-9
@@ -297,9 +292,7 @@ class TestBounds:
     def test_never_goes_negative(self) -> None:
         """Leverage should never go below 0.0."""
         mgr = LeverageManager(decay_rate=1.0)
-        regime = _make_regime(
-            TrendLabel.TREND_DOWN, VolLabel.HIGH, confidence=1.0, duration=1000
-        )
+        regime = _make_regime(TrendLabel.TREND_DOWN, VolLabel.HIGH, confidence=1.0, duration=1000)
         for _ in range(100):
             lev = mgr.get_leverage_multiplier(regime)
             assert lev >= 0.0
@@ -307,9 +300,7 @@ class TestBounds:
     def test_max_leverage_cap_with_high_conviction(self) -> None:
         """Even perfect conditions should respect max_leverage."""
         mgr = LeverageManager(max_leverage=1.5, decay_rate=1.0)
-        regime = _make_regime(
-            TrendLabel.TREND_UP, VolLabel.LOW, confidence=1.0, duration=500
-        )
+        regime = _make_regime(TrendLabel.TREND_UP, VolLabel.LOW, confidence=1.0, duration=500)
         lev = mgr.get_leverage_multiplier(regime)
         assert lev <= 1.5 + 1e-9
 

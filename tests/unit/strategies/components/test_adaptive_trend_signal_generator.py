@@ -694,9 +694,7 @@ class TestEMAThreadSafety:
         gen = AdaptiveTrendSignalGenerator(trend_ema_period=10)
         np.random.seed(101)
         arrays = [np.cumsum(np.random.randn(50)) + 500.0 for _ in range(4)]
-        expected = [
-            pd.Series(arr).ewm(span=10, adjust=False).mean().values for arr in arrays
-        ]
+        expected = [pd.Series(arr).ewm(span=10, adjust=False).mean().values for arr in arrays]
 
         errors: list[str] = []
 
@@ -711,9 +709,7 @@ class TestEMAThreadSafety:
                     val = float(ema[49])
                     valid = any(np.isclose(val, exp[49], rtol=1e-8) for exp in expected)
                     if not valid:
-                        errors.append(
-                            f"arr_idx={arr_idx}: ema[49]={val} matches no expected value"
-                        )
+                        errors.append(f"arr_idx={arr_idx}: ema[49]={val} matches no expected value")
             except Exception as e:
                 errors.append(f"arr_idx={arr_idx} exception: {e}")
 

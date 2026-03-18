@@ -287,9 +287,7 @@ class OnnxRunner:
             "confidence_scale_factor": self.config.confidence_scale_factor,
             "direction_threshold": self.config.direction_threshold,
             "normalization_params": (
-                self.model_metadata.get("normalization_params", {})
-                if self.model_metadata
-                else {}
+                self.model_metadata.get("normalization_params", {}) if self.model_metadata else {}
             ),
         }
 

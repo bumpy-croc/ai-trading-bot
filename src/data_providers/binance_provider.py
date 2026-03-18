@@ -934,9 +934,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             if symbol_info:
                 # Validate tick_size is numeric before division to prevent TypeError
                 tick_size_raw = symbol_info.get("tick_size", 0.01)
-                tick_size = (
-                    float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
-                )
+                tick_size = float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
                 if tick_size > 0:
                     stop_price = round(stop_price / tick_size) * tick_size
                     limit_price = round(limit_price / tick_size) * tick_size

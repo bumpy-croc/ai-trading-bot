@@ -420,9 +420,7 @@ def create_tft_model(
     if hidden_size <= 0:
         raise ValueError(f"hidden_size must be positive, got {hidden_size}")
     if hidden_size % n_heads != 0:
-        raise ValueError(
-            f"hidden_size ({hidden_size}) must be divisible by n_heads ({n_heads})"
-        )
+        raise ValueError(f"hidden_size ({hidden_size}) must be divisible by n_heads ({n_heads})")
     if not 0.0 <= dropout < 1.0:
         raise ValueError(f"dropout must be in [0.0, 1.0), got {dropout}")
     if num_lstm_layers <= 0:

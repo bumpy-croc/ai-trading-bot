@@ -355,9 +355,7 @@ class EmergencyControls:
             # Notify approval callbacks with timeout protection
             for i, callback in enumerate(self.approval_callbacks):
                 try:
-                    execute_with_timeout(
-                        callback, _CALLBACK_TIMEOUT_SECONDS, approval_request
-                    )
+                    execute_with_timeout(callback, _CALLBACK_TIMEOUT_SECONDS, approval_request)
                 except ExecutionTimeoutError as error:
                     self.logger.warning("Approval callback #%d timed out: %s", i, error)
                 except Exception:

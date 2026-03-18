@@ -180,9 +180,7 @@ class TestKellyCalculation:
 
     def test_compute_statistics_no_losses_fallback(self):
         """Test b falls back to expected_reward_risk when no losses exist."""
-        sizer = KellyCriterionSizer(
-            min_trades=2, lookback_trades=20, expected_reward_risk=1.5
-        )
+        sizer = KellyCriterionSizer(min_trades=2, lookback_trades=20, expected_reward_risk=1.5)
         sizer.record_trade(win=True, profit_pct=0.04, loss_risk_pct=0.02)
         sizer.record_trade(win=True, profit_pct=0.04, loss_risk_pct=0.02)
 

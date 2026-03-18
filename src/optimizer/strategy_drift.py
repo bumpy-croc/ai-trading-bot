@@ -132,7 +132,9 @@ class StrategyDriftDetector:
         sharpe_z = self._z_score(live_sharpe, baseline_sharpe_mean, baseline_sharpe_std)
         win_rate_z = self._z_score(live_win_rate, baseline_win_rate_mean, baseline_win_rate_std)
         # For drawdown, *higher* is worse, so invert the sign
-        drawdown_z = -self._z_score(live_max_drawdown, baseline_drawdown_mean, baseline_drawdown_std)
+        drawdown_z = -self._z_score(
+            live_max_drawdown, baseline_drawdown_mean, baseline_drawdown_std
+        )
 
         # Worst (most negative) z-score drives overall severity
         worst_z = min(sharpe_z, win_rate_z, drawdown_z)

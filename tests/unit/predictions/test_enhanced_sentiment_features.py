@@ -15,13 +15,15 @@ def sample_ohlcv():
     np.random.seed(42)
     n = 100
     close = 50000 + np.cumsum(np.random.randn(n) * 100)
-    return pd.DataFrame({
-        "open": close - np.random.rand(n) * 50,
-        "high": close + np.random.rand(n) * 100,
-        "low": close - np.random.rand(n) * 100,
-        "close": close,
-        "volume": np.random.rand(n) * 1e6 + 1e5,
-    })
+    return pd.DataFrame(
+        {
+            "open": close - np.random.rand(n) * 50,
+            "high": close + np.random.rand(n) * 100,
+            "low": close - np.random.rand(n) * 100,
+            "close": close,
+            "volume": np.random.rand(n) * 1e6 + 1e5,
+        }
+    )
 
 
 @pytest.mark.fast
@@ -162,25 +164,29 @@ class TestEnhancedSentimentExtractor:
     def test_zero_price_raises_error(self):
         """Zero prices are rejected by strict validation."""
         extractor = EnhancedSentimentExtractor(enabled=True)
-        df = pd.DataFrame({
-            "open": [100.0, 200.0],
-            "high": [110.0, 210.0],
-            "low": [90.0, 190.0],
-            "close": [0.0, 200.0],
-            "volume": [1000.0, 2000.0],
-        })
+        df = pd.DataFrame(
+            {
+                "open": [100.0, 200.0],
+                "high": [110.0, 210.0],
+                "low": [90.0, 190.0],
+                "close": [0.0, 200.0],
+                "volume": [1000.0, 2000.0],
+            }
+        )
         with pytest.raises(ValueError, match="prices must be positive"):
             extractor.extract(df)
 
     def test_nan_price_raises_error(self):
         """NaN prices are rejected by strict validation."""
         extractor = EnhancedSentimentExtractor(enabled=True)
-        df = pd.DataFrame({
-            "open": [100.0, float("nan")],
-            "high": [110.0, 210.0],
-            "low": [90.0, 190.0],
-            "close": [105.0, 205.0],
-            "volume": [1000.0, 2000.0],
-        })
+        df = pd.DataFrame(
+            {
+                "open": [100.0, float("nan")],
+                "high": [110.0, 210.0],
+                "low": [90.0, 190.0],
+                "close": [105.0, 205.0],
+                "volume": [1000.0, 2000.0],
+            }
+        )
         with pytest.raises(ValueError, match="prices must be positive"):
             extractor.extract(df)

@@ -71,7 +71,9 @@ def _download(ns: argparse.Namespace) -> int:
             return 1
 
         # Fetch data using provider
-        print(f"Fetching {ns.symbol} {ns.timeframe} data from {start_date.date()} to {end_date.date()}...")
+        print(
+            f"Fetching {ns.symbol} {ns.timeframe} data from {start_date.date()} to {end_date.date()}..."
+        )
         df = provider.get_historical_data(ns.symbol, ns.timeframe, start_date, end_date)
 
         if df is None or df.empty:
@@ -99,6 +101,7 @@ def _download(ns: argparse.Namespace) -> int:
     except Exception as e:
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 
@@ -139,7 +142,9 @@ def _prefill(ns: argparse.Namespace) -> int:
     cache_dir = ns.cache_dir or str(get_cache_dir())
     # Use auto provider (Binance → CoinGecko failover)
     provider = CachedDataProvider(
-        create_data_provider(provider_type="auto"), cache_dir=cache_dir, cache_ttl_hours=ns.cache_ttl_hours
+        create_data_provider(provider_type="auto"),
+        cache_dir=cache_dir,
+        cache_ttl_hours=ns.cache_ttl_hours,
     )
     print(
         f"Prefilling cache dir={cache_dir} symbols={symbols} timeframes={timeframes} range={start.date()}..{end.date()}"

@@ -26,20 +26,28 @@ class TestDataDownload:
         )
 
         # Create mock data with proper index
-        mock_df = pd.DataFrame({
-            "open": [40000, 40050],
-            "high": [40100, 40150],
-            "low": [39900, 39950],
-            "close": [40050, 40100],
-            "volume": [100, 150],
-        }, index=pd.DatetimeIndex([
-            datetime(2024, 1, 1, tzinfo=UTC),
-            datetime(2024, 1, 1, 1, 0, tzinfo=UTC),
-        ], name="timestamp"))
+        mock_df = pd.DataFrame(
+            {
+                "open": [40000, 40050],
+                "high": [40100, 40150],
+                "low": [39900, 39950],
+                "close": [40050, 40100],
+                "volume": [100, 150],
+            },
+            index=pd.DatetimeIndex(
+                [
+                    datetime(2024, 1, 1, tzinfo=UTC),
+                    datetime(2024, 1, 1, 1, 0, tzinfo=UTC),
+                ],
+                name="timestamp",
+            ),
+        )
 
         # Act
         with (
-            patch("src.data_providers.provider_factory.create_data_provider") as mock_create_provider,
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
             patch("cli.commands.data.Path") as mock_path,
         ):
 
@@ -75,7 +83,9 @@ class TestDataDownload:
         )
 
         # Act - Mock provider to return None (no data)
-        with patch("src.data_providers.provider_factory.create_data_provider") as mock_create_provider:
+        with patch(
+            "src.data_providers.provider_factory.create_data_provider"
+        ) as mock_create_provider:
             mock_provider = Mock()
             mock_provider.get_historical_data.return_value = None
             mock_provider.close.return_value = None
@@ -100,19 +110,27 @@ class TestDataDownload:
         )
 
         # Create mock data with proper index
-        mock_df = pd.DataFrame({
-            "open": [40000],
-            "high": [40100],
-            "low": [39900],
-            "close": [40050],
-            "volume": [100],
-        }, index=pd.DatetimeIndex([
-            datetime(2024, 1, 1, tzinfo=UTC),
-        ], name="timestamp"))
+        mock_df = pd.DataFrame(
+            {
+                "open": [40000],
+                "high": [40100],
+                "low": [39900],
+                "close": [40050],
+                "volume": [100],
+            },
+            index=pd.DatetimeIndex(
+                [
+                    datetime(2024, 1, 1, tzinfo=UTC),
+                ],
+                name="timestamp",
+            ),
+        )
 
         # Act
         with (
-            patch("src.data_providers.provider_factory.create_data_provider") as mock_create_provider,
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
             patch("cli.commands.data.Path") as mock_path,
         ):
 

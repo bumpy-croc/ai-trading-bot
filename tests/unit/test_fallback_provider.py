@@ -188,9 +188,7 @@ def test_get_live_data_fallback(mock_binance_blocked, mock_coingecko_success):
     provider = FallbackProvider()
 
     # Mock live data responses
-    provider.primary_provider.get_live_data = Mock(
-        side_effect=Exception("403 Forbidden")
-    )
+    provider.primary_provider.get_live_data = Mock(side_effect=Exception("403 Forbidden"))
     provider.fallback_provider.get_live_data = Mock(
         return_value=pd.DataFrame(
             {

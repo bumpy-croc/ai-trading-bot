@@ -4,7 +4,6 @@ Validates TrendFollowingRiskManager, TrendFollowingPositionSizer,
 and the create_adaptive_trend_strategy factory function.
 """
 
-
 import pytest
 
 from src.strategies.adaptive_trend import (

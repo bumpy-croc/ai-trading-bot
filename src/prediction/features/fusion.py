@@ -54,15 +54,11 @@ class FeatureFusionPipeline:
 
         if enable_onchain:
             kwargs = onchain_kwargs or {}
-            self.extractors["onchain"] = OnChainFeatureExtractor(
-                enabled=True, **kwargs
-            )
+            self.extractors["onchain"] = OnChainFeatureExtractor(enabled=True, **kwargs)
 
         if enable_macro:
             kwargs = macro_kwargs or {}
-            self.extractors["macro"] = MacroFeatureExtractor(
-                enabled=True, **kwargs
-            )
+            self.extractors["macro"] = MacroFeatureExtractor(enabled=True, **kwargs)
 
         if enable_enhanced_sentiment:
             kwargs = sentiment_kwargs or {}
@@ -133,8 +129,7 @@ class FeatureFusionPipeline:
         """Get configuration for the fusion pipeline."""
         return {
             "extractors": {
-                name: extractor.get_config()
-                for name, extractor in self.extractors.items()
+                name: extractor.get_config() for name, extractor in self.extractors.items()
             },
         }
 

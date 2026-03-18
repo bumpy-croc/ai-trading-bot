@@ -96,9 +96,7 @@ class CoinGeckoProvider(DataProvider):
 
         # Configurable timeout via DATA_FETCH_TIMEOUT_SECONDS env var
         config = get_config()
-        self._timeout = float(
-            config.get("DATA_FETCH_TIMEOUT_SECONDS", DEFAULT_DATA_FETCH_TIMEOUT)
-        )
+        self._timeout = float(config.get("DATA_FETCH_TIMEOUT_SECONDS", DEFAULT_DATA_FETCH_TIMEOUT))
 
         if self.api_key:
             self._session.headers.update({"x-cg-pro-api-key": self.api_key})
@@ -137,7 +135,7 @@ class CoinGeckoProvider(DataProvider):
         # Fallback: assume symbol is the coin name
         logger.warning(
             "Symbol %s not in mapping, using as-is. This may fail if not a valid CoinGecko ID.",
-            symbol
+            symbol,
         )
         return symbol.lower()
 
@@ -229,7 +227,10 @@ class CoinGeckoProvider(DataProvider):
                 # Recent data: use CoinGecko market_chart
                 logger.info(
                     "Fetching %s data for %d days (%s to %s) via CoinGecko market_chart",
-                    coin_id, days_diff, start.date(), end.date(),
+                    coin_id,
+                    days_diff,
+                    start.date(),
+                    end.date(),
                 )
                 df = self._fetch_via_coingecko_market_chart(coin_id, start, end, timeframe)
             else:
@@ -239,11 +240,12 @@ class CoinGeckoProvider(DataProvider):
                 if binance_symbol:
                     logger.info(
                         "Fetching %s data for %d days (%s to %s) via Binance public archives",
-                        binance_symbol, days_diff, start.date(), end.date(),
+                        binance_symbol,
+                        days_diff,
+                        start.date(),
+                        end.date(),
                     )
-                    df = self._fetch_via_binance_archive(
-                        binance_symbol, start, end, timeframe
-                    )
+                    df = self._fetch_via_binance_archive(binance_symbol, start, end, timeframe)
                     # Backfill recent gap with CoinGecko if Binance archives
                     # are missing recent months (archives may lag publication)
                     if df is not None and not df.empty:
@@ -265,7 +267,8 @@ class CoinGeckoProvider(DataProvider):
                             logger.info(
                                 "Binance archives end at %s, backfilling %d-day "
                                 "gap with CoinGecko",
-                                last_archive_date.date(), gap_days,
+                                last_archive_date.date(),
+                                gap_days,
                             )
                             # CoinGecko returns daily granularity when days > 90,
                             # so sub-daily timeframes get degraded resolution
@@ -275,7 +278,8 @@ class CoinGeckoProvider(DataProvider):
                                     "CoinGecko returns daily data for this range, so "
                                     "%s candles in the gap segment will have degraded "
                                     "intraday resolution.",
-                                    gap_days, timeframe,
+                                    gap_days,
+                                    timeframe,
                                 )
                             # Advance by one candle interval (not one day) to avoid
                             # skipping intraday candles at the archive/CoinGecko boundary
@@ -310,22 +314,24 @@ class CoinGeckoProvider(DataProvider):
                         )
                     logger.info(
                         "Fetching %s data for %d days (%s to %s) via CoinGecko market_chart",
-                        coin_id, days_diff, start.date(), end.date(),
+                        coin_id,
+                        days_diff,
+                        start.date(),
+                        end.date(),
                     )
-                    df = self._fetch_via_coingecko_market_chart(
-                        coin_id, start, end, timeframe
-                    )
+                    df = self._fetch_via_coingecko_market_chart(coin_id, start, end, timeframe)
 
             if df is not None and len(df) > 0:
                 self.data = df
                 logger.info(
                     "Fetched %d candles for %s from %s to %s",
-                    len(df), coin_id, df.index.min(), df.index.max(),
+                    len(df),
+                    coin_id,
+                    df.index.min(),
+                    df.index.max(),
                 )
             else:
-                logger.warning(
-                    "No data returned for %s from %s to %s", coin_id, start, end
-                )
+                logger.warning("No data returned for %s from %s to %s", coin_id, start, end)
                 return pd.DataFrame()
 
             return df
@@ -364,15 +370,11 @@ class CoinGeckoProvider(DataProvider):
             logger.warning("No price data from CoinGecko market_chart for %s", coin_id)
             return pd.DataFrame()
 
-        logger.info(
-            "CoinGecko market_chart returned %d price points", len(data["prices"])
-        )
+        logger.info("CoinGecko market_chart returned %d price points", len(data["prices"]))
 
         # Build price DataFrame
         price_df = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
-        price_df["timestamp"] = pd.to_datetime(
-            price_df["timestamp"], unit="ms", utc=True
-        )
+        price_df["timestamp"] = pd.to_datetime(price_df["timestamp"], unit="ms", utc=True)
         price_df.set_index("timestamp", inplace=True)
         price_df = price_df[~price_df.index.duplicated(keep="last")]
         price_df.sort_index(inplace=True)
@@ -383,17 +385,11 @@ class CoinGeckoProvider(DataProvider):
 
         # Add volume data
         if "total_volumes" in data and data["total_volumes"]:
-            vol_df = pd.DataFrame(
-                data["total_volumes"], columns=["timestamp", "volume"]
-            )
-            vol_df["timestamp"] = pd.to_datetime(
-                vol_df["timestamp"], unit="ms", utc=True
-            )
+            vol_df = pd.DataFrame(data["total_volumes"], columns=["timestamp", "volume"])
+            vol_df["timestamp"] = pd.to_datetime(vol_df["timestamp"], unit="ms", utc=True)
             vol_df.set_index("timestamp", inplace=True)
             vol_df = vol_df[~vol_df.index.duplicated(keep="last")]
-            vol_df["volume"] = pd.to_numeric(
-                vol_df["volume"], errors="coerce"
-            ).fillna(0)
+            vol_df["volume"] = pd.to_numeric(vol_df["volume"], errors="coerce").fillna(0)
             vol_df.loc[vol_df["volume"] < 0, "volume"] = 0
             price_df = price_df.join(vol_df, how="left")
             price_df["volume"] = price_df["volume"].fillna(0)
@@ -447,21 +443,21 @@ class CoinGeckoProvider(DataProvider):
                         all_dfs.append(df_month)
                         logger.debug(
                             "Downloaded %d candles for %s %s",
-                            len(df_month), binance_symbol, year_month,
+                            len(df_month),
+                            binance_symbol,
+                            year_month,
                         )
                 elif response.status_code == 404:
-                    logger.debug(
-                        "No data available for %s %s (404)", binance_symbol, year_month
-                    )
+                    logger.debug("No data available for %s %s (404)", binance_symbol, year_month)
                 else:
                     logger.warning(
                         "Failed to fetch %s %s: HTTP %d",
-                        binance_symbol, year_month, response.status_code,
+                        binance_symbol,
+                        year_month,
+                        response.status_code,
                     )
             except Exception as e:
-                logger.warning(
-                    "Error fetching %s %s: %s", binance_symbol, year_month, e
-                )
+                logger.warning("Error fetching %s %s: %s", binance_symbol, year_month, e)
 
             # Advance to next month
             if current.month == 12:
@@ -479,13 +475,12 @@ class CoinGeckoProvider(DataProvider):
         combined.sort_index(inplace=True)
 
         # Filter to requested date range
-        combined = combined[
-            (combined.index >= start) & (combined.index <= end)
-        ]
+        combined = combined[(combined.index >= start) & (combined.index <= end)]
 
         logger.info(
             "Binance archives: %d candles for %s (%s to %s)",
-            len(combined), binance_symbol,
+            len(combined),
+            binance_symbol,
             combined.index.min() if len(combined) > 0 else "N/A",
             combined.index.max() if len(combined) > 0 else "N/A",
         )
@@ -582,7 +577,9 @@ class CoinGeckoProvider(DataProvider):
 
         logger.info(
             "Resampled %d raw points to %d %s candles",
-            len(df), len(resampled), timeframe,
+            len(df),
+            len(resampled),
+            timeframe,
         )
 
         return resampled
@@ -672,9 +669,7 @@ class CoinGeckoProvider(DataProvider):
         """
         try:
             coin_id = self._convert_symbol(symbol)
-            data = self._request(
-                "/simple/price", params={"ids": coin_id, "vs_currencies": "usd"}
-            )
+            data = self._request("/simple/price", params={"ids": coin_id, "vs_currencies": "usd"})
 
             if coin_id not in data or "usd" not in data[coin_id]:
                 raise ValueError(f"No price data for {coin_id}")
@@ -683,7 +678,9 @@ class CoinGeckoProvider(DataProvider):
 
             # Validate price is positive and finite (reject NaN/Infinity)
             if not math.isfinite(price) or price <= 0:
-                raise ValueError(f"Invalid price {price} for {symbol} (must be positive and finite)")
+                raise ValueError(
+                    f"Invalid price {price} for {symbol} (must be positive and finite)"
+                )
 
             return price
 

@@ -391,7 +391,9 @@ class TestPrepareTrainingData:
         def mock_download_func(args: MagicMock) -> int:
             # Create a CSV file in the output directory
             csv_path = Path(args.output_dir) / "BTCUSDT_1h_2024.csv"
-            csv_path.write_text("timestamp,open,high,low,close,volume\n2024-01-01,100,101,99,100,1000")
+            csv_path.write_text(
+                "timestamp,open,high,low,close,volume\n2024-01-01,100,101,99,100,1000"
+            )
             return 0
 
         with patch("cli.commands.data._download", side_effect=mock_download_func):
@@ -415,9 +417,7 @@ class TestPrepareTrainingData:
             with pytest.raises(RuntimeError, match="Failed to download training data"):
                 orchestrator._prepare_training_data()
 
-    def test_raises_error_when_no_data_files_found(
-        self, cloud_config: CloudTrainingConfig
-    ) -> None:
+    def test_raises_error_when_no_data_files_found(self, cloud_config: CloudTrainingConfig) -> None:
         """Verify RuntimeError raised when no CSV files found after download."""
         mock_provider = MagicMock()
         mock_provider.provider_name = "local"
@@ -512,9 +512,7 @@ class TestFindArtifactsRoot:
         # Should return root since no valid artifacts found
         assert result == tmp_path
 
-    def test_finds_onnx_model(
-        self, cloud_config: CloudTrainingConfig, tmp_path: Path
-    ) -> None:
+    def test_finds_onnx_model(self, cloud_config: CloudTrainingConfig, tmp_path: Path) -> None:
         """Verify finds artifacts with model.onnx instead of model.keras."""
         nested_dir = tmp_path / "BTCUSDT" / "basic" / "2024-01-01_v1"
         nested_dir.mkdir(parents=True)

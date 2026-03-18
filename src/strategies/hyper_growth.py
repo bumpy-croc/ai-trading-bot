@@ -69,9 +69,7 @@ class FlatRiskManager(RiskManager):
         """
         super().__init__("flat_risk_manager")
         if not 0.01 <= risk_fraction <= 0.50:
-            raise ValueError(
-                f"risk_fraction must be between 0.01 and 0.50, got {risk_fraction}"
-            )
+            raise ValueError(f"risk_fraction must be between 0.01 and 0.50, got {risk_fraction}")
         self.risk_fraction = risk_fraction
         self.stop_loss_pct = stop_loss_pct
         self.min_confidence = min_confidence
@@ -141,12 +139,12 @@ class FlatRiskManager(RiskManager):
 # With the default max_leverage=1.0 none of these values take effect — they exist
 # so that callers who pass max_leverage > 1.0 get regime-aware scaling automatically.
 _HYPER_LEVERAGE_MAP: dict[tuple[TrendLabel, VolLabel], float] = {
-    (TrendLabel.TREND_UP, VolLabel.LOW): 3.0,      # Full leverage in confirmed bull + low vol
-    (TrendLabel.TREND_UP, VolLabel.HIGH): 2.0,      # Moderate leverage in bull + high vol
-    (TrendLabel.RANGE, VolLabel.LOW): 1.5,           # Slight leverage in confirmed range + low vol
-    (TrendLabel.RANGE, VolLabel.HIGH): 1.0,          # No leverage in range + high vol
-    (TrendLabel.TREND_DOWN, VolLabel.LOW): 0.5,      # Minimal exposure in bear + low vol
-    (TrendLabel.TREND_DOWN, VolLabel.HIGH): 0.0,     # Cash in confirmed bear + high vol
+    (TrendLabel.TREND_UP, VolLabel.LOW): 3.0,  # Full leverage in confirmed bull + low vol
+    (TrendLabel.TREND_UP, VolLabel.HIGH): 2.0,  # Moderate leverage in bull + high vol
+    (TrendLabel.RANGE, VolLabel.LOW): 1.5,  # Slight leverage in confirmed range + low vol
+    (TrendLabel.RANGE, VolLabel.HIGH): 1.0,  # No leverage in range + high vol
+    (TrendLabel.TREND_DOWN, VolLabel.LOW): 0.5,  # Minimal exposure in bear + low vol
+    (TrendLabel.TREND_DOWN, VolLabel.HIGH): 0.0,  # Cash in confirmed bear + high vol
 }
 
 
@@ -193,7 +191,7 @@ def create_hyper_growth_strategy(
     if signal_source == "momentum":
         signal_generator = MomentumSignalGenerator(
             name=f"{name}_signals",
-            momentum_entry_threshold=0.001,   # 0.1% — very sensitive
+            momentum_entry_threshold=0.001,  # 0.1% — very sensitive
             strong_momentum_threshold=0.005,  # 0.5%
         )
     else:

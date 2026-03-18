@@ -386,9 +386,7 @@ class DynamicRiskManager:
                                                 "Volatility std() returned non-finite value"
                                             )
                     except Exception as vol_err:
-                        logger.warning(
-                            f"Volatility estimation failed, using fallback: {vol_err}"
-                        )
+                        logger.warning(f"Volatility estimation failed, using fallback: {vol_err}")
 
                 except Exception as e:
                     logger.warning(f"Failed to get performance metrics from database: {e}")
@@ -604,10 +602,7 @@ class DynamicRiskManager:
             return self.db_manager.get_active_positions(session_id=session_id)
 
         snapshot = self._positions_provider() if self._positions_provider else {}
-        return [
-            {"symbol": symbol, **(pos or {})}
-            for symbol, pos in snapshot.items()
-        ]
+        return [{"symbol": symbol, **(pos or {})} for symbol, pos in snapshot.items()]
 
     @staticmethod
     def _extract_position_size(pos: dict[str, Any]) -> float:

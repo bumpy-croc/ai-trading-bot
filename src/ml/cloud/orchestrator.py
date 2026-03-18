@@ -160,7 +160,9 @@ class CloudTrainingOrchestrator:
             logger.info(f"Downloaded {len(data_files)} file(s)")
 
             # Upload to S3 using existing artifact manager
-            logger.info(f"Uploading training data to S3 bucket {self.config.storage_config.s3_bucket}...")
+            logger.info(
+                f"Uploading training data to S3 bucket {self.config.storage_config.s3_bucket}..."
+            )
             s3_uri = self.s3_manager.upload_training_data(
                 symbol=tc.symbol,
                 timeframe=tc.timeframe,
@@ -449,7 +451,9 @@ class CloudTrainingOrchestrator:
         # Look for nested structure: SYMBOL/TYPE/VERSION/*
         # This happens when SageMaker saves with full registry path
         # Limit search depth to prevent slow searches on deep directories
-        for candidate in itertools.islice(artifact_path.rglob("metadata.json"), MAX_METADATA_SEARCH_DEPTH):
+        for candidate in itertools.islice(
+            artifact_path.rglob("metadata.json"), MAX_METADATA_SEARCH_DEPTH
+        ):
             # Find the parent directory that contains model files
             parent = candidate.parent
             if (parent / "model.keras").exists() or (parent / "model.onnx").exists():

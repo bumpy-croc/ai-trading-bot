@@ -132,9 +132,7 @@ class EnhancedSentimentExtractor(FeatureExtractor):
             work_index = df.index
             if isinstance(work_index, pd.DatetimeIndex):
                 work_index = (
-                    pd.to_datetime(work_index, utc=True)
-                    .tz_convert("UTC")
-                    .tz_localize(None)
+                    pd.to_datetime(work_index, utc=True).tz_convert("UTC").tz_localize(None)
                 )
 
             # Reindex to data's index with forward fill
@@ -157,7 +155,9 @@ class EnhancedSentimentExtractor(FeatureExtractor):
         """
         log_volume = np.log1p(df["volume"])
         rolling_mean = log_volume.rolling(window=20, min_periods=1).mean()
-        rolling_std = log_volume.rolling(window=20, min_periods=1).std().fillna(1e-9).replace(0, 1e-9)
+        rolling_std = (
+            log_volume.rolling(window=20, min_periods=1).std().fillna(1e-9).replace(0, 1e-9)
+        )
         zscore = ((log_volume - rolling_mean) / rolling_std).fillna(0.0)
         df["social_volume_zscore"] = np.clip(zscore / 3.0, -1.0, 1.0)
         return df
@@ -199,8 +199,10 @@ class EnhancedSentimentExtractor(FeatureExtractor):
     def get_config(self) -> dict:
         """Get configuration parameters for this extractor."""
         config = super().get_config()
-        config.update({
-            "enabled": self.enabled,
-            "has_provider": self._provider is not None,
-        })
+        config.update(
+            {
+                "enabled": self.enabled,
+                "has_provider": self._provider is not None,
+            }
+        )
         return config

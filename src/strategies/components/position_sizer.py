@@ -548,9 +548,7 @@ class KellyCriterionSizer(PositionSizer):
         super().__init__("kelly_criterion_sizer")
 
         if not 0.01 <= kelly_fraction <= 1.0:
-            raise ValueError(
-                f"kelly_fraction must be between 0.01 and 1.0, got {kelly_fraction}"
-            )
+            raise ValueError(f"kelly_fraction must be between 0.01 and 1.0, got {kelly_fraction}")
         if min_trades < 1:
             raise ValueError(f"min_trades must be >= 1, got {min_trades}")
         if lookback_trades < min_trades:
@@ -566,17 +564,13 @@ class KellyCriterionSizer(PositionSizer):
                 f"expected_win_rate must be between 0 and 1 exclusive, got {expected_win_rate}"
             )
         if expected_reward_risk <= 0:
-            raise ValueError(
-                f"expected_reward_risk must be positive, got {expected_reward_risk}"
-            )
+            raise ValueError(f"expected_reward_risk must be positive, got {expected_reward_risk}")
         if not 0.0 < overfitting_threshold <= 1.0:
             raise ValueError(
                 f"overfitting_threshold must be between 0 and 1 inclusive, got {overfitting_threshold}"
             )
         if not 0.01 <= max_fraction <= 1.0:
-            raise ValueError(
-                f"max_fraction must be between 0.01 and 1.0, got {max_fraction}"
-            )
+            raise ValueError(f"max_fraction must be between 0.01 and 1.0, got {max_fraction}")
 
         self.kelly_fraction = kelly_fraction
         self.min_trades = min_trades

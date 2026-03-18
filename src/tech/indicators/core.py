@@ -96,6 +96,7 @@ def clear_indicator_cache() -> None:
     global _INDICATOR_CACHE
     _INDICATOR_CACHE = {}
 
+
 # Constants for division protection and regime detection
 EPSILON = 1e-10  # Prevents division by zero in all calculations
 

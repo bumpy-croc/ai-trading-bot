@@ -309,8 +309,9 @@ def test_reload_models_warns_when_no_cache_manager(tmp_path: Path, monkeypatch, 
     # Act
     import logging
 
-    with caplog.at_level(logging.WARNING), patch.object(
-        reg, "_scan_registry", return_value=(fake_bundles, {})
+    with (
+        caplog.at_level(logging.WARNING),
+        patch.object(reg, "_scan_registry", return_value=(fake_bundles, {})),
     ):
         reg.reload_models()
 
@@ -343,8 +344,9 @@ def test_reload_models_handles_cache_clear_exception(tmp_path: Path, monkeypatch
     # Act
     import logging
 
-    with caplog.at_level(logging.WARNING), patch.object(
-        reg, "_scan_registry", return_value=(fake_bundles, {})
+    with (
+        caplog.at_level(logging.WARNING),
+        patch.object(reg, "_scan_registry", return_value=(fake_bundles, {})),
     ):
         reg.reload_models()
 

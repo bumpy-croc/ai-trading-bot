@@ -16,6 +16,7 @@ from src.strategies.leveraged_regime import create_leveraged_regime_strategy
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def sample_dataframe() -> pd.DataFrame:
     """Create a realistic OHLCV dataframe for strategy testing."""
@@ -105,9 +106,7 @@ class TestCreateLeveragedRegimeStrategy:
 
     def test_max_fraction_capped_at_050(self) -> None:
         """max_fraction in risk_overrides should not exceed 0.50."""
-        strategy = create_leveraged_regime_strategy(
-            base_fraction=0.20, max_leverage=3.0
-        )
+        strategy = create_leveraged_regime_strategy(base_fraction=0.20, max_leverage=3.0)
         overrides = strategy.get_risk_overrides()
         assert overrides["max_fraction"] <= 0.50
 
@@ -264,9 +263,7 @@ class TestLeverageActuallyScalesPositions:
         base_sizer = leveraged_sizer.base_sizer
 
         base_size = base_sizer.calculate_size(signal, balance, risk_amount, bull_regime)
-        leveraged_size = leveraged_sizer.calculate_size(
-            signal, balance, risk_amount, bull_regime
-        )
+        leveraged_size = leveraged_sizer.calculate_size(signal, balance, risk_amount, bull_regime)
 
         # Leveraged size should be larger due to bull leverage > 1.0
         assert leveraged_size > base_size

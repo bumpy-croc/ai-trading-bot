@@ -168,7 +168,9 @@ class OnChainFeatureExtractor(FeatureExtractor):
         """
         log_volume = np.log1p(df["volume"])
         rolling_mean = log_volume.rolling(window=30, min_periods=1).mean()
-        rolling_std = log_volume.rolling(window=30, min_periods=1).std().fillna(1e-9).replace(0, 1e-9)
+        rolling_std = (
+            log_volume.rolling(window=30, min_periods=1).std().fillna(1e-9).replace(0, 1e-9)
+        )
         zscore = ((log_volume - rolling_mean) / rolling_std).fillna(0.0)
         df["active_addresses_zscore"] = np.clip(zscore / 3.0, -1.0, 1.0)
         return df
@@ -180,8 +182,10 @@ class OnChainFeatureExtractor(FeatureExtractor):
     def get_config(self) -> dict:
         """Get configuration parameters for this extractor."""
         config = super().get_config()
-        config.update({
-            "enabled": self.enabled,
-            "cache_ttl": self.cache_ttl,
-        })
+        config.update(
+            {
+                "enabled": self.enabled,
+                "cache_ttl": self.cache_ttl,
+            }
+        )
         return config

@@ -63,9 +63,7 @@ class TestStrategyExitResult:
 
     def test_exit_result_with_reason(self):
         """Test exit result with custom reason."""
-        result = StrategyExitResult(
-            should_exit=True, exit_reason="Stop loss hit"
-        )
+        result = StrategyExitResult(should_exit=True, exit_reason="Stop loss hit")
 
         assert result.should_exit is True
         assert result.exit_reason == "Stop loss hit"
