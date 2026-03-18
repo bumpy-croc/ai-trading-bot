@@ -45,5 +45,6 @@
     "robustness": false,
     "onnx": true
   },
-  "version_id": "2026-01-06_14h_v3"
+  "version_id": "2026-01-06_14h_v3",
+  "timeframe": "1h"
 }
