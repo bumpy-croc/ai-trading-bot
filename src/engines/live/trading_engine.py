@@ -3502,7 +3502,12 @@ class LiveTradingEngine:
             logger.info("🔍 Found %s session #%s", source, session_id)
             recovered_balance = self.db_manager.recover_last_balance(session_id)
             if recovered_balance and recovered_balance > 0:
-                self.trading_session_id = session_id
+                # For crash recovery (active session), reuse the existing session ID so
+                # trades continue to be attributed to the same session row.
+                # For clean restarts (inactive session), only recover the balance — a new
+                # session will be created below, preventing writes to a closed session.
+                if source == "active":
+                    self.trading_session_id = session_id
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,
