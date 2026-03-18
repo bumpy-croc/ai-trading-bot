@@ -1531,10 +1531,21 @@ class LiveTradingEngine:
                     candle=current_candle,
                     safety_mode=safety_mode,
                 )
-                # Evaluate partial exits and scale-ins for open positions
+                # Evaluate partial exits and scale-ins for open positions.
+                # Pass current candle time so positions entered on this bar
+                # are skipped, matching backtest same-bar protection.
                 if not safety_mode:
+                    _candle_time = (
+                        df.index[current_index]
+                        if df is not None and current_index < len(df)
+                        else None
+                    )
                     self.live_exit_handler.check_partial_operations(
-                        df, current_index, float(current_price), self.current_balance
+                        df,
+                        current_index,
+                        float(current_price),
+                        self.current_balance,
+                        candle_time=_candle_time,
                     )
                 # Check entry conditions if not at maximum positions
                 if (not safety_mode) and (
@@ -1888,7 +1899,45 @@ class LiveTradingEngine:
         component_strategy = None if safety_mode else self._component_strategy
         decision_for_exit = None if safety_mode else runtime_decision
 
+        # Get current candle timestamp for same-bar exit protection
+        candle_time = None
+        if df is not None and current_index < len(df):
+            candle_time = df.index[current_index]
+
         for position in positions_snapshot.values():
+            # Same-bar exit protection: skip exit evaluation for positions
+            # entered on the current candle. The candle's high/low may include
+            # extremes that occurred before the entry fill, so evaluating SL/TP
+            # against them would be unrealistic. This matches backtest behavior
+            # where entered_this_candle prevents same-bar exits.
+            if candle_time is not None and position.entry_time is not None:
+                try:
+                    entry_ts = position.entry_time
+                    # Normalize both timestamps to UTC-aware for safe comparison.
+                    # All timestamps in this system are UTC; if one is naive,
+                    # localize it rather than stripping tzinfo from the other.
+                    entry_cmp = entry_ts
+                    candle_cmp = candle_time
+                    entry_aware = getattr(entry_cmp, "tzinfo", None) is not None
+                    candle_aware = getattr(candle_cmp, "tzinfo", None) is not None
+                    if entry_aware and not candle_aware:
+                        candle_cmp = candle_cmp.replace(tzinfo=UTC)
+                    elif candle_aware and not entry_aware:
+                        entry_cmp = entry_cmp.replace(tzinfo=UTC)
+                    if entry_cmp >= candle_cmp:
+                        logger.debug(
+                            "Skipping exit check for %s: entered on current bar",
+                            position.symbol,
+                        )
+                        continue
+                except (TypeError, ValueError, AttributeError) as exc:
+                    logger.warning(
+                        "Same-bar exit comparison failed for %s, "
+                        "proceeding with exit check: %s",
+                        position.symbol,
+                        exc,
+                    )
+
             exit_check = self.live_exit_handler.check_exit_conditions(
                 position=position,
                 current_price=float(current_price),

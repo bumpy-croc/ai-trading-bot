@@ -730,6 +730,7 @@ class LiveExitHandler:
         current_index: int,
         current_price: float,
         current_balance: float,
+        candle_time: object | None = None,
     ) -> None:
         """Check and execute partial exits and scale-ins.
 
@@ -747,12 +748,35 @@ class LiveExitHandler:
             current_index: Current candle index.
             current_price: Current market price.
             current_balance: Current account balance.
+            candle_time: Current candle timestamp. Positions entered on this
+                candle are skipped to match backtest same-bar protection.
         """
         if self.partial_manager is None:
             return
 
         # Defensive iteration: list() creates snapshot to prevent concurrent modification errors
         for order_id, position in list(self.position_tracker.positions.items()):
+            # Same-bar protection: skip positions entered on the current candle.
+            # This matches the backtest engine where entered_this_candle guards
+            # both full exits and partial operations.
+            if candle_time is not None and position.entry_time is not None:
+                try:
+                    entry_cmp = position.entry_time
+                    candle_cmp = candle_time
+                    entry_aware = getattr(entry_cmp, "tzinfo", None) is not None
+                    candle_aware = getattr(candle_cmp, "tzinfo", None) is not None
+                    if entry_aware and not candle_aware:
+                        candle_cmp = candle_cmp.replace(tzinfo=UTC)
+                    elif candle_aware and not entry_aware:
+                        entry_cmp = entry_cmp.replace(tzinfo=UTC)
+                    if entry_cmp >= candle_cmp:
+                        logger.debug(
+                            "Skipping partial ops for %s: entered on current bar",
+                            position.symbol,
+                        )
+                        continue
+                except (TypeError, ValueError, AttributeError) as exc:
+                    logger.debug("Candle-time comparison failed: %s", exc)
             try:
                 # Check for partial exits (loop to handle multiple exits in same cycle)
                 iteration_count = 0
