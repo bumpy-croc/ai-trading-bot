@@ -42,6 +42,10 @@ class MockPosition:
     current_size: float | None = 0.1
     size: float = 0.1
     quantity: float | None = 0.1
+    partial_exits_taken: int = 0
+    last_partial_exit_price: float | None = None
+    original_size: float | None = 0.1
+    entry_balance: float | None = None
 
 
 @dataclass
@@ -1098,8 +1102,9 @@ class TestFilledOrderPositionReconciliation:
         assert call_kwargs["symbol"] == "BTCUSDT"
         assert call_kwargs["side"] == "LONG"
         assert call_kwargs["entry_price"] == 50000.0
-        # size is a balance fraction (not fill_qty); no entry_balance => default 0.1
-        assert call_kwargs["size"] == 0.1
+        # size is a balance fraction: (0.001 * 50000) / 1000 = 0.05
+        # (DB balance of 1000.0 from mock_db fixture)
+        assert call_kwargs["size"] == pytest.approx(0.05)
 
         # Position should be tracked in memory
         mock_position_tracker.track_recovered_position.assert_called_once()
@@ -1107,7 +1112,8 @@ class TestFilledOrderPositionReconciliation:
         assert pos_arg.symbol == "BTCUSDT"
         assert pos_arg.entry_price == 50000.0
         assert pos_arg.quantity == 0.001
-        assert pos_arg.size == 0.1
+        assert pos_arg.size == pytest.approx(0.05)
+        assert pos_arg.entry_balance == 1000.0
         assert pos_arg.exchange_order_id is not None
         db_id_arg = mock_position_tracker.track_recovered_position.call_args[0][1]
         assert db_id_arg == 42
@@ -1251,13 +1257,13 @@ class TestFilledOrderPositionReconciliation:
         db_id_arg = mock_position_tracker.track_recovered_position.call_args[0][1]
         assert db_id_arg is None
 
-    def test_filled_partial_exit_closes_position(
+    def test_filled_partial_exit_reduces_size_not_closes(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
-        """PARTIAL_EXIT filled also triggers position close reconciliation."""
+        """PARTIAL_EXIT filled reduces position size but keeps it open."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
-        pos = MockPosition(db_position_id=15)
+        pos = MockPosition(db_position_id=15, current_size=0.1, size=0.1)
         mock_position_tracker._positions_lock = __import__("threading").Lock()
         mock_position_tracker._positions = {"order_456": pos}
 
@@ -1271,6 +1277,7 @@ class TestFilledOrderPositionReconciliation:
                 "status": "SUBMITTED",
                 "order_type": "PARTIAL_EXIT",
                 "position_id": 15,
+                "size_fraction": 0.03,
                 "created_at": datetime.now(UTC),
             }
         ]
@@ -1282,8 +1289,148 @@ class TestFilledOrderPositionReconciliation:
         results = reconciler.resolve_pending_orders()
         assert len(results) == 1
 
-        mock_position_tracker.remove_position.assert_called_once_with("order_456")
-        mock_db.close_position.assert_called_once_with(15, exit_price=52000.0)
+        # Position must NOT be removed — only reduced
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+
+        # current_size reduced by size_fraction
+        assert pos.current_size == pytest.approx(0.07)
+        assert pos.partial_exits_taken == 1
+        assert pos.last_partial_exit_price == 52000.0
+
+        # DB updated with new size
+        mock_db.update_position.assert_called_once()
+        call_kwargs = mock_db.update_position.call_args.kwargs
+        assert call_kwargs["current_size"] == pytest.approx(0.07)
+        assert call_kwargs["partial_exits_taken"] == 1
+        assert call_kwargs["last_partial_exit_price"] == 52000.0
+
+    def test_filled_entry_uses_db_balance_for_sizing(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Recovered entry calculates size_fraction from DB balance and sets entry_balance."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 99
+        mock_db.get_current_balance.return_value = 5000.0
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 10,
+                "client_order_id": "atb_BTCUSDT_long_balance_test",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.01,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+                # No entry_balance in order_data — should fall back to DB
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.01
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        reconciler.resolve_pending_orders()
+
+        # size_fraction = (0.01 * 50000) / 5000 = 0.1
+        mock_db.log_position.assert_called_once()
+        call_kwargs = mock_db.log_position.call_args.kwargs
+        assert call_kwargs["size"] == pytest.approx(0.1)
+
+        # entry_balance set on the LivePosition
+        pos_arg = mock_position_tracker.track_recovered_position.call_args[0][0]
+        assert pos_arg.entry_balance == 5000.0
+        assert pos_arg.size == pytest.approx(0.1)
+
+    def test_partially_filled_entry_creates_position(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """PARTIALLY_FILLED entry order creates a position for the filled portion."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 55
+        mock_db.get_current_balance.return_value = 10000.0
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 20,
+                "client_order_id": "atb_BTCUSDT_long_partial_fill",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.01,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.PARTIALLY_FILLED,
+            average_price=50000.0,
+            filled_quantity=0.005,  # Half filled
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+        assert results[0].status == "resolved"
+        assert results[0].severity == Severity.MEDIUM
+
+        # Position created for the filled portion
+        mock_db.log_position.assert_called_once()
+        call_kwargs = mock_db.log_position.call_args.kwargs
+        assert call_kwargs["quantity"] == 0.005
+        assert call_kwargs["entry_price"] == 50000.0
+        # size_fraction = (0.005 * 50000) / 10000 = 0.025
+        assert call_kwargs["size"] == pytest.approx(0.025)
+
+        # Position tracked in memory
+        mock_position_tracker.track_recovered_position.assert_called_once()
+
+        # Journal stays SUBMITTED (order still active on exchange)
+        mock_db.update_order_journal.assert_called_once()
+        journal_kwargs = mock_db.update_order_journal.call_args.kwargs
+        assert journal_kwargs["status"] == "SUBMITTED"
+
+    def test_partially_filled_non_entry_does_not_create_position(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """PARTIALLY_FILLED non-entry order does not create a position."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 21,
+                "client_order_id": "atbx_BTCUSDT_exit_partial",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.01,
+                "status": "SUBMITTED",
+                "order_type": "FULL_EXIT",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.PARTIALLY_FILLED,
+            average_price=51000.0,
+            filled_quantity=0.005,
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+
+        # No position creation for non-entry partial fills
+        mock_db.log_position.assert_not_called()
+        mock_position_tracker.track_recovered_position.assert_not_called()
 
     def test_no_order_type_skips_position_reconciliation(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker

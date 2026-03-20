@@ -245,8 +245,39 @@ class PositionReconciler:
                 eo_status.value,
             )
 
+        elif eo_status == ExOrderStatus.PARTIALLY_FILLED:
+            order_type = order_data.get("order_type", "")
+
+            # Keep journal as SUBMITTED since the order is still active
+            self.db_manager.update_order_journal(
+                client_order_id=order_data["client_order_id"],
+                status="SUBMITTED",
+                exchange_order_id=exchange_order.order_id,
+            )
+            result.status = "resolved"
+            result.severity = Severity.MEDIUM
+
+            if order_type == "ENTRY":
+                # Create a position for the filled portion so acquired
+                # inventory is tracked. The order remains active on exchange.
+                fill_price = exchange_order.average_price or 0.0
+                fill_qty = exchange_order.filled_quantity or 0.0
+                if fill_price > 0 and fill_qty > 0:
+                    symbol = order_data.get("symbol", "")
+                    side = order_data.get("side", "LONG")
+                    self._reconcile_filled_entry(
+                        order_data, exchange_order, symbol, side, fill_price, fill_qty
+                    )
+                    logger.info(
+                        "Partially filled ENTRY %s: created position for "
+                        "%.6f @ %.2f (order still active)",
+                        order_data["client_order_id"],
+                        fill_qty,
+                        fill_price,
+                    )
+
         else:
-            # Still pending/partially filled on exchange
+            # Still pending on exchange (NEW, etc.)
             self.db_manager.update_order_journal(
                 client_order_id=order_data["client_order_id"],
                 status="SUBMITTED",
@@ -281,8 +312,10 @@ class PositionReconciler:
             self._reconcile_filled_entry(
                 order_data, exchange_order, symbol, side, fill_price, fill_qty
             )
-        elif order_type in ("FULL_EXIT", "PARTIAL_EXIT"):
+        elif order_type == "FULL_EXIT":
             self._reconcile_filled_exit(order_data, fill_price)
+        elif order_type == "PARTIAL_EXIT":
+            self._reconcile_filled_partial_exit(order_data, fill_price)
 
     def _reconcile_filled_entry(
         self,
@@ -313,13 +346,25 @@ class PositionReconciler:
 
         try:
             # Calculate size as balance fraction from entry_balance if available,
-            # otherwise use a conservative default. size/original_size/current_size
+            # otherwise fetch current DB balance. size/original_size/current_size
             # are balance-fraction fields (0.0-1.0), NOT asset quantities.
+            # Exits use size * entry_balance to compute sell quantity, so both
+            # size_fraction and entry_balance must be accurate.
             entry_balance = order_data.get("entry_balance")
+            if not entry_balance or entry_balance <= 0:
+                try:
+                    entry_balance = self.db_manager.get_current_balance(self.session_id)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to fetch DB balance for recovered entry sizing: %s", e
+                    )
+                    entry_balance = None
+
             if entry_balance and entry_balance > 0 and fill_price > 0:
                 size_fraction = min((fill_qty * fill_price) / entry_balance, 1.0)
             else:
                 size_fraction = 0.1  # Conservative default when balance unknown
+                entry_balance = None  # Do not store an invalid balance
 
             position = LivePosition(
                 symbol=symbol,
@@ -333,6 +378,7 @@ class PositionReconciler:
                 order_id=order_id,
                 exchange_order_id=exchange_order.order_id,
                 client_order_id=order_data.get("client_order_id"),
+                entry_balance=entry_balance,
             )
 
             # Persist to DB first
@@ -415,6 +461,75 @@ class PositionReconciler:
         except Exception as e:
             logger.warning(
                 "Failed to reconcile filled exit order %s: %s",
+                client_order_id,
+                e,
+            )
+
+    def _reconcile_filled_partial_exit(
+        self, order_data: dict, fill_price: float
+    ) -> None:
+        """Reduce position size for a filled partial exit, keeping it open.
+
+        Unlike _reconcile_filled_exit which removes the position entirely,
+        this method only reduces current_size by the exit's size_fraction.
+        """
+        position_id = order_data.get("position_id")
+        client_order_id = order_data.get("client_order_id", "")
+        size_fraction = order_data.get("size_fraction", 0.0)
+
+        try:
+            if position_id is not None:
+                # Find the position in the tracker by db_position_id
+                target_pos = None
+                with self.position_tracker._positions_lock:
+                    for _oid, pos in self.position_tracker._positions.items():
+                        if getattr(pos, "db_position_id", None) == position_id:
+                            target_pos = pos
+                            break
+
+                if target_pos is not None and size_fraction > 0:
+                    new_size = max(target_pos.current_size - size_fraction, 0.0)
+                    target_pos.current_size = new_size
+                    target_pos.partial_exits_taken = (
+                        getattr(target_pos, "partial_exits_taken", 0) + 1
+                    )
+                    target_pos.last_partial_exit_price = fill_price
+                    logger.info(
+                        "Reconciled filled PARTIAL_EXIT %s: reduced position size "
+                        "by %.4f to %.4f",
+                        client_order_id,
+                        size_fraction,
+                        new_size,
+                    )
+
+                # Update DB position with reduced size
+                try:
+                    if size_fraction > 0:
+                        self.db_manager.update_position(
+                            position_id,
+                            current_size=(
+                                target_pos.current_size if target_pos else None
+                            ),
+                            partial_exits_taken=(
+                                target_pos.partial_exits_taken if target_pos else None
+                            ),
+                            last_partial_exit_price=fill_price if fill_price > 0 else None,
+                        )
+                    logger.info(
+                        "Reconciled filled PARTIAL_EXIT %s: updated DB position %s",
+                        client_order_id,
+                        position_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to update DB position %s for partial exit %s: %s",
+                        position_id,
+                        client_order_id,
+                        e,
+                    )
+        except Exception as e:
+            logger.warning(
+                "Failed to reconcile filled partial exit order %s: %s",
                 client_order_id,
                 e,
             )
