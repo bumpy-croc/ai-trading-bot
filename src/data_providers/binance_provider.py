@@ -724,6 +724,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     else None
                 ),
                 time_in_force=order_data.get("timeInForce", "GTC"),
+                client_order_id=order_data.get("clientOrderId"),
             )
         except (KeyError, ValueError, TypeError) as e:
             logger.error("Failed to parse order data: %s. Data: %s", e, order_data)

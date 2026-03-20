@@ -52,6 +52,7 @@ class EntryExecutionResult:
     entry_fee: float = 0.0
     slippage_cost: float = 0.0
     error: str | None = None
+    client_order_id: str | None = None
 
 
 @dataclass
@@ -154,13 +155,10 @@ class LiveExecutionEngine:
     def _is_filled_status(self, status: Any) -> bool:
         """Return True when the order status indicates a fill."""
         if isinstance(status, OrderStatus):
-            return status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
+            return status == OrderStatus.FILLED
         if isinstance(status, str):
             normalized = status.upper()
-            return normalized in (
-                OrderStatus.FILLED.value,
-                OrderStatus.PARTIALLY_FILLED.value,
-            )
+            return normalized == OrderStatus.FILLED.value
         return False
 
     def _adjust_cost_totals(self, fee_delta: float, slippage_delta: float) -> None:
@@ -332,8 +330,11 @@ class LiveExecutionEngine:
             quantity = position_value / executed_price
 
             # Execute real order if enabled
+            client_order_id: str | None = None
             if self.enable_live_trading:
-                order_id = self._execute_live_order(symbol, side, position_value, executed_price)
+                order_id, client_order_id = self._execute_live_order(
+                    symbol, side, position_value, executed_price
+                )
                 if not order_id:
                     return EntryExecutionResult(
                         success=False,
@@ -395,6 +396,7 @@ class LiveExecutionEngine:
                 quantity=quantity,
                 entry_fee=entry_fee,
                 slippage_cost=slippage_cost,
+                client_order_id=client_order_id,
             )
 
         except (ValueError, ArithmeticError, TypeError) as e:
@@ -544,7 +546,7 @@ class LiveExecutionEngine:
         side: PositionSide,
         value: float,
         price: float,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """Execute a real market order via exchange with idempotency.
 
         Generates a client order ID based on timestamp and order details to prevent
@@ -557,7 +559,7 @@ class LiveExecutionEngine:
             price: Expected price.
 
         Returns:
-            Order ID if successful, None otherwise.
+            Tuple of (exchange_order_id, client_order_id). Both None on failure.
         """
         # CRITICAL VALIDATION: Never allow live trading mode without exchange interface
         if self.exchange_interface is None:
@@ -567,11 +569,11 @@ class LiveExecutionEngine:
                     "CRITICAL: Live trading enabled but no exchange interface configured! "
                     "This would create fake orders. Aborting order placement."
                 )
-                return None
+                return None, None
             else:
                 # Paper trading mode - this is expected
                 logger.debug("Paper trading mode - generating simulated order ID")
-                return f"paper_{int(time.time() * 1000)}"
+                return f"paper_{int(time.time() * 1000)}", None
 
         try:
             # Defensive validation - should already be validated by caller but check anyway
@@ -581,7 +583,7 @@ class LiveExecutionEngine:
                     price,
                     symbol,
                 )
-                return None
+                return None, None
 
             if value <= 0 or not math.isfinite(value):
                 logger.error(
@@ -589,13 +591,13 @@ class LiveExecutionEngine:
                     value,
                     symbol,
                 )
-                return None
+                return None, None
 
             order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
             quantity = value / price
             quantity = self._normalize_quantity(symbol, quantity, value)
             if quantity <= 0:
-                return None
+                return None, None
 
             # Generate deterministic client order ID for idempotency
             # Format: atb_{timestamp_hex}_{uuid8} (~24 chars, within Binance 36-char limit)
@@ -635,7 +637,7 @@ class LiveExecutionEngine:
                         self.db_manager.update_order_journal(client_order_id, "UNKNOWN")
                     except Exception:
                         pass
-                return None
+                return None, client_order_id
 
             # Extract order_id and update journal with exchange data
             exchange_order_id = (
@@ -665,10 +667,10 @@ class LiveExecutionEngine:
                 except Exception as e:
                     logger.warning("Failed to update entry order journal: %s", e)
 
-            return exchange_order_id
+            return exchange_order_id, client_order_id
         except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order execution failed: %s", e)
-            return None
+            return None, None
 
     def _close_live_order(
         self,

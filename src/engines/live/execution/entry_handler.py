@@ -360,7 +360,9 @@ class LiveEntryHandler:
             )
             # Fall back to raw balance to prevent negative basis in P&L calculations
             entry_balance = balance
-        # Create position with actual quantity from execution
+        # Create position with actual quantity from execution.
+        # Populate exchange_order_id and client_order_id so the PeriodicReconciler
+        # can match this position to exchange orders without a restart cycle.
         position = LivePosition(
             symbol=symbol,
             side=signal.side,
@@ -372,6 +374,8 @@ class LiveEntryHandler:
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             order_id=exec_result.order_id,
+            exchange_order_id=exec_result.order_id,
+            client_order_id=exec_result.client_order_id,
             original_size=signal.size_fraction,
             current_size=signal.size_fraction,
         )

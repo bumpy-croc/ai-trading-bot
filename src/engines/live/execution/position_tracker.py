@@ -879,6 +879,8 @@ class LivePositionTracker:
                     stop_loss=float(db_pos.stop_loss) if db_pos.stop_loss else None,
                     take_profit=float(db_pos.take_profit) if db_pos.take_profit else None,
                     order_id=db_pos.entry_order_id,
+                    exchange_order_id=db_pos.entry_order_id,
+                    client_order_id=getattr(db_pos, "client_order_id", None),
                     original_size=float(db_pos.original_size) if db_pos.original_size else None,
                     current_size=float(db_pos.current_size) if db_pos.current_size else None,
                     partial_exits_taken=int(db_pos.partial_exits_taken or 0),
