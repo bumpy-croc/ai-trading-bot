@@ -37,6 +37,7 @@ from .models import (
     Position,
     PositionSide,
     PositionStatus,
+    ReconciliationAuditEvent,
     RiskAdjustment,
     StrategyExecution,
     SystemEvent,
@@ -907,12 +908,14 @@ class DatabaseManager:
         mfe_time: datetime | None = None,
         mae_time: datetime | None = None,
         stop_loss_order_id: str | None = None,
+        client_order_id: str | None = None,
     ) -> int:
         """
         Log a new position to the database.
 
         Args:
             entry_order_id: Exchange order ID for the entry order (will be used to create an ENTRY order)
+            client_order_id: Our atb_... idempotency key for the entry order
 
         Returns:
             Position ID
@@ -951,6 +954,7 @@ class DatabaseManager:
                 mae_time=mae_time,
                 entry_order_id=entry_order_id,
                 stop_loss_order_id=stop_loss_order_id,
+                client_order_id=client_order_id,
             )
             # Trailing fields (optional)
             if trailing_stop_activated is not None:
@@ -975,6 +979,7 @@ class DatabaseManager:
                     status=OrderStatus.FILLED,  # Already filled since position exists
                     exchange_order_id=entry_order_id,  # Use the entry_order_id
                     internal_order_id=f"entry_{position.id}_{int(datetime.now(UTC).timestamp())}",
+                    client_order_id=client_order_id,
                     symbol=symbol,
                     side=side,
                     quantity=Decimal(str(quantity or size)),
@@ -3355,4 +3360,244 @@ class DatabaseManager:
                     "created_at": order.created_at,
                 }
                 for order in orders
+            ]
+
+    # ---- Reconciliation: Order Journal Methods ----
+
+    def create_order_journal_entry(
+        self,
+        session_id: int,
+        client_order_id: str,
+        symbol: str,
+        side: str | PositionSide,
+        order_type: str | OrderType,
+        quantity: float,
+        strategy_name: str,
+        position_id: int | None = None,
+        price: float | None = None,
+        size_fraction: float | None = None,
+        replaced_order_id: int | None = None,
+    ) -> int:
+        """Create a pre-submit order journal entry (status=PENDING_SUBMIT).
+
+        This MUST be called BEFORE placing the order on the exchange so that
+        crash recovery can find and resolve the order.
+
+        Returns:
+            Database order ID.
+        """
+        if isinstance(side, str):
+            side = PositionSide[side.upper()]
+        if isinstance(order_type, str):
+            order_type = OrderType[order_type.upper()]
+
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
+            order = Order(
+                position_id=position_id,
+                order_type=order_type,
+                status=OrderStatus.PENDING_SUBMIT,
+                internal_order_id=client_order_id,
+                client_order_id=client_order_id,
+                symbol=symbol,
+                side=side,
+                quantity=Decimal(str(quantity)),
+                price=Decimal(str(price)) if price is not None else None,
+                strategy_name=strategy_name,
+                session_id=session_id,
+                size_fraction=Decimal(str(size_fraction)) if size_fraction is not None else None,
+                replaced_order_id=replaced_order_id,
+            )
+            session.add(order)
+            session.commit()
+            logger.debug(
+                "Journal entry created: %s %s %s qty=%.8f client_id=%s",
+                symbol,
+                side.value,
+                order_type.value,
+                quantity,
+                client_order_id,
+            )
+            return order.id
+
+    def update_order_journal(
+        self,
+        client_order_id: str,
+        status: str | OrderStatus,
+        exchange_order_id: str | None = None,
+        fill_price: float | None = None,
+        fill_quantity: float | None = None,
+        commission: float | None = None,
+        position_id: int | None = None,
+    ) -> bool:
+        """Update an order journal entry after exchange interaction.
+
+        Args:
+            client_order_id: Our atb_... idempotency key.
+            status: New status (SUBMITTED, CONFIRMED, CANCELLED, etc.).
+            exchange_order_id: Exchange-assigned order ID.
+            fill_price: Authoritative fill price from exchange.
+            fill_quantity: Authoritative fill quantity from exchange.
+            commission: Authoritative commission from exchange.
+            position_id: Link to position (set after position creation for entry orders).
+
+        Returns:
+            True if update succeeded.
+        """
+        if isinstance(status, str):
+            status = OrderStatus[status.upper()]
+
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
+            order = (
+                session.query(Order)
+                .filter(Order.client_order_id == client_order_id)
+                .first()
+            )
+            if not order:
+                logger.warning("No order found for client_order_id=%s", client_order_id)
+                return False
+
+            order.status = status
+            if exchange_order_id is not None:
+                order.exchange_order_id = exchange_order_id
+            if fill_price is not None:
+                order.actual_fill_price = Decimal(str(fill_price))
+                order.filled_price = Decimal(str(fill_price))
+            if fill_quantity is not None:
+                order.actual_fill_quantity = Decimal(str(fill_quantity))
+                order.filled_quantity = Decimal(str(fill_quantity))
+            if commission is not None:
+                order.actual_commission = Decimal(str(commission))
+                order.commission = Decimal(str(commission))
+            if position_id is not None:
+                order.position_id = position_id
+            if status in (OrderStatus.CONFIRMED, OrderStatus.FILLED):
+                order.filled_at = datetime.now(UTC)
+            if status == OrderStatus.CANCELLED:
+                order.cancelled_at = datetime.now(UTC)
+
+            session.commit()
+            logger.debug(
+                "Journal updated: client_id=%s status=%s exchange_id=%s",
+                client_order_id,
+                status.value,
+                exchange_order_id,
+            )
+            return True
+
+    def get_unresolved_orders(self, session_id: int) -> list[dict]:
+        """Get orders in PENDING_SUBMIT, SUBMITTED, or UNKNOWN status for crash recovery.
+
+        Returns:
+            List of order dicts needing resolution.
+        """
+        unresolved_statuses = [
+            OrderStatus.PENDING_SUBMIT,
+            OrderStatus.SUBMITTED,
+            OrderStatus.UNKNOWN,
+        ]
+        with self.get_session() as session:
+            orders = (
+                session.query(Order)
+                .filter(
+                    Order.session_id == session_id,
+                    Order.status.in_(unresolved_statuses),
+                )
+                .order_by(Order.created_at.asc())
+                .all()
+            )
+            return [
+                {
+                    "id": order.id,
+                    "position_id": order.position_id,
+                    "order_type": order.order_type.value,
+                    "status": order.status.value,
+                    "client_order_id": order.client_order_id,
+                    "exchange_order_id": order.exchange_order_id,
+                    "internal_order_id": order.internal_order_id,
+                    "symbol": order.symbol,
+                    "side": order.side.value,
+                    "quantity": float(order.quantity),
+                    "price": float(order.price) if order.price else None,
+                    "created_at": order.created_at,
+                    "size_fraction": float(order.size_fraction) if order.size_fraction else None,
+                    "replaced_order_id": order.replaced_order_id,
+                }
+                for order in orders
+            ]
+
+    # ---- Reconciliation: Audit Event Methods ----
+
+    def log_audit_event(
+        self,
+        session_id: int,
+        entity_type: str,
+        entity_id: int | None,
+        field: str,
+        old_value: str | None,
+        new_value: str | None,
+        reason: str,
+        severity: str,
+    ) -> int:
+        """Record an immutable reconciliation audit event.
+
+        Returns:
+            Audit event ID.
+        """
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
+            event = ReconciliationAuditEvent(
+                session_id=session_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                field=field,
+                old_value=old_value,
+                new_value=new_value,
+                reason=reason,
+                severity=severity,
+            )
+            session.add(event)
+            session.commit()
+            logger.info(
+                "Audit event [%s]: %s.%s %s→%s (%s)",
+                severity,
+                entity_type,
+                field,
+                old_value,
+                new_value,
+                reason,
+            )
+            return event.id
+
+    def get_audit_events(
+        self, session_id: int, severity: str | None = None, limit: int = 100
+    ) -> list[dict]:
+        """Retrieve reconciliation audit events for a session.
+
+        Args:
+            session_id: Trading session ID.
+            severity: Filter by severity (CRITICAL, HIGH, MEDIUM, LOW).
+            limit: Maximum events to return.
+
+        Returns:
+            List of audit event dicts, newest first.
+        """
+        with self.get_session() as session:
+            query = session.query(ReconciliationAuditEvent).filter(
+                ReconciliationAuditEvent.session_id == session_id
+            )
+            if severity:
+                query = query.filter(ReconciliationAuditEvent.severity == severity)
+            events = query.order_by(ReconciliationAuditEvent.timestamp.desc()).limit(limit).all()
+            return [
+                {
+                    "id": event.id,
+                    "timestamp": event.timestamp,
+                    "entity_type": event.entity_type,
+                    "entity_id": event.entity_id,
+                    "field": event.field,
+                    "old_value": event.old_value,
+                    "new_value": event.new_value,
+                    "reason": event.reason,
+                    "severity": event.severity,
+                }
+                for event in events
             ]

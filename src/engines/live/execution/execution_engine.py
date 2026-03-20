@@ -105,6 +105,12 @@ class LiveExecutionEngine:
                 "Provide exchange_interface or set enable_live_trading=False."
             )
 
+        # Optional: database manager and session_id for order journaling
+        # Set by trading engine after initialization
+        self.db_manager: Any = None
+        self.session_id: int | None = None
+        self.strategy_name: str = "unknown"
+
         # Use shared cost calculator for all fee and slippage calculations
         self._cost_calculator = CostCalculator(
             fee_rate=fee_rate,
@@ -601,13 +607,59 @@ class LiveExecutionEngine:
             unique_suffix = uuid.uuid4().hex[:8]
             client_order_id = f"atb_{symbol}_{side.value}_{timestamp_ms}_{unique_suffix}"
 
-            return self.exchange_interface.place_order(
+            # Journal the order BEFORE submission (crash recovery anchor)
+            if self.db_manager and self.session_id:
+                try:
+                    self.db_manager.create_order_journal_entry(
+                        session_id=self.session_id,
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=side.value,
+                        order_type="ENTRY",
+                        quantity=quantity,
+                        strategy_name=self.strategy_name,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to journal entry order: %s", e)
+
+            order_result = self.exchange_interface.place_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
                 client_order_id=client_order_id,
             )
+
+            if order_result is None:
+                # Mark journal as FAILED if we journaled it
+                if self.db_manager and self.session_id:
+                    try:
+                        self.db_manager.update_order_journal(client_order_id, "FAILED")
+                    except Exception:
+                        pass
+                return None
+
+            # Extract order_id and update journal with exchange data
+            exchange_order_id = (
+                order_result.order_id if hasattr(order_result, "order_id") else str(order_result)
+            )
+            if self.db_manager and self.session_id:
+                try:
+                    fill_price = getattr(order_result, "average_price", None)
+                    fill_qty = getattr(order_result, "filled_quantity", None)
+                    commission = getattr(order_result, "commission", None)
+                    self.db_manager.update_order_journal(
+                        client_order_id=client_order_id,
+                        status="CONFIRMED",
+                        exchange_order_id=exchange_order_id,
+                        fill_price=float(fill_price) if fill_price else None,
+                        fill_quantity=float(fill_qty) if fill_qty else None,
+                        commission=float(commission) if commission else None,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to update entry order journal: %s", e)
+
+            return exchange_order_id
         except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order execution failed: %s", e)
             return None
@@ -655,13 +707,57 @@ class LiveExecutionEngine:
                 # Include original order ID for traceability
                 client_order_id = f"{client_order_id}_{order_id[:8]}"
 
-            close_order_id = self.exchange_interface.place_order(
+            # Journal the exit order BEFORE submission (crash recovery anchor)
+            if self.db_manager and self.session_id:
+                try:
+                    self.db_manager.create_order_journal_entry(
+                        session_id=self.session_id,
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=close_side_str,
+                        order_type="FULL_EXIT",
+                        quantity=quantity,
+                        strategy_name=self.strategy_name,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to journal exit order: %s", e)
+
+            close_result = self.exchange_interface.place_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
                 client_order_id=client_order_id,
             )
+            # Extract order_id string for backward compat
+            close_order_id = None
+            if close_result is not None:
+                close_order_id = (
+                    close_result.order_id
+                    if hasattr(close_result, "order_id")
+                    else str(close_result)
+                )
+
+            # Update journal with result
+            if self.db_manager and self.session_id:
+                try:
+                    if close_order_id:
+                        fill_price = getattr(close_result, "average_price", None)
+                        fill_qty = getattr(close_result, "filled_quantity", None)
+                        commission = getattr(close_result, "commission", None)
+                        self.db_manager.update_order_journal(
+                            client_order_id=client_order_id,
+                            status="CONFIRMED",
+                            exchange_order_id=close_order_id,
+                            fill_price=float(fill_price) if fill_price else None,
+                            fill_quantity=float(fill_qty) if fill_qty else None,
+                            commission=float(commission) if commission else None,
+                        )
+                    else:
+                        self.db_manager.update_order_journal(client_order_id, "FAILED")
+                except Exception as e:
+                    logger.warning("Failed to update exit order journal: %s", e)
+
             if close_order_id:
                 logger.info(
                     "Live close order placed: %s %s qty=%.8f order_id=%s",

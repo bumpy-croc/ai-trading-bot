@@ -62,14 +62,24 @@ class PositionSide(enum.Enum):
 
 
 class OrderStatus(enum.Enum):
-    """Order status enumeration"""
+    """Order status enumeration.
 
-    # Values use uppercase to match existing PostgreSQL enum labels
+    Lifecycle: PENDING_SUBMIT → SUBMITTED → CONFIRMED (happy path)
+    Legacy mapping: PENDING→PENDING, OPEN→SUBMITTED, FILLED→CONFIRMED
+    """
+
+    # Legacy values (kept for backward compat with existing rows)
     PENDING = "PENDING"
     OPEN = "OPEN"
     FILLED = "FILLED"
     CANCELLED = "CANCELLED"
     FAILED = "FAILED"
+    # New reconciliation-aware statuses
+    PENDING_SUBMIT = "PENDING_SUBMIT"  # Journaled but not yet sent to exchange
+    SUBMITTED = "SUBMITTED"  # Sent to exchange, awaiting fill confirmation
+    CONFIRMED = "CONFIRMED"  # Fill verified with authoritative exchange data
+    UNKNOWN = "UNKNOWN"  # Exchange returned ambiguous status (timeout, etc.)
+    UNRESOLVED = "UNRESOLVED"  # Could not reconcile — requires manual intervention
 
 
 class PositionStatus(enum.Enum):
@@ -86,6 +96,7 @@ class OrderType(enum.Enum):
     PARTIAL_EXIT = "PARTIAL_EXIT"  # Order that partially closes position
     SCALE_IN = "SCALE_IN"  # Order that adds to existing position
     FULL_EXIT = "FULL_EXIT"  # Order that completely closes position
+    STOP_LOSS = "STOP_LOSS"  # Server-side stop-loss order
 
 
 class TradeSource(enum.Enum):
@@ -239,6 +250,7 @@ class Position(Base):
     # Order tracking for live trading
     entry_order_id = Column(String(100))  # Exchange order ID for entry
     stop_loss_order_id = Column(String(100))  # Exchange order ID for server-side stop-loss
+    client_order_id = Column(String(100), index=True)  # Our atb_... idempotency key
 
     # Relationships
     trades = relationship("Trade", backref="position")
@@ -262,13 +274,15 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True)
-    position_id = Column(Integer, ForeignKey("positions.id"), nullable=False, index=True)
+    # Nullable: entry orders are journaled before position creation, linked later via UPDATE
+    position_id = Column(Integer, ForeignKey("positions.id"), nullable=True, index=True)
     order_type = Column(Enum(OrderType, native_enum=False, create_type=False), nullable=False)
     status = Column(Enum(OrderStatus, native_enum=False, create_type=False), nullable=False)
 
     # Order identification
     exchange_order_id = Column(String(100), unique=True, index=True)  # From exchange
     internal_order_id = Column(String(100), nullable=False, index=True)  # Our reference
+    client_order_id = Column(String(100), index=True)  # Our atb_... idempotency key
 
     # Order details
     symbol = Column(String(20), nullable=False)
@@ -278,10 +292,15 @@ class Order(Base):
     quantity = Column(Numeric(18, 8), nullable=False)
     price = Column(Numeric(18, 8))  # Limit price (null for market orders)
 
-    # Execution details
+    # Execution details (simulated/estimated)
     filled_quantity = Column(Numeric(18, 8), default=0)
     filled_price = Column(Numeric(18, 8))
     commission = Column(Numeric(18, 8), default=0)
+
+    # Authoritative fill data from exchange (reconciliation source of truth)
+    actual_fill_price = Column(Numeric(18, 8))
+    actual_fill_quantity = Column(Numeric(18, 8))
+    actual_commission = Column(Numeric(18, 8))
 
     # Timestamps
     created_at = Column(DateTime, default=utc_now, index=True)
@@ -297,9 +316,13 @@ class Order(Base):
     target_level = Column(Integer)  # For partial exits/scale-ins
     size_fraction = Column(Numeric(18, 8))  # Fraction of original position
 
+    # Stop-loss replacement chain
+    replaced_order_id = Column(Integer, ForeignKey("orders.id"))  # Previous SL order replaced
+
     __table_args__ = (
         Index("idx_order_position_type", "position_id", "order_type"),
         Index("idx_order_status_created", "status", "created_at"),
+        Index("idx_order_client_id", "client_order_id"),
         UniqueConstraint("internal_order_id", "session_id", name="uq_order_internal_session"),
     )
 
@@ -521,6 +544,32 @@ class SystemEvent(Base):
     )
 
     created_at = Column(DateTime, default=utc_now)
+
+
+class ReconciliationAuditEvent(Base):
+    """Immutable audit trail for reconciliation corrections.
+
+    Every auto-correction by the reconciler records before/after values
+    so discrepancies can be investigated without losing historical data.
+    """
+
+    __tablename__ = "reconciliation_audit_events"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("trading_sessions.id"), index=True)
+    timestamp = Column(DateTime, default=utc_now, nullable=False, index=True)
+    entity_type = Column(String(20), nullable=False)  # position, order, balance
+    entity_id = Column(Integer)  # FK to positions.id or orders.id
+    field = Column(String(50), nullable=False)  # Which field was corrected
+    old_value = Column(Text)
+    new_value = Column(Text)
+    reason = Column(Text, nullable=False)  # Human-readable explanation
+    severity = Column(String(10), nullable=False)  # CRITICAL, HIGH, MEDIUM, LOW
+
+    __table_args__ = (
+        Index("idx_audit_session_time", "session_id", "timestamp"),
+        Index("idx_audit_severity", "severity", "timestamp"),
+    )
 
 
 class StrategyExecution(Base):

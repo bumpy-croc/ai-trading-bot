@@ -1,0 +1,798 @@
+"""Binance reconciliation module for position, order, and balance verification.
+
+Provides startup reconciliation (resolve pending orders, verify positions),
+periodic runtime reconciliation, and discrepancy handling with severity-based
+responses including close-only mode for critical issues.
+
+All corrections are recorded as immutable audit events with before/after values.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from enum import Enum
+from typing import TYPE_CHECKING, Any
+
+from src.config.constants import (
+    DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT,
+    DEFAULT_RECONCILIATION_DUST_THRESHOLD,
+    DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
+    DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN,
+    DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
+)
+
+if TYPE_CHECKING:
+    from src.data_providers.exchange_interface import ExchangeInterface
+    from src.database.manager import DatabaseManager
+    from src.engines.live.execution.position_tracker import LivePositionTracker
+
+logger = logging.getLogger(__name__)
+
+
+# ---------- Data Models ----------
+
+
+class Severity(str, Enum):
+    """Discrepancy severity levels."""
+
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+@dataclass
+class AuditEvent:
+    """In-memory audit event before persistence."""
+
+    entity_type: str  # position, order, balance
+    entity_id: int | None
+    field: str
+    old_value: str | None
+    new_value: str | None
+    reason: str
+    severity: Severity
+
+
+@dataclass
+class ReconciliationResult:
+    """Result of reconciling a single entity."""
+
+    entity_type: str
+    entity_id: int | str | None
+    status: str  # resolved, corrected, unresolved, skipped
+    corrections: list[AuditEvent] = field(default_factory=list)
+    severity: Severity = Severity.LOW
+
+
+# ---------- Startup Reconciliation ----------
+
+
+class PositionReconciler:
+    """Verifies recovered positions and resolves pending orders on startup.
+
+    Uses Binance as the source of truth for execution state. The DB is the
+    audit trail — when they disagree, Binance wins.
+    """
+
+    def __init__(
+        self,
+        exchange_interface: ExchangeInterface,
+        position_tracker: LivePositionTracker,
+        db_manager: DatabaseManager,
+        session_id: int,
+    ) -> None:
+        self.exchange = exchange_interface
+        self.position_tracker = position_tracker
+        self.db_manager = db_manager
+        self.session_id = session_id
+
+    def reconcile_startup(
+        self, positions: dict[str, Any]
+    ) -> list[ReconciliationResult]:
+        """Run full startup reconciliation.
+
+        Args:
+            positions: Current position_tracker.positions snapshot.
+
+        Returns:
+            List of reconciliation results.
+        """
+        results: list[ReconciliationResult] = []
+
+        # Step A: Resolve pending orders from crash recovery
+        results.extend(self.resolve_pending_orders())
+
+        # Step B: Verify each recovered position
+        for order_id, position in positions.items():
+            result = self.reconcile_position(position)
+            results.append(result)
+
+        # Step C: Verify balance consistency
+        results.append(self._reconcile_balance(positions))
+
+        return results
+
+    def resolve_pending_orders(self) -> list[ReconciliationResult]:
+        """Resolve orders stuck in PENDING_SUBMIT/SUBMITTED/UNKNOWN."""
+        results: list[ReconciliationResult] = []
+        unresolved = self.db_manager.get_unresolved_orders(self.session_id)
+
+        if not unresolved:
+            logger.info("No pending orders to resolve")
+            return results
+
+        logger.info("Resolving %d pending orders...", len(unresolved))
+
+        for order_data in unresolved:
+            result = self._resolve_single_order(order_data)
+            results.append(result)
+
+        return results
+
+    def _resolve_single_order(self, order_data: dict) -> ReconciliationResult:
+        """Resolve a single pending order against Binance."""
+        client_order_id = order_data.get("client_order_id")
+        symbol = order_data["symbol"]
+        status = order_data["status"]
+        result = ReconciliationResult(
+            entity_type="order",
+            entity_id=order_data["id"],
+            status="unresolved",
+        )
+
+        # 1. Query by client_order_id
+        exchange_order = None
+        if client_order_id:
+            try:
+                exchange_order = self.exchange.get_order_by_client_id(
+                    client_order_id, symbol
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to query order by client_id %s: %s", client_order_id, e
+                )
+
+        if exchange_order:
+            return self._handle_found_order(order_data, exchange_order, result)
+
+        # 2. Not found by client_id — bounded fallback
+        return self._handle_not_found_order(order_data, status, result)
+
+    def _handle_found_order(
+        self, order_data: dict, exchange_order: Any, result: ReconciliationResult
+    ) -> ReconciliationResult:
+        """Handle an order found on exchange."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOrderStatus
+
+        eo_status = exchange_order.status
+
+        if eo_status == ExOrderStatus.FILLED:
+            # Update journal with fill data
+            self.db_manager.update_order_journal(
+                client_order_id=order_data["client_order_id"],
+                status="CONFIRMED",
+                exchange_order_id=exchange_order.order_id,
+                fill_price=exchange_order.average_price,
+                fill_quantity=exchange_order.filled_quantity,
+                commission=exchange_order.commission,
+            )
+            audit = AuditEvent(
+                entity_type="order",
+                entity_id=order_data["id"],
+                field="status",
+                old_value=order_data["status"],
+                new_value="CONFIRMED",
+                reason=f"Order filled on exchange (price={exchange_order.average_price})",
+                severity=Severity.MEDIUM,
+            )
+            self._persist_audit(audit)
+            result.status = "resolved"
+            result.severity = Severity.MEDIUM
+            result.corrections.append(audit)
+            logger.info(
+                "Resolved order %s: FILLED @ %s",
+                order_data["client_order_id"],
+                exchange_order.average_price,
+            )
+
+        elif eo_status in (ExOrderStatus.CANCELLED, ExOrderStatus.REJECTED, ExOrderStatus.EXPIRED):
+            self.db_manager.update_order_journal(
+                client_order_id=order_data["client_order_id"],
+                status="CANCELLED",
+            )
+            result.status = "resolved"
+            result.severity = Severity.MEDIUM
+            logger.info(
+                "Resolved order %s: %s",
+                order_data["client_order_id"],
+                eo_status.value,
+            )
+
+        else:
+            # Still pending/partially filled on exchange
+            self.db_manager.update_order_journal(
+                client_order_id=order_data["client_order_id"],
+                status="SUBMITTED",
+                exchange_order_id=exchange_order.order_id,
+            )
+            result.status = "resolved"
+            result.severity = Severity.LOW
+
+        return result
+
+    def _handle_not_found_order(
+        self, order_data: dict, status: str, result: ReconciliationResult
+    ) -> ReconciliationResult:
+        """Handle an order not found on exchange."""
+        client_order_id = order_data.get("client_order_id", "")
+
+        if status == "PENDING_SUBMIT":
+            # Order never left our process — safe to mark cancelled
+            self.db_manager.update_order_journal(
+                client_order_id=client_order_id,
+                status="CANCELLED",
+            )
+            audit = AuditEvent(
+                entity_type="order",
+                entity_id=order_data["id"],
+                field="status",
+                old_value=status,
+                new_value="CANCELLED",
+                reason="Order was PENDING_SUBMIT but not found on exchange — never sent",
+                severity=Severity.LOW,
+            )
+            self._persist_audit(audit)
+            result.status = "resolved"
+            result.severity = Severity.LOW
+            result.corrections.append(audit)
+            logger.info("Cancelled unsent order: %s", client_order_id)
+            return result
+
+        # SUBMITTED or UNKNOWN — order may exist on exchange
+        # Try bounded fallback: query recent orders
+        try:
+            created_at = order_data.get("created_at")
+            if created_at:
+                start_time = created_at - timedelta(minutes=5)
+                all_orders = self.exchange.get_all_orders(
+                    order_data["symbol"], start_time=start_time, limit=100
+                )
+                match = self._find_matching_order(order_data, all_orders)
+                if match:
+                    return self._handle_found_order(order_data, match, result)
+        except Exception as e:
+            logger.warning("Bounded fallback search failed: %s", e)
+
+        # No match found — mark UNRESOLVED
+        self.db_manager.update_order_journal(
+            client_order_id=client_order_id,
+            status="UNRESOLVED",
+        )
+        audit = AuditEvent(
+            entity_type="order",
+            entity_id=order_data["id"],
+            field="status",
+            old_value=status,
+            new_value="UNRESOLVED",
+            reason=f"Order {status} but not found on exchange — manual intervention required",
+            severity=Severity.CRITICAL,
+        )
+        self._persist_audit(audit)
+        result.status = "unresolved"
+        result.severity = Severity.CRITICAL
+        result.corrections.append(audit)
+        logger.critical(
+            "UNRESOLVED order %s: was %s but not found on exchange",
+            client_order_id,
+            status,
+        )
+        return result
+
+    def _find_matching_order(
+        self, order_data: dict, exchange_orders: list[Any]
+    ) -> Any | None:
+        """Find a matching order using strict correlation criteria."""
+        target_qty = order_data["quantity"]
+        target_side = order_data["side"]
+        created_at = order_data.get("created_at")
+        client_prefix = "atb_"
+        tolerance = DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT
+        time_window = timedelta(minutes=DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN)
+
+        candidates = []
+        for order in exchange_orders:
+            # Filter: must have our prefix
+            if hasattr(order, "client_order_id") and order.client_order_id:
+                if not order.client_order_id.startswith(client_prefix):
+                    continue
+
+            # Filter: matching side
+            order_side = order.side.value if hasattr(order.side, "value") else str(order.side)
+            if order_side != target_side:
+                continue
+
+            # Filter: quantity within tolerance
+            qty_diff = abs(order.quantity - target_qty) / max(target_qty, 1e-9)
+            if qty_diff > tolerance:
+                continue
+
+            # Filter: timestamp within window
+            if created_at and hasattr(order, "create_time") and order.create_time:
+                time_diff = abs((order.create_time - created_at).total_seconds())
+                if time_diff > time_window.total_seconds():
+                    continue
+
+            candidates.append(order)
+
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            logger.warning(
+                "Ambiguous match: %d candidates for order %s",
+                len(candidates),
+                order_data.get("client_order_id"),
+            )
+        return None
+
+    def reconcile_position(self, position: Any) -> ReconciliationResult:
+        """Verify a single recovered position against exchange data."""
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=getattr(position, "db_position_id", None),
+            status="verified",
+        )
+
+        exchange_order_id = getattr(position, "exchange_order_id", None)
+        client_order_id = getattr(position, "client_order_id", None)
+        symbol = position.symbol
+
+        # 1. Verify entry order
+        exchange_order = None
+        if exchange_order_id:
+            try:
+                exchange_order = self.exchange.get_order(exchange_order_id, symbol)
+            except Exception as e:
+                logger.warning("Failed to verify entry order %s: %s", exchange_order_id, e)
+        elif client_order_id:
+            try:
+                exchange_order = self.exchange.get_order_by_client_id(
+                    client_order_id, symbol
+                )
+            except Exception as e:
+                logger.warning("Failed to verify entry by client_id %s: %s", client_order_id, e)
+
+        if exchange_order:
+            result = self._verify_entry_order(position, exchange_order, result)
+        elif not exchange_order_id and not client_order_id:
+            # Legacy position — no exchange identifiers
+            logger.warning(
+                "Legacy position %s has no exchange identifiers — skipping verification",
+                symbol,
+            )
+            result.status = "skipped"
+            result.severity = Severity.LOW
+
+        # 2. Verify stop-loss order if present
+        sl_order_id = getattr(position, "stop_loss_order_id", None)
+        if sl_order_id:
+            self._verify_stop_loss(position, sl_order_id, result)
+
+        return result
+
+    def _verify_entry_order(
+        self, position: Any, exchange_order: Any, result: ReconciliationResult
+    ) -> ReconciliationResult:
+        """Verify entry order fill data matches position."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOrderStatus
+
+        if exchange_order.status == ExOrderStatus.FILLED:
+            # Check fill price matches entry_price
+            if exchange_order.average_price and position.entry_price > 0:
+                price_diff_pct = abs(
+                    exchange_order.average_price - position.entry_price
+                ) / position.entry_price
+                if price_diff_pct > 0.001:  # >0.1% difference
+                    audit = AuditEvent(
+                        entity_type="position",
+                        entity_id=getattr(position, "db_position_id", None),
+                        field="entry_price",
+                        old_value=str(position.entry_price),
+                        new_value=str(exchange_order.average_price),
+                        reason=f"Entry price mismatch ({price_diff_pct:.4%}) — exchange is source of truth",
+                        severity=Severity.MEDIUM,
+                    )
+                    self._persist_audit(audit)
+                    result.corrections.append(audit)
+                    result.severity = Severity.MEDIUM
+                    logger.info(
+                        "Entry price corrected for %s: %.8f → %.8f",
+                        position.symbol,
+                        position.entry_price,
+                        exchange_order.average_price,
+                    )
+
+        elif exchange_order.status in (
+            ExOrderStatus.CANCELLED,
+            ExOrderStatus.REJECTED,
+        ):
+            # Position never actually opened
+            audit = AuditEvent(
+                entity_type="position",
+                entity_id=getattr(position, "db_position_id", None),
+                field="status",
+                old_value="OPEN",
+                new_value="CANCELLED",
+                reason=f"Entry order was {exchange_order.status.value} — position never opened",
+                severity=Severity.HIGH,
+            )
+            self._persist_audit(audit)
+            result.corrections.append(audit)
+            result.status = "corrected"
+            result.severity = Severity.HIGH
+            logger.warning(
+                "Position %s entry order was %s — removing from tracker",
+                position.symbol,
+                exchange_order.status.value,
+            )
+
+        return result
+
+    def _verify_stop_loss(
+        self, position: Any, sl_order_id: str, result: ReconciliationResult
+    ) -> None:
+        """Verify stop-loss order status."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOrderStatus
+
+        try:
+            sl_order = self.exchange.get_order(sl_order_id, position.symbol)
+            if not sl_order:
+                # SL order not found — may need re-placement
+                audit = AuditEvent(
+                    entity_type="position",
+                    entity_id=getattr(position, "db_position_id", None),
+                    field="stop_loss_order_id",
+                    old_value=sl_order_id,
+                    new_value="MISSING",
+                    reason="Stop-loss order not found on exchange — needs re-placement",
+                    severity=Severity.MEDIUM,
+                )
+                self._persist_audit(audit)
+                result.corrections.append(audit)
+                if result.severity.value < Severity.MEDIUM.value:
+                    result.severity = Severity.MEDIUM
+                return
+
+            if sl_order.status == ExOrderStatus.FILLED:
+                # SL triggered while offline — position should be closed
+                audit = AuditEvent(
+                    entity_type="position",
+                    entity_id=getattr(position, "db_position_id", None),
+                    field="status",
+                    old_value="OPEN",
+                    new_value="CLOSED_BY_SL",
+                    reason=f"Stop-loss filled @ {sl_order.average_price} while offline",
+                    severity=Severity.HIGH,
+                )
+                self._persist_audit(audit)
+                result.corrections.append(audit)
+                result.status = "corrected"
+                result.severity = Severity.HIGH
+                logger.warning(
+                    "Stop-loss triggered offline for %s @ %s",
+                    position.symbol,
+                    sl_order.average_price,
+                )
+
+        except Exception as e:
+            logger.warning(
+                "Failed to verify stop-loss order %s: %s", sl_order_id, e
+            )
+
+    def _reconcile_balance(
+        self, positions: dict[str, Any]
+    ) -> ReconciliationResult:
+        """Verify account balance consistency."""
+        result = ReconciliationResult(
+            entity_type="balance",
+            entity_id=None,
+            status="verified",
+        )
+
+        try:
+            usdt_balance = self.exchange.get_balance("USDT")
+            if not usdt_balance:
+                return result
+
+            exchange_total = usdt_balance.total
+            db_balance = self.db_manager.get_current_balance(self.session_id)
+
+            if db_balance > 0:
+                diff_pct = abs(exchange_total - db_balance) / db_balance
+                if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
+                    severity = Severity.CRITICAL
+                    audit = AuditEvent(
+                        entity_type="balance",
+                        entity_id=None,
+                        field="total_balance",
+                        old_value=str(db_balance),
+                        new_value=str(exchange_total),
+                        reason=f"Balance discrepancy {diff_pct:.2%} exceeds threshold",
+                        severity=severity,
+                    )
+                    self._persist_audit(audit)
+                    result.corrections.append(audit)
+                    result.severity = severity
+                    result.status = "corrected"
+                    logger.critical(
+                        "Balance discrepancy: DB=$%.2f vs Exchange=$%.2f (%.2f%%)",
+                        db_balance,
+                        exchange_total,
+                        diff_pct * 100,
+                    )
+                elif diff_pct > 0.01:  # >1% warning
+                    result.severity = Severity.LOW
+                    logger.info(
+                        "Minor balance difference: DB=$%.2f vs Exchange=$%.2f (%.2f%%)",
+                        db_balance,
+                        exchange_total,
+                        diff_pct * 100,
+                    )
+
+        except Exception as e:
+            logger.warning("Balance reconciliation failed: %s", e)
+
+        return result
+
+    def _persist_audit(self, audit: AuditEvent) -> None:
+        """Persist an audit event to the database."""
+        try:
+            self.db_manager.log_audit_event(
+                session_id=self.session_id,
+                entity_type=audit.entity_type,
+                entity_id=audit.entity_id,
+                field=audit.field,
+                old_value=audit.old_value,
+                new_value=audit.new_value,
+                reason=audit.reason,
+                severity=audit.severity.value,
+            )
+        except Exception as e:
+            logger.error("Failed to persist audit event: %s", e)
+
+
+# ---------- Periodic Reconciliation ----------
+
+
+class PeriodicReconciler:
+    """Background daemon that periodically verifies positions/orders/balance.
+
+    Runs in a separate daemon thread. Configurable interval (default 60s).
+    Uses per-position mutation locks to prevent double-close races.
+    NOT instantiated in paper mode.
+    """
+
+    def __init__(
+        self,
+        exchange_interface: ExchangeInterface,
+        position_tracker: LivePositionTracker,
+        db_manager: DatabaseManager,
+        session_id: int,
+        interval: float = DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
+        on_critical: Any = None,
+    ) -> None:
+        """Initialize periodic reconciler.
+
+        Args:
+            exchange_interface: Exchange provider.
+            position_tracker: Live position tracker.
+            db_manager: Database manager.
+            session_id: Current trading session ID.
+            interval: Seconds between reconciliation cycles.
+            on_critical: Callback invoked on CRITICAL severity (e.g., enter close-only mode).
+        """
+        self.exchange = exchange_interface
+        self.position_tracker = position_tracker
+        self.db_manager = db_manager
+        self.session_id = session_id
+        self.interval = interval
+        self.on_critical = on_critical
+
+        self._running = False
+        self._thread: threading.Thread | None = None
+        # Per-position mutation locks to serialize reconciler + OrderTracker + exit
+        self._position_mutation_locks: dict[str, threading.Lock] = {}
+        self._locks_lock = threading.Lock()  # Protects _position_mutation_locks dict
+
+    def start(self) -> None:
+        """Start the periodic reconciliation daemon thread."""
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name="PeriodicReconciler",
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info(
+            "Periodic reconciler started (interval=%ds)", self.interval
+        )
+
+    def stop(self) -> None:
+        """Stop the periodic reconciliation daemon."""
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=10)
+        logger.info("Periodic reconciler stopped")
+
+    def get_position_lock(self, position_key: str) -> threading.Lock:
+        """Get or create a per-position mutation lock.
+
+        All mutators (OrderTracker callbacks, reconciler corrections, normal exits)
+        should acquire this lock before mutating a position.
+        """
+        with self._locks_lock:
+            if position_key not in self._position_mutation_locks:
+                self._position_mutation_locks[position_key] = threading.Lock()
+            return self._position_mutation_locks[position_key]
+
+    def _run_loop(self) -> None:
+        """Main reconciliation loop running in daemon thread."""
+        while self._running:
+            try:
+                self._reconcile_cycle()
+            except Exception as e:
+                logger.error("Reconciliation cycle failed: %s", e, exc_info=True)
+
+            # Sleep in small increments to allow quick shutdown
+            for _ in range(int(self.interval)):
+                if not self._running:
+                    break
+                time.sleep(1)
+
+    def _reconcile_cycle(self) -> None:
+        """Execute one reconciliation cycle."""
+        # Snapshot positions (release lock before API calls)
+        positions_snapshot = self.position_tracker.positions
+        if not positions_snapshot:
+            return
+
+        max_severity = Severity.LOW
+
+        # 1. Verify each position's entry order
+        for order_key, position in positions_snapshot.items():
+            exchange_order_id = getattr(position, "exchange_order_id", None)
+            if not exchange_order_id:
+                continue
+
+            try:
+                exchange_order = self.exchange.get_order(
+                    exchange_order_id, position.symbol
+                )
+                if not exchange_order:
+                    continue
+
+                from src.data_providers.exchange_interface import (
+                    OrderStatus as ExOrderStatus,
+                )
+
+                # Check if position was closed externally
+                if exchange_order.status in (
+                    ExOrderStatus.CANCELLED,
+                    ExOrderStatus.REJECTED,
+                ):
+                    severity = Severity.HIGH
+                    self.db_manager.log_audit_event(
+                        session_id=self.session_id,
+                        entity_type="position",
+                        entity_id=getattr(position, "db_position_id", None),
+                        field="status",
+                        old_value="OPEN",
+                        new_value=exchange_order.status.value,
+                        reason="Entry order cancelled/rejected on exchange",
+                        severity=severity.value,
+                    )
+                    if severity.value > max_severity.value:
+                        max_severity = severity
+
+            except Exception as e:
+                logger.debug("Failed to verify position %s: %s", order_key, e)
+
+        # 2. Check for orphaned orders with our prefix
+        try:
+            if positions_snapshot:
+                sample_symbol = next(iter(positions_snapshot.values())).symbol
+                open_orders = self.exchange.get_open_orders(sample_symbol)
+                tracked_exchange_ids = set()
+                for pos in positions_snapshot.values():
+                    eid = getattr(pos, "exchange_order_id", None)
+                    if eid:
+                        tracked_exchange_ids.add(eid)
+                    sl_id = getattr(pos, "stop_loss_order_id", None)
+                    if sl_id:
+                        tracked_exchange_ids.add(sl_id)
+
+                for order in open_orders:
+                    if order.order_id not in tracked_exchange_ids:
+                        client_id = getattr(order, "client_order_id", "") or ""
+                        if client_id.startswith("atb_"):
+                            logger.warning(
+                                "Orphaned order found: %s (%s) — not tracked",
+                                order.order_id,
+                                client_id,
+                            )
+                            max_severity = Severity.HIGH
+        except Exception as e:
+            logger.debug("Orphaned order check failed: %s", e)
+
+        # 3. Verify balance
+        try:
+            usdt_balance = self.exchange.get_balance("USDT")
+            if usdt_balance:
+                db_balance = self.db_manager.get_current_balance(self.session_id)
+                if db_balance > 0:
+                    diff_pct = abs(usdt_balance.total - db_balance) / db_balance
+                    if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
+                        max_severity = Severity.CRITICAL
+                        logger.critical(
+                            "Balance discrepancy: DB=$%.2f vs Exchange=$%.2f (%.2f%%)",
+                            db_balance,
+                            usdt_balance.total,
+                            diff_pct * 100,
+                        )
+        except Exception as e:
+            logger.debug("Balance check failed: %s", e)
+
+        # 4. Trigger close-only mode on CRITICAL
+        if max_severity == Severity.CRITICAL and self.on_critical:
+            try:
+                self.on_critical()
+            except Exception as e:
+                logger.error("on_critical callback failed: %s", e)
+
+
+# ---------- Discrepancy Handling ----------
+
+
+def classify_severity(
+    entity_type: str,
+    issue: str,
+    value_diff_pct: float | None = None,
+) -> Severity:
+    """Classify a discrepancy into a severity level.
+
+    Severity taxonomy:
+    - CRITICAL: Position in tracker but order never filled; balance >5%; unknown orders
+    - HIGH: Position closed externally; SL filled but missed; quantity mismatch
+    - MEDIUM: Entry price slippage unrecorded; missing SL order
+    - LOW: Minor balance rounding (<1%); timing discrepancy
+    """
+    if entity_type == "balance" and value_diff_pct is not None:
+        if value_diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
+            return Severity.CRITICAL
+        if value_diff_pct > 0.01:
+            return Severity.LOW
+        return Severity.LOW
+
+    if entity_type == "order":
+        if issue in ("not_found_submitted", "not_found_unknown"):
+            return Severity.CRITICAL
+        if issue == "not_found_pending_submit":
+            return Severity.LOW
+        if issue == "filled":
+            return Severity.MEDIUM
+
+    if entity_type == "position":
+        if issue in ("entry_cancelled", "entry_rejected", "sl_filled_offline"):
+            return Severity.HIGH
+        if issue in ("price_mismatch", "sl_missing"):
+            return Severity.MEDIUM
+        if issue == "legacy_no_ids":
+            return Severity.LOW
+
+    return Severity.LOW
