@@ -251,7 +251,7 @@ class TestPositionReconciler:
         mock_exchange.get_balance.return_value = MockBalance(total=1005.0)
         mock_db.get_current_balance.return_value = 1000.0
 
-        result = reconciler._reconcile_balance({})
+        result = reconciler._reconcile_balance()
         assert result.severity != Severity.CRITICAL
 
     def test_reconcile_balance_exceeds_threshold(self, reconciler, mock_exchange, mock_db):
@@ -259,7 +259,7 @@ class TestPositionReconciler:
         mock_exchange.get_balance.return_value = MockBalance(total=500.0)
         mock_db.get_current_balance.return_value = 1000.0
 
-        result = reconciler._reconcile_balance({})
+        result = reconciler._reconcile_balance()
         assert result.severity == Severity.CRITICAL
 
 

@@ -37,12 +37,41 @@ logger = logging.getLogger(__name__)
 
 
 class Severity(str, Enum):
-    """Discrepancy severity levels."""
+    """Discrepancy severity levels.
+
+    Numeric ordering: LOW < MEDIUM < HIGH < CRITICAL.
+    String values are preserved for serialization/logging.
+    """
 
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
+
+    @staticmethod
+    def _numeric_rank(member: Severity) -> int:
+        """Return numeric rank for ordering comparisons."""
+        return {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}[member.value]
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Severity):
+            return NotImplemented
+        return self._numeric_rank(self) < self._numeric_rank(other)
+
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, Severity):
+            return NotImplemented
+        return self._numeric_rank(self) <= self._numeric_rank(other)
+
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, Severity):
+            return NotImplemented
+        return self._numeric_rank(self) > self._numeric_rank(other)
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, Severity):
+            return NotImplemented
+        return self._numeric_rank(self) >= self._numeric_rank(other)
 
 
 @dataclass
@@ -113,7 +142,7 @@ class PositionReconciler:
             results.append(result)
 
         # Step C: Verify balance consistency
-        results.append(self._reconcile_balance(positions))
+        results.append(self._reconcile_balance())
 
         return results
 
@@ -306,14 +335,17 @@ class PositionReconciler:
 
         candidates = []
         for order in exchange_orders:
-            # Filter: must have our prefix
-            if hasattr(order, "client_order_id") and order.client_order_id:
-                if not order.client_order_id.startswith(client_prefix):
-                    continue
+            # Filter: must have our prefix (skip manually placed orders too)
+            client_id = getattr(order, "client_order_id", None)
+            if not client_id or not client_id.startswith(client_prefix):
+                continue
 
             # Filter: matching side
+            # target_side is PositionSide.value ("LONG"/"SHORT"), but exchange
+            # Order.side uses OrderSide ("BUY"/"SELL"). Map before comparing.
             order_side = order.side.value if hasattr(order.side, "value") else str(order.side)
-            if order_side != target_side:
+            expected_exchange_side = "BUY" if target_side == "LONG" else "SELL"
+            if order_side != expected_exchange_side:
                 continue
 
             # Filter: quantity within tolerance
@@ -415,6 +447,7 @@ class PositionReconciler:
                         position.entry_price,
                         exchange_order.average_price,
                     )
+                    position.entry_price = exchange_order.average_price
 
         elif exchange_order.status in (
             ExOrderStatus.CANCELLED,
@@ -463,7 +496,7 @@ class PositionReconciler:
                 )
                 self._persist_audit(audit)
                 result.corrections.append(audit)
-                if result.severity.value < Severity.MEDIUM.value:
+                if result.severity < Severity.MEDIUM:
                     result.severity = Severity.MEDIUM
                 return
 
@@ -493,9 +526,7 @@ class PositionReconciler:
                 "Failed to verify stop-loss order %s: %s", sl_order_id, e
             )
 
-    def _reconcile_balance(
-        self, positions: dict[str, Any]
-    ) -> ReconciliationResult:
+    def _reconcile_balance(self) -> ReconciliationResult:
         """Verify account balance consistency."""
         result = ReconciliationResult(
             entity_type="balance",
@@ -514,7 +545,6 @@ class PositionReconciler:
             if db_balance > 0:
                 diff_pct = abs(exchange_total - db_balance) / db_balance
                 if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
-                    severity = Severity.CRITICAL
                     audit = AuditEvent(
                         entity_type="balance",
                         entity_id=None,
@@ -522,11 +552,11 @@ class PositionReconciler:
                         old_value=str(db_balance),
                         new_value=str(exchange_total),
                         reason=f"Balance discrepancy {diff_pct:.2%} exceeds threshold",
-                        severity=severity,
+                        severity=Severity.CRITICAL,
                     )
                     self._persist_audit(audit)
                     result.corrections.append(audit)
-                    result.severity = severity
+                    result.severity = Severity.CRITICAL
                     result.status = "corrected"
                     logger.critical(
                         "Balance discrepancy: DB=$%.2f vs Exchange=$%.2f (%.2f%%)",
@@ -697,7 +727,7 @@ class PeriodicReconciler:
                         reason="Entry order cancelled/rejected on exchange",
                         severity=severity.value,
                     )
-                    if severity.value > max_severity.value:
+                    if severity > max_severity:
                         max_severity = severity
 
             except Exception as e:
@@ -775,8 +805,6 @@ def classify_severity(
     if entity_type == "balance" and value_diff_pct is not None:
         if value_diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
             return Severity.CRITICAL
-        if value_diff_pct > 0.01:
-            return Severity.LOW
         return Severity.LOW
 
     if entity_type == "order":

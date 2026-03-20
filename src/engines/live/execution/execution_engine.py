@@ -14,7 +14,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.config.constants import (
     DEFAULT_FEE_RATE,
@@ -23,9 +23,6 @@ from src.config.constants import (
 from src.data_providers.exchange_interface import OrderSide, OrderStatus, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -601,11 +598,11 @@ class LiveExecutionEngine:
                 return None
 
             # Generate deterministic client order ID for idempotency
-            # Format: atb_SYMBOL_SIDE_TIMESTAMP_UUID
-            # UUID prevents collision if multiple orders placed within same millisecond
+            # Format: atb_{timestamp_hex}_{uuid8} (~24 chars, within Binance 36-char limit)
+            # Symbol and side are already in the order params, so omitted from the ID
             timestamp_ms = int(time.time() * 1000)
             unique_suffix = uuid.uuid4().hex[:8]
-            client_order_id = f"atb_{symbol}_{side.value}_{timestamp_ms}_{unique_suffix}"
+            client_order_id = f"atb_{timestamp_ms:x}_{unique_suffix}"
 
             # Journal the order BEFORE submission (crash recovery anchor)
             if self.db_manager and self.session_id:
@@ -698,14 +695,11 @@ class LiveExecutionEngine:
                 return None
 
             # Generate deterministic client order ID for exit order idempotency
-            # Use UUID to prevent collision, timestamp for ordering
+            # Format: atbx_{timestamp_hex}_{uuid8} (~25 chars, within Binance 36-char limit)
+            # Symbol and side are already in the order params, so omitted from the ID
             timestamp_ms = int(time.time() * 1000)
-            close_side_str = "SELL" if side == PositionSide.LONG else "BUY"
             unique_suffix = uuid.uuid4().hex[:8]
-            client_order_id = f"atb_close_{symbol}_{close_side_str}_{timestamp_ms}_{unique_suffix}"
-            if order_id:
-                # Include original order ID for traceability
-                client_order_id = f"{client_order_id}_{order_id[:8]}"
+            client_order_id = f"atbx_{timestamp_ms:x}_{unique_suffix}"
 
             # Journal the exit order BEFORE submission (crash recovery anchor)
             if self.db_manager and self.session_id:
@@ -714,7 +708,7 @@ class LiveExecutionEngine:
                         session_id=self.session_id,
                         client_order_id=client_order_id,
                         symbol=symbol,
-                        side=close_side_str,
+                        side=side.value,
                         order_type="FULL_EXIT",
                         quantity=quantity,
                         strategy_name=self.strategy_name,
