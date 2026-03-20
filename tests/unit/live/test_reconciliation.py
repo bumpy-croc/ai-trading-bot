@@ -297,6 +297,55 @@ class TestPositionReconciler:
         mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
         mock_db.close_position.assert_called_once_with(8, exit_price=None)
 
+    def test_reconcile_position_sl_cancelled_clears_reference(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Cancelled stop-loss clears stale reference and flags for re-placement."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(stop_loss_order_id="sl_canc_1", db_position_id=20)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_canc_1", status=ExOS.CANCELLED)
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+
+        result = reconciler.reconcile_position(pos)
+        # Position stays open — not removed from tracker
+        mock_position_tracker.remove_position.assert_not_called()
+        # Stale SL reference cleared
+        assert pos.stop_loss_order_id is None
+        # Correction recorded with MEDIUM severity
+        assert result.severity >= Severity.MEDIUM
+        sl_corrections = [
+            c for c in result.corrections
+            if "unprotected" in c.reason and c.field == "stop_loss_order_id"
+        ]
+        assert len(sl_corrections) == 1
+        assert sl_corrections[0].severity == Severity.MEDIUM
+        assert sl_corrections[0].old_value == "sl_canc_1"
+        assert sl_corrections[0].new_value is None
+        mock_db.log_audit_event.assert_called()
+
+    def test_reconcile_position_sl_expired_clears_reference(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Expired stop-loss clears stale reference and flags for re-placement."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(stop_loss_order_id="sl_exp_1", db_position_id=21)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_exp_1", status=ExOS.EXPIRED)
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+
+        result = reconciler.reconcile_position(pos)
+        mock_position_tracker.remove_position.assert_not_called()
+        assert pos.stop_loss_order_id is None
+        assert result.severity >= Severity.MEDIUM
+        sl_corrections = [
+            c for c in result.corrections
+            if "expired" in c.reason and c.field == "stop_loss_order_id"
+        ]
+        assert len(sl_corrections) == 1
+
     def test_reconcile_position_legacy_no_ids(self, reconciler):
         """Legacy position without exchange IDs is skipped."""
         pos = MockPosition(exchange_order_id=None, client_order_id=None)
@@ -668,3 +717,338 @@ class TestFindMatchingOrder:
         result = reconciler._find_matching_order(order_data, [buy_order])
         assert result is not None
         assert result.order_id == "ex_buy"
+
+
+# ---------- Asset Holdings Verification Tests ----------
+
+
+class TestAssetHoldingsVerification:
+    """Tests for external close detection via asset balance checks."""
+
+    def test_extract_base_asset_btcusdt(self):
+        """Extracts BTC from BTCUSDT."""
+        assert PositionReconciler._extract_base_asset("BTCUSDT") == "BTC"
+
+    def test_extract_base_asset_ethusdt(self):
+        """Extracts ETH from ETHUSDT."""
+        assert PositionReconciler._extract_base_asset("ETHUSDT") == "ETH"
+
+    def test_extract_base_asset_btcbusd(self):
+        """Extracts BTC from BTCBUSD."""
+        assert PositionReconciler._extract_base_asset("BTCBUSD") == "BTC"
+
+    def test_extract_base_asset_btcusd(self):
+        """Extracts BTC from BTCUSD."""
+        assert PositionReconciler._extract_base_asset("BTCUSD") == "BTC"
+
+    def test_extract_base_asset_unknown_quote(self):
+        """Returns full symbol when no known quote currency matches."""
+        assert PositionReconciler._extract_base_asset("BTCEUR") == "BTCEUR"
+
+    def test_position_externally_closed_detected(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Position with near-zero asset balance is detected as externally closed."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=10)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        # Asset balance is near zero — position was sold externally
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.0001, free=0.0001, locked=0.0
+        )
+
+        result = reconciler.reconcile_position(pos)
+        assert result.status == "corrected"
+        assert result.severity == Severity.HIGH
+        assert any("closed externally" in c.reason for c in result.corrections)
+        mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
+        mock_db.close_position.assert_called_once_with(10)
+
+    def test_position_with_sufficient_balance_not_flagged(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Position with sufficient asset balance passes verification."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=11)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        # Asset balance is above 50% of tracked quantity
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.08, free=0.08, locked=0.0
+        )
+
+        result = reconciler.reconcile_position(pos)
+        assert result.status == "verified"
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+
+    def test_position_exactly_at_threshold_not_flagged(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Position at exactly 50% of tracked quantity is not flagged."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=12)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        # Exactly 50% — should NOT be flagged (threshold is strictly less than)
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.05, free=0.05, locked=0.0
+        )
+
+        result = reconciler.reconcile_position(pos)
+        assert result.status == "verified"
+        mock_position_tracker.remove_position.assert_not_called()
+
+    def test_asset_check_skipped_when_already_corrected(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Asset check is skipped if position was already corrected (e.g., entry cancelled)."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=13)
+        # Entry order is cancelled — position already corrected before asset check
+        entry_order = MockExchangeOrder(status=ExOS.CANCELLED)
+        mock_exchange.get_order.return_value = entry_order
+
+        result = reconciler.reconcile_position(pos)
+        assert result.status == "corrected"
+        # The remove_position call comes from the entry cancel, not asset check
+        assert mock_position_tracker.remove_position.call_count == 1
+
+    def test_asset_check_with_no_balance_returned(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Null balance response triggers external close detection."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=14)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        mock_exchange.get_balance.return_value = None
+
+        result = reconciler.reconcile_position(pos)
+        assert result.status == "corrected"
+        assert result.severity == Severity.HIGH
+        mock_position_tracker.remove_position.assert_called_once()
+
+    def test_asset_check_exchange_error_is_handled(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Exchange API error during asset check is handled gracefully."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=15)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        mock_exchange.get_balance.side_effect = ConnectionError("API timeout")
+
+        result = reconciler.reconcile_position(pos)
+        # Should not crash — position stays verified
+        assert result.status == "verified"
+        mock_position_tracker.remove_position.assert_not_called()
+
+    def test_asset_check_no_db_id_skips_db_close(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """External close detection without db_position_id skips DB close."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=None)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.0, free=0.0, locked=0.0
+        )
+
+        result = reconciler.reconcile_position(pos)
+        assert result.status == "corrected"
+        mock_position_tracker.remove_position.assert_called_once()
+        mock_db.close_position.assert_not_called()
+
+
+class TestPeriodicReconcilerAssetCheck:
+    """Tests for asset holdings checks in periodic reconciliation cycle."""
+
+    def test_cycle_detects_externally_closed_position(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Periodic cycle detects position with no asset balance on exchange."""
+        pos = MockPosition(current_size=0.1, exchange_order_id="ex_001")
+        mock_position_tracker.positions = {"key1": pos}
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED
+        )
+        # Asset balance is zero, but USDT balance is fine
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=1000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.0, free=0.0, locked=0.0)
+        )
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+        )
+        reconciler._reconcile_cycle()
+
+        # Audit event logged for external close
+        audit_calls = mock_db.log_audit_event.call_args_list
+        external_close_logged = any(
+            "closed externally" in str(call) for call in audit_calls
+        )
+        assert external_close_logged
+
+    def test_cycle_no_false_positive_when_balance_sufficient(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Periodic cycle does not flag positions with sufficient asset balance."""
+        pos = MockPosition(current_size=0.1, exchange_order_id="ex_002")
+        mock_position_tracker.positions = {"key1": pos}
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED
+        )
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=1000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+        )
+        reconciler._reconcile_cycle()
+
+        # No external close audit event should be logged
+        audit_calls = mock_db.log_audit_event.call_args_list
+        external_close_logged = any(
+            "closed externally" in str(call) for call in audit_calls
+        )
+        assert not external_close_logged
+
+
+# ---------- Position-Notional-Aware Balance Tests ----------
+
+
+class TestBalanceAccountsForPositionNotional:
+    """Tests that balance reconciliation subtracts position notional before comparing.
+
+    In spot trading, buying BTC reduces USDT by the purchase amount. The DB
+    balance only moves for fees/realized PnL, so expected USDT on exchange
+    equals db_balance minus total position notional.
+    """
+
+    def test_no_false_critical_after_opening_position(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Opening a position reduces exchange USDT but should not trigger CRITICAL.
+
+        Scenario: $10,000 DB balance, bought 0.1 BTC @ $50,000 = $5,000 notional.
+        Exchange USDT = $5,000 (correct). Without position adjustment this would
+        show a 50% discrepancy and trigger close-only mode.
+        """
+        pos = MockPosition(entry_price=50000.0, current_size=0.1)
+        mock_position_tracker.positions = {"pos_1": pos}
+        mock_exchange.get_balance.return_value = MockBalance(total=5000.0)
+        mock_db.get_current_balance.return_value = 10000.0
+
+        result = reconciler._reconcile_balance()
+        assert result.severity != Severity.CRITICAL
+        assert result.status == "verified"
+
+    def test_genuine_discrepancy_still_triggers_critical(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Genuine balance loss still triggers CRITICAL even with positions.
+
+        Scenario: $10,000 DB, $5,000 in positions, expected USDT = $5,000.
+        Exchange shows only $1,000 — 80% discrepancy.
+        """
+        pos = MockPosition(entry_price=50000.0, current_size=0.1)
+        mock_position_tracker.positions = {"pos_1": pos}
+        mock_exchange.get_balance.return_value = MockBalance(total=1000.0)
+        mock_db.get_current_balance.return_value = 10000.0
+
+        result = reconciler._reconcile_balance()
+        assert result.severity == Severity.CRITICAL
+
+    def test_multiple_positions_notional_summed(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Multiple positions' notional values are summed correctly.
+
+        Scenario: $20,000 DB, two positions totaling $15,000 notional.
+        Exchange USDT = $5,000 (correct).
+        """
+        pos1 = MockPosition(entry_price=50000.0, current_size=0.1, symbol="BTCUSDT")
+        pos2 = MockPosition(entry_price=3000.0, current_size=10.0 / 3, symbol="ETHUSDT")
+        mock_position_tracker.positions = {"pos_1": pos1, "pos_2": pos2}
+        mock_exchange.get_balance.return_value = MockBalance(total=5000.0)
+        mock_db.get_current_balance.return_value = 20000.0
+
+        result = reconciler._reconcile_balance()
+        assert result.severity != Severity.CRITICAL
+
+    def test_no_positions_falls_back_to_raw_comparison(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """With no positions, comparison is against raw DB balance."""
+        mock_position_tracker.positions = {}
+        mock_exchange.get_balance.return_value = MockBalance(total=500.0)
+        mock_db.get_current_balance.return_value = 1000.0
+
+        result = reconciler._reconcile_balance()
+        assert result.severity == Severity.CRITICAL
+
+    def test_periodic_reconciler_no_false_critical_with_positions(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Periodic reconciler balance check accounts for position notional.
+
+        Same scenario as startup: position notional explains USDT drop.
+        """
+        pos = MockPosition(
+            entry_price=50000.0, current_size=0.1, exchange_order_id="ex_100"
+        )
+        mock_position_tracker.positions = {"pos_1": pos}
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        # USDT = $5,000 (DB $10,000 minus $5,000 position notional)
+        # BTC balance = 0.1 (position is held)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_db.get_current_balance.return_value = 10000.0
+
+        callback = MagicMock()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=callback,
+        )
+        reconciler._reconcile_cycle()
+        # Should NOT trigger close-only mode
+        callback.assert_not_called()

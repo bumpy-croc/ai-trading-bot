@@ -423,6 +423,10 @@ class PositionReconciler:
         if sl_order_id:
             self._verify_stop_loss(position, sl_order_id, result)
 
+        # 3. Verify asset holdings — detect external closes
+        if result.status != "corrected":
+            self._verify_asset_holdings(position, result)
+
         return result
 
     def _verify_entry_order(
@@ -520,6 +524,33 @@ class PositionReconciler:
                     result.severity = Severity.MEDIUM
                 return
 
+            if sl_order.status in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED):
+                # SL was cancelled or expired — position is unprotected
+                audit = AuditEvent(
+                    entity_type="position",
+                    entity_id=getattr(position, "db_position_id", None),
+                    field="stop_loss_order_id",
+                    old_value=sl_order_id,
+                    new_value=None,
+                    reason=(
+                        f"Stop-loss order {sl_order.status.value.lower()} on exchange "
+                        "— position is unprotected, needs SL re-placement"
+                    ),
+                    severity=Severity.MEDIUM,
+                )
+                self._persist_audit(audit)
+                result.corrections.append(audit)
+                if result.severity < Severity.MEDIUM:
+                    result.severity = Severity.MEDIUM
+                position.stop_loss_order_id = None
+                logger.warning(
+                    "Stop-loss %s for %s was %s — cleared stale reference",
+                    sl_order_id,
+                    position.symbol,
+                    sl_order.status.value,
+                )
+                return
+
             if sl_order.status == ExOrderStatus.FILLED:
                 # SL triggered while offline — position should be closed
                 audit = AuditEvent(
@@ -564,8 +595,110 @@ class PositionReconciler:
                 "Failed to verify stop-loss order %s: %s", sl_order_id, e
             )
 
+    @staticmethod
+    def _extract_base_asset(symbol: str) -> str:
+        """Extract the base asset from a trading pair symbol.
+
+        Strips common quote currencies (USDT, BUSD, USD) from the end
+        of the symbol to get the base asset (e.g., "BTC" from "BTCUSDT").
+        """
+        for quote in ("USDT", "BUSD", "USD"):
+            if symbol.endswith(quote) and len(symbol) > len(quote):
+                return symbol[: -len(quote)]
+        return symbol
+
+    def _verify_asset_holdings(
+        self, position: Any, result: ReconciliationResult
+    ) -> None:
+        """Verify the bot holds the expected asset on exchange.
+
+        Detects positions closed externally (e.g., manual sell on Binance UI)
+        by checking if the actual asset balance is significantly below the
+        tracked position quantity. Uses 50% threshold to catch full external
+        closes while tolerating partial exits.
+        """
+        symbol = position.symbol
+        base_asset = self._extract_base_asset(symbol)
+        position_qty = getattr(position, "current_size", None) or getattr(
+            position, "size", 0
+        )
+        if position_qty <= 0:
+            return
+
+        try:
+            balance = self.exchange.get_balance(base_asset)
+            held_qty = balance.total if balance else 0.0
+
+            # If held quantity is less than 50% of tracked quantity,
+            # the position was likely closed externally
+            if held_qty < position_qty * 0.5:
+                audit = AuditEvent(
+                    entity_type="position",
+                    entity_id=getattr(position, "db_position_id", None),
+                    field="status",
+                    old_value="OPEN",
+                    new_value="CLOSED_EXTERNALLY",
+                    reason=(
+                        f"Position asset not found on exchange — likely closed externally "
+                        f"(held={held_qty:.8f}, tracked={position_qty:.8f}, asset={base_asset})"
+                    ),
+                    severity=Severity.HIGH,
+                )
+                self._persist_audit(audit)
+                result.corrections.append(audit)
+                result.status = "corrected"
+                result.severity = Severity.HIGH
+                logger.warning(
+                    "Position %s externally closed: held %s=%s, tracked=%s",
+                    symbol,
+                    base_asset,
+                    held_qty,
+                    position_qty,
+                )
+                # Remove from in-memory tracker
+                self.position_tracker.remove_position(position.order_id)
+                # Close the DB position
+                db_pos_id = getattr(position, "db_position_id", None)
+                if db_pos_id:
+                    try:
+                        self.db_manager.close_position(db_pos_id)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to close DB position %s: %s", db_pos_id, e
+                        )
+        except Exception as e:
+            logger.warning(
+                "Asset holdings check failed for %s: %s", base_asset, e
+            )
+
+    def _estimate_position_notional(self) -> float:
+        """Estimate total notional value of open positions using entry prices.
+
+        In spot trading, buying an asset reduces USDT by the purchase amount.
+        The DB balance only changes for fees/realized PnL, so comparing raw
+        DB balance to exchange USDT would show a false discrepancy equal to
+        the notional value of open positions. This method calculates that
+        notional so it can be subtracted from the DB balance.
+        """
+        total = 0.0
+        positions = self.position_tracker.positions
+        for position in positions.values():
+            qty = getattr(position, "current_size", None) or getattr(
+                position, "size", 0
+            )
+            price = getattr(position, "entry_price", 0)
+            if qty > 0 and price > 0:
+                total += qty * price
+        return total
+
     def _reconcile_balance(self) -> ReconciliationResult:
-        """Verify account balance consistency."""
+        """Verify account balance consistency.
+
+        Compares exchange USDT against the expected USDT after accounting for
+        position notional values. In spot trading, buying BTC reduces USDT by
+        the purchase amount, so raw DB balance minus position notional gives
+        the expected USDT on exchange.
+        """
         result = ReconciliationResult(
             entity_type="balance",
             entity_id=None,
@@ -581,15 +714,24 @@ class PositionReconciler:
             db_balance = self.db_manager.get_current_balance(self.session_id)
 
             if db_balance > 0:
-                diff_pct = abs(exchange_total - db_balance) / db_balance
+                # Subtract position notional to get expected USDT on exchange
+                position_notional = self._estimate_position_notional()
+                expected_usdt = db_balance - position_notional
+                # Avoid division by zero when all capital is in positions
+                comparison_base = max(expected_usdt, db_balance * 0.01)
+                diff_pct = abs(exchange_total - expected_usdt) / comparison_base
                 if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
                     audit = AuditEvent(
                         entity_type="balance",
                         entity_id=None,
                         field="total_balance",
-                        old_value=str(db_balance),
+                        old_value=str(expected_usdt),
                         new_value=str(exchange_total),
-                        reason=f"Balance discrepancy {diff_pct:.2%} exceeds threshold",
+                        reason=(
+                            f"Balance discrepancy {diff_pct:.2%} exceeds threshold "
+                            f"(db={db_balance:.2f}, position_notional={position_notional:.2f}, "
+                            f"expected_usdt={expected_usdt:.2f})"
+                        ),
                         severity=Severity.CRITICAL,
                     )
                     self._persist_audit(audit)
@@ -597,18 +739,24 @@ class PositionReconciler:
                     result.severity = Severity.CRITICAL
                     result.status = "corrected"
                     logger.critical(
-                        "Balance discrepancy: DB=$%.2f vs Exchange=$%.2f (%.2f%%)",
-                        db_balance,
+                        "Balance discrepancy: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
+                        "[db=$%.2f, position_notional=$%.2f]",
+                        expected_usdt,
                         exchange_total,
                         diff_pct * 100,
+                        db_balance,
+                        position_notional,
                     )
                 elif diff_pct > 0.01:  # >1% warning
                     result.severity = Severity.LOW
                     logger.info(
-                        "Minor balance difference: DB=$%.2f vs Exchange=$%.2f (%.2f%%)",
-                        db_balance,
+                        "Minor balance difference: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
+                        "[db=$%.2f, position_notional=$%.2f]",
+                        expected_usdt,
                         exchange_total,
                         diff_pct * 100,
+                        db_balance,
+                        position_notional,
                     )
 
         except Exception as e:
@@ -771,6 +919,43 @@ class PeriodicReconciler:
             except Exception as e:
                 logger.debug("Failed to verify position %s: %s", order_key, e)
 
+        # 1b. Verify asset holdings for each position — detect external closes
+        for order_key, position in list(positions_snapshot.items()):
+            position_qty = getattr(position, "current_size", None) or getattr(
+                position, "size", 0
+            )
+            if position_qty <= 0:
+                continue
+
+            try:
+                base_asset = PositionReconciler._extract_base_asset(
+                    position.symbol
+                )
+                balance = self.exchange.get_balance(base_asset)
+                held_qty = balance.total if balance else 0.0
+
+                if held_qty < position_qty * 0.5:
+                    severity = Severity.HIGH
+                    self.db_manager.log_audit_event(
+                        session_id=self.session_id,
+                        entity_type="position",
+                        entity_id=getattr(position, "db_position_id", None),
+                        field="status",
+                        old_value="OPEN",
+                        new_value="CLOSED_EXTERNALLY",
+                        reason=(
+                            f"Position asset not found on exchange — likely closed externally "
+                            f"(held={held_qty:.8f}, tracked={position_qty:.8f}, asset={base_asset})"
+                        ),
+                        severity=severity.value,
+                    )
+                    if severity > max_severity:
+                        max_severity = severity
+            except Exception as e:
+                logger.debug(
+                    "Asset holdings check failed for %s: %s", order_key, e
+                )
+
         # 2. Check for orphaned orders with our prefix
         try:
             if positions_snapshot:
@@ -801,20 +986,35 @@ class PeriodicReconciler:
         except Exception as e:
             logger.debug("Orphaned order check failed: %s", e)
 
-        # 3. Verify balance
+        # 3. Verify balance (accounting for position notional values)
         try:
             usdt_balance = self.exchange.get_balance("USDT")
             if usdt_balance:
                 db_balance = self.db_manager.get_current_balance(self.session_id)
                 if db_balance > 0:
-                    diff_pct = abs(usdt_balance.total - db_balance) / db_balance
+                    # Subtract position notional to get expected USDT
+                    position_notional = 0.0
+                    for position in positions_snapshot.values():
+                        qty = getattr(position, "current_size", None) or getattr(
+                            position, "size", 0
+                        )
+                        price = getattr(position, "entry_price", 0)
+                        if qty > 0 and price > 0:
+                            position_notional += qty * price
+                    expected_usdt = db_balance - position_notional
+                    # Avoid division by zero when all capital is in positions
+                    comparison_base = max(expected_usdt, db_balance * 0.01)
+                    diff_pct = abs(usdt_balance.total - expected_usdt) / comparison_base
                     if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
                         max_severity = Severity.CRITICAL
                         logger.critical(
-                            "Balance discrepancy: DB=$%.2f vs Exchange=$%.2f (%.2f%%)",
-                            db_balance,
+                            "Balance discrepancy: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
+                            "[db=$%.2f, position_notional=$%.2f]",
+                            expected_usdt,
                             usdt_balance.total,
                             diff_pct * 100,
+                            db_balance,
+                            position_notional,
                         )
         except Exception as e:
             logger.debug("Balance check failed: %s", e)
