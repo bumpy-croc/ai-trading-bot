@@ -427,10 +427,12 @@ class PositionReconciler:
             if position_id is not None:
                 # Search tracker for position with matching db_position_id
                 order_id_to_remove = None
+                matched_position = None
                 with self.position_tracker._positions_lock:
                     for oid, pos in self.position_tracker._positions.items():
                         if getattr(pos, "db_position_id", None) == position_id:
                             order_id_to_remove = oid
+                            matched_position = pos
                             break
 
                 if order_id_to_remove is not None:
@@ -457,6 +459,12 @@ class PositionReconciler:
                         position_id,
                         client_order_id,
                         e,
+                    )
+
+                # Realize P&L so session balance stays correct
+                if matched_position is not None and fill_price > 0:
+                    self._realize_pnl_on_close(
+                        matched_position, fill_price, "exit_order_recovery"
                     )
         except Exception as e:
             logger.warning(
@@ -742,6 +750,53 @@ class PositionReconciler:
                     )
                     position.entry_price = exchange_order.average_price
 
+            # Check fill quantity matches position quantity
+            filled_qty = getattr(exchange_order, "filled_quantity", None)
+            position_qty = getattr(position, "quantity", None) or 0.0
+            if filled_qty and filled_qty > 0 and position_qty > 0:
+                qty_diff_pct = abs(filled_qty - position_qty) / position_qty
+                # Correct if >1% difference — significant enough to affect P&L
+                if qty_diff_pct > 0.01:
+                    audit = AuditEvent(
+                        entity_type="position",
+                        entity_id=getattr(position, "db_position_id", None),
+                        field="quantity",
+                        old_value=str(position_qty),
+                        new_value=str(filled_qty),
+                        reason=(
+                            f"Quantity mismatch ({qty_diff_pct:.4%}) "
+                            "— exchange is source of truth"
+                        ),
+                        severity=Severity.MEDIUM,
+                    )
+                    self._persist_audit(audit)
+                    result.corrections.append(audit)
+                    if result.severity < Severity.MEDIUM:
+                        result.severity = Severity.MEDIUM
+                    logger.info(
+                        "Quantity corrected for %s: %.8f → %.8f",
+                        position.symbol,
+                        position_qty,
+                        filled_qty,
+                    )
+                    position.quantity = filled_qty
+
+                    # Recalculate size (balance fraction) if entry_balance is available
+                    entry_price = position.entry_price
+                    entry_balance = getattr(position, "entry_balance", None)
+                    if entry_price and entry_price > 0 and entry_balance and entry_balance > 0:
+                        new_size = (filled_qty * entry_price) / entry_balance
+                        old_size = getattr(position, "size", None)
+                        position.size = new_size
+                        if hasattr(position, "current_size"):
+                            position.current_size = new_size
+                        logger.info(
+                            "Size recalculated for %s: %s → %.6f",
+                            position.symbol,
+                            old_size,
+                            new_size,
+                        )
+
         elif exchange_order.status in (
             ExOrderStatus.CANCELLED,
             ExOrderStatus.REJECTED,
@@ -855,13 +910,13 @@ class PositionReconciler:
                 self.position_tracker.remove_position(position.order_id)
                 # Close the DB position with SL fill details
                 db_pos_id = getattr(position, "db_position_id", None)
+                exit_price = (
+                    float(sl_order.average_price)
+                    if sl_order.average_price
+                    else None
+                )
                 if db_pos_id:
                     try:
-                        exit_price = (
-                            float(sl_order.average_price)
-                            if sl_order.average_price
-                            else None
-                        )
                         self.db_manager.close_position(
                             db_pos_id, exit_price=exit_price
                         )
@@ -869,6 +924,11 @@ class PositionReconciler:
                         logger.warning(
                             "Failed to close DB position %s: %s", db_pos_id, e
                         )
+
+                # Realize P&L so session balance stays correct
+                self._realize_pnl_on_close(
+                    position, exit_price, "stop_loss_filled_offline"
+                )
 
         except Exception as e:
             logger.warning(
@@ -945,6 +1005,14 @@ class PositionReconciler:
                         logger.warning(
                             "Failed to close DB position %s: %s", db_pos_id, e
                         )
+
+                # Realize P&L — no exit price available for external closes,
+                # so skip balance update (P&L is unknown)
+                # External closes have no fill price; we cannot compute P&L
+                logger.info(
+                    "External close for %s — P&L not realized (no exit price)",
+                    symbol,
+                )
         except Exception as e:
             logger.warning(
                 "Asset holdings check failed for %s: %s", base_asset, e
@@ -1041,6 +1109,84 @@ class PositionReconciler:
             logger.warning("Balance reconciliation failed: %s", e)
 
         return result
+
+    def _realize_pnl_on_close(
+        self,
+        position: Any,
+        exit_price: float | None,
+        reason: str,
+    ) -> None:
+        """Update session balance with realized P&L after reconciliation close.
+
+        Calculates P&L from position entry_price/quantity and exit_price, then
+        adjusts the DB balance so capital and performance stats stay correct.
+        Skips silently when exit_price is unavailable or position data is missing.
+
+        Args:
+            position: Position object with entry_price, quantity, and side attrs.
+            exit_price: Fill price at which the position was closed.
+            reason: Human-readable reason for the audit trail.
+        """
+        if exit_price is None or exit_price <= 0:
+            return
+
+        entry_price = getattr(position, "entry_price", 0)
+        quantity = getattr(position, "quantity", 0) or 0.0
+        if entry_price <= 0 or quantity <= 0:
+            return
+
+        # Calculate realized P&L (long: sell higher = profit)
+        side = getattr(position, "side", "long")
+        if side == "short":
+            pnl = (entry_price - exit_price) * quantity
+        else:
+            pnl = (exit_price - entry_price) * quantity
+
+        try:
+            current_balance = self.db_manager.get_current_balance(self.session_id)
+            if current_balance is None or current_balance < 0:
+                logger.warning(
+                    "Cannot realize P&L — unable to read current balance "
+                    "(session_id=%s)",
+                    self.session_id,
+                )
+                return
+
+            new_balance = current_balance + pnl
+            self.db_manager.update_balance(
+                new_balance,
+                f"reconciliation_close: {reason}",
+                "system",
+                self.session_id,
+            )
+
+            # Audit the P&L correction
+            audit = AuditEvent(
+                entity_type="balance",
+                entity_id=getattr(position, "db_position_id", None),
+                field="realized_pnl",
+                old_value=f"{current_balance:.2f}",
+                new_value=f"{new_balance:.2f}",
+                reason=(
+                    f"Reconciliation P&L: {pnl:+.2f} "
+                    f"(entry={entry_price:.2f}, exit={exit_price:.2f}, "
+                    f"qty={quantity:.8f}, {reason})"
+                ),
+                severity=Severity.MEDIUM,
+            )
+            self._persist_audit(audit)
+            logger.info(
+                "Realized reconciliation P&L %+.2f for %s (%s)",
+                pnl,
+                position.symbol,
+                reason,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to realize P&L for position %s: %s",
+                getattr(position, "symbol", "unknown"),
+                e,
+            )
 
     def _persist_audit(self, audit: AuditEvent) -> None:
         """Persist an audit event to the database."""

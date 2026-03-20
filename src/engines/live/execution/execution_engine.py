@@ -153,7 +153,29 @@ class LiveExecutionEngine:
             return None
 
     def _is_filled_status(self, status: Any) -> bool:
-        """Return True when the order status indicates a fill."""
+        """Return True when the order status indicates any fill (full or partial).
+
+        Used in execute_entry/execute_exit to decide whether to extract fill
+        data from the exchange order response. PARTIALLY_FILLED orders contain
+        valid fill data that must be captured.
+        """
+        if isinstance(status, OrderStatus):
+            return status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
+        if isinstance(status, str):
+            normalized = status.upper()
+            return normalized in (
+                OrderStatus.FILLED.value,
+                OrderStatus.PARTIALLY_FILLED.value,
+            )
+        return False
+
+    def _is_journal_confirmed_status(self, status: Any) -> bool:
+        """Return True only for fully filled orders (journal CONFIRMED status).
+
+        Used in journal updates to distinguish CONFIRMED (fully filled) from
+        SUBMITTED (still pending). PARTIALLY_FILLED orders remain SUBMITTED
+        until fully filled.
+        """
         if isinstance(status, OrderStatus):
             return status == OrderStatus.FILLED
         if isinstance(status, str):
@@ -653,11 +675,11 @@ class LiveExecutionEngine:
                     fill_qty = getattr(order_result, "filled_quantity", None)
                     commission = getattr(order_result, "commission", None)
                     # Only mark CONFIRMED when the order is fully filled;
-                    # use SUBMITTED for orders still pending on the exchange
+                    # use SUBMITTED for partial fills still pending on exchange
                     order_status = getattr(order_result, "status", None)
                     journal_status = (
                         "CONFIRMED"
-                        if self._is_filled_status(order_status)
+                        if self._is_journal_confirmed_status(order_status)
                         else "SUBMITTED"
                     )
                     self.db_manager.update_order_journal(
@@ -759,11 +781,11 @@ class LiveExecutionEngine:
                         fill_qty = getattr(close_result, "filled_quantity", None)
                         commission = getattr(close_result, "commission", None)
                         # Only mark CONFIRMED when the order is fully filled;
-                        # use SUBMITTED for orders still pending on the exchange
+                        # use SUBMITTED for partial fills still pending on exchange
                         order_status = getattr(close_result, "status", None)
                         journal_status = (
                             "CONFIRMED"
-                            if self._is_filled_status(order_status)
+                            if self._is_journal_confirmed_status(order_status)
                             else "SUBMITTED"
                         )
                         self.db_manager.update_order_journal(
