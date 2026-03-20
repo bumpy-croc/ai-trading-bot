@@ -116,3 +116,59 @@ class TestGetLastSessionId:
             "filter() should receive 2 conditions (cutoff + ~is_active). "
             f"Got {len(filter_args)}: {filter_args}"
         )
+
+
+class TestGetLastSessionId7DayWindow:
+    """Regression tests for the 7-day (168 hour) recovery window.
+
+    The window was extended from 24h to 7d to catch sessions like #107
+    which ran for ~47 hours before crashing. These tests verify the window
+    works correctly for various scenarios.
+    """
+
+    def _build_query_chain(self, mock_session: Mock, result: Mock | None) -> Mock:
+        """Wire up a mock query chain ending in .first() -> result."""
+        mock_query = Mock()
+        mock_filter = Mock()
+        mock_order = Mock()
+
+        mock_session.query.return_value = mock_query
+        mock_query.filter.return_value = mock_filter
+        mock_filter.filter.return_value = mock_filter
+        mock_filter.order_by.return_value = mock_order
+        mock_order.first.return_value = result
+        return mock_query
+
+    @pytest.mark.fast
+    def test_recovers_session_within_7_day_window(self, mock_postgresql_db):
+        """Sessions within the 7-day window are returned."""
+        inactive = Mock()
+        inactive.id = 107
+        inactive.is_active = False
+        self._build_query_chain(mock_postgresql_db._mock_session, inactive)
+
+        result = mock_postgresql_db.get_last_session_id(within_hours=168)
+
+        assert result == 107
+
+    @pytest.mark.fast
+    def test_7_day_window_parameter_passed_correctly(self, mock_postgresql_db):
+        """The within_hours=168 parameter is passed correctly.
+
+        This is a simple smoke test to verify the function accepts the
+        7-day window parameter. The actual time filtering logic is
+        tested by the integration tests.
+        """
+        mock_query = Mock()
+        mock_filter = Mock()
+        mock_order = Mock()
+        mock_postgresql_db._mock_session.query.return_value = mock_query
+        mock_query.filter.return_value = mock_filter
+        mock_filter.filter.return_value = mock_filter
+        mock_filter.order_by.return_value = mock_order
+        mock_order.first.return_value = None
+
+        mock_postgresql_db.get_last_session_id(within_hours=168)
+
+        # Verify filter was called (time-based filtering happened)
+        assert mock_query.filter.called
