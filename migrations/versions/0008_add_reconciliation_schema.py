@@ -26,6 +26,45 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # --- 0. Defensive enum migration for PostgreSQL native enums ---
+    # Models use native_enum=False so values are stored as VARCHAR strings.
+    # However, if native PostgreSQL enum types were created by an earlier migration,
+    # we must add the new members to avoid CHECK constraint or type errors.
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        new_order_status_values = [
+            "PENDING_SUBMIT",
+            "SUBMITTED",
+            "CONFIRMED",
+            "UNKNOWN",
+            "UNRESOLVED",
+        ]
+        new_order_type_values = [
+            "STOP_LOSS",
+        ]
+
+        for value in new_order_status_values:
+            try:
+                op.execute(
+                    sa.text(
+                        f"ALTER TYPE orderstatus ADD VALUE IF NOT EXISTS '{value}'"
+                    )
+                )
+            except Exception:
+                # Type does not exist (non-native enum) — safe to skip
+                pass
+
+        for value in new_order_type_values:
+            try:
+                op.execute(
+                    sa.text(
+                        f"ALTER TYPE ordertype ADD VALUE IF NOT EXISTS '{value}'"
+                    )
+                )
+            except Exception:
+                # Type does not exist (non-native enum) — safe to skip
+                pass
+
     # --- 1. New table: reconciliation_audit_events ---
     op.create_table(
         "reconciliation_audit_events",

@@ -329,22 +329,31 @@ class PositionReconciler:
         target_qty = order_data["quantity"]
         target_side = order_data["side"]
         created_at = order_data.get("created_at")
-        client_prefix = "atb_"
+        client_prefix = "atb"
         tolerance = DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT
         time_window = timedelta(minutes=DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN)
+
+        # Determine expected exchange side based on order type.
+        # For entries, LONG→BUY, SHORT→SELL.
+        # For exits (FULL_EXIT, PARTIAL_EXIT), the side is inverted because
+        # closing a LONG requires a SELL and closing a SHORT requires a BUY.
+        order_type = order_data.get("order_type", "ENTRY")
+        is_exit_order = order_type in ("FULL_EXIT", "PARTIAL_EXIT")
+        if is_exit_order:
+            expected_exchange_side = "SELL" if target_side == "LONG" else "BUY"
+        else:
+            expected_exchange_side = "BUY" if target_side == "LONG" else "SELL"
 
         candidates = []
         for order in exchange_orders:
             # Filter: must have our prefix (skip manually placed orders too)
+            # Accepts both "atb_" (entry) and "atbx_" (exit) prefixed orders.
             client_id = getattr(order, "client_order_id", None)
             if not client_id or not client_id.startswith(client_prefix):
                 continue
 
             # Filter: matching side
-            # target_side is PositionSide.value ("LONG"/"SHORT"), but exchange
-            # Order.side uses OrderSide ("BUY"/"SELL"). Map before comparing.
             order_side = order.side.value if hasattr(order.side, "value") else str(order.side)
-            expected_exchange_side = "BUY" if target_side == "LONG" else "SELL"
             if order_side != expected_exchange_side:
                 continue
 
@@ -472,6 +481,17 @@ class PositionReconciler:
                 position.symbol,
                 exchange_order.status.value,
             )
+            # Remove phantom position from in-memory tracker
+            self.position_tracker.remove_position(position.order_id)
+            # Close the DB position if it exists
+            db_pos_id = getattr(position, "db_position_id", None)
+            if db_pos_id:
+                try:
+                    self.db_manager.close_position(db_pos_id)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to close DB position %s: %s", db_pos_id, e
+                    )
 
         return result
 
@@ -520,6 +540,24 @@ class PositionReconciler:
                     position.symbol,
                     sl_order.average_price,
                 )
+                # Remove position from in-memory tracker
+                self.position_tracker.remove_position(position.order_id)
+                # Close the DB position with SL fill details
+                db_pos_id = getattr(position, "db_position_id", None)
+                if db_pos_id:
+                    try:
+                        exit_price = (
+                            float(sl_order.average_price)
+                            if sl_order.average_price
+                            else None
+                        )
+                        self.db_manager.close_position(
+                            db_pos_id, exit_price=exit_price
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to close DB position %s: %s", db_pos_id, e
+                        )
 
         except Exception as e:
             logger.warning(
@@ -736,8 +774,6 @@ class PeriodicReconciler:
         # 2. Check for orphaned orders with our prefix
         try:
             if positions_snapshot:
-                sample_symbol = next(iter(positions_snapshot.values())).symbol
-                open_orders = self.exchange.get_open_orders(sample_symbol)
                 tracked_exchange_ids = set()
                 for pos in positions_snapshot.values():
                     eid = getattr(pos, "exchange_order_id", None)
@@ -747,16 +783,21 @@ class PeriodicReconciler:
                     if sl_id:
                         tracked_exchange_ids.add(sl_id)
 
-                for order in open_orders:
-                    if order.order_id not in tracked_exchange_ids:
-                        client_id = getattr(order, "client_order_id", "") or ""
-                        if client_id.startswith("atb_"):
-                            logger.warning(
-                                "Orphaned order found: %s (%s) — not tracked",
-                                order.order_id,
-                                client_id,
-                            )
-                            max_severity = Severity.HIGH
+                # Query open orders for every symbol with active positions
+                symbols = set(pos.symbol for pos in positions_snapshot.values())
+                for symbol in symbols:
+                    open_orders = self.exchange.get_open_orders(symbol)
+                    for order in open_orders:
+                        if order.order_id not in tracked_exchange_ids:
+                            client_id = getattr(order, "client_order_id", "") or ""
+                            if client_id.startswith("atb_"):
+                                logger.warning(
+                                    "Orphaned order found: %s (%s) on %s — not tracked",
+                                    order.order_id,
+                                    client_id,
+                                    symbol,
+                                )
+                                max_severity = Severity.HIGH
         except Exception as e:
             logger.debug("Orphaned order check failed: %s", e)
 

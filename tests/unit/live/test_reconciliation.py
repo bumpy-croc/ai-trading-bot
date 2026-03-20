@@ -211,8 +211,8 @@ class TestPositionReconciler:
         result = reconciler.reconcile_position(pos)
         assert result.entity_type == "position"
 
-    def test_reconcile_position_entry_cancelled_is_high(self, reconciler, mock_exchange, mock_db):
-        """Position whose entry was cancelled gets HIGH severity."""
+    def test_reconcile_position_entry_cancelled_is_high(self, reconciler, mock_exchange, mock_db, mock_position_tracker):
+        """Position whose entry was cancelled gets HIGH severity and removes from tracker."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         pos = MockPosition()
@@ -223,12 +223,47 @@ class TestPositionReconciler:
         assert result.severity == Severity.HIGH
         assert len(result.corrections) > 0
         mock_db.log_audit_event.assert_called()
+        # Position must be removed from in-memory tracker
+        mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
+        # DB position must be closed
+        mock_db.close_position.assert_called_once_with(pos.db_position_id)
 
-    def test_reconcile_position_sl_filled_offline(self, reconciler, mock_exchange, mock_db):
-        """Stop-loss filled while offline is detected."""
+    def test_reconcile_position_entry_rejected_removes_from_tracker(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Position whose entry was rejected is removed from tracker and DB."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
-        pos = MockPosition(stop_loss_order_id="sl_123")
+        pos = MockPosition(order_id="rej_001", db_position_id=42)
+        order = MockExchangeOrder(status=ExOS.REJECTED)
+        mock_exchange.get_order.return_value = order
+
+        result = reconciler.reconcile_position(pos)
+        assert result.status == "corrected"
+        assert result.severity == Severity.HIGH
+        mock_position_tracker.remove_position.assert_called_once_with("rej_001")
+        mock_db.close_position.assert_called_once_with(42)
+
+    def test_reconcile_position_entry_cancelled_no_db_id(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Cancelled entry without db_position_id skips DB close gracefully."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(db_position_id=None)
+        order = MockExchangeOrder(status=ExOS.CANCELLED)
+        mock_exchange.get_order.return_value = order
+
+        result = reconciler.reconcile_position(pos)
+        assert result.severity == Severity.HIGH
+        mock_position_tracker.remove_position.assert_called_once()
+        mock_db.close_position.assert_not_called()
+
+    def test_reconcile_position_sl_filled_offline(self, reconciler, mock_exchange, mock_db, mock_position_tracker):
+        """Stop-loss filled while offline removes position and closes DB record."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(stop_loss_order_id="sl_123", db_position_id=7)
         # Entry order is fine
         entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
         sl_order = MockExchangeOrder(
@@ -239,6 +274,28 @@ class TestPositionReconciler:
         result = reconciler.reconcile_position(pos)
         assert result.severity == Severity.HIGH
         assert any("Stop-loss filled" in c.reason for c in result.corrections)
+        # Position must be removed from in-memory tracker
+        mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
+        # DB position must be closed with SL fill price
+        mock_db.close_position.assert_called_once_with(7, exit_price=49000.0)
+
+    def test_reconcile_position_sl_filled_no_average_price(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """SL filled without average_price still removes position, closes DB without price."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(stop_loss_order_id="sl_456", db_position_id=8)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_456", status=ExOS.FILLED, average_price=None
+        )
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+
+        result = reconciler.reconcile_position(pos)
+        assert result.severity == Severity.HIGH
+        mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
+        mock_db.close_position.assert_called_once_with(8, exit_price=None)
 
     def test_reconcile_position_legacy_no_ids(self, reconciler):
         """Legacy position without exchange IDs is skipped."""
@@ -422,3 +479,192 @@ class TestCloseOnlyMode:
         close_only = True
         exit_should_proceed = True  # Exits always run
         assert exit_should_proceed is True
+
+
+# ---------- _find_matching_order Tests ----------
+
+
+class TestFindMatchingOrder:
+    """Tests for _find_matching_order prefix and side mapping logic."""
+
+    def test_exit_order_with_atbx_prefix_matches(self, reconciler):
+        """Exit orders using 'atbx_' prefix are accepted by the prefix filter."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "id": 1,
+            "client_order_id": "atbx_BTCUSDT_exit_1234",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "quantity": 0.001,
+            "order_type": "FULL_EXIT",
+            "created_at": datetime.now(UTC),
+        }
+        exchange_order = MockExchangeOrder(
+            order_id="ex_999",
+            quantity=0.001,
+            side=OrderSide.SELL,
+            client_order_id="atbx_BTCUSDT_exit_1234",
+            create_time=datetime.now(UTC),
+        )
+        result = reconciler._find_matching_order(order_data, [exchange_order])
+        assert result is not None
+        assert result.order_id == "ex_999"
+
+    def test_entry_order_with_atb_prefix_still_matches(self, reconciler):
+        """Entry orders using 'atb_' prefix continue to match."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "id": 2,
+            "client_order_id": "atb_BTCUSDT_long_5678",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "quantity": 0.001,
+            "order_type": "ENTRY",
+            "created_at": datetime.now(UTC),
+        }
+        exchange_order = MockExchangeOrder(
+            order_id="ex_100",
+            quantity=0.001,
+            side=OrderSide.BUY,
+            client_order_id="atb_BTCUSDT_long_5678",
+            create_time=datetime.now(UTC),
+        )
+        result = reconciler._find_matching_order(order_data, [exchange_order])
+        assert result is not None
+        assert result.order_id == "ex_100"
+
+    def test_exit_order_long_expects_sell_side(self, reconciler):
+        """Closing a LONG position requires SELL — exit order side is inverted."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "id": 3,
+            "client_order_id": "atbx_BTCUSDT_exit_9999",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "quantity": 0.001,
+            "order_type": "FULL_EXIT",
+            "created_at": datetime.now(UTC),
+        }
+        # BUY side should NOT match a LONG exit (exit should be SELL)
+        buy_order = MockExchangeOrder(
+            order_id="ex_buy",
+            quantity=0.001,
+            side=OrderSide.BUY,
+            client_order_id="atbx_BTCUSDT_exit_a",
+            create_time=datetime.now(UTC),
+        )
+        sell_order = MockExchangeOrder(
+            order_id="ex_sell",
+            quantity=0.001,
+            side=OrderSide.SELL,
+            client_order_id="atbx_BTCUSDT_exit_b",
+            create_time=datetime.now(UTC),
+        )
+        result = reconciler._find_matching_order(order_data, [buy_order, sell_order])
+        assert result is not None
+        assert result.order_id == "ex_sell"
+
+    def test_exit_order_short_expects_buy_side(self, reconciler):
+        """Closing a SHORT position requires BUY — exit order side is inverted."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "id": 4,
+            "client_order_id": "atbx_BTCUSDT_exit_7777",
+            "symbol": "BTCUSDT",
+            "side": "SHORT",
+            "quantity": 0.001,
+            "order_type": "PARTIAL_EXIT",
+            "created_at": datetime.now(UTC),
+        }
+        buy_order = MockExchangeOrder(
+            order_id="ex_buy",
+            quantity=0.001,
+            side=OrderSide.BUY,
+            client_order_id="atbx_BTCUSDT_exit_c",
+            create_time=datetime.now(UTC),
+        )
+        result = reconciler._find_matching_order(order_data, [buy_order])
+        assert result is not None
+        assert result.order_id == "ex_buy"
+
+    def test_entry_order_long_expects_buy_side(self, reconciler):
+        """Entry for LONG position expects BUY side (unchanged behavior)."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "id": 5,
+            "client_order_id": "atb_BTCUSDT_long_1111",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "quantity": 0.001,
+            "order_type": "ENTRY",
+            "created_at": datetime.now(UTC),
+        }
+        sell_order = MockExchangeOrder(
+            order_id="ex_sell",
+            quantity=0.001,
+            side=OrderSide.SELL,
+            client_order_id="atb_BTCUSDT_long_x",
+            create_time=datetime.now(UTC),
+        )
+        buy_order = MockExchangeOrder(
+            order_id="ex_buy",
+            quantity=0.001,
+            side=OrderSide.BUY,
+            client_order_id="atb_BTCUSDT_long_y",
+            create_time=datetime.now(UTC),
+        )
+        result = reconciler._find_matching_order(order_data, [sell_order, buy_order])
+        assert result is not None
+        assert result.order_id == "ex_buy"
+
+    def test_non_atb_prefix_orders_excluded(self, reconciler):
+        """Orders without 'atb' prefix are excluded from matching."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "id": 6,
+            "client_order_id": "atb_BTCUSDT_long_2222",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "quantity": 0.001,
+            "order_type": "ENTRY",
+            "created_at": datetime.now(UTC),
+        }
+        manual_order = MockExchangeOrder(
+            order_id="ex_manual",
+            quantity=0.001,
+            side=OrderSide.BUY,
+            client_order_id="manual_order_123",
+            create_time=datetime.now(UTC),
+        )
+        result = reconciler._find_matching_order(order_data, [manual_order])
+        assert result is None
+
+    def test_missing_order_type_defaults_to_entry_behavior(self, reconciler):
+        """When order_type is absent, defaults to ENTRY side mapping."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "id": 7,
+            "client_order_id": "atb_BTCUSDT_long_3333",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "quantity": 0.001,
+            "created_at": datetime.now(UTC),
+            # No order_type key
+        }
+        buy_order = MockExchangeOrder(
+            order_id="ex_buy",
+            quantity=0.001,
+            side=OrderSide.BUY,
+            client_order_id="atb_BTCUSDT_long_z",
+            create_time=datetime.now(UTC),
+        )
+        result = reconciler._find_matching_order(order_data, [buy_order])
+        assert result is not None
+        assert result.order_id == "ex_buy"

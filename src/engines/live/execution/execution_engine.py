@@ -628,10 +628,11 @@ class LiveExecutionEngine:
             )
 
             if order_result is None:
-                # Mark journal as FAILED if we journaled it
+                # Order may have been placed despite returning None (timeout/network error),
+                # so mark as UNKNOWN rather than FAILED — the reconciler resolves on restart
                 if self.db_manager and self.session_id:
                     try:
-                        self.db_manager.update_order_journal(client_order_id, "FAILED")
+                        self.db_manager.update_order_journal(client_order_id, "UNKNOWN")
                     except Exception:
                         pass
                 return None
@@ -645,9 +646,17 @@ class LiveExecutionEngine:
                     fill_price = getattr(order_result, "average_price", None)
                     fill_qty = getattr(order_result, "filled_quantity", None)
                     commission = getattr(order_result, "commission", None)
+                    # Only mark CONFIRMED when the order is fully filled;
+                    # use SUBMITTED for orders still pending on the exchange
+                    order_status = getattr(order_result, "status", None)
+                    journal_status = (
+                        "CONFIRMED"
+                        if self._is_filled_status(order_status)
+                        else "SUBMITTED"
+                    )
                     self.db_manager.update_order_journal(
                         client_order_id=client_order_id,
-                        status="CONFIRMED",
+                        status=journal_status,
                         exchange_order_id=exchange_order_id,
                         fill_price=float(fill_price) if fill_price else None,
                         fill_quantity=float(fill_qty) if fill_qty else None,
@@ -739,16 +748,27 @@ class LiveExecutionEngine:
                         fill_price = getattr(close_result, "average_price", None)
                         fill_qty = getattr(close_result, "filled_quantity", None)
                         commission = getattr(close_result, "commission", None)
+                        # Only mark CONFIRMED when the order is fully filled;
+                        # use SUBMITTED for orders still pending on the exchange
+                        order_status = getattr(close_result, "status", None)
+                        journal_status = (
+                            "CONFIRMED"
+                            if self._is_filled_status(order_status)
+                            else "SUBMITTED"
+                        )
                         self.db_manager.update_order_journal(
                             client_order_id=client_order_id,
-                            status="CONFIRMED",
+                            status=journal_status,
                             exchange_order_id=close_order_id,
                             fill_price=float(fill_price) if fill_price else None,
                             fill_quantity=float(fill_qty) if fill_qty else None,
                             commission=float(commission) if commission else None,
                         )
                     else:
-                        self.db_manager.update_order_journal(client_order_id, "FAILED")
+                        # Order may have been placed despite returning None
+                        # (timeout/network error), so mark as UNKNOWN — the
+                        # reconciler resolves on restart
+                        self.db_manager.update_order_journal(client_order_id, "UNKNOWN")
                 except Exception as e:
                     logger.warning("Failed to update exit order journal: %s", e)
 

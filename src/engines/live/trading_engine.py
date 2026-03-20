@@ -3759,6 +3759,17 @@ class LiveTradingEngine:
                     )
                     self._close_only_mode = True
 
+                # Log HIGH severity auto-corrections (cancelled entries, SL fills)
+                for r in results:
+                    if r.status == "corrected" and r.severity >= Severity.HIGH:
+                        for correction in r.corrections:
+                            logger.warning(
+                                "⚠️ Auto-corrected %s #%s: %s",
+                                r.entity_type,
+                                r.entity_id,
+                                correction.reason,
+                            )
+
                 corrections = sum(len(r.corrections) for r in results)
                 logger.info(
                     "✅ Reconciliation complete: %d results, %d corrections, %d critical",
