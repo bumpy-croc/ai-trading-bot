@@ -1052,3 +1052,264 @@ class TestBalanceAccountsForPositionNotional:
         reconciler._reconcile_cycle()
         # Should NOT trigger close-only mode
         callback.assert_not_called()
+
+
+# ---------- Filled Order Position Reconciliation Tests ----------
+
+
+class TestFilledOrderPositionReconciliation:
+    """Tests for _reconcile_filled_order_position — crash recovery scenarios."""
+
+    def test_filled_entry_creates_position_when_missing(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Crash after ENTRY fill: position is created in tracker and DB."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 42
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 1,
+                "client_order_id": "atb_BTCUSDT_long_9999_abcd",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+        assert results[0].status == "resolved"
+
+        # Position should be logged to DB
+        mock_db.log_position.assert_called_once()
+        call_kwargs = mock_db.log_position.call_args.kwargs
+        assert call_kwargs["symbol"] == "BTCUSDT"
+        assert call_kwargs["side"] == "LONG"
+        assert call_kwargs["entry_price"] == 50000.0
+        assert call_kwargs["size"] == 0.001
+
+        # Position should be tracked in memory
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        pos_arg = mock_position_tracker.track_recovered_position.call_args[0][0]
+        assert pos_arg.symbol == "BTCUSDT"
+        assert pos_arg.entry_price == 50000.0
+        db_id_arg = mock_position_tracker.track_recovered_position.call_args[0][1]
+        assert db_id_arg == 42
+
+    def test_filled_entry_skips_if_position_already_tracked(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """No duplicate position if entry order was already reconciled."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        # Position already exists under the exchange order ID
+        mock_position_tracker._positions = {"123456": MockPosition()}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 1,
+                "client_order_id": "atb_BTCUSDT_long_1111_xxxx",
+                "exchange_order_id": "123456",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        reconciler.resolve_pending_orders()
+
+        # Should NOT create duplicate
+        mock_db.log_position.assert_not_called()
+        mock_position_tracker.track_recovered_position.assert_not_called()
+
+    def test_filled_full_exit_closes_position(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Crash after FULL_EXIT fill: position is removed from tracker and DB."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(db_position_id=7)
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {"order_123": pos}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 2,
+                "client_order_id": "atbx_BTCUSDT_exit_5555",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "FULL_EXIT",
+                "position_id": 7,
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=51000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+        assert results[0].status == "resolved"
+
+        # Position should be removed from tracker
+        mock_position_tracker.remove_position.assert_called_once_with("order_123")
+        # DB position should be closed with exit price
+        mock_db.close_position.assert_called_once_with(7, exit_price=51000.0)
+
+    def test_filled_exit_no_position_id_is_safe(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Exit order without position_id does not crash."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 3,
+                "client_order_id": "atbx_BTCUSDT_exit_6666",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "FULL_EXIT",
+                "created_at": datetime.now(UTC),
+                # No position_id
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=51000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        # Should not raise
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+
+    def test_filled_entry_db_failure_still_tracks_in_memory(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """If DB log_position fails, position is still tracked in memory."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.side_effect = Exception("DB connection lost")
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 4,
+                "client_order_id": "atb_BTCUSDT_long_7777_zzzz",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.002,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=48000.0, filled_quantity=0.002
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+
+        # Still tracked in memory with db_id=None
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        db_id_arg = mock_position_tracker.track_recovered_position.call_args[0][1]
+        assert db_id_arg is None
+
+    def test_filled_partial_exit_closes_position(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """PARTIAL_EXIT filled also triggers position close reconciliation."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(db_position_id=15)
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {"order_456": pos}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 5,
+                "client_order_id": "atbx_BTCUSDT_exit_8888",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.0005,
+                "status": "SUBMITTED",
+                "order_type": "PARTIAL_EXIT",
+                "position_id": 15,
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=52000.0, filled_quantity=0.0005
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+
+        mock_position_tracker.remove_position.assert_called_once_with("order_456")
+        mock_db.close_position.assert_called_once_with(15, exit_price=52000.0)
+
+    def test_no_order_type_skips_position_reconciliation(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Orders without order_type do not trigger position reconciliation."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 6,
+                "client_order_id": "atb_BTCUSDT_long_0000",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "created_at": datetime.now(UTC),
+                # No order_type
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+
+        # No position creation or closing
+        mock_db.log_position.assert_not_called()
+        mock_position_tracker.track_recovered_position.assert_not_called()
+        mock_position_tracker.remove_position.assert_not_called()

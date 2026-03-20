@@ -229,6 +229,9 @@ class PositionReconciler:
                 exchange_order.average_price,
             )
 
+            # Reconcile position state for filled orders
+            self._reconcile_filled_order_position(order_data, exchange_order)
+
         elif eo_status in (ExOrderStatus.CANCELLED, ExOrderStatus.REJECTED, ExOrderStatus.EXPIRED):
             self.db_manager.update_order_journal(
                 client_order_id=order_data["client_order_id"],
@@ -253,6 +256,156 @@ class PositionReconciler:
             result.severity = Severity.LOW
 
         return result
+
+    def _reconcile_filled_order_position(
+        self, order_data: dict, exchange_order: Any
+    ) -> None:
+        """Reconcile position state after discovering a filled order on exchange.
+
+        Handles two crash scenarios:
+        1. ENTRY filled but position never persisted — creates the position.
+        2. FULL_EXIT or PARTIAL_EXIT filled but position still tracked — closes it.
+
+        Defensive: catches all exceptions since the position may already be
+        in the correct state.
+        """
+        from src.engines.live.execution.position_tracker import LivePosition
+
+        order_type = order_data.get("order_type", "")
+        symbol = order_data.get("symbol", "")
+        side = order_data.get("side", "LONG")
+        fill_price = exchange_order.average_price or 0.0
+        fill_qty = exchange_order.filled_quantity or 0.0
+
+        if order_type == "ENTRY":
+            self._reconcile_filled_entry(
+                order_data, symbol, side, fill_price, fill_qty
+            )
+        elif order_type in ("FULL_EXIT", "PARTIAL_EXIT"):
+            self._reconcile_filled_exit(order_data, fill_price)
+
+    def _reconcile_filled_entry(
+        self,
+        order_data: dict,
+        symbol: str,
+        side: str,
+        fill_price: float,
+        fill_qty: float,
+    ) -> None:
+        """Create position if an ENTRY order filled but was never persisted."""
+        from datetime import UTC, datetime
+
+        from src.engines.live.execution.position_tracker import LivePosition
+
+        client_order_id = order_data.get("client_order_id", "")
+        # Use exchange order ID as tracker key; fall back to client_order_id
+        order_id = order_data.get("exchange_order_id") or client_order_id
+
+        # Skip if position already exists in tracker
+        with self.position_tracker._positions_lock:
+            if order_id in self.position_tracker._positions:
+                logger.debug(
+                    "Entry order %s: position already tracked, skipping.",
+                    client_order_id,
+                )
+                return
+
+        try:
+            position = LivePosition(
+                symbol=symbol,
+                side=side,
+                entry_price=fill_price,
+                entry_time=datetime.now(UTC),
+                size=fill_qty,
+                quantity=fill_qty,
+                original_size=fill_qty,
+                current_size=fill_qty,
+                order_id=order_id,
+            )
+
+            # Persist to DB first
+            db_id = None
+            try:
+                db_id = self.db_manager.log_position(
+                    symbol=symbol,
+                    side=side,
+                    entry_price=fill_price,
+                    size=fill_qty,
+                    strategy_name="recovered",
+                    entry_order_id=order_id,
+                    quantity=fill_qty,
+                    session_id=self.session_id,
+                    client_order_id=client_order_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to persist recovered entry position to DB: %s", e
+                )
+
+            # Track in memory
+            self.position_tracker.track_recovered_position(position, db_id)
+            logger.info(
+                "Reconciled filled ENTRY %s: created position %s (db_id=%s)",
+                client_order_id,
+                order_id,
+                db_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to reconcile filled entry order %s: %s",
+                client_order_id,
+                e,
+            )
+
+    def _reconcile_filled_exit(
+        self, order_data: dict, fill_price: float
+    ) -> None:
+        """Close position if an exit order filled but position is still tracked."""
+        position_id = order_data.get("position_id")
+        client_order_id = order_data.get("client_order_id", "")
+
+        # Try to find and remove from in-memory tracker by position_id mapping
+        try:
+            if position_id is not None:
+                # Search tracker for position with matching db_position_id
+                order_id_to_remove = None
+                with self.position_tracker._positions_lock:
+                    for oid, pos in self.position_tracker._positions.items():
+                        if getattr(pos, "db_position_id", None) == position_id:
+                            order_id_to_remove = oid
+                            break
+
+                if order_id_to_remove is not None:
+                    self.position_tracker.remove_position(order_id_to_remove)
+                    logger.info(
+                        "Reconciled filled exit %s: removed position %s from tracker",
+                        client_order_id,
+                        order_id_to_remove,
+                    )
+
+                # Close in DB
+                try:
+                    self.db_manager.close_position(
+                        position_id, exit_price=fill_price if fill_price > 0 else None
+                    )
+                    logger.info(
+                        "Reconciled filled exit %s: closed DB position %s",
+                        client_order_id,
+                        position_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to close DB position %s for exit order %s: %s",
+                        position_id,
+                        client_order_id,
+                        e,
+                    )
+        except Exception as e:
+            logger.warning(
+                "Failed to reconcile filled exit order %s: %s",
+                client_order_id,
+                e,
+            )
 
     def _handle_not_found_order(
         self, order_data: dict, status: str, result: ReconciliationResult
@@ -913,6 +1066,20 @@ class PeriodicReconciler:
                         reason="Entry order cancelled/rejected on exchange",
                         severity=severity.value,
                     )
+
+                    # Remove ghost position from tracker and close in DB
+                    lock = self.get_position_lock(order_key)
+                    with lock:
+                        self.position_tracker.remove_position(order_key)
+                        db_pos_id = getattr(position, "db_position_id", None)
+                        if db_pos_id is not None:
+                            self.db_manager.close_position(db_pos_id)
+                    logger.warning(
+                        "Removed ghost position %s — entry order %s on exchange",
+                        order_key,
+                        exchange_order.status.value,
+                    )
+
                     if severity > max_severity:
                         max_severity = severity
 
@@ -949,6 +1116,22 @@ class PeriodicReconciler:
                         ),
                         severity=severity.value,
                     )
+
+                    # Remove ghost position from tracker and close in DB
+                    lock = self.get_position_lock(order_key)
+                    with lock:
+                        self.position_tracker.remove_position(order_key)
+                        db_pos_id = getattr(position, "db_position_id", None)
+                        if db_pos_id is not None:
+                            self.db_manager.close_position(db_pos_id)
+                    logger.warning(
+                        "Removed ghost position %s — externally closed "
+                        "(held=%.8f, tracked=%.8f)",
+                        order_key,
+                        held_qty,
+                        position_qty,
+                    )
+
                     if severity > max_severity:
                         max_severity = severity
             except Exception as e:
