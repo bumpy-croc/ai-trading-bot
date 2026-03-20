@@ -380,6 +380,35 @@ class LiveEntryHandler:
             current_size=signal.size_fraction,
         )
 
+        # Scale position size down for partial fills so exit sizing is correct.
+        # exec_result.quantity reflects actual filled qty; compare against the
+        # notional-derived requested qty to detect partial fills.
+        executed_price = getattr(exec_result, "executed_price", 0.0) or 0.0
+        position_value = getattr(exec_result, "position_value", 0.0) or 0.0
+        actual_qty = getattr(exec_result, "quantity", 0.0) or 0.0
+        if (
+            isinstance(executed_price, (int, float))
+            and isinstance(position_value, (int, float))
+            and executed_price > 0
+            and position_value > 0
+        ):
+            requested_qty = position_value / executed_price
+            if actual_qty > 0 and requested_qty > 0:
+                fill_ratio = actual_qty / requested_qty
+                if fill_ratio < 0.99:  # Partial fill
+                    position.size *= fill_ratio
+                    position.original_size = position.size
+                    position.current_size = position.size
+                    logger.warning(
+                        "Partial fill for %s: %.1f%% filled (qty=%.8f / requested=%.8f) — "
+                        "scaled position size to %.6f",
+                        symbol,
+                        fill_ratio * 100,
+                        actual_qty,
+                        requested_qty,
+                        position.size,
+                    )
+
         return LiveEntryResult(
             position=position,
             entry_fee=exec_result.entry_fee,

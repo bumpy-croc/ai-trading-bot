@@ -3726,13 +3726,10 @@ class LiveTradingEngine:
             return
 
         positions_snapshot = self.live_position_tracker.positions
-        if not positions_snapshot:
-            logger.info("📊 No local positions to reconcile")
-            return
 
-        logger.info("🔄 Reconciling %s positions with exchange...", len(positions_snapshot))
-
-        # Use PositionReconciler if session is available
+        # Run PositionReconciler regardless of position count — resolve_pending_orders
+        # must execute even when no positions were recovered (e.g. entry submitted but
+        # never persisted as a position before crash).
         if self.trading_session_id:
             try:
                 from src.engines.live.reconciliation import (
@@ -3746,6 +3743,13 @@ class LiveTradingEngine:
                     db_manager=self.db_manager,
                     session_id=self.trading_session_id,
                 )
+
+                if not positions_snapshot:
+                    logger.info("📊 No local positions to reconcile — checking pending orders")
+                    reconciler.resolve_pending_orders()
+                    return
+
+                logger.info("🔄 Reconciling %s positions with exchange...", len(positions_snapshot))
                 results = reconciler.reconcile_startup(positions_snapshot)
 
                 # Check for critical issues
@@ -3783,7 +3787,11 @@ class LiveTradingEngine:
                     "PositionReconciler failed, falling back to legacy reconciliation: %s", e
                 )
 
-        # Legacy fallback: SL-based reconciliation
+        # Legacy fallback: SL-based reconciliation (requires positions)
+        if not positions_snapshot:
+            logger.info("📊 No local positions to reconcile")
+            return
+
         try:
             exchange_orders = self.exchange_interface.get_open_orders()
             exchange_order_ids = {order.order_id for order in exchange_orders}
