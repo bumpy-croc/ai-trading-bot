@@ -157,7 +157,12 @@ class TestPositionReconciler:
         results = reconciler.resolve_pending_orders()
         assert len(results) == 1
         assert results[0].status == "resolved"
-        mock_db.update_order_journal.assert_called_once()
+        # Journal is updated twice: first SUBMITTED (with fill data), then
+        # CONFIRMED after position repair succeeds.
+        assert mock_db.update_order_journal.call_count == 2
+        calls = mock_db.update_order_journal.call_args_list
+        assert calls[0].kwargs["status"] == "SUBMITTED"
+        assert calls[1].kwargs["status"] == "CONFIRMED"
 
     def test_resolve_pending_order_not_found_pending_submit(
         self, reconciler, mock_exchange, mock_db

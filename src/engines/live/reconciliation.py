@@ -201,14 +201,26 @@ class PositionReconciler:
         eo_status = exchange_order.status
 
         if eo_status == ExOrderStatus.FILLED:
-            # Update journal with fill data
+            # First, persist exchange data as SUBMITTED so we have the fill
+            # info recorded. We defer CONFIRMED until position repair succeeds
+            # so a failed repair is retried on next restart.
             self.db_manager.update_order_journal(
                 client_order_id=order_data["client_order_id"],
-                status="CONFIRMED",
+                status="SUBMITTED",
                 exchange_order_id=exchange_order.order_id,
                 fill_price=exchange_order.average_price,
                 fill_quantity=exchange_order.filled_quantity,
                 commission=exchange_order.commission,
+            )
+
+            # Reconcile position state for filled orders
+            self._reconcile_filled_order_position(order_data, exchange_order)
+
+            # Only mark CONFIRMED after successful position repair
+            self.db_manager.update_order_journal(
+                client_order_id=order_data["client_order_id"],
+                status="CONFIRMED",
+                exchange_order_id=exchange_order.order_id,
             )
             audit = AuditEvent(
                 entity_type="order",
@@ -228,9 +240,6 @@ class PositionReconciler:
                 order_data["client_order_id"],
                 exchange_order.average_price,
             )
-
-            # Reconcile position state for filled orders
-            self._reconcile_filled_order_position(order_data, exchange_order)
 
         elif eo_status in (ExOrderStatus.CANCELLED, ExOrderStatus.REJECTED, ExOrderStatus.EXPIRED):
             self.db_manager.update_order_journal(
@@ -332,14 +341,20 @@ class PositionReconciler:
         from src.engines.live.execution.position_tracker import LivePosition
 
         client_order_id = order_data.get("client_order_id", "")
-        # Use exchange order ID as tracker key; fall back to client_order_id
-        order_id = order_data.get("exchange_order_id") or client_order_id
+        # Derive tracker key from the verified exchange order object, not from
+        # order_data which may still hold the stale client_order_id on first
+        # recovery. This prevents duplicate positions on restart-twice.
+        order_id = exchange_order.order_id or order_data.get("exchange_order_id") or client_order_id
 
-        # Skip if position already exists in tracker
+        # Skip if position already exists under either the exchange_order_id
+        # or the client_order_id (covers first-recovery key mismatch).
         with self.position_tracker._positions_lock:
-            if order_id in self.position_tracker._positions:
+            if order_id in self.position_tracker._positions or client_order_id in self.position_tracker._positions:
                 logger.debug(
-                    "Entry order %s: position already tracked, skipping.",
+                    "Entry order %s: position already tracked (checked both "
+                    "exchange_order_id=%s and client_order_id=%s), skipping.",
+                    client_order_id,
+                    order_id,
                     client_order_id,
                 )
                 return
@@ -861,6 +876,48 @@ class PositionReconciler:
 
             if sl_order.status in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED):
                 # SL was cancelled or expired — position is unprotected
+                filled_qty = getattr(sl_order, "filled_quantity", None) or 0.0
+
+                # If the SL partially executed before cancellation/expiry,
+                # reduce the position size by the filled amount.
+                if filled_qty > 0 and hasattr(position, "quantity") and position.quantity > 0:
+                    old_quantity = position.quantity
+                    position.quantity = max(position.quantity - filled_qty, 0.0)
+
+                    # Recalculate size fraction if entry_balance is available
+                    entry_balance = getattr(position, "entry_balance", None)
+                    fill_price = getattr(sl_order, "average_price", None) or 0.0
+                    if entry_balance and entry_balance > 0 and fill_price > 0:
+                        filled_notional = filled_qty * fill_price
+                        old_size = getattr(position, "current_size", 0.0)
+                        reduction = filled_notional / entry_balance
+                        position.current_size = max(old_size - reduction, 0.0)
+
+                    partial_audit = AuditEvent(
+                        entity_type="position",
+                        entity_id=getattr(position, "db_position_id", None),
+                        field="quantity",
+                        old_value=str(old_quantity),
+                        new_value=str(position.quantity),
+                        reason=(
+                            f"SL order {sl_order.status.value.lower()} after partial fill "
+                            f"of {filled_qty} — reduced position quantity"
+                        ),
+                        severity=Severity.MEDIUM,
+                    )
+                    self._persist_audit(partial_audit)
+                    result.corrections.append(partial_audit)
+                    logger.warning(
+                        "Stop-loss %s for %s was %s with partial fill of %s — "
+                        "reduced position quantity from %s to %s",
+                        sl_order_id,
+                        position.symbol,
+                        sl_order.status.value,
+                        filled_qty,
+                        old_quantity,
+                        position.quantity,
+                    )
+
                 audit = AuditEvent(
                     entity_type="position",
                     entity_id=getattr(position, "db_position_id", None),
