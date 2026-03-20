@@ -3513,7 +3513,7 @@ class LiveTradingEngine:
             if session_id is None:
                 strategy = self._strategy_name()
                 session_id = self.db_manager.get_last_session_id(
-                    within_hours=24,
+                    within_hours=168,  # 7 days — covers long-running paper trading sessions
                     strategy_name=strategy,
                     symbol=self._active_symbol,
                 )
