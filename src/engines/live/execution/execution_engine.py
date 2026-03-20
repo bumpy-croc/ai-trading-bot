@@ -415,6 +415,7 @@ class LiveExecutionEngine:
         position_notional: float,
         liquidity: str | None = None,
         apply_slippage: bool = True,
+        position_db_id: int | None = None,
     ) -> ExitExecutionResult:
         """Execute an exit order with fees and slippage.
 
@@ -426,6 +427,8 @@ class LiveExecutionEngine:
             position_notional: Notional value of position.
             liquidity: Liquidity classification for fee and slippage handling.
             apply_slippage: When False, slippage is suppressed.
+            position_db_id: Database row ID for the position being closed.
+                Used to link exit journal entries to their position for crash recovery.
 
         Returns:
             ExitExecutionResult with execution details.
@@ -475,6 +478,7 @@ class LiveExecutionEngine:
                     quantity,
                     position_notional=position_notional,
                     order_id=order_id,
+                    position_db_id=position_db_id,
                 )
                 if not close_order_id:
                     return ExitExecutionResult(
@@ -679,6 +683,7 @@ class LiveExecutionEngine:
         quantity: float,
         position_notional: float,
         order_id: str | None = None,
+        position_db_id: int | None = None,
     ) -> str | None:
         """Close a real market order via exchange.
 
@@ -687,6 +692,8 @@ class LiveExecutionEngine:
             side: Position side to close.
             quantity: Quantity to close.
             order_id: Order ID to close.
+            position_db_id: Database row ID for the position being closed.
+                Links exit journal entries to their position for crash recovery.
 
         Returns:
             Order ID if successful, None otherwise.
@@ -723,6 +730,7 @@ class LiveExecutionEngine:
                         order_type="FULL_EXIT",
                         quantity=quantity,
                         strategy_name=self.strategy_name,
+                        position_id=position_db_id,
                     )
                 except Exception as e:
                     logger.warning("Failed to journal exit order: %s", e)
@@ -765,12 +773,15 @@ class LiveExecutionEngine:
                             fill_price=float(fill_price) if fill_price else None,
                             fill_quantity=float(fill_qty) if fill_qty else None,
                             commission=float(commission) if commission else None,
+                            position_id=position_db_id,
                         )
                     else:
                         # Order may have been placed despite returning None
                         # (timeout/network error), so mark as UNKNOWN — the
                         # reconciler resolves on restart
-                        self.db_manager.update_order_journal(client_order_id, "UNKNOWN")
+                        self.db_manager.update_order_journal(
+                            client_order_id, "UNKNOWN", position_id=position_db_id
+                        )
                 except Exception as e:
                     logger.warning("Failed to update exit order journal: %s", e)
 

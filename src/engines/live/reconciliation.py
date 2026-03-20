@@ -279,7 +279,7 @@ class PositionReconciler:
 
         if order_type == "ENTRY":
             self._reconcile_filled_entry(
-                order_data, symbol, side, fill_price, fill_qty
+                order_data, exchange_order, symbol, side, fill_price, fill_qty
             )
         elif order_type in ("FULL_EXIT", "PARTIAL_EXIT"):
             self._reconcile_filled_exit(order_data, fill_price)
@@ -287,6 +287,7 @@ class PositionReconciler:
     def _reconcile_filled_entry(
         self,
         order_data: dict,
+        exchange_order: Any,
         symbol: str,
         side: str,
         fill_price: float,
@@ -311,16 +312,27 @@ class PositionReconciler:
                 return
 
         try:
+            # Calculate size as balance fraction from entry_balance if available,
+            # otherwise use a conservative default. size/original_size/current_size
+            # are balance-fraction fields (0.0-1.0), NOT asset quantities.
+            entry_balance = order_data.get("entry_balance")
+            if entry_balance and entry_balance > 0 and fill_price > 0:
+                size_fraction = min((fill_qty * fill_price) / entry_balance, 1.0)
+            else:
+                size_fraction = 0.1  # Conservative default when balance unknown
+
             position = LivePosition(
                 symbol=symbol,
                 side=side,
                 entry_price=fill_price,
                 entry_time=datetime.now(UTC),
-                size=fill_qty,
+                size=size_fraction,
                 quantity=fill_qty,
-                original_size=fill_qty,
-                current_size=fill_qty,
+                original_size=size_fraction,
+                current_size=size_fraction,
                 order_id=order_id,
+                exchange_order_id=exchange_order.order_id,
+                client_order_id=order_data.get("client_order_id"),
             )
 
             # Persist to DB first
@@ -330,7 +342,7 @@ class PositionReconciler:
                     symbol=symbol,
                     side=side,
                     entry_price=fill_price,
-                    size=fill_qty,
+                    size=size_fraction,
                     strategy_name="recovered",
                     entry_order_id=order_id,
                     quantity=fill_qty,
@@ -772,9 +784,8 @@ class PositionReconciler:
         """
         symbol = position.symbol
         base_asset = self._extract_base_asset(symbol)
-        position_qty = getattr(position, "current_size", None) or getattr(
-            position, "size", 0
-        )
+        # Use quantity (actual asset amount), not size (balance fraction)
+        position_qty = getattr(position, "quantity", None) or 0.0
         if position_qty <= 0:
             return
 
@@ -836,9 +847,8 @@ class PositionReconciler:
         total = 0.0
         positions = self.position_tracker.positions
         for position in positions.values():
-            qty = getattr(position, "current_size", None) or getattr(
-                position, "size", 0
-            )
+            # Use quantity (actual asset amount), not size (balance fraction)
+            qty = getattr(position, "quantity", None) or 0.0
             price = getattr(position, "entry_price", 0)
             if qty > 0 and price > 0:
                 total += qty * price
@@ -1088,9 +1098,8 @@ class PeriodicReconciler:
 
         # 1b. Verify asset holdings for each position — detect external closes
         for order_key, position in list(positions_snapshot.items()):
-            position_qty = getattr(position, "current_size", None) or getattr(
-                position, "size", 0
-            )
+            # Use quantity (actual asset amount), not size (balance fraction)
+            position_qty = getattr(position, "quantity", None) or 0.0
             if position_qty <= 0:
                 continue
 
@@ -1178,9 +1187,8 @@ class PeriodicReconciler:
                     # Subtract position notional to get expected USDT
                     position_notional = 0.0
                     for position in positions_snapshot.values():
-                        qty = getattr(position, "current_size", None) or getattr(
-                            position, "size", 0
-                        )
+                        # Use quantity (actual asset amount), not size (balance fraction)
+                        qty = getattr(position, "quantity", None) or 0.0
                         price = getattr(position, "entry_price", 0)
                         if qty > 0 and price > 0:
                             position_notional += qty * price

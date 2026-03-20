@@ -41,6 +41,7 @@ class MockPosition:
     stop_loss_order_id: str | None = None
     current_size: float | None = 0.1
     size: float = 0.1
+    quantity: float | None = 0.1
 
 
 @dataclass
@@ -996,8 +997,8 @@ class TestBalanceAccountsForPositionNotional:
         Scenario: $20,000 DB, two positions totaling $15,000 notional.
         Exchange USDT = $5,000 (correct).
         """
-        pos1 = MockPosition(entry_price=50000.0, current_size=0.1, symbol="BTCUSDT")
-        pos2 = MockPosition(entry_price=3000.0, current_size=10.0 / 3, symbol="ETHUSDT")
+        pos1 = MockPosition(entry_price=50000.0, current_size=0.1, quantity=0.1, symbol="BTCUSDT")
+        pos2 = MockPosition(entry_price=3000.0, current_size=10.0 / 3, quantity=10.0 / 3, symbol="ETHUSDT")
         mock_position_tracker.positions = {"pos_1": pos1, "pos_2": pos2}
         mock_exchange.get_balance.return_value = MockBalance(total=5000.0)
         mock_db.get_current_balance.return_value = 20000.0
@@ -1097,13 +1098,17 @@ class TestFilledOrderPositionReconciliation:
         assert call_kwargs["symbol"] == "BTCUSDT"
         assert call_kwargs["side"] == "LONG"
         assert call_kwargs["entry_price"] == 50000.0
-        assert call_kwargs["size"] == 0.001
+        # size is a balance fraction (not fill_qty); no entry_balance => default 0.1
+        assert call_kwargs["size"] == 0.1
 
         # Position should be tracked in memory
         mock_position_tracker.track_recovered_position.assert_called_once()
         pos_arg = mock_position_tracker.track_recovered_position.call_args[0][0]
         assert pos_arg.symbol == "BTCUSDT"
         assert pos_arg.entry_price == 50000.0
+        assert pos_arg.quantity == 0.001
+        assert pos_arg.size == 0.1
+        assert pos_arg.exchange_order_id is not None
         db_id_arg = mock_position_tracker.track_recovered_position.call_args[0][1]
         assert db_id_arg == 42
 
