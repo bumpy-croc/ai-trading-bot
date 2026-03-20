@@ -42,6 +42,7 @@ from src.engines.shared.trailing_stop_manager import TrailingStopManager
 from src.engines.shared.validation import (
     convert_exit_fraction_to_current,
     is_position_fully_closed,
+    is_same_bar_entry,
 )
 
 if TYPE_CHECKING:
@@ -730,6 +731,7 @@ class LiveExitHandler:
         current_index: int,
         current_price: float,
         current_balance: float,
+        candle_time: object | None = None,
     ) -> None:
         """Check and execute partial exits and scale-ins.
 
@@ -747,12 +749,23 @@ class LiveExitHandler:
             current_index: Current candle index.
             current_price: Current market price.
             current_balance: Current account balance.
+            candle_time: Current candle timestamp. Positions entered on this
+                candle are skipped to match backtest same-bar protection.
         """
         if self.partial_manager is None:
             return
 
         # Defensive iteration: list() creates snapshot to prevent concurrent modification errors
         for order_id, position in list(self.position_tracker.positions.items()):
+            # Same-bar protection: skip positions entered on the current candle.
+            # This matches the backtest engine where entered_this_candle guards
+            # both full exits and partial operations.
+            if is_same_bar_entry(position.entry_time, candle_time):
+                logger.debug(
+                    "Skipping partial ops for %s: entered on current bar",
+                    position.symbol,
+                )
+                continue
             try:
                 # Check for partial exits (loop to handle multiple exits in same cycle)
                 iteration_count = 0
