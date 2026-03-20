@@ -2016,6 +2016,7 @@ class LiveTradingEngine:
                     float(current_price),
                     candle_high,
                     candle_low,
+                    candle,
                 )
 
     def _check_entry_conditions(
