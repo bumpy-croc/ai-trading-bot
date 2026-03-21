@@ -25,6 +25,7 @@ from src.config.constants import (
     DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
     DEFAULT_STOP_LOSS_PCT,
 )
+from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
     from src.data_providers.exchange_interface import ExchangeInterface
@@ -483,7 +484,11 @@ class PositionReconciler:
 
             # Apply a conservative default stop-loss so the recovered position
             # is never unprotected. The strategy may tighten this later.
-            if side == "SHORT":
+            side_is_short = (
+                side == PositionSide.SHORT
+                or str(side).lower() == "short"
+            )
+            if side_is_short:
                 default_stop = fill_price * (1.0 + DEFAULT_STOP_LOSS_PCT)
             else:
                 default_stop = fill_price * (1.0 - DEFAULT_STOP_LOSS_PCT)
@@ -1028,7 +1033,11 @@ class PositionReconciler:
                         from src.data_providers.exchange_interface import OrderSide
 
                         side = getattr(position, "side", "long")
-                        sl_side = OrderSide.SELL if side == "long" else OrderSide.BUY
+                        side_is_long = (
+                            side == PositionSide.LONG
+                            or str(side).lower() == "long"
+                        )
+                        sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                         qty = getattr(position, "quantity", 0)
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
@@ -1154,7 +1163,11 @@ class PositionReconciler:
                         from src.data_providers.exchange_interface import OrderSide
 
                         side = getattr(position, "side", "long")
-                        sl_side = OrderSide.SELL if side == "long" else OrderSide.BUY
+                        side_is_long = (
+                            side == PositionSide.LONG
+                            or str(side).lower() == "long"
+                        )
+                        sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                         qty = getattr(position, "quantity", 0)
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
@@ -1477,16 +1490,28 @@ class PositionReconciler:
             return
 
         entry_price = getattr(position, "entry_price", 0)
-        quantity = getattr(position, "quantity", 0) or 0.0
-        if entry_price <= 0 or quantity <= 0:
+        qty = getattr(position, "quantity", 0) or 0.0
+        if entry_price <= 0 or qty <= 0:
             return
+
+        # Scale quantity by current_size/original_size to account for partial
+        # exits. Without this, closing after a 50% partial exit would calculate
+        # P&L on the full original quantity, doubling the realized amount.
+        current = getattr(position, "current_size", None)
+        original = getattr(position, "original_size", None)
+        if current and original and original > 0:
+            qty = qty * (current / original)
 
         # Calculate realized P&L (long: sell higher = profit)
         side = getattr(position, "side", "long")
-        if side == "short":
-            pnl = (entry_price - exit_price) * quantity
+        side_is_short = (
+            side == PositionSide.SHORT
+            or str(side).lower() == "short"
+        )
+        if side_is_short:
+            pnl = (entry_price - exit_price) * qty
         else:
-            pnl = (exit_price - entry_price) * quantity
+            pnl = (exit_price - entry_price) * qty
 
         try:
             current_balance = self.db_manager.get_current_balance(self.session_id)
@@ -1516,7 +1541,7 @@ class PositionReconciler:
                 reason=(
                     f"Reconciliation P&L: {pnl:+.2f} "
                     f"(entry={entry_price:.2f}, exit={exit_price:.2f}, "
-                    f"qty={quantity:.8f}, {reason})"
+                    f"qty={qty:.8f}, {reason})"
                 ),
                 severity=Severity.MEDIUM,
             )

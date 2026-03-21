@@ -660,13 +660,16 @@ class LiveExecutionEngine:
 
             if order_result is None:
                 # Order may have been placed despite returning None (timeout/network error),
-                # so mark as UNKNOWN rather than FAILED — the reconciler resolves on restart
+                # so mark as UNKNOWN rather than FAILED — the reconciler resolves on restart.
+                # Return client_order_id as the order_id so execute_entry creates a tracked
+                # position. This blocks duplicate entries for the same symbol. If the order
+                # never actually filled, the startup reconciler cleans up the phantom position.
                 if self.db_manager and self.session_id:
                     try:
                         self.db_manager.update_order_journal(client_order_id, "UNKNOWN")
                     except Exception as e:
                         logger.warning("Failed to mark order as UNKNOWN: %s", e)
-                return None, client_order_id
+                return client_order_id, client_order_id
 
             # Extract order_id and update journal with exchange data
             exchange_order_id = (
