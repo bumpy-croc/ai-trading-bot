@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -32,6 +33,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine, desc, func, text
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 # Ensure the project root is on sys.path so imports work when run as a script
@@ -85,19 +87,35 @@ def _poll_until(
 
 def _start_bot(extra_args: Sequence[str] | None = None) -> subprocess.Popen:
     """Start the trading bot as a subprocess and return the Popen handle."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "src.engines.live.runner",
-        "chaos_test",
-        "--symbol",
-        "BTCUSDT",
-        "--timeframe",
-        "1m",
-        "--paper-trading",
-        "--check-interval",
-        "30",
-    ]
+    atb_path = shutil.which("atb")
+    if atb_path:
+        cmd = [
+            atb_path,
+            "live",
+            "chaos_test",
+            "--symbol",
+            "BTCUSDT",
+            "--timeframe",
+            "1m",
+            "--paper-trading",
+            "--check-interval",
+            "30",
+        ]
+    else:
+        # Fallback to module invocation when atb is not on PATH
+        cmd = [
+            sys.executable,
+            "-m",
+            "src.engines.live.runner",
+            "chaos_test",
+            "--symbol",
+            "BTCUSDT",
+            "--timeframe",
+            "1m",
+            "--paper-trading",
+            "--check-interval",
+            "30",
+        ]
     if extra_args:
         cmd.extend(extra_args)
 
@@ -208,8 +226,10 @@ def phase_journal(
                 )
             else:
                 logger.info("PASS: No reconciliation audit events (clean run)")
-        except Exception:
-            logger.info("reconciliation_audit_events table not present (PR #576 not merged yet)")
+        except ProgrammingError:
+            logger.warning(
+                "reconciliation_audit_events table not present (PR #576 not merged yet)"
+            )
 
         return True
     finally:
@@ -471,7 +491,8 @@ def phase_sl_reconciliation(db: Session, timeout: float, railway: bool) -> bool:
             )
             count = result.scalar()
             return (count or 0) > 0
-        except Exception:
+        except SQLAlchemyError as e:
+            logger.warning("DB error while checking SL audit events: %s", e)
             return False
 
     if _poll_until(_has_sl_events, timeout, interval=10, description="SL audit events"):
