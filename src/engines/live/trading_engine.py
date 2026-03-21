@@ -3581,6 +3581,9 @@ class LiveTradingEngine:
                 # session will be created below, preventing writes to a closed session.
                 if source == "active":
                     self.trading_session_id = session_id
+                    # Wire session context to execution engine so journaling works
+                    self.live_execution_engine.session_id = session_id
+                    self.live_execution_engine.strategy_name = self._strategy_name()
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,

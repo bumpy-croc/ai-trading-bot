@@ -459,6 +459,34 @@ class PositionReconciler:
                         e,
                     )
 
+            # Place server-side stop-loss on exchange for protection
+            side_lower = side.lower()
+            if position.stop_loss and hasattr(self.exchange, "place_stop_loss_order"):
+                try:
+                    from src.data_providers.exchange_interface import OrderSide
+
+                    sl_side = OrderSide.SELL if side_lower == "long" else OrderSide.BUY
+                    sl_order_id = self.exchange.place_stop_loss_order(
+                        symbol=symbol,
+                        side=sl_side,
+                        quantity=fill_qty,
+                        stop_price=position.stop_loss,
+                    )
+                    if sl_order_id:
+                        position.stop_loss_order_id = sl_order_id
+                        logger.info(
+                            "Placed recovery stop-loss for %s: %s @ %.2f",
+                            symbol,
+                            sl_order_id,
+                            position.stop_loss,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to place recovery stop-loss for %s: %s",
+                        symbol,
+                        e,
+                    )
+
             logger.info(
                 "Reconciled filled ENTRY %s: created position %s (db_id=%s)",
                 client_order_id,
