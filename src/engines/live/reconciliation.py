@@ -115,11 +115,13 @@ class PositionReconciler:
         position_tracker: LivePositionTracker,
         db_manager: DatabaseManager,
         session_id: int,
+        max_position_size: float = 0.1,
     ) -> None:
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
         self.db_manager = db_manager
         self.session_id = session_id
+        self.max_position_size = max_position_size
 
     def reconcile_startup(
         self, positions: dict[str, Any]
@@ -439,7 +441,7 @@ class PositionReconciler:
             if entry_balance and entry_balance > 0 and fill_price > 0:
                 size_fraction = min((fill_qty * fill_price) / entry_balance, 1.0)
             else:
-                size_fraction = 0.1  # Conservative default when balance unknown
+                size_fraction = self.max_position_size  # Respect configured limit
                 entry_balance = None  # Do not store an invalid balance
 
             position = LivePosition(

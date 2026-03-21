@@ -3745,6 +3745,7 @@ class LiveTradingEngine:
                     position_tracker=self.live_position_tracker,
                     db_manager=self.db_manager,
                     session_id=self.trading_session_id,
+                    max_position_size=self.max_position_size,
                 )
 
                 if not positions_snapshot:
