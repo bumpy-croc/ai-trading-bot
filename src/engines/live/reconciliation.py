@@ -1670,13 +1670,13 @@ class PeriodicReconciler:
                         severity=severity.value,
                     )
 
-                    # Remove ghost position from tracker and close in DB
-                    lock = self.get_position_lock(order_key)
-                    with lock:
-                        self.position_tracker.remove_position(order_key)
-                        db_pos_id = getattr(position, "db_position_id", None)
-                        if db_pos_id is not None:
-                            self.db_manager.close_position(db_pos_id)
+                    # Remove ghost position from tracker and close in DB.
+                    # Thread safety: LivePositionTracker._positions_lock
+                    # serializes all mutations, no per-position lock needed.
+                    self.position_tracker.remove_position(order_key)
+                    db_pos_id = getattr(position, "db_position_id", None)
+                    if db_pos_id is not None:
+                        self.db_manager.close_position(db_pos_id)
                     logger.warning(
                         "Removed ghost position %s — entry order %s on exchange",
                         order_key,
@@ -1735,13 +1735,13 @@ class PeriodicReconciler:
                         severity=severity.value,
                     )
 
-                    # Remove ghost position from tracker and close in DB
-                    lock = self.get_position_lock(order_key)
-                    with lock:
-                        self.position_tracker.remove_position(order_key)
-                        db_pos_id = getattr(position, "db_position_id", None)
-                        if db_pos_id is not None:
-                            self.db_manager.close_position(db_pos_id)
+                    # Remove ghost position from tracker and close in DB.
+                    # Thread safety: LivePositionTracker._positions_lock
+                    # serializes all mutations, no per-position lock needed.
+                    self.position_tracker.remove_position(order_key)
+                    db_pos_id = getattr(position, "db_position_id", None)
+                    if db_pos_id is not None:
+                        self.db_manager.close_position(db_pos_id)
                     logger.warning(
                         "Removed ghost position %s — externally closed "
                         "(held=%.8f, tracked=%.8f)",
@@ -1778,11 +1778,26 @@ class PeriodicReconciler:
                             client_id = getattr(order, "client_order_id", "") or ""
                             if client_id.startswith("atb_"):
                                 logger.warning(
-                                    "Orphaned order found: %s (%s) on %s — not tracked",
+                                    "Orphaned order found: %s (%s) on %s — cancelling",
                                     order.order_id,
                                     client_id,
                                     symbol,
                                 )
+                                try:
+                                    self.exchange.cancel_order(
+                                        order.order_id, symbol
+                                    )
+                                    logger.info(
+                                        "Cancelled orphaned order %s on %s",
+                                        order.order_id,
+                                        symbol,
+                                    )
+                                except Exception as cancel_err:
+                                    logger.warning(
+                                        "Failed to cancel orphaned order %s: %s",
+                                        order.order_id,
+                                        cancel_err,
+                                    )
                                 max_severity = Severity.HIGH
         except Exception as e:
             logger.debug("Orphaned order check failed: %s", e)
