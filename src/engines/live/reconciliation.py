@@ -1427,6 +1427,13 @@ class PositionReconciler:
                         db_balance,
                         position_notional,
                     )
+                    # Correct DB balance to match actual exchange capital
+                    self.db_manager.update_balance(
+                        exchange_total,
+                        "reconciliation_balance_correction",
+                        "system",
+                        self.session_id,
+                    )
                 elif diff_pct > 0.01:  # >1% warning
                     result.severity = Severity.LOW
                     logger.info(
@@ -1832,6 +1839,13 @@ class PeriodicReconciler:
                             diff_pct * 100,
                             db_balance,
                             position_notional,
+                        )
+                        # Correct DB balance to match actual exchange capital
+                        self.db_manager.update_balance(
+                            usdt_balance.total,
+                            "reconciliation_balance_correction",
+                            "system",
+                            self.session_id,
                         )
         except Exception as e:
             logger.debug("Balance check failed: %s", e)
