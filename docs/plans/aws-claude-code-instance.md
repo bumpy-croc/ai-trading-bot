@@ -31,28 +31,114 @@ You (Telegram/Discord)
 └─────────────────────────────┘
 ```
 
-## Implementation Steps
+## Deployment Options (Pick One)
 
-### 1. Provision EC2 Instance
+### Option A: EC2 `t3.small` — Cheapest Always-On (~$13-17/mo)
 
-**Instance type**: `t3.medium` (2 vCPU, 4 GB RAM) — sufficient for Claude Code CLI
-- Upgrade to `t3.large` if running heavy builds/tests locally
+Claude Code CLI is lightweight (Node.js process polling Telegram + calling the API).
+It doesn't need much CPU/RAM — the heavy lifting happens on Anthropic's servers.
 
-**AMI**: Ubuntu 24.04 LTS
-
-**Storage**: 50 GB gp3 EBS (enough for multiple repos + deps)
-
-**Security Group**: Outbound-only (no inbound ports needed — Telegram polling is outbound)
+| Component | Monthly Cost |
+|-----------|-------------|
+| EC2 t3.small (2 vCPU, 2 GB RAM), 24/7 on-demand | ~$15 |
+| 20 GB gp3 EBS | ~$1.60 |
+| Data transfer | ~$1 |
+| **Total (on-demand)** | **~$17/mo** |
+| **Total (1yr Reserved Instance)** | **~$13/mo** |
 
 ```bash
 aws ec2 run-instances \
-  --image-id ami-0abcdef1234567890 \  # Ubuntu 24.04 in your region
-  --instance-type t3.medium \
+  --image-id ami-0abcdef1234567890 \
+  --instance-type t3.small \
   --key-name your-key \
   --security-group-ids sg-xxx \
-  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":50,"VolumeType":"gp3"}}]' \
+  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":20,"VolumeType":"gp3"}}]' \
   --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=claude-code-agent}]'
 ```
+
+**When to pick this**: You want simplicity and always-on availability. Best default choice.
+
+### Option B: EC2 `t3.micro` — Bare Minimum (~$8-11/mo)
+
+Even cheaper, but only 1 GB RAM. Works if you're only doing git ops / code review
+and not running tests or builds on the instance itself.
+
+| Component | Monthly Cost |
+|-----------|-------------|
+| EC2 t3.micro (2 vCPU, 1 GB RAM) | ~$7.50 |
+| 15 GB gp3 EBS | ~$1.20 |
+| Data transfer | ~$1 |
+| **Total (on-demand)** | **~$10/mo** |
+| **Total (1yr RI)** | **~$8/mo** |
+
+**When to pick this**: You only need Claude to review PRs, write code, and push —
+not run test suites or builds locally on the instance.
+
+### Option C: ECS Fargate — Serverless Container (~$5-15/mo, pay-per-use)
+
+No EC2 to manage. Run Claude Code in a container that stays up via ECS service.
+Fargate pricing is per vCPU-hour + per GB-hour.
+
+| Component | Monthly Cost (always-on) | Monthly Cost (12hr/day) |
+|-----------|-------------------------|------------------------|
+| Fargate 0.25 vCPU / 0.5 GB | ~$7 | ~$3.50 |
+| Fargate 0.5 vCPU / 1 GB | ~$15 | ~$7.50 |
+| EFS storage (optional, for repos) | ~$0.30/GB | ~$0.30/GB |
+| **Total (light, always-on)** | **~$8/mo** | **~$4/mo** |
+
+**Dockerfile**:
+```dockerfile
+FROM node:20-slim
+RUN apt-get update && apt-get install -y git curl unzip python3 \
+    && npm install -g @anthropic-ai/claude-code \
+    && curl -fsSL https://bun.sh/install | bash
+COPY start-claude.sh /start-claude.sh
+CMD ["/start-claude.sh"]
+```
+
+**When to pick this**: You want hands-off infra management or want to shut it
+down during off-hours to save money. Slightly more setup than EC2.
+
+**Caveat**: Channels require a persistent session. If the container restarts,
+messages during downtime are lost (same as EC2). ECS `desiredCount=1` with
+restart policy keeps it running.
+
+### Option D: Lightsail — Fixed Price, Simple (~$5-10/mo)
+
+AWS Lightsail is a simpler, fixed-price alternative to EC2.
+
+| Plan | Specs | Monthly Cost |
+|------|-------|-------------|
+| $5 plan | 1 vCPU, 1 GB RAM, 40 GB SSD | $5/mo |
+| $10 plan | 1 vCPU, 2 GB RAM, 60 GB SSD | $10/mo |
+
+```bash
+aws lightsail create-instances \
+  --instance-names claude-code-agent \
+  --availability-zone us-east-1a \
+  --blueprint-id ubuntu_24_04 \
+  --bundle-id small_3_0
+```
+
+**When to pick this**: You want the simplest possible setup with predictable pricing.
+No Reserved Instance complexity. Storage included.
+
+---
+
+### Recommendation
+
+**Go with Option A (t3.small) or Option D (Lightsail $5)** depending on preference:
+- Lightsail $5 if you want dead-simple and cheapest
+- t3.small if you want standard EC2 tooling and may run light tests
+
+## Implementation Steps
+
+### 1. Provision the Instance
+
+Pick your option above and provision it. All options need:
+- **OS**: Ubuntu 24.04 LTS
+- **Security Group**: Outbound-only (no inbound ports — Telegram polling is outbound)
+- **Storage**: 15-20 GB is plenty for Claude Code + a few cloned repos
 
 ### 2. Install Dependencies on the Instance
 
@@ -235,16 +321,17 @@ chmod +x ~/sync-repos.sh
 crontab -l | { cat; echo "0 6 * * * ~/sync-repos.sh"; } | crontab -
 ```
 
-## Cost Estimate
+## Cost Summary
 
-| Component | Monthly Cost |
-|-----------|-------------|
-| EC2 t3.medium (on-demand, 24/7) | ~$30 |
-| 50 GB gp3 EBS | ~$4 |
-| Data transfer (minimal) | ~$1 |
-| **Total** | **~$35/mo** |
+| Option | Always-On | 12hr/day | Complexity |
+|--------|-----------|----------|------------|
+| Lightsail $5 | **$5/mo** | N/A | Simplest |
+| EC2 t3.micro | $10/mo | N/A | Simple |
+| EC2 t3.small | $17/mo ($13 RI) | N/A | Simple |
+| ECS Fargate (light) | $8/mo | **$4/mo** | Medium |
 
-**Cost optimization**: Use a Reserved Instance or Savings Plan to drop EC2 to ~$19/mo.
+**Note**: These costs are for the compute infrastructure only. Claude Code API usage
+(Anthropic billing) is separate and depends on how much you use it.
 
 ## Security Considerations
 
