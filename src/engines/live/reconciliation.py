@@ -1033,10 +1033,19 @@ class PositionReconciler:
         """
         symbol = position.symbol
         base_asset = self._extract_base_asset(symbol)
-        # Use quantity (actual asset amount), not size (balance fraction)
-        position_qty = getattr(position, "quantity", None) or 0.0
-        if position_qty <= 0:
+        # Use quantity (actual asset amount), not size (balance fraction).
+        # Scale by current_size/original_size to account for partial exits
+        # that reduce current_size but leave quantity unchanged.
+        qty = getattr(position, "quantity", None) or 0.0
+        if qty <= 0:
             return
+
+        current_size = getattr(position, "current_size", None)
+        original_size = getattr(position, "original_size", None)
+        if current_size and original_size and original_size > 0:
+            position_qty = qty * (current_size / original_size)
+        else:
+            position_qty = qty
 
         try:
             balance = self.exchange.get_balance(base_asset)
@@ -1433,10 +1442,19 @@ class PeriodicReconciler:
 
         # 1b. Verify asset holdings for each position — detect external closes
         for order_key, position in list(positions_snapshot.items()):
-            # Use quantity (actual asset amount), not size (balance fraction)
-            position_qty = getattr(position, "quantity", None) or 0.0
-            if position_qty <= 0:
+            # Use quantity (actual asset amount), not size (balance fraction).
+            # Scale by current_size/original_size to account for partial exits
+            # that reduce current_size but leave quantity unchanged.
+            qty = getattr(position, "quantity", None) or 0.0
+            if qty <= 0:
                 continue
+
+            current_size = getattr(position, "current_size", None)
+            original_size = getattr(position, "original_size", None)
+            if current_size and original_size and original_size > 0:
+                position_qty = qty * (current_size / original_size)
+            else:
+                position_qty = qty
 
             try:
                 base_asset = PositionReconciler._extract_base_asset(

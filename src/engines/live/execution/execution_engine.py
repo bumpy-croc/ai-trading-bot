@@ -49,6 +49,7 @@ class EntryExecutionResult:
     executed_price: float = 0.0
     position_value: float = 0.0
     quantity: float = 0.0
+    requested_quantity: float = 0.0
     entry_fee: float = 0.0
     slippage_cost: float = 0.0
     error: str | None = None
@@ -350,6 +351,7 @@ class LiveExecutionEngine:
                 )
 
             quantity = position_value / executed_price
+            requested_quantity = quantity  # Preserve before fill data overwrites
 
             # Execute real order if enabled
             client_order_id: str | None = None
@@ -416,6 +418,7 @@ class LiveExecutionEngine:
                 executed_price=executed_price,
                 position_value=position_value,
                 quantity=quantity,
+                requested_quantity=requested_quantity,
                 entry_fee=entry_fee,
                 slippage_cost=slippage_cost,
                 client_order_id=client_order_id,
