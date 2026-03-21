@@ -543,12 +543,19 @@ class PositionReconciler:
                                     order_id,
                                     e,
                                 )
+                    else:
+                        raise RuntimeError(
+                            f"Recovery stop-loss placement returned None for "
+                            f"{symbol} — position is unprotected"
+                        )
                 except Exception as e:
-                    logger.warning(
-                        "Failed to place recovery stop-loss for %s: %s",
+                    logger.critical(
+                        "Failed to place recovery stop-loss for %s: %s — "
+                        "position is unprotected",
                         symbol,
                         e,
                     )
+                    raise
 
             logger.info(
                 "Reconciled filled ENTRY %s: created position %s (db_id=%s)",
@@ -1011,6 +1018,62 @@ class PositionReconciler:
                 result.corrections.append(audit)
                 if result.severity < Severity.MEDIUM:
                     result.severity = Severity.MEDIUM
+                position.stop_loss_order_id = None
+
+                # Attempt to re-place the stop-loss so the position is protected
+                if position.stop_loss and hasattr(self.exchange, "place_stop_loss_order"):
+                    try:
+                        from src.data_providers.exchange_interface import OrderSide
+
+                        side = getattr(position, "side", "long")
+                        sl_side = OrderSide.SELL if side == "long" else OrderSide.BUY
+                        qty = getattr(position, "quantity", 0)
+                        new_sl_id = self.exchange.place_stop_loss_order(
+                            symbol=position.symbol,
+                            side=sl_side,
+                            quantity=qty,
+                            stop_price=position.stop_loss,
+                        )
+                        if new_sl_id:
+                            position.stop_loss_order_id = new_sl_id
+                            logger.info(
+                                "Re-placed missing stop-loss for %s: %s @ %.2f",
+                                position.symbol,
+                                new_sl_id,
+                                position.stop_loss,
+                            )
+                            # Persist the new SL order ID to DB
+                            db_pos_id = getattr(position, "db_position_id", None)
+                            if db_pos_id is not None:
+                                try:
+                                    self.db_manager.update_position(
+                                        position_id=db_pos_id,
+                                        stop_loss_order_id=new_sl_id,
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        "Failed to persist re-placed SL order ID "
+                                        "for %s: %s",
+                                        position.symbol,
+                                        e,
+                                    )
+                        else:
+                            # SL re-placement failed — escalate to CRITICAL
+                            logger.critical(
+                                "Failed to re-place missing stop-loss for %s — "
+                                "position is unprotected, entering close-only mode",
+                                position.symbol,
+                            )
+                            result.severity = Severity.CRITICAL
+                    except Exception as e:
+                        logger.critical(
+                            "Exception re-placing missing stop-loss for %s: %s — "
+                            "position is unprotected",
+                            position.symbol,
+                            e,
+                        )
+                        result.severity = Severity.CRITICAL
+
                 return
 
             if sl_order.status in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED):
