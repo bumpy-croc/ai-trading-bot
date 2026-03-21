@@ -1023,11 +1023,13 @@ class PositionReconciler:
                     old_quantity = position.quantity
                     position.quantity = max(position.quantity - filled_qty, 0.0)
 
-                    # Recalculate size fraction if entry_balance is available
+                    # Recalculate size fraction if entry_balance is available.
+                    # Use entry_price (not fill_price) for consistency with how
+                    # exits are sized: current_size * entry_balance / entry_price.
                     entry_balance = getattr(position, "entry_balance", None)
-                    fill_price = getattr(sl_order, "average_price", None) or 0.0
-                    if entry_balance and entry_balance > 0 and fill_price > 0:
-                        filled_notional = filled_qty * fill_price
+                    entry_price = getattr(position, "entry_price", None) or 0.0
+                    if entry_balance and entry_balance > 0 and entry_price > 0:
+                        filled_notional = filled_qty * entry_price
                         old_size = getattr(position, "current_size", 0.0)
                         reduction = filled_notional / entry_balance
                         position.current_size = max(old_size - reduction, 0.0)
@@ -1080,6 +1082,61 @@ class PositionReconciler:
                     position.symbol,
                     sl_order.status.value,
                 )
+
+                # Attempt to re-place the stop-loss so the position is protected
+                if position.stop_loss and hasattr(self.exchange, "place_stop_loss_order"):
+                    try:
+                        from src.data_providers.exchange_interface import OrderSide
+
+                        side = getattr(position, "side", "long")
+                        sl_side = OrderSide.SELL if side == "long" else OrderSide.BUY
+                        qty = getattr(position, "quantity", 0)
+                        new_sl_id = self.exchange.place_stop_loss_order(
+                            symbol=position.symbol,
+                            side=sl_side,
+                            quantity=qty,
+                            stop_price=position.stop_loss,
+                        )
+                        if new_sl_id:
+                            position.stop_loss_order_id = new_sl_id
+                            logger.info(
+                                "Re-placed stop-loss for %s: %s @ %.2f",
+                                position.symbol,
+                                new_sl_id,
+                                position.stop_loss,
+                            )
+                            # Persist the new SL order ID to DB
+                            db_pos_id = getattr(position, "db_position_id", None)
+                            if db_pos_id is not None:
+                                try:
+                                    self.db_manager.update_position(
+                                        position_id=db_pos_id,
+                                        stop_loss_order_id=new_sl_id,
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        "Failed to persist re-placed SL order ID "
+                                        "for %s: %s",
+                                        position.symbol,
+                                        e,
+                                    )
+                        else:
+                            # SL re-placement failed — escalate to CRITICAL
+                            logger.critical(
+                                "Failed to re-place stop-loss for %s — "
+                                "position is unprotected, entering close-only mode",
+                                position.symbol,
+                            )
+                            result.severity = Severity.CRITICAL
+                    except Exception as e:
+                        logger.critical(
+                            "Exception re-placing stop-loss for %s: %s — "
+                            "position is unprotected",
+                            position.symbol,
+                            e,
+                        )
+                        result.severity = Severity.CRITICAL
+
                 return
 
             if sl_order.status == ExOrderStatus.FILLED:
