@@ -1701,7 +1701,7 @@ class PeriodicReconciler:
                         max_severity = severity
 
             except Exception as e:
-                logger.debug("Failed to verify position %s: %s", order_key, e)
+                logger.warning("Failed to verify position %s: %s", order_key, e)
 
         # 1b. Verify asset holdings for each position — detect external closes
         for order_key, position in list(positions_snapshot.items()):
@@ -1790,7 +1790,7 @@ class PeriodicReconciler:
                     for order in open_orders:
                         if order.order_id not in tracked_exchange_ids:
                             client_id = getattr(order, "client_order_id", "") or ""
-                            if client_id.startswith("atb_"):
+                            if client_id.startswith("atb"):  # Catches atb_ (entry) and atbx_ (exit)
                                 logger.warning(
                                     "Orphaned order found: %s (%s) on %s — cancelling",
                                     order.order_id,
@@ -1814,7 +1814,7 @@ class PeriodicReconciler:
                                     )
                                 max_severity = Severity.HIGH
         except Exception as e:
-            logger.debug("Orphaned order check failed: %s", e)
+            logger.warning("Orphaned order check failed: %s", e)
 
         # 3. Verify balance (accounting for position notional values)
         try:
@@ -1858,7 +1858,7 @@ class PeriodicReconciler:
                             self.session_id,
                         )
         except Exception as e:
-            logger.debug("Balance check failed: %s", e)
+            logger.warning("Balance check failed: %s", e)
 
         # 4. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:

@@ -664,8 +664,8 @@ class LiveExecutionEngine:
                 if self.db_manager and self.session_id:
                     try:
                         self.db_manager.update_order_journal(client_order_id, "UNKNOWN")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to mark order as UNKNOWN: %s", e)
                 return None, client_order_id
 
             # Extract order_id and update journal with exchange data
@@ -689,9 +689,9 @@ class LiveExecutionEngine:
                         client_order_id=client_order_id,
                         status=journal_status,
                         exchange_order_id=exchange_order_id,
-                        fill_price=float(fill_price) if fill_price else None,
-                        fill_quantity=float(fill_qty) if fill_qty else None,
-                        commission=float(commission) if commission else None,
+                        fill_price=float(fill_price) if fill_price is not None else None,
+                        fill_quantity=float(fill_qty) if fill_qty is not None else None,
+                        commission=float(commission) if commission is not None else None,
                     )
                 except Exception as e:
                     logger.warning("Failed to update entry order journal: %s", e)
@@ -795,9 +795,9 @@ class LiveExecutionEngine:
                             client_order_id=client_order_id,
                             status=journal_status,
                             exchange_order_id=close_order_id,
-                            fill_price=float(fill_price) if fill_price else None,
-                            fill_quantity=float(fill_qty) if fill_qty else None,
-                            commission=float(commission) if commission else None,
+                            fill_price=float(fill_price) if fill_price is not None else None,
+                            fill_quantity=float(fill_qty) if fill_qty is not None else None,
+                            commission=float(commission) if commission is not None else None,
                             position_id=position_db_id,
                         )
                     else:
