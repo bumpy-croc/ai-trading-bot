@@ -958,8 +958,8 @@ class MonitoringDashboard:
             result = self.db_manager.execute_query(query)
             if result and result[0].get("symbol"):
                 return str(result[0]["symbol"])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to determine active symbol, falling back to default: %s", e)
         return "BTCUSDT"  # Final fallback
 
     def _get_price_change_24h(self) -> float:

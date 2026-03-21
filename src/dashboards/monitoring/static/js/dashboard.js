@@ -1365,12 +1365,12 @@ class TradingDashboard {
             const pnlSign = unrealizedPnl >= 0 ? '+' : '';
             const pnlClass = unrealizedPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
             return `
-            <tr role="row" aria-label="Position ${position.symbol} ${position.side}">
-                <td role="cell" aria-label="Symbol" class="mono">${position.symbol}</td>
+            <tr role="row" aria-label="Position ${this._escapeHtml(position.symbol)} ${this._escapeHtml(position.side)}">
+                <td role="cell" aria-label="Symbol" class="mono">${this._escapeHtml(position.symbol)}</td>
                 <td role="cell" aria-label="Position side">
                     <span class="badge ${position.side === 'long' ? 'bg-success' : 'bg-danger'}"
                           aria-label="${position.side === 'long' ? 'Long position' : 'Short position'}">
-                        ${position.side}
+                        ${this._escapeHtml(position.side)}
                     </span>
                 </td>
                 <td role="cell" aria-label="Position size" class="mono">${this.formatQuantity(position.symbol, quantity)}</td>
@@ -1439,8 +1439,8 @@ class TradingDashboard {
             const reasonBadge = this._getExitReasonBadge(exitReason);
             return `
             <tr>
-                <td class="mono">${trade.symbol}</td>
-                <td><span class="badge ${trade.side && trade.side.toLowerCase() === 'long' ? 'bg-success' : 'bg-danger'}">${trade.side}</span></td>
+                <td class="mono">${this._escapeHtml(trade.symbol)}</td>
+                <td><span class="badge ${trade.side && trade.side.toLowerCase() === 'long' ? 'bg-success' : 'bg-danger'}">${this._escapeHtml(trade.side)}</span></td>
                 <td class="mono">${this.formatQuantity(trade.symbol, quantity)}</td>
                 <td class="mono">${this.formatCurrency(entryPrice)}</td>
                 <td class="mono">${this.formatCurrency(exitPrice)}</td>
@@ -1466,6 +1466,15 @@ class TradingDashboard {
         return `${diffMinutes}m ago`;
     }
 
+    _escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     _getExitReasonBadge(reason) {
         const r = String(reason).toLowerCase();
         const badgeMap = {
@@ -1480,7 +1489,7 @@ class TradingDashboard {
         if (match) {
             return `<span class="badge ${match[1].class}">${match[1].label}</span>`;
         }
-        return `<span class="badge bg-secondary">${reason}</span>`;
+        return `<span class="badge bg-secondary">${this._escapeHtml(reason)}</span>`;
     }
 
     initializeChart() {
