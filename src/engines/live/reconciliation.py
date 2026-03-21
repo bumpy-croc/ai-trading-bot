@@ -1123,16 +1123,12 @@ class PositionReconciler:
                     old_quantity = position.quantity
                     position.quantity = max(position.quantity - filled_qty, 0.0)
 
-                    # Recalculate size fraction if entry_balance is available.
-                    # Use entry_price (not fill_price) for consistency with how
-                    # exits are sized: current_size * entry_balance / entry_price.
-                    entry_balance = getattr(position, "entry_balance", None)
-                    entry_price = getattr(position, "entry_price", None) or 0.0
-                    if entry_balance and entry_balance > 0 and entry_price > 0:
-                        filled_notional = filled_qty * entry_price
-                        old_size = getattr(position, "current_size", 0.0)
-                        reduction = filled_notional / entry_balance
-                        position.current_size = max(old_size - reduction, 0.0)
+                    # NOTE: Do NOT reduce current_size here. current_size tracks
+                    # the fraction remaining after partial take-profit exits and is
+                    # used together with original_size to scale the replacement SL
+                    # quantity. Reducing current_size AND quantity would double-count
+                    # the SL fill when computing the replacement SL qty at line
+                    # `qty = qty * (current / original)` below.
 
                     partial_audit = AuditEvent(
                         entity_type="position",

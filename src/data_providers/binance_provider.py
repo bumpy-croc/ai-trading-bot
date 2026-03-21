@@ -905,14 +905,47 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         except BinanceOrderException as e:
             error_msg = str(e)
-            # Check if this is a duplicate client order ID error (idempotency working as expected)
-            if client_order_id and ("Duplicate order sent" in error_msg or "-2010" in error_msg):
+            error_code = getattr(e, "code", None)
+
+            # Check if this is a duplicate client order ID error (idempotency)
+            if client_order_id and (
+                "Duplicate order sent" in error_msg or error_code == -2010
+            ):
                 logger.warning(
                     f"Duplicate client order ID detected: {client_order_id}. "
                     "This order may have already been placed. Check order status manually."
                 )
                 return None
-            logger.error(f"Binance order error: {e}")
+
+            # Definitive rejections: the exchange explicitly rejected the order,
+            # so it was NOT placed. Raise ValueError so the caller can distinguish
+            # this from ambiguous network/timeout errors (which return None).
+            definitive_codes = {
+                -1013,  # LOT_SIZE / MIN_NOTIONAL filter failure
+                -1021,  # TIMESTAMP out of recv window
+                -1100,  # Illegal characters in parameter
+                -1101,  # Too many parameters
+                -1102,  # Mandatory parameter missing
+                -1106,  # Parameter not required
+                -1111,  # Precision over maximum for asset
+                -1116,  # Order type not supported
+                -2010,  # NEW_ORDER_REJECTED (insufficient balance, etc.)
+                -2013,  # Order does not exist
+                -2015,  # Invalid API key / permissions
+            }
+            if error_code in definitive_codes:
+                logger.error(
+                    "Order definitively rejected by Binance (code=%s): %s",
+                    error_code,
+                    error_msg,
+                )
+                raise ValueError(
+                    f"Order rejected by exchange (code={error_code}): {error_msg}"
+                ) from e
+
+            # Ambiguous error (unknown code, network-adjacent): return None so the
+            # caller treats it as "order may or may not have been placed".
+            logger.error(f"Binance order error (ambiguous, code={error_code}): {e}")
             return None
         except Exception as e:
             logger.error(f"Failed to place order: {e}")

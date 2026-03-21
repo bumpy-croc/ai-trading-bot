@@ -650,13 +650,29 @@ class LiveExecutionEngine:
                 except Exception as e:
                     logger.warning("Failed to journal entry order: %s", e)
 
-            order_result = self.exchange_interface.place_order(
-                symbol=symbol,
-                side=order_side,
-                order_type=OrderType.MARKET,
-                quantity=quantity,
-                client_order_id=client_order_id,
-            )
+            try:
+                order_result = self.exchange_interface.place_order(
+                    symbol=symbol,
+                    side=order_side,
+                    order_type=OrderType.MARKET,
+                    quantity=quantity,
+                    client_order_id=client_order_id,
+                )
+            except ValueError as e:
+                # Definitively rejected by exchange (invalid params, insufficient
+                # balance, etc.). The order was NOT placed, so mark as FAILED and
+                # return (None, None) — no phantom position should be created.
+                logger.error(
+                    "Order definitively rejected for %s: %s — no position created",
+                    symbol,
+                    e,
+                )
+                if self.db_manager and self.session_id:
+                    try:
+                        self.db_manager.update_order_journal(client_order_id, "FAILED")
+                    except Exception as journal_err:
+                        logger.warning("Failed to mark order as FAILED: %s", journal_err)
+                return None, None
 
             if order_result is None:
                 # Order may have been placed despite returning None (timeout/network error),
@@ -700,7 +716,7 @@ class LiveExecutionEngine:
                     logger.warning("Failed to update entry order journal: %s", e)
 
             return exchange_order_id, client_order_id
-        except (ConnectionError, TimeoutError, ValueError) as e:
+        except (ConnectionError, TimeoutError) as e:
             logger.error("Live order execution failed: %s", e)
             return None, None
 
