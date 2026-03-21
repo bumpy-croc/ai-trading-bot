@@ -577,30 +577,9 @@ class PositionReconciler:
         """Handle an order not found on exchange."""
         client_order_id = order_data.get("client_order_id", "")
 
-        if status == "PENDING_SUBMIT":
-            # Order never left our process — safe to mark cancelled
-            self.db_manager.update_order_journal(
-                client_order_id=client_order_id,
-                status="CANCELLED",
-            )
-            audit = AuditEvent(
-                entity_type="order",
-                entity_id=order_data["id"],
-                field="status",
-                old_value=status,
-                new_value="CANCELLED",
-                reason="Order was PENDING_SUBMIT but not found on exchange — never sent",
-                severity=Severity.LOW,
-            )
-            self._persist_audit(audit)
-            result.status = "resolved"
-            result.severity = Severity.LOW
-            result.corrections.append(audit)
-            logger.info("Cancelled unsent order: %s", client_order_id)
-            return result
-
-        # SUBMITTED or UNKNOWN — order may exist on exchange
-        # Try bounded fallback: query recent orders
+        # Try bounded fallback search for ALL statuses (including PENDING_SUBMIT).
+        # A PENDING_SUBMIT order may actually exist on exchange if place_order
+        # raised ConnectionError/TimeoutError after the request was sent.
         try:
             created_at = order_data.get("created_at")
             if created_at:
@@ -614,7 +593,31 @@ class PositionReconciler:
         except Exception as e:
             logger.warning("Bounded fallback search failed: %s", e)
 
-        # No match found — mark UNRESOLVED
+        # No match found on exchange after fallback search
+        if status == "PENDING_SUBMIT":
+            # Order was PENDING_SUBMIT and not found via client_id or fallback
+            # — safe to assume it never reached the exchange
+            self.db_manager.update_order_journal(
+                client_order_id=client_order_id,
+                status="CANCELLED",
+            )
+            audit = AuditEvent(
+                entity_type="order",
+                entity_id=order_data["id"],
+                field="status",
+                old_value=status,
+                new_value="CANCELLED",
+                reason="Order was PENDING_SUBMIT and not found on exchange after fallback search — never sent",
+                severity=Severity.LOW,
+            )
+            self._persist_audit(audit)
+            result.status = "resolved"
+            result.severity = Severity.LOW
+            result.corrections.append(audit)
+            logger.info("Cancelled unsent order: %s", client_order_id)
+            return result
+
+        # SUBMITTED or UNKNOWN — mark UNRESOLVED for manual intervention
         self.db_manager.update_order_journal(
             client_order_id=client_order_id,
             status="UNRESOLVED",

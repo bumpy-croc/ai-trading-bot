@@ -709,11 +709,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 price=float(order_data.get("price", 0)) if order_data.get("price") != "0" else None,
                 status=self._convert_order_status(order_data["status"]),
                 filled_quantity=float(order_data.get("executedQty", 0)),
-                average_price=(
-                    float(order_data.get("avgPrice", 0))
-                    if order_data.get("avgPrice") and order_data.get("avgPrice") != "0"
-                    else None
-                ),
+                average_price=self._extract_average_price(order_data),
                 commission=0.0,  # Will be updated from trade history
                 commission_asset="",
                 create_time=datetime.fromtimestamp(int(order_data["time"]) / 1000, tz=UTC),
@@ -729,6 +725,27 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         except (KeyError, ValueError, TypeError) as e:
             logger.error("Failed to parse order data: %s. Data: %s", e, order_data)
             return None
+
+    @staticmethod
+    def _extract_average_price(order_data: dict) -> float | None:
+        """Extract average fill price from Binance order data.
+
+        Binance spot endpoints return executedQty and cummulativeQuoteQty
+        but not always avgPrice. Falls back to computing the average from
+        cummulativeQuoteQty / executedQty when avgPrice is missing or zero.
+        """
+        avg_price_raw = order_data.get("avgPrice")
+        if avg_price_raw and str(avg_price_raw) != "0":
+            return float(avg_price_raw)
+
+        # Fallback: derive from cummulativeQuoteQty / executedQty
+        exec_qty = float(order_data.get("executedQty", 0))
+        if exec_qty > 0:
+            cum_quote = float(order_data.get("cummulativeQuoteQty", 0))
+            if cum_quote > 0:
+                return cum_quote / exec_qty
+
+        return None
 
     def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         """Get all open orders"""
