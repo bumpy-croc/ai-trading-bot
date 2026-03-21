@@ -1355,10 +1355,10 @@ class TestFilledOrderPositionReconciliation:
         assert pos_arg.entry_balance == 5000.0
         assert pos_arg.size == pytest.approx(0.1)
 
-    def test_partially_filled_entry_creates_position(
+    def test_partially_filled_entry_creates_position_and_cancels_order(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
-        """PARTIALLY_FILLED entry order creates a position for the filled portion."""
+        """PARTIALLY_FILLED entry order creates position and cancels remainder."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         mock_position_tracker._positions_lock = __import__("threading").Lock()
@@ -1382,6 +1382,7 @@ class TestFilledOrderPositionReconciliation:
             status=ExOS.PARTIALLY_FILLED,
             average_price=50000.0,
             filled_quantity=0.005,  # Half filled
+            commission=0.05,
         )
         mock_exchange.get_order_by_client_id.return_value = exchange_order
 
@@ -1401,10 +1402,63 @@ class TestFilledOrderPositionReconciliation:
         # Position tracked in memory
         mock_position_tracker.track_recovered_position.assert_called_once()
 
-        # Journal stays SUBMITTED (order still active on exchange)
-        mock_db.update_order_journal.assert_called_once()
+        # Remaining order cancelled on exchange
+        mock_exchange.cancel_order.assert_called_once_with(
+            exchange_order.order_id, "BTCUSDT"
+        )
+
+        # Journal marked CONFIRMED (filled portion accounted, remainder cancelled)
         journal_kwargs = mock_db.update_order_journal.call_args.kwargs
-        assert journal_kwargs["status"] == "SUBMITTED"
+        assert journal_kwargs["status"] == "CONFIRMED"
+        assert journal_kwargs["fill_price"] == 50000.0
+        assert journal_kwargs["fill_quantity"] == 0.005
+        assert journal_kwargs["commission"] == 0.05
+
+    def test_partially_filled_entry_cancel_failure_still_confirms(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """If cancelling the remainder fails, position is still created and journal confirmed."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 56
+        mock_db.get_current_balance.return_value = 10000.0
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 21,
+                "client_order_id": "atb_BTCUSDT_long_cancel_fail",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.01,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.PARTIALLY_FILLED,
+            average_price=48000.0,
+            filled_quantity=0.003,
+            commission=0.03,
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        mock_exchange.cancel_order.side_effect = Exception("Order already filled")
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+        assert results[0].status == "resolved"
+
+        # Position still created despite cancel failure
+        mock_db.log_position.assert_called_once()
+
+        # Cancel was attempted
+        mock_exchange.cancel_order.assert_called_once()
+
+        # Journal still marked CONFIRMED
+        journal_kwargs = mock_db.update_order_journal.call_args.kwargs
+        assert journal_kwargs["status"] == "CONFIRMED"
 
     def test_partially_filled_non_entry_does_not_create_position(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker

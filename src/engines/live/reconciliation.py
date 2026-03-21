@@ -269,18 +269,11 @@ class PositionReconciler:
         elif eo_status == ExOrderStatus.PARTIALLY_FILLED:
             order_type = order_data.get("order_type", "")
 
-            # Keep journal as SUBMITTED since the order is still active
-            self.db_manager.update_order_journal(
-                client_order_id=order_data["client_order_id"],
-                status="SUBMITTED",
-                exchange_order_id=exchange_order.order_id,
-            )
-            result.status = "resolved"
-            result.severity = Severity.MEDIUM
-
             if order_type == "ENTRY":
                 # Create a position for the filled portion so acquired
-                # inventory is tracked. The order remains active on exchange.
+                # inventory is tracked with a stop-loss. Cancel the remaining
+                # order on exchange to avoid untracked fills — the strategy
+                # can open a new position on the next signal if needed.
                 fill_price = exchange_order.average_price or 0.0
                 fill_qty = exchange_order.filled_quantity or 0.0
                 if fill_price > 0 and fill_qty > 0:
@@ -289,13 +282,52 @@ class PositionReconciler:
                     self._reconcile_filled_entry(
                         order_data, exchange_order, symbol, side, fill_price, fill_qty
                     )
-                    logger.info(
+
+                # Cancel the unfilled remainder on exchange so subsequent
+                # fills do not become untracked inventory without a stop-loss.
+                try:
+                    cancel_symbol = order_data.get("symbol", "")
+                    self.exchange.cancel_order(
+                        exchange_order.order_id, cancel_symbol
+                    )
+                    logger.warning(
                         "Partially filled ENTRY %s: created position for "
-                        "%.6f @ %.2f (order still active)",
+                        "%.6f @ %.2f and CANCELLED remaining order on "
+                        "exchange to prevent untracked fills",
                         order_data["client_order_id"],
                         fill_qty,
                         fill_price,
                     )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to cancel partially filled ENTRY %s on "
+                        "exchange (may already be filled/cancelled): %s",
+                        order_data["client_order_id"],
+                        e,
+                    )
+
+                # Mark CONFIRMED — filled portion is accounted for and
+                # the unfilled remainder has been cancelled.
+                self.db_manager.update_order_journal(
+                    client_order_id=order_data["client_order_id"],
+                    status="CONFIRMED",
+                    exchange_order_id=exchange_order.order_id,
+                    fill_price=fill_price if fill_price > 0 else None,
+                    fill_quantity=fill_qty if fill_qty > 0 else None,
+                    commission=exchange_order.commission,
+                )
+                result.status = "resolved"
+                result.severity = Severity.MEDIUM
+            else:
+                # Non-entry partial fills: keep journal as SUBMITTED since
+                # the order is still active on exchange.
+                self.db_manager.update_order_journal(
+                    client_order_id=order_data["client_order_id"],
+                    status="SUBMITTED",
+                    exchange_order_id=exchange_order.order_id,
+                )
+                result.status = "resolved"
+                result.severity = Severity.MEDIUM
 
         else:
             # Still pending on exchange (NEW, etc.)
