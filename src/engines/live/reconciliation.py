@@ -1368,6 +1368,11 @@ class PositionReconciler:
             qty = getattr(position, "quantity", None) or 0.0
             price = getattr(position, "entry_price", 0)
             if qty > 0 and price > 0:
+                # Scale by current_size/original_size to account for partial exits
+                current = getattr(position, "current_size", None)
+                original = getattr(position, "original_size", None)
+                if current and original and original > 0:
+                    qty = qty * (current / original)
                 total += qty * price
         return total
 
@@ -1824,6 +1829,11 @@ class PeriodicReconciler:
                         qty = getattr(position, "quantity", None) or 0.0
                         price = getattr(position, "entry_price", 0)
                         if qty > 0 and price > 0:
+                            # Scale by current_size/original_size for partial exits
+                            current = getattr(position, "current_size", None)
+                            original = getattr(position, "original_size", None)
+                            if current and original and original > 0:
+                                qty = qty * (current / original)
                             position_notional += qty * price
                     expected_usdt = db_balance - position_notional
                     # Avoid division by zero when all capital is in positions

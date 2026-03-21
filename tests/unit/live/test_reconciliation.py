@@ -1009,8 +1009,8 @@ class TestBalanceAccountsForPositionNotional:
         Scenario: $20,000 DB, two positions totaling $15,000 notional.
         Exchange USDT = $5,000 (correct).
         """
-        pos1 = MockPosition(entry_price=50000.0, current_size=0.1, quantity=0.1, symbol="BTCUSDT")
-        pos2 = MockPosition(entry_price=3000.0, current_size=10.0 / 3, quantity=10.0 / 3, symbol="ETHUSDT")
+        pos1 = MockPosition(entry_price=50000.0, current_size=0.1, original_size=0.1, quantity=0.1, symbol="BTCUSDT")
+        pos2 = MockPosition(entry_price=3000.0, current_size=0.5, original_size=0.5, quantity=10.0 / 3, symbol="ETHUSDT")
         mock_position_tracker.positions = {"pos_1": pos1, "pos_2": pos2}
         mock_exchange.get_balance.return_value = MockBalance(total=5000.0)
         mock_db.get_current_balance.return_value = 20000.0
