@@ -1118,17 +1118,23 @@ class PositionReconciler:
                 filled_qty = getattr(sl_order, "filled_quantity", None) or 0.0
 
                 # If the SL partially executed before cancellation/expiry,
-                # reduce the position size by the filled amount.
+                # compute the remaining held quantity and update position.quantity
+                # to match. After partial exits, the bot holds
+                # `quantity * (current_size / original_size)` of the asset. When
+                # the SL fills some of that, the remaining is held_qty - filled_qty.
                 if filled_qty > 0 and hasattr(position, "quantity") and position.quantity > 0:
                     old_quantity = position.quantity
-                    position.quantity = max(position.quantity - filled_qty, 0.0)
-
-                    # NOTE: Do NOT reduce current_size here. current_size tracks
-                    # the fraction remaining after partial take-profit exits and is
-                    # used together with original_size to scale the replacement SL
-                    # quantity. Reducing current_size AND quantity would double-count
-                    # the SL fill when computing the replacement SL qty at line
-                    # `qty = qty * (current / original)` below.
+                    # Compute what we actually hold before the SL fill
+                    held_qty = position.quantity
+                    current = getattr(position, "current_size", None)
+                    original = getattr(position, "original_size", None)
+                    if current and original and original > 0:
+                        held_qty = position.quantity * (current / original)
+                    # After SL fill, what remains
+                    remaining_qty = max(held_qty - filled_qty, 0.0)
+                    # Update position.quantity to the remaining amount directly.
+                    # The replacement SL uses this quantity without further scaling.
+                    position.quantity = remaining_qty
 
                     partial_audit = AuditEvent(
                         entity_type="position",
@@ -1190,12 +1196,10 @@ class PositionReconciler:
                             or str(side).lower() == "long"
                         )
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                        # Scale quantity by remaining size after partial exits
+                        # position.quantity is already set to the remaining held
+                        # amount (accounting for both partial exits and partial
+                        # SL fills), so no further scaling is needed.
                         qty = getattr(position, "quantity", 0) or 0.0
-                        current = getattr(position, "current_size", None)
-                        original = getattr(position, "original_size", None)
-                        if current and original and original > 0:
-                            qty = qty * (current / original)
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
                             side=sl_side,
@@ -1823,7 +1827,156 @@ class PeriodicReconciler:
                     "Asset holdings check failed for %s: %s", order_key, e
                 )
 
-        # 2. Check for orphaned orders with our prefix
+        # 2. Verify stop-loss orders are still active on exchange
+        for order_key, position in list(positions_snapshot.items()):
+            sl_order_id = getattr(position, "stop_loss_order_id", None)
+            if not sl_order_id:
+                continue
+
+            try:
+                from src.data_providers.exchange_interface import (
+                    OrderStatus as ExOrderStatus,
+                )
+
+                sl_order = self.exchange.get_order(sl_order_id, position.symbol)
+
+                if sl_order and sl_order.status == ExOrderStatus.FILLED:
+                    # SL triggered — remove position from tracker + close in DB
+                    exit_price = (
+                        float(sl_order.average_price)
+                        if sl_order.average_price
+                        else None
+                    )
+                    self.db_manager.log_audit_event(
+                        session_id=self.session_id,
+                        entity_type="position",
+                        entity_id=getattr(position, "db_position_id", None),
+                        field="status",
+                        old_value="OPEN",
+                        new_value="CLOSED_BY_SL",
+                        reason=f"Stop-loss filled @ {exit_price} (periodic check)",
+                        severity=Severity.HIGH.value,
+                    )
+                    self.position_tracker.remove_position(order_key)
+                    db_pos_id = getattr(position, "db_position_id", None)
+                    if db_pos_id is not None:
+                        self.db_manager.close_position(
+                            db_pos_id, exit_price=exit_price
+                        )
+                    logger.warning(
+                        "Stop-loss filled for %s @ %s (periodic check) — "
+                        "removed position %s",
+                        position.symbol,
+                        exit_price,
+                        order_key,
+                    )
+                    if Severity.HIGH > max_severity:
+                        max_severity = Severity.HIGH
+
+                elif (
+                    sl_order
+                    and sl_order.status
+                    in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED)
+                ) or sl_order is None:
+                    # SL cancelled/expired/missing — attempt re-placement
+                    status_desc = (
+                        sl_order.status.value if sl_order else "MISSING"
+                    )
+                    logger.warning(
+                        "Stop-loss %s for %s is %s — attempting re-placement",
+                        sl_order_id,
+                        position.symbol,
+                        status_desc,
+                    )
+                    position.stop_loss_order_id = None
+
+                    stop_price = getattr(position, "stop_loss", None)
+                    if (
+                        stop_price
+                        and hasattr(self.exchange, "place_stop_loss_order")
+                    ):
+                        try:
+                            from src.data_providers.exchange_interface import (
+                                OrderSide,
+                            )
+
+                            side = getattr(position, "side", "long")
+                            side_is_long = (
+                                side == PositionSide.LONG
+                                or str(side).lower() == "long"
+                            )
+                            sl_side = (
+                                OrderSide.SELL if side_is_long else OrderSide.BUY
+                            )
+                            # Compute held qty accounting for partial exits
+                            qty = getattr(position, "quantity", 0) or 0.0
+                            current = getattr(position, "current_size", None)
+                            original = getattr(position, "original_size", None)
+                            if current and original and original > 0:
+                                qty = qty * (current / original)
+                            new_sl_id = self.exchange.place_stop_loss_order(
+                                symbol=position.symbol,
+                                side=sl_side,
+                                quantity=qty,
+                                stop_price=stop_price,
+                            )
+                            if new_sl_id:
+                                position.stop_loss_order_id = new_sl_id
+                                logger.info(
+                                    "Re-placed stop-loss for %s: %s @ %.2f "
+                                    "(periodic check)",
+                                    position.symbol,
+                                    new_sl_id,
+                                    stop_price,
+                                )
+                                db_pos_id = getattr(
+                                    position, "db_position_id", None
+                                )
+                                if db_pos_id is not None:
+                                    try:
+                                        self.db_manager.update_position(
+                                            position_id=db_pos_id,
+                                            stop_loss_order_id=new_sl_id,
+                                        )
+                                    except Exception as e:
+                                        logger.warning(
+                                            "Failed to persist re-placed SL "
+                                            "order ID for %s: %s",
+                                            position.symbol,
+                                            e,
+                                        )
+                            else:
+                                logger.critical(
+                                    "Failed to re-place stop-loss for %s — "
+                                    "position is unprotected (periodic check)",
+                                    position.symbol,
+                                )
+                                max_severity = Severity.CRITICAL
+                        except Exception as e:
+                            logger.critical(
+                                "Exception re-placing stop-loss for %s: %s — "
+                                "position is unprotected (periodic check)",
+                                position.symbol,
+                                e,
+                            )
+                            max_severity = Severity.CRITICAL
+                    else:
+                        logger.critical(
+                            "Cannot re-place stop-loss for %s — no stop_price "
+                            "or exchange does not support SL orders",
+                            position.symbol,
+                        )
+                        max_severity = Severity.CRITICAL
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to verify stop-loss %s for %s: %s",
+                    sl_order_id,
+                    position.symbol,
+                    e,
+                )
+
+        # 3. Check for orphaned orders with our prefix
         try:
             if positions_snapshot:
                 tracked_exchange_ids = set()
@@ -1868,7 +2021,7 @@ class PeriodicReconciler:
         except Exception as e:
             logger.warning("Orphaned order check failed: %s", e)
 
-        # 3. Verify balance (accounting for position notional values)
+        # 4. Verify balance (accounting for position notional values)
         try:
             usdt_balance = self.exchange.get_balance("USDT")
             if usdt_balance:
@@ -1912,7 +2065,7 @@ class PeriodicReconciler:
         except Exception as e:
             logger.warning("Balance check failed: %s", e)
 
-        # 4. Trigger close-only mode on CRITICAL
+        # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:
             try:
                 self.on_critical()
