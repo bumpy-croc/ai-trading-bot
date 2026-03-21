@@ -1140,7 +1140,14 @@ class PositionReconciler:
 
         try:
             balance = self.exchange.get_balance(base_asset)
-            held_qty = balance.total if balance else 0.0
+            if balance is None:
+                logger.warning(
+                    "get_balance returned None for %s — skipping asset check "
+                    "(transient API error)",
+                    base_asset,
+                )
+                return
+            held_qty = balance.total
 
             # If held quantity is less than 50% of tracked quantity,
             # the position was likely closed externally
@@ -1552,7 +1559,14 @@ class PeriodicReconciler:
                     position.symbol
                 )
                 balance = self.exchange.get_balance(base_asset)
-                held_qty = balance.total if balance else 0.0
+                if balance is None:
+                    logger.warning(
+                        "get_balance returned None for %s — skipping asset "
+                        "check (transient API error)",
+                        base_asset,
+                    )
+                    continue
+                held_qty = balance.total
 
                 if held_qty < position_qty * 0.5:
                     severity = Severity.HIGH

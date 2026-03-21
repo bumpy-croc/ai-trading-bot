@@ -832,7 +832,7 @@ class TestAssetHoldingsVerification:
     def test_asset_check_with_no_balance_returned(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
-        """Null balance response triggers external close detection."""
+        """Null balance response skips asset check — position stays open."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         pos = MockPosition(current_size=0.1, db_position_id=14)
@@ -841,9 +841,12 @@ class TestAssetHoldingsVerification:
         mock_exchange.get_balance.return_value = None
 
         result = reconciler.reconcile_position(pos)
-        assert result.status == "corrected"
-        assert result.severity == Severity.HIGH
-        mock_position_tracker.remove_position.assert_called_once()
+        # Position stays open — not corrected or closed
+        assert result.status != "corrected" or not any(
+            "closed externally" in c.reason for c in result.corrections
+        )
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
 
     def test_asset_check_exchange_error_is_handled(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
