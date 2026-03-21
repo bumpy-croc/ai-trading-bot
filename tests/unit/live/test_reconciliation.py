@@ -1457,7 +1457,7 @@ class TestFilledOrderPositionReconciliation:
         results = reconciler.resolve_pending_orders()
         assert len(results) == 1
         assert results[0].status == "resolved"
-        assert results[0].severity == Severity.HIGH
+        assert results[0].severity == Severity.CRITICAL
 
         # Position still created despite cancel failure
         mock_db.log_position.assert_called_once()

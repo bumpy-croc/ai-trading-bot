@@ -337,7 +337,7 @@ class PositionReconciler:
                         commission=exchange_order.commission,
                     )
                     result.status = "resolved"
-                    result.severity = Severity.HIGH
+                    result.severity = Severity.CRITICAL
             else:
                 # Non-entry partial fills: keep journal as SUBMITTED since
                 # the order is still active on exchange.

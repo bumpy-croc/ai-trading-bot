@@ -3653,6 +3653,7 @@ class LiveTradingEngine:
                     unrealized_pnl_percent=float(
                         pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
                     ),
+                    quantity=pos_data.get("quantity"),
                     order_id=tracker_key,  # Backward compat: used as _positions dict key
                     tracker_key=tracker_key,
                     exchange_order_id=entry_order_id,
