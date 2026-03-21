@@ -285,11 +285,20 @@ class PositionReconciler:
 
                 # Cancel the unfilled remainder on exchange so subsequent
                 # fills do not become untracked inventory without a stop-loss.
+                cancel_success = False
                 try:
                     cancel_symbol = order_data.get("symbol", "")
-                    self.exchange.cancel_order(
+                    cancel_success = self.exchange.cancel_order(
                         exchange_order.order_id, cancel_symbol
                     )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to cancel partial entry remainder: %s", e
+                    )
+
+                if cancel_success:
+                    # Safe to mark CONFIRMED — all fills accounted for,
+                    # remainder cancelled.
                     logger.warning(
                         "Partially filled ENTRY %s: created position for "
                         "%.6f @ %.2f and CANCELLED remaining order on "
@@ -298,26 +307,34 @@ class PositionReconciler:
                         fill_qty,
                         fill_price,
                     )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to cancel partially filled ENTRY %s on "
-                        "exchange (may already be filled/cancelled): %s",
-                        order_data["client_order_id"],
-                        e,
+                    self.db_manager.update_order_journal(
+                        client_order_id=order_data["client_order_id"],
+                        status="CONFIRMED",
+                        exchange_order_id=exchange_order.order_id,
+                        fill_price=fill_price if fill_price > 0 else None,
+                        fill_quantity=fill_qty if fill_qty > 0 else None,
+                        commission=exchange_order.commission,
                     )
-
-                # Mark CONFIRMED — filled portion is accounted for and
-                # the unfilled remainder has been cancelled.
-                self.db_manager.update_order_journal(
-                    client_order_id=order_data["client_order_id"],
-                    status="CONFIRMED",
-                    exchange_order_id=exchange_order.order_id,
-                    fill_price=fill_price if fill_price > 0 else None,
-                    fill_quantity=fill_qty if fill_qty > 0 else None,
-                    commission=exchange_order.commission,
-                )
-                result.status = "resolved"
-                result.severity = Severity.MEDIUM
+                    result.status = "resolved"
+                    result.severity = Severity.MEDIUM
+                else:
+                    # Remainder may still be live — leave as SUBMITTED so
+                    # the order stays in the unresolved queue for retry.
+                    logger.warning(
+                        "Could not cancel partial entry %s — remainder "
+                        "may still fill; keeping journal as SUBMITTED",
+                        order_data["client_order_id"],
+                    )
+                    self.db_manager.update_order_journal(
+                        client_order_id=order_data["client_order_id"],
+                        status="SUBMITTED",
+                        exchange_order_id=exchange_order.order_id,
+                        fill_price=fill_price if fill_price > 0 else None,
+                        fill_quantity=fill_qty if fill_qty > 0 else None,
+                        commission=exchange_order.commission,
+                    )
+                    result.status = "resolved"
+                    result.severity = Severity.HIGH
             else:
                 # Non-entry partial fills: keep journal as SUBMITTED since
                 # the order is still active on exchange.
@@ -512,6 +529,20 @@ class PositionReconciler:
                             sl_order_id,
                             position.stop_loss,
                         )
+                        # Persist the SL order ID to DB so it survives restarts
+                        if db_id is not None:
+                            try:
+                                self.db_manager.update_position(
+                                    position_id=db_id,
+                                    stop_loss_order_id=sl_order_id,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "Failed to persist SL order ID for "
+                                    "position %s: %s",
+                                    order_id,
+                                    e,
+                                )
                 except Exception as e:
                     logger.warning(
                         "Failed to place recovery stop-loss for %s: %s",

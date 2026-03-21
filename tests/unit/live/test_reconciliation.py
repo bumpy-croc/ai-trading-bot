@@ -10,7 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -1128,7 +1128,12 @@ class TestFilledOrderPositionReconciliation:
 
         # Default stop-loss should be applied (5% below entry for LONG)
         assert pos_arg.stop_loss == pytest.approx(50000.0 * 0.95)
-        mock_db.update_position.assert_called_once_with(42, stop_loss=pos_arg.stop_loss)
+        # First call persists stop-loss price, second persists SL order ID
+        update_calls = mock_db.update_position.call_args_list
+        assert any(
+            c == call(42, stop_loss=pos_arg.stop_loss)
+            for c in update_calls
+        )
 
     def test_filled_entry_skips_if_position_already_tracked(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -1417,10 +1422,10 @@ class TestFilledOrderPositionReconciliation:
         assert journal_kwargs["fill_quantity"] == 0.005
         assert journal_kwargs["commission"] == 0.05
 
-    def test_partially_filled_entry_cancel_failure_still_confirms(
+    def test_partially_filled_entry_cancel_failure_keeps_submitted(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
-        """If cancelling the remainder fails, position is still created and journal confirmed."""
+        """If cancelling the remainder fails, journal stays SUBMITTED with HIGH severity."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         mock_position_tracker._positions_lock = __import__("threading").Lock()
@@ -1452,6 +1457,7 @@ class TestFilledOrderPositionReconciliation:
         results = reconciler.resolve_pending_orders()
         assert len(results) == 1
         assert results[0].status == "resolved"
+        assert results[0].severity == Severity.HIGH
 
         # Position still created despite cancel failure
         mock_db.log_position.assert_called_once()
@@ -1459,9 +1465,9 @@ class TestFilledOrderPositionReconciliation:
         # Cancel was attempted
         mock_exchange.cancel_order.assert_called_once()
 
-        # Journal still marked CONFIRMED
+        # Journal stays SUBMITTED so the order remains in unresolved queue
         journal_kwargs = mock_db.update_order_journal.call_args.kwargs
-        assert journal_kwargs["status"] == "CONFIRMED"
+        assert journal_kwargs["status"] == "SUBMITTED"
 
     def test_partially_filled_non_entry_does_not_create_position(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -1564,7 +1570,12 @@ class TestFilledOrderPositionReconciliation:
         pos_arg = mock_position_tracker.track_recovered_position.call_args[0][0]
         # SHORT: stop_loss = entry * (1 + 0.05) = 42000.0
         assert pos_arg.stop_loss == pytest.approx(40000.0 * 1.05)
-        mock_db.update_position.assert_called_once_with(55, stop_loss=pos_arg.stop_loss)
+        # First call persists stop-loss price, second persists SL order ID
+        update_calls = mock_db.update_position.call_args_list
+        assert any(
+            c == call(55, stop_loss=pos_arg.stop_loss)
+            for c in update_calls
+        )
 
     def test_filled_entry_db_failure_still_sets_in_memory_stop_loss(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
