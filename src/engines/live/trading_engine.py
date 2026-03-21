@@ -3746,7 +3746,39 @@ class LiveTradingEngine:
 
                 if not positions_snapshot:
                     logger.info("📊 No local positions to reconcile — checking pending orders")
-                    reconciler.resolve_pending_orders()
+                    results = reconciler.resolve_pending_orders()
+
+                    # Process results even with no positions — a filled entry
+                    # order may create a position, and critical issues must
+                    # still trigger close-only mode.
+                    critical_count = sum(
+                        1 for r in results if r.severity == Severity.CRITICAL
+                    )
+                    if critical_count > 0:
+                        logger.critical(
+                            "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
+                            critical_count,
+                        )
+                        self._close_only_mode = True
+
+                    for r in results:
+                        if r.status == "corrected" and r.severity >= Severity.HIGH:
+                            for correction in r.corrections:
+                                logger.warning(
+                                    "⚠️ Auto-corrected %s #%s: %s",
+                                    r.entity_type,
+                                    r.entity_id,
+                                    correction.reason,
+                                )
+
+                    if results:
+                        corrections = sum(len(r.corrections) for r in results)
+                        logger.info(
+                            "✅ Pending order resolution complete: %d results, %d corrections, %d critical",
+                            len(results),
+                            corrections,
+                            critical_count,
+                        )
                     return
 
                 logger.info("🔄 Reconciling %s positions with exchange...", len(positions_snapshot))

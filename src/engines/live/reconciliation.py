@@ -213,10 +213,21 @@ class PositionReconciler:
                 commission=exchange_order.commission,
             )
 
-            # Reconcile position state for filled orders
-            self._reconcile_filled_order_position(order_data, exchange_order)
+            # Reconcile position state for filled orders. Only mark
+            # CONFIRMED after successful position repair — if repair fails
+            # the order stays as SUBMITTED so the next restart retries.
+            try:
+                self._reconcile_filled_order_position(order_data, exchange_order)
+            except Exception as e:
+                logger.warning(
+                    "Position repair failed for order %s, leaving as SUBMITTED: %s",
+                    order_data["client_order_id"],
+                    e,
+                )
+                result.status = "unresolved"
+                result.severity = Severity.CRITICAL
+                return result
 
-            # Only mark CONFIRMED after successful position repair
             self.db_manager.update_order_journal(
                 client_order_id=order_data["client_order_id"],
                 status="CONFIRMED",
@@ -429,6 +440,7 @@ class PositionReconciler:
                 client_order_id,
                 e,
             )
+            raise
 
     def _reconcile_filled_exit(
         self, order_data: dict, fill_price: float
@@ -487,6 +499,7 @@ class PositionReconciler:
                 client_order_id,
                 e,
             )
+            raise
 
     def _reconcile_filled_partial_exit(
         self, order_data: dict, fill_price: float
@@ -556,6 +569,7 @@ class PositionReconciler:
                 client_order_id,
                 e,
             )
+            raise
 
     def _handle_not_found_order(
         self, order_data: dict, status: str, result: ReconciliationResult
