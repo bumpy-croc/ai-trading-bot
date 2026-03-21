@@ -47,7 +47,7 @@ class TestMonitoringDashboard:
             assert dashboard.db_manager is not None
             assert dashboard.data_provider is not None
             assert not dashboard.is_running
-            assert dashboard.update_interval == 3600
+            assert dashboard.update_interval == 30
 
     def test_dashboard_initialization_with_offline_mode(self):
         """Test dashboard initialization when Binance is unavailable"""
