@@ -23,6 +23,7 @@ from src.config.constants import (
     DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
     DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN,
     DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
+    DEFAULT_STOP_LOSS_PCT,
 )
 
 if TYPE_CHECKING:
@@ -428,6 +429,36 @@ class PositionReconciler:
 
             # Track in memory
             self.position_tracker.track_recovered_position(position, db_id)
+
+            # Apply a conservative default stop-loss so the recovered position
+            # is never unprotected. The strategy may tighten this later.
+            if side == "SHORT":
+                default_stop = fill_price * (1.0 + DEFAULT_STOP_LOSS_PCT)
+            else:
+                default_stop = fill_price * (1.0 - DEFAULT_STOP_LOSS_PCT)
+            position.stop_loss = default_stop
+            logger.warning(
+                "Recovered position %s has no stop-loss; applied default "
+                "%.2f%% stop at %.4f (entry=%.4f, side=%s)",
+                order_id,
+                DEFAULT_STOP_LOSS_PCT * 100,
+                default_stop,
+                fill_price,
+                side,
+            )
+
+            # Persist the default stop-loss to the database
+            if db_id is not None:
+                try:
+                    self.db_manager.update_position(db_id, stop_loss=default_stop)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to persist default stop-loss for recovered "
+                        "position %s: %s",
+                        order_id,
+                        e,
+                    )
+
             logger.info(
                 "Reconciled filled ENTRY %s: created position %s (db_id=%s)",
                 client_order_id,

@@ -1123,6 +1123,10 @@ class TestFilledOrderPositionReconciliation:
         db_id_arg = mock_position_tracker.track_recovered_position.call_args[0][1]
         assert db_id_arg == 42
 
+        # Default stop-loss should be applied (5% below entry for LONG)
+        assert pos_arg.stop_loss == pytest.approx(50000.0 * 0.95)
+        mock_db.update_position.assert_called_once_with(42, stop_loss=pos_arg.stop_loss)
+
     def test_filled_entry_skips_if_position_already_tracked(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
@@ -1470,3 +1474,72 @@ class TestFilledOrderPositionReconciliation:
         mock_db.log_position.assert_not_called()
         mock_position_tracker.track_recovered_position.assert_not_called()
         mock_position_tracker.remove_position.assert_not_called()
+
+    def test_filled_entry_short_gets_stop_loss_above_entry(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """SHORT recovered position gets stop-loss above entry price."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 55
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 7,
+                "client_order_id": "atb_BTCUSDT_short_1234_abcd",
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "quantity": 0.002,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=40000.0, filled_quantity=0.002
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        reconciler.resolve_pending_orders()
+
+        pos_arg = mock_position_tracker.track_recovered_position.call_args[0][0]
+        # SHORT: stop_loss = entry * (1 + 0.05) = 42000.0
+        assert pos_arg.stop_loss == pytest.approx(40000.0 * 1.05)
+        mock_db.update_position.assert_called_once_with(55, stop_loss=pos_arg.stop_loss)
+
+    def test_filled_entry_db_failure_still_sets_in_memory_stop_loss(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """If DB log_position fails, stop-loss is still set in memory."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.side_effect = Exception("DB connection lost")
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 8,
+                "client_order_id": "atb_BTCUSDT_long_5555_ffff",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=60000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        reconciler.resolve_pending_orders()
+
+        pos_arg = mock_position_tracker.track_recovered_position.call_args[0][0]
+        # Stop-loss set in memory even though DB failed
+        assert pos_arg.stop_loss == pytest.approx(60000.0 * 0.95)
+        # update_position should NOT be called since db_id is None
+        mock_db.update_position.assert_not_called()
