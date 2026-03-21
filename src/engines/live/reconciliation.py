@@ -855,6 +855,27 @@ class PositionReconciler:
                 exchange_order = self.exchange.get_order(exchange_order_id, symbol)
             except Exception as e:
                 logger.warning("Failed to verify entry order %s: %s", exchange_order_id, e)
+            # If exchange_order_id is actually a client_order_id (phantom from timeout),
+            # fall back to client_id lookup
+            if exchange_order is None and exchange_order_id.startswith("atb"):
+                try:
+                    exchange_order = self.exchange.get_order_by_client_id(
+                        exchange_order_id, symbol
+                    )
+                    if exchange_order:
+                        # Update to real exchange order ID
+                        position.exchange_order_id = exchange_order.order_id
+                        logger.info(
+                            "Resolved phantom exchange_order_id %s to real order %s",
+                            exchange_order_id,
+                            exchange_order.order_id,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to resolve phantom order %s by client_id: %s",
+                        exchange_order_id,
+                        e,
+                    )
         elif client_order_id:
             try:
                 exchange_order = self.exchange.get_order_by_client_id(
@@ -1038,7 +1059,12 @@ class PositionReconciler:
                             or str(side).lower() == "long"
                         )
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                        qty = getattr(position, "quantity", 0)
+                        # Scale quantity by remaining size after partial exits
+                        qty = getattr(position, "quantity", 0) or 0.0
+                        current = getattr(position, "current_size", None)
+                        original = getattr(position, "original_size", None)
+                        if current and original and original > 0:
+                            qty = qty * (current / original)
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
                             side=sl_side,
@@ -1168,7 +1194,12 @@ class PositionReconciler:
                             or str(side).lower() == "long"
                         )
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                        qty = getattr(position, "quantity", 0)
+                        # Scale quantity by remaining size after partial exits
+                        qty = getattr(position, "quantity", 0) or 0.0
+                        current = getattr(position, "current_size", None)
+                        original = getattr(position, "original_size", None)
+                        if current and original and original > 0:
+                            qty = qty * (current / original)
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
                             side=sl_side,
