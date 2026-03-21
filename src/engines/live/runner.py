@@ -23,9 +23,9 @@ from src.infrastructure.logging.config import configure_logging
 from src.risk.risk_manager import RiskParameters
 
 # Import strategies
-from src.strategies.ml_basic import create_ml_basic_strategy
 from src.strategies.chaos_test import create_chaos_test_strategy
 from src.strategies.hyper_growth import create_hyper_growth_strategy
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 # Configure logging
 configure_logging()
@@ -35,9 +35,9 @@ logger = logging.getLogger("live_trading")
 def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
-        "ml_basic": create_ml_basic_strategy,
-        "hyper_growth": create_hyper_growth_strategy,
         "chaos_test": create_chaos_test_strategy,
+        "hyper_growth": create_hyper_growth_strategy,
+        "ml_basic": create_ml_basic_strategy,
     }
 
     # Lazy import for optional strategies to keep startup fast

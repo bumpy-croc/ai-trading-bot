@@ -28,9 +28,8 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from sqlalchemy import create_engine, desc, func, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -60,20 +59,6 @@ logger = logging.getLogger("chaos_smoke_test")
 # Helpers
 # ---------------------------------------------------------------------------
 
-_VALID_LIFECYCLE_TRANSITIONS = {
-    # status -> set of valid next statuses
-    OrderStatus.PENDING: {
-        OrderStatus.OPEN,
-        OrderStatus.FILLED,
-        OrderStatus.CANCELLED,
-        OrderStatus.FAILED,
-    },
-    OrderStatus.OPEN: {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.FAILED},
-    OrderStatus.FILLED: set(),
-    OrderStatus.CANCELLED: set(),
-    OrderStatus.FAILED: set(),
-}
-
 
 def _get_db_session(database_url: str) -> Session:
     """Create a SQLAlchemy session from a DATABASE_URL."""
@@ -83,7 +68,7 @@ def _get_db_session(database_url: str) -> Session:
 
 
 def _poll_until(
-    predicate: Any,
+    predicate: Callable[[], bool],
     timeout: float,
     interval: float = 5.0,
     description: str = "condition",
@@ -199,8 +184,7 @@ def phase_journal(
             if not order.internal_order_id:
                 errors.append(f"Order id={order.id} missing internal_order_id")
 
-            # Verify status is a valid terminal or in-progress state
-            if order.status not in {s for s in OrderStatus}:
+            if order.status not in set(OrderStatus):
                 errors.append(f"Order id={order.id} has invalid status: {order.status}")
 
         if errors:
@@ -217,7 +201,7 @@ def phase_journal(
                 {"start": run_start},
             )
             audit_count = result.scalar()
-            if audit_count and audit_count > 0:
+            if audit_count:
                 logger.warning(
                     "Found %d reconciliation audit events (expected 0 in clean run)", audit_count
                 )
@@ -314,18 +298,13 @@ def _validate_crash_recovery(db: Session, timeout: float) -> bool:
 
     def _post_restart_activity() -> bool:
         db.expire_all()
-        # Look for either a recovered position or a new trade
-        recent_session = (
+        return (
             db.query(TradingSession)
             .filter(TradingSession.strategy_name == "ChaosTest")
             .filter(TradingSession.is_active.is_(True))
             .order_by(desc(TradingSession.start_time))
             .first()
-        )
-        if not recent_session:
-            return False
-        # Session exists and is active -- bot is running
-        return True
+        ) is not None
 
     if not _poll_until(_post_restart_activity, timeout, description="post-restart activity"):
         logger.error("Bot did not resume trading after restart")
@@ -569,14 +548,10 @@ def main() -> int:
 
     # Summary
     logger.info("\n=== Smoke Test Results ===")
-    all_passed = True
     for phase_name, passed in results.items():
-        status = "PASS" if passed else "FAIL"
-        logger.info("  %-10s %s", phase_name, status)
-        if not passed:
-            all_passed = False
+        logger.info("  %-10s %s", phase_name, "PASS" if passed else "FAIL")
 
-    return 0 if all_passed else 1
+    return 0 if all(results.values()) else 1
 
 
 if __name__ == "__main__":

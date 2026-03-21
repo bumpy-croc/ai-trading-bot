@@ -10,7 +10,7 @@ NOT for production use -- paper trading validation only.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -82,7 +82,7 @@ class ChaosSignalGenerator(SignalGenerator):
         self,
         df: pd.DataFrame,
         index: int,
-        regime: Optional["RegimeContext"] = None,
+        regime: "RegimeContext | None" = None,
     ) -> Signal:
         """Generate a trading signal based on RSI with forced alternation.
 
