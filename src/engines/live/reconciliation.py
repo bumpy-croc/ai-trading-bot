@@ -563,14 +563,52 @@ class PositionReconciler:
                     )
 
                 if not sl_placed:
-                    # Emergency-close: remove from tracker and close in DB.
-                    # The position can be re-entered on the next signal.
+                    # Emergency-close: sell on exchange, remove from tracker,
+                    # and close in DB. The position can be re-entered on the
+                    # next signal.
                     logger.critical(
                         "Recovery SL placement failed for %s (order_id=%s) — "
-                        "removing unprotected position from tracker and DB",
+                        "emergency-closing on exchange and removing from "
+                        "tracker and DB",
                         symbol,
                         order_id,
                     )
+
+                    # Attempt to actually sell the asset on exchange
+                    try:
+                        from src.data_providers.exchange_interface import (
+                            OrderSide,
+                            OrderType,
+                        )
+
+                        sell_side = (
+                            OrderSide.SELL
+                            if side_lower == "long"
+                            else OrderSide.BUY
+                        )
+                        self.exchange.place_order(
+                            symbol=symbol,
+                            side=sell_side,
+                            order_type=OrderType.MARKET,
+                            quantity=fill_qty,
+                        )
+                        logger.critical(
+                            "Emergency-closed recovered %s position on "
+                            "exchange (qty=%.8f, side=%s)",
+                            symbol,
+                            fill_qty,
+                            sell_side,
+                        )
+                    except Exception as sell_err:
+                        logger.critical(
+                            "CRITICAL: Emergency sell FAILED for %s "
+                            "(qty=%.8f). MANUAL INTERVENTION REQUIRED. "
+                            "Error: %s",
+                            symbol,
+                            fill_qty,
+                            sell_err,
+                        )
+
                     self.position_tracker.remove_position(order_id)
                     if db_id is not None:
                         try:
