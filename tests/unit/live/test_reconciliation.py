@@ -23,6 +23,8 @@ from src.engines.live.reconciliation import (
     classify_severity,
 )
 
+pytestmark = pytest.mark.fast
+
 
 # ---------- Test Fixtures ----------
 
@@ -499,8 +501,7 @@ class TestAuditEvents:
 
         reconciler.reconcile_position(pos)
         mock_db.log_audit_event.assert_called()
-        call_kwargs = mock_db.log_audit_event.call_args
-        assert call_kwargs[1]["severity"] == "HIGH" or call_kwargs.kwargs.get("severity") == "HIGH"
+        assert mock_db.log_audit_event.call_args.kwargs["severity"] == "HIGH"
 
     def test_audit_event_contains_before_after(self, reconciler, mock_db):
         """Audit events contain old_value and new_value."""
@@ -527,18 +528,45 @@ class TestCloseOnlyMode:
     """Tests for close-only mode behavior in trading engine context."""
 
     def test_close_only_mode_skips_entries(self):
-        """Close-only mode prevents new entry signals."""
-        # Minimal mock of _check_entry_conditions behavior
-        close_only = True
-        entry_should_proceed = not close_only
-        assert entry_should_proceed is False
+        """Close-only mode causes _check_entry_conditions to return early."""
+        from src.engines.live.trading_engine import LiveTradingEngine
+
+        engine = MagicMock(spec=LiveTradingEngine)
+        engine._close_only_mode = True
+        # Call the real method on the mock instance
+        LiveTradingEngine._check_entry_conditions(
+            engine,
+            df=MagicMock(),
+            current_index=0,
+            symbol="BTCUSDT",
+            current_price=50000.0,
+            current_time=datetime.now(UTC),
+        )
+        # _is_runtime_strategy should NOT be called — early return before it
+        engine._is_runtime_strategy.assert_not_called()
 
     def test_close_only_mode_allows_exits(self):
-        """Close-only mode still allows exit operations."""
-        # Exit logic runs regardless of close_only_mode
-        close_only = True
-        exit_should_proceed = True  # Exits always run
-        assert exit_should_proceed is True
+        """Close-only mode does not block when disabled (entry check proceeds)."""
+        from src.engines.live.trading_engine import LiveTradingEngine
+
+        engine = MagicMock(spec=LiveTradingEngine)
+        engine._close_only_mode = False
+        # The method will proceed past the guard and call _is_runtime_strategy.
+        # Let it raise to short-circuit the rest — we only care that the guard
+        # did NOT block execution.
+        engine._is_runtime_strategy.side_effect = StopIteration("short-circuit")
+
+        with pytest.raises(StopIteration):
+            LiveTradingEngine._check_entry_conditions(
+                engine,
+                df=MagicMock(),
+                current_index=0,
+                symbol="BTCUSDT",
+                current_price=50000.0,
+                current_time=datetime.now(UTC),
+            )
+        # _is_runtime_strategy IS called — not blocked by close-only mode
+        engine._is_runtime_strategy.assert_called_once()
 
 
 # ---------- _find_matching_order Tests ----------

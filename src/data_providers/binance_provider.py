@@ -907,9 +907,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             error_msg = str(e)
             error_code = getattr(e, "code", None)
 
-            # Check if this is a duplicate client order ID error (idempotency)
+            # Check if this is a duplicate client order ID error (idempotency).
+            # Require BOTH conditions: -2010 alone covers other rejections
+            # (insufficient balance, etc.) that are NOT duplicates.
             if client_order_id and (
-                "Duplicate order sent" in error_msg or error_code == -2010
+                "Duplicate order sent" in error_msg and error_code == -2010
             ):
                 logger.warning(
                     f"Duplicate client order ID detected: {client_order_id}. "

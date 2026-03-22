@@ -649,6 +649,9 @@ class LiveExecutionEngine:
                     )
                 except Exception as e:
                     logger.warning("Failed to journal entry order: %s", e)
+                    # Journal failure means no crash-recovery anchor exists.
+                    # Proceeding would risk a phantom position on restart.
+                    return None, None
 
             try:
                 order_result = self.exchange_interface.place_order(
@@ -778,6 +781,9 @@ class LiveExecutionEngine:
                     )
                 except Exception as e:
                     logger.warning("Failed to journal exit order: %s", e)
+                    # Journal failure means no crash-recovery anchor exists.
+                    # Proceeding would risk losing track of the exit on restart.
+                    return None
 
             close_result = self.exchange_interface.place_order(
                 symbol=symbol,

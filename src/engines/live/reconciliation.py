@@ -819,6 +819,9 @@ class PositionReconciler:
                 continue
 
             # Filter: timestamp within window
+            # Normalize created_at to UTC-aware before comparison
+            if created_at and created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
             if created_at and hasattr(order, "create_time") and order.create_time:
                 time_diff = abs((order.create_time - created_at).total_seconds())
                 if time_diff > time_window.total_seconds():
@@ -1446,8 +1449,10 @@ class PositionReconciler:
                 # Subtract position notional to get expected USDT on exchange
                 position_notional = self._estimate_position_notional()
                 expected_usdt = db_balance - position_notional
-                # Avoid division by zero when all capital is in positions
-                comparison_base = max(expected_usdt, db_balance * 0.01)
+                # Use abs(expected_usdt) to avoid false CRITICAL when
+                # expected_usdt is negative (e.g. position notional > db_balance
+                # due to price appreciation)
+                comparison_base = max(abs(expected_usdt), db_balance * 0.01)
                 diff_pct = abs(exchange_total - expected_usdt) / comparison_base
                 if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
                     audit = AuditEvent(
@@ -1476,9 +1481,12 @@ class PositionReconciler:
                         db_balance,
                         position_notional,
                     )
-                    # Correct DB balance to match actual exchange capital
+                    # Correct DB balance to match actual total capital.
+                    # DB balance represents total capital (USDT + position notional),
+                    # not just free USDT on exchange.
+                    corrected_balance = exchange_total + position_notional
                     self.db_manager.update_balance(
-                        exchange_total,
+                        corrected_balance,
                         "reconciliation_balance_correction",
                         "system",
                         self.session_id,
@@ -1759,7 +1767,12 @@ class PeriodicReconciler:
             except Exception as e:
                 logger.warning("Failed to verify position %s: %s", order_key, e)
 
-        # 1b. Verify asset holdings for each position — detect external closes
+        # 1b. Verify asset holdings for each position — detect external closes.
+        # NOTE: This per-position check compares held asset balance against the
+        # individual position's quantity. For a single-symbol bot (at most 1
+        # position per asset), this is correct. If multi-position-per-asset
+        # support is added, the check must aggregate tracked quantities before
+        # comparing against the exchange balance.
         for order_key, position in list(positions_snapshot.items()):
             # Use quantity (actual asset amount), not size (balance fraction).
             # Scale by current_size/original_size to account for partial exits
@@ -1823,7 +1836,7 @@ class PeriodicReconciler:
                     if severity > max_severity:
                         max_severity = severity
             except Exception as e:
-                logger.debug(
+                logger.warning(
                     "Asset holdings check failed for %s: %s", order_key, e
                 )
 
@@ -1976,11 +1989,15 @@ class PeriodicReconciler:
                     e,
                 )
 
-        # 3. Check for orphaned orders with our prefix
+        # 3. Check for orphaned orders with our prefix.
+        # Rebuild tracked IDs from a fresh position snapshot so that any
+        # positions closed during steps 1-2 are excluded, preventing
+        # cancellation of valid stop-loss orders on newly opened positions.
         try:
-            if positions_snapshot:
+            fresh_snapshot = self.position_tracker.positions
+            if fresh_snapshot:
                 tracked_exchange_ids = set()
-                for pos in positions_snapshot.values():
+                for pos in fresh_snapshot.values():
                     eid = getattr(pos, "exchange_order_id", None)
                     if eid:
                         tracked_exchange_ids.add(eid)
@@ -1989,7 +2006,7 @@ class PeriodicReconciler:
                         tracked_exchange_ids.add(sl_id)
 
                 # Query open orders for every symbol with active positions
-                symbols = set(pos.symbol for pos in positions_snapshot.values())
+                symbols = set(pos.symbol for pos in fresh_snapshot.values())
                 for symbol in symbols:
                     open_orders = self.exchange.get_open_orders(symbol)
                     for order in open_orders:
@@ -2041,8 +2058,10 @@ class PeriodicReconciler:
                                 qty = qty * (current / original)
                             position_notional += qty * price
                     expected_usdt = db_balance - position_notional
-                    # Avoid division by zero when all capital is in positions
-                    comparison_base = max(expected_usdt, db_balance * 0.01)
+                    # Use abs(expected_usdt) to avoid false CRITICAL when
+                    # expected_usdt is negative (e.g. position notional >
+                    # db_balance due to price appreciation)
+                    comparison_base = max(abs(expected_usdt), db_balance * 0.01)
                     diff_pct = abs(usdt_balance.total - expected_usdt) / comparison_base
                     if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
                         max_severity = Severity.CRITICAL
@@ -2055,9 +2074,12 @@ class PeriodicReconciler:
                             db_balance,
                             position_notional,
                         )
-                        # Correct DB balance to match actual exchange capital
+                        # Correct DB balance to match actual total capital.
+                        # DB balance represents total capital (USDT + position
+                        # notional), not just free USDT on exchange.
+                        corrected_balance = usdt_balance.total + position_notional
                         self.db_manager.update_balance(
-                            usdt_balance.total,
+                            corrected_balance,
                             "reconciliation_balance_correction",
                             "system",
                             self.session_id,
