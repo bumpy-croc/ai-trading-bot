@@ -827,7 +827,7 @@ class PositionReconciler:
         qty = getattr(position, "quantity", 0) or 0.0
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current and original and original > 0:
+        if current is not None and original is not None and original > 0:
             qty = qty * (current / original)
 
         if qty <= 0:
@@ -1126,7 +1126,7 @@ class PositionReconciler:
                     qty = getattr(position, "quantity", 0) or 0.0
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    if current and original and original > 0:
+                    if current is not None and original is not None and original > 0:
                         qty = qty * (current / original)
                     new_sl_id = self.exchange.place_stop_loss_order(
                         symbol=position.symbol,
@@ -1338,7 +1338,7 @@ class PositionReconciler:
                         qty = getattr(position, "quantity", 0) or 0.0
                         current = getattr(position, "current_size", None)
                         original = getattr(position, "original_size", None)
-                        if current and original and original > 0:
+                        if current is not None and original is not None and original > 0:
                             qty = qty * (current / original)
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
@@ -1637,7 +1637,7 @@ class PositionReconciler:
 
         current_size = getattr(position, "current_size", None)
         original_size = getattr(position, "original_size", None)
-        if current_size and original_size and original_size > 0:
+        if current_size is not None and original_size is not None and original_size > 0:
             position_qty = qty * (current_size / original_size)
         else:
             position_qty = qty
@@ -1751,7 +1751,7 @@ class PositionReconciler:
                 # Scale by current_size/original_size to account for partial exits
                 current = getattr(position, "current_size", None)
                 original = getattr(position, "original_size", None)
-                if current and original and original > 0:
+                if current is not None and original is not None and original > 0:
                     qty = qty * (current / original)
                 total += qty * price
         return total
@@ -1871,7 +1871,7 @@ class PositionReconciler:
         # P&L on the full original quantity, doubling the realized amount.
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current and original and original > 0:
+        if current is not None and original is not None and original > 0:
             qty = qty * (current / original)
 
         # Calculate realized P&L (long: sell higher = profit)
@@ -2121,7 +2121,7 @@ class PeriodicReconciler:
 
             current_size = getattr(position, "current_size", None)
             original_size = getattr(position, "original_size", None)
-            if current_size and original_size and original_size > 0:
+            if current_size is not None and original_size is not None and original_size > 0:
                 position_qty = qty * (current_size / original_size)
             else:
                 position_qty = qty
@@ -2433,7 +2433,7 @@ class PeriodicReconciler:
                             # Scale by current_size/original_size for partial exits
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if current and original and original > 0:
+                            if current is not None and original is not None and original > 0:
                                 qty = qty * (current / original)
                             position_notional += qty * price
                     expected_usdt = db_balance - position_notional
@@ -2521,7 +2521,7 @@ class PeriodicReconciler:
             qty = getattr(position, "quantity", 0) or 0.0
             current = getattr(position, "current_size", None)
             original = getattr(position, "original_size", None)
-            if current and original and original > 0:
+            if current is not None and original is not None and original > 0:
                 qty = qty * (current / original)
 
             new_sl_id = self.exchange.place_stop_loss_order(
