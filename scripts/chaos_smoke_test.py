@@ -381,13 +381,12 @@ def _validate_crash_recovery(
 
         # If we know the pre-crash session, verify the engine reused it
         if expected_session_id is not None and session.id != expected_session_id:
-            logger.warning(
-                "Engine created new session %d instead of recovering session %d",
+            logger.error(
+                "FAIL: Engine created new session %d instead of recovering session %d",
                 session.id,
                 expected_session_id,
             )
-            # Still allow progress check on new session (engine may have
-            # legitimately started fresh if crash was too old)
+            return False
 
         trade_count = (
             db.query(func.count(Trade.id))
