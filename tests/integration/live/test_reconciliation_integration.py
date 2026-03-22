@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
@@ -123,7 +124,8 @@ class TestReconciliationIntegration:
             interval=1,
             on_critical=on_critical,
         )
-        return pr
+        yield pr
+        pr.stop()
 
     # ---------- helpers ----------
 
@@ -235,12 +237,12 @@ class TestReconciliationIntegration:
         results = reconciler.resolve_pending_orders()
 
         # Assert
-        assert len(results) >= 1
+        assert len(results) == 1
         resolved = [r for r in results if r.status == "resolved"]
-        assert len(resolved) >= 1
+        assert len(resolved) == 1
 
         # Position tracked in memory
-        assert len(position_tracker.positions) >= 1
+        assert len(position_tracker.positions) == 1
 
         # SL placed on exchange
         mock_exchange.place_stop_loss_order.assert_called()
@@ -263,7 +265,7 @@ class TestReconciliationIntegration:
         results = reconciler.resolve_pending_orders()
 
         # Assert
-        assert len(results) >= 1
+        assert len(results) == 1
         assert results[0].status == "resolved"
 
         # No position created
@@ -283,7 +285,7 @@ class TestReconciliationIntegration:
         results = reconciler.resolve_pending_orders()
 
         # Assert
-        assert len(results) >= 1
+        assert len(results) == 1
         assert results[0].status == "resolved"
         assert results[0].severity == Severity.LOW
 
@@ -314,7 +316,7 @@ class TestReconciliationIntegration:
         results = reconciler.resolve_pending_orders()
 
         # Assert
-        assert len(results) >= 1
+        assert len(results) == 1
         assert results[0].status == "unresolved"
         assert results[0].severity == Severity.CRITICAL
 
@@ -348,12 +350,13 @@ class TestReconciliationIntegration:
         # This is expected behavior: the position is still tracked in memory.
         try:
             reconciler.resolve_pending_orders()
-        except Exception:
-            # DB integrity errors may propagate; verify side effects anyway
+        except IntegrityError:
+            # DB integrity errors may propagate from UNIQUE constraint on
+            # exchange_order_id; verify side effects anyway
             pass
 
         # Assert — position tracked in memory regardless of DB integrity issues
-        assert len(position_tracker.positions) >= 1
+        assert len(position_tracker.positions) == 1
 
         # Remainder cancelled on exchange
         mock_exchange.cancel_order.assert_called()
@@ -835,14 +838,11 @@ class TestReconciliationIntegration:
         mock_exchange.place_stop_loss_order.assert_called()
         call_kwargs = mock_exchange.place_stop_loss_order.call_args
         expected_stop = 50000.0 * (1.0 - DEFAULT_STOP_LOSS_PCT)
-        # Check stop_price is close to expected default
-        actual_stop = call_kwargs.kwargs.get(
-            "stop_price", call_kwargs[1].get("stop_price") if len(call_kwargs) > 1 else None
-        )
-        if actual_stop is None and call_kwargs.args:
-            # positional arg
-            actual_stop = call_kwargs.kwargs.get("stop_price")
-        assert actual_stop is not None
+        # Check stop_price is close to expected default — try kwargs first, then positional
+        actual_stop = call_kwargs.kwargs.get("stop_price")
+        if actual_stop is None and len(call_kwargs.args) > 2:
+            actual_stop = call_kwargs.args[2]
+        assert actual_stop is not None, f"stop_price not found in call_args: {call_kwargs}"
         assert abs(actual_stop - expected_stop) < 1.0
 
     def test_filled_entry_emergency_close_on_sl_failure(
