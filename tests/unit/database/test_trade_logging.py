@@ -1,11 +1,12 @@
 """Trade and position logging tests for DatabaseManager."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import pytest
 
-from src.database.models import PositionSide, PositionStatus
+from src.database.models import OrderStatus, PositionSide, PositionStatus
 
 pytestmark = pytest.mark.unit
 
@@ -76,6 +77,54 @@ class TestTradeLogging:
         )
 
         mock_postgresql_db._mock_session.commit.assert_called()
+
+    def test_log_position_reuses_existing_journal_entry(self, mock_postgresql_db):
+        """Regression: log_position must update an existing journal Order
+        (created by create_order_journal_entry) instead of inserting a duplicate
+        row, which would violate the exchange_order_id UNIQUE constraint."""
+        mock_position_obj = Mock()
+        mock_position_obj.id = 101
+        mock_position_obj.session_id = 1
+
+        # Simulate an existing journal Order row with matching client_order_id
+        existing_journal = Mock()
+        existing_journal.client_order_id = "atb_abc123"
+        existing_journal.status = OrderStatus.PENDING_SUBMIT
+
+        mock_query = Mock()
+        # First query call: Order lookup by client_order_id returns the journal
+        # Second query call would be for other queries
+        mock_query.filter.return_value.first.return_value = existing_journal
+        mock_postgresql_db._mock_session.query.return_value = mock_query
+
+        with patch("src.database.manager.Position") as mock_position_class:
+            mock_position_class.return_value = mock_position_obj
+
+            mock_postgresql_db.log_position(
+                symbol="BTCUSDT",
+                side="LONG",
+                entry_price=45000.0,
+                size=0.1,
+                strategy_name="TestStrategy",
+                entry_order_id="exch_order_999",
+                client_order_id="atb_abc123",
+            )
+
+        # The existing journal row should be updated, not a new one added
+        assert existing_journal.position_id == 101
+        assert existing_journal.status == OrderStatus.FILLED
+        assert existing_journal.exchange_order_id == "exch_order_999"
+        assert existing_journal.filled_quantity == Decimal("0.1")
+        assert existing_journal.filled_price == Decimal("45000.0")
+        assert existing_journal.filled_at is not None
+
+        # Verify no duplicate Order row was inserted via session.add for an Order
+        # (session.add is called for Position, but NOT for a second Order)
+        add_calls = mock_postgresql_db._mock_session.add.call_args_list
+        added_types = [type(c[0][0]).__name__ for c in add_calls]
+        assert (
+            added_types.count("Order") == 0
+        ), f"Expected no new Order added when journal exists, got: {added_types}"
 
     def test_close_position(self, mock_postgresql_db):
         """Test closing a position"""

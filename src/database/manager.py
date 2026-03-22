@@ -980,7 +980,11 @@ class DatabaseManager:
                 if client_order_id:
                     entry_order = (
                         session.query(Order)
-                        .filter(Order.client_order_id == client_order_id)
+                        .filter(
+                            Order.client_order_id == client_order_id,
+                            Order.symbol == symbol,
+                            Order.order_type == OrderType.ENTRY,
+                        )
                         .first()
                     )
 
@@ -3468,11 +3472,7 @@ class DatabaseManager:
             status = OrderStatus[status.upper()]
 
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
-            order = (
-                session.query(Order)
-                .filter(Order.client_order_id == client_order_id)
-                .first()
-            )
+            order = session.query(Order).filter(Order.client_order_id == client_order_id).first()
             if not order:
                 logger.warning("No order found for client_order_id=%s", client_order_id)
                 return False
