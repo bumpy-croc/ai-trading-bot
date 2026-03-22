@@ -1,7 +1,8 @@
 """Trade and position logging tests for DatabaseManager."""
 
 from datetime import UTC, datetime
-from unittest.mock import Mock, call, patch
+from decimal import Decimal
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -113,6 +114,17 @@ class TestTradeLogging:
         assert existing_journal.position_id == 101
         assert existing_journal.status == OrderStatus.FILLED
         assert existing_journal.exchange_order_id == "exch_order_999"
+        assert existing_journal.filled_quantity == Decimal("0.1")
+        assert existing_journal.filled_price == Decimal("45000.0")
+        assert existing_journal.filled_at is not None
+
+        # Verify no duplicate Order row was inserted via session.add for an Order
+        # (session.add is called for Position, but NOT for a second Order)
+        add_calls = mock_postgresql_db._mock_session.add.call_args_list
+        added_types = [type(c[0][0]).__name__ for c in add_calls]
+        assert added_types.count("Order") == 0, (
+            f"Expected no new Order added when journal exists, got: {added_types}"
+        )
 
     def test_close_position(self, mock_postgresql_db):
         """Test closing a position"""

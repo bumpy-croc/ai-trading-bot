@@ -10,12 +10,13 @@ All corrections are recorded as immutable audit events with before/after values.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from src.config.constants import (
     DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT,
@@ -33,6 +34,15 @@ if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePositionTracker
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _HasDbPositionId(Protocol):
+    """Structural type for position objects that carry a DB position ID."""
+
+    db_position_id: int | None
+    symbol: str
+    entry_price: float
 
 
 # ---------- Data Models ----------
@@ -1210,9 +1220,18 @@ class PositionReconciler:
                         position.entry_price,
                         exchange_order.average_price,
                     )
+                    previous_entry_price = position.entry_price
                     position.entry_price = exchange_order.average_price
                     # Persist corrected entry_price to DB
-                    self._persist_position_correction(position, entry_price=exchange_order.average_price)
+                    try:
+                        self._persist_position_correction(position, entry_price=exchange_order.average_price)
+                    except Exception:
+                        position.entry_price = previous_entry_price
+                        logger.critical(
+                            "DB/memory state diverged for position %s entry_price — rolled back in-memory",
+                            position.symbol,
+                        )
+                        raise
 
             # Check fill quantity matches position quantity
             filled_qty = getattr(exchange_order, "filled_quantity", None)
@@ -1243,6 +1262,12 @@ class PositionReconciler:
                         position_qty,
                         filled_qty,
                     )
+                    # Snapshot in-memory state for rollback on DB failure
+                    prev_quantity = position_qty
+                    prev_size = getattr(position, "size", None)
+                    prev_current_size = getattr(position, "current_size", None)
+                    prev_original_size = getattr(position, "original_size", None)
+
                     position.quantity = filled_qty
 
                     # Recalculate size (balance fraction) if entry_balance is available
@@ -1250,7 +1275,6 @@ class PositionReconciler:
                     entry_balance = getattr(position, "entry_balance", None)
                     if entry_price and entry_price > 0 and entry_balance and entry_balance > 0:
                         new_size = (filled_qty * entry_price) / entry_balance
-                        old_size = getattr(position, "size", None)
                         position.size = new_size
                         if hasattr(position, "current_size"):
                             position.current_size = new_size
@@ -1259,18 +1283,33 @@ class PositionReconciler:
                         logger.info(
                             "Size recalculated for %s: %s → %.6f",
                             position.symbol,
-                            old_size,
+                            prev_size,
                             new_size,
                         )
 
                     # Persist corrected quantity/size to DB
-                    self._persist_position_correction(
-                        position,
-                        quantity=filled_qty,
-                        size=getattr(position, "size", None),
-                        current_size=getattr(position, "current_size", None),
-                        original_size=getattr(position, "original_size", None),
-                    )
+                    try:
+                        self._persist_position_correction(
+                            position,
+                            quantity=filled_qty,
+                            size=getattr(position, "size", None),
+                            current_size=getattr(position, "current_size", None),
+                            original_size=getattr(position, "original_size", None),
+                        )
+                    except Exception:
+                        # Rollback in-memory state to prevent DB/memory divergence
+                        position.quantity = prev_quantity
+                        if prev_size is not None:
+                            position.size = prev_size
+                        if prev_current_size is not None and hasattr(position, "current_size"):
+                            position.current_size = prev_current_size
+                        if prev_original_size is not None and hasattr(position, "original_size"):
+                            position.original_size = prev_original_size
+                        logger.critical(
+                            "DB/memory state diverged for position %s quantity/size — rolled back in-memory",
+                            position.symbol,
+                        )
+                        raise
 
         elif exchange_order.status in (
             ExOrderStatus.CANCELLED,
@@ -1912,7 +1951,7 @@ class PositionReconciler:
 
     def _persist_position_correction(
         self,
-        position: Any,
+        position: _HasDbPositionId,
         entry_price: float | None = None,
         quantity: float | None = None,
         size: float | None = None,
@@ -1923,8 +1962,12 @@ class PositionReconciler:
 
         All corrections are applied in a single transaction to prevent
         partial writes (e.g. new size with old quantity) on commit failure.
+
+        Raises:
+            ValueError: If any financial value is non-positive or non-finite.
+            Exception: Re-raised from DB commit failures.
         """
-        db_pos_id = getattr(position, "db_position_id", None)
+        db_pos_id = position.db_position_id
         if db_pos_id is None:
             return
 
@@ -1932,7 +1975,18 @@ class PositionReconciler:
 
         from src.database.models import Position as DBPosition
 
-        corrections: dict[str, Any] = {}
+        # Validate financial inputs before persisting
+        for name, val in [
+            ("entry_price", entry_price),
+            ("quantity", quantity),
+            ("size", size),
+            ("current_size", current_size),
+            ("original_size", original_size),
+        ]:
+            if val is not None and (not math.isfinite(val) or val <= 0):
+                raise ValueError(f"{name} must be positive and finite, got {val}")
+
+        corrections: dict[str, Decimal] = {}
         if entry_price is not None:
             corrections["entry_price"] = Decimal(str(entry_price))
         if quantity is not None:
