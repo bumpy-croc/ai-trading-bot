@@ -122,9 +122,9 @@ class TestTradeLogging:
         # (session.add is called for Position, but NOT for a second Order)
         add_calls = mock_postgresql_db._mock_session.add.call_args_list
         added_types = [type(c[0][0]).__name__ for c in add_calls]
-        assert added_types.count("Order") == 0, (
-            f"Expected no new Order added when journal exists, got: {added_types}"
-        )
+        assert (
+            added_types.count("Order") == 0
+        ), f"Expected no new Order added when journal exists, got: {added_types}"
 
     def test_close_position(self, mock_postgresql_db):
         """Test closing a position"""

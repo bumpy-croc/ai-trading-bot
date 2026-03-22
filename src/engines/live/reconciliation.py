@@ -134,9 +134,7 @@ class PositionReconciler:
         self.session_id = session_id
         self.max_position_size = max_position_size
 
-    def reconcile_startup(
-        self, positions: dict[str, Any]
-    ) -> list[ReconciliationResult]:
+    def reconcile_startup(self, positions: dict[str, Any]) -> list[ReconciliationResult]:
         """Run full startup reconciliation.
 
         Args:
@@ -192,13 +190,9 @@ class PositionReconciler:
         exchange_order = None
         if client_order_id:
             try:
-                exchange_order = self.exchange.get_order_by_client_id(
-                    client_order_id, symbol
-                )
+                exchange_order = self.exchange.get_order_by_client_id(client_order_id, symbol)
             except Exception as e:
-                logger.warning(
-                    "Failed to query order by client_id %s: %s", client_order_id, e
-                )
+                logger.warning("Failed to query order by client_id %s: %s", client_order_id, e)
 
         if exchange_order:
             return self._handle_found_order(order_data, exchange_order, result)
@@ -305,9 +299,7 @@ class PositionReconciler:
                         exchange_order.order_id, cancel_symbol
                     )
                 except Exception as e:
-                    logger.warning(
-                        "Failed to cancel partial entry remainder: %s", e
-                    )
+                    logger.warning("Failed to cancel partial entry remainder: %s", e)
 
                 if cancel_success:
                     # Safe to mark CONFIRMED — all fills accounted for,
@@ -371,9 +363,7 @@ class PositionReconciler:
 
         return result
 
-    def _reconcile_filled_order_position(
-        self, order_data: dict, exchange_order: Any
-    ) -> None:
+    def _reconcile_filled_order_position(self, order_data: dict, exchange_order: Any) -> None:
         """Reconcile position state after discovering a filled order on exchange.
 
         Handles two crash scenarios:
@@ -423,7 +413,10 @@ class PositionReconciler:
         # Skip if position already exists under either the exchange_order_id
         # or the client_order_id (covers first-recovery key mismatch).
         with self.position_tracker._positions_lock:
-            if order_id in self.position_tracker._positions or client_order_id in self.position_tracker._positions:
+            if (
+                order_id in self.position_tracker._positions
+                or client_order_id in self.position_tracker._positions
+            ):
                 logger.debug(
                     "Entry order %s: position already tracked (checked both "
                     "exchange_order_id=%s and client_order_id=%s), skipping.",
@@ -444,9 +437,7 @@ class PositionReconciler:
                 try:
                     entry_balance = self.db_manager.get_current_balance(self.session_id)
                 except Exception as e:
-                    logger.warning(
-                        "Failed to fetch DB balance for recovered entry sizing: %s", e
-                    )
+                    logger.warning("Failed to fetch DB balance for recovered entry sizing: %s", e)
                     entry_balance = None
 
             if entry_balance and entry_balance > 0 and fill_price > 0:
@@ -485,19 +476,14 @@ class PositionReconciler:
                     client_order_id=client_order_id,
                 )
             except Exception as e:
-                logger.warning(
-                    "Failed to persist recovered entry position to DB: %s", e
-                )
+                logger.warning("Failed to persist recovered entry position to DB: %s", e)
 
             # Track in memory
             self.position_tracker.track_recovered_position(position, db_id)
 
             # Apply a conservative default stop-loss so the recovered position
             # is never unprotected. The strategy may tighten this later.
-            side_is_short = (
-                side == PositionSide.SHORT
-                or str(side).lower() == "short"
-            )
+            side_is_short = side == PositionSide.SHORT or str(side).lower() == "short"
             if side_is_short:
                 default_stop = fill_price * (1.0 + DEFAULT_STOP_LOSS_PCT)
             else:
@@ -519,8 +505,7 @@ class PositionReconciler:
                     self.db_manager.update_position(db_id, stop_loss=default_stop)
                 except Exception as e:
                     logger.warning(
-                        "Failed to persist default stop-loss for recovered "
-                        "position %s: %s",
+                        "Failed to persist default stop-loss for recovered " "position %s: %s",
                         order_id,
                         e,
                     )
@@ -559,8 +544,7 @@ class PositionReconciler:
                                 )
                             except Exception as e:
                                 logger.warning(
-                                    "Failed to persist SL order ID for "
-                                    "position %s: %s",
+                                    "Failed to persist SL order ID for " "position %s: %s",
                                     order_id,
                                     e,
                                 )
@@ -592,11 +576,7 @@ class PositionReconciler:
                             OrderType,
                         )
 
-                        sell_side = (
-                            OrderSide.SELL
-                            if side_lower == "long"
-                            else OrderSide.BUY
-                        )
+                        sell_side = OrderSide.SELL if side_lower == "long" else OrderSide.BUY
                         sell_result = self.exchange.place_order(
                             symbol=symbol,
                             side=sell_side,
@@ -664,9 +644,7 @@ class PositionReconciler:
             )
             raise
 
-    def _reconcile_filled_exit(
-        self, order_data: dict, fill_price: float
-    ) -> None:
+    def _reconcile_filled_exit(self, order_data: dict, fill_price: float) -> None:
         """Close position if an exit order filled but position is still tracked."""
         position_id = order_data.get("position_id")
         client_order_id = order_data.get("client_order_id", "")
@@ -712,9 +690,7 @@ class PositionReconciler:
 
                 # Realize P&L so session balance stays correct
                 if matched_position is not None and fill_price > 0:
-                    self._realize_pnl_on_close(
-                        matched_position, fill_price, "exit_order_recovery"
-                    )
+                    self._realize_pnl_on_close(matched_position, fill_price, "exit_order_recovery")
         except Exception as e:
             logger.warning(
                 "Failed to reconcile filled exit order %s: %s",
@@ -723,9 +699,7 @@ class PositionReconciler:
             )
             raise
 
-    def _reconcile_filled_partial_exit(
-        self, order_data: dict, fill_price: float
-    ) -> None:
+    def _reconcile_filled_partial_exit(self, order_data: dict, fill_price: float) -> None:
         """Reduce position size for a filled partial exit, keeping it open.
 
         Unlike _reconcile_filled_exit which removes the position entirely,
@@ -768,9 +742,7 @@ class PositionReconciler:
                     if size_fraction > 0:
                         self.db_manager.update_position(
                             position_id,
-                            current_size=(
-                                target_pos.current_size if target_pos else None
-                            ),
+                            current_size=(target_pos.current_size if target_pos else None),
                             partial_exits_taken=(
                                 target_pos.partial_exits_taken if target_pos else None
                             ),
@@ -848,9 +820,7 @@ class PositionReconciler:
             from src.data_providers.exchange_interface import OrderSide
 
             side = getattr(position, "side", "long")
-            side_is_long = (
-                side == PositionSide.LONG or str(side).lower() == "long"
-            )
+            side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
             sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
             new_sl_id = self.exchange.place_stop_loss_order(
                 symbol=symbol,
@@ -861,8 +831,7 @@ class PositionReconciler:
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
                 logger.info(
-                    "Replaced stop-loss for %s after partial exit: %s @ %.2f "
-                    "(qty=%.6f)",
+                    "Replaced stop-loss for %s after partial exit: %s @ %.2f " "(qty=%.6f)",
                     symbol,
                     new_sl_id,
                     stop_loss,
@@ -877,15 +846,13 @@ class PositionReconciler:
                         )
                     except Exception as e:
                         logger.warning(
-                            "Failed to persist resized SL order ID "
-                            "for %s: %s",
+                            "Failed to persist resized SL order ID " "for %s: %s",
                             symbol,
                             e,
                         )
             else:
                 logger.warning(
-                    "Failed to place resized stop-loss for %s — no order ID "
-                    "returned",
+                    "Failed to place resized stop-loss for %s — no order ID " "returned",
                     symbol,
                 )
         except Exception as e:
@@ -966,9 +933,7 @@ class PositionReconciler:
         )
         return result
 
-    def _find_matching_order(
-        self, order_data: dict, exchange_orders: list[Any]
-    ) -> Any | None:
+    def _find_matching_order(self, order_data: dict, exchange_orders: list[Any]) -> Any | None:
         """Find a matching order using strict correlation criteria."""
         target_qty = order_data["quantity"]
         target_side = order_data["side"]
@@ -1050,9 +1015,7 @@ class PositionReconciler:
             # fall back to client_id lookup
             if exchange_order is None and exchange_order_id.startswith("atb"):
                 try:
-                    exchange_order = self.exchange.get_order_by_client_id(
-                        exchange_order_id, symbol
-                    )
+                    exchange_order = self.exchange.get_order_by_client_id(exchange_order_id, symbol)
                     if exchange_order:
                         # Update to real exchange order ID
                         position.exchange_order_id = exchange_order.order_id
@@ -1069,9 +1032,7 @@ class PositionReconciler:
                     )
         elif client_order_id:
             try:
-                exchange_order = self.exchange.get_order_by_client_id(
-                    client_order_id, symbol
-                )
+                exchange_order = self.exchange.get_order_by_client_id(client_order_id, symbol)
             except Exception as e:
                 logger.warning("Failed to verify entry by client_id %s: %s", client_order_id, e)
 
@@ -1094,19 +1055,14 @@ class PositionReconciler:
         # 3. Place missing exchange stop-loss for positions that have a SL price
         # but no exchange SL order (e.g. phantom positions from timeout, or any
         # case where SL placement was missed before shutdown).
-        if result.status != "corrected" and not getattr(
-            position, "stop_loss_order_id", None
-        ):
+        if result.status != "corrected" and not getattr(position, "stop_loss_order_id", None):
             sl_price = getattr(position, "stop_loss", None)
             if not sl_price:
                 # No stop_loss price either — compute a default one
                 entry_price = getattr(position, "entry_price", None) or 0.0
                 if entry_price > 0:
                     side = getattr(position, "side", "long")
-                    side_is_short = (
-                        side == PositionSide.SHORT
-                        or str(side).lower() == "short"
-                    )
+                    side_is_short = side == PositionSide.SHORT or str(side).lower() == "short"
                     if side_is_short:
                         sl_price = entry_price * (1.0 + DEFAULT_STOP_LOSS_PCT)
                     else:
@@ -1127,10 +1083,7 @@ class PositionReconciler:
                     from src.data_providers.exchange_interface import OrderSide
 
                     side = getattr(position, "side", "long")
-                    side_is_long = (
-                        side == PositionSide.LONG
-                        or str(side).lower() == "long"
-                    )
+                    side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                     sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                     # Scale quantity by remaining size after partial exits
                     qty = getattr(position, "quantity", 0) or 0.0
@@ -1169,8 +1122,7 @@ class PositionReconciler:
                                 )
                     else:
                         logger.critical(
-                            "Failed to place missing stop-loss for %s — "
-                            "position is unprotected",
+                            "Failed to place missing stop-loss for %s — " "position is unprotected",
                             position.symbol,
                         )
                         result.severity = Severity.CRITICAL
@@ -1198,9 +1150,9 @@ class PositionReconciler:
         if exchange_order.status == ExOrderStatus.FILLED:
             # Check fill price matches entry_price
             if exchange_order.average_price and position.entry_price > 0:
-                price_diff_pct = abs(
-                    exchange_order.average_price - position.entry_price
-                ) / position.entry_price
+                price_diff_pct = (
+                    abs(exchange_order.average_price - position.entry_price) / position.entry_price
+                )
                 if price_diff_pct > 0.001:  # >0.1% difference
                     audit = AuditEvent(
                         entity_type="position",
@@ -1224,12 +1176,16 @@ class PositionReconciler:
                     position.entry_price = exchange_order.average_price
                     # Persist corrected entry_price to DB
                     try:
-                        self._persist_position_correction(position, entry_price=exchange_order.average_price)
-                    except Exception:
+                        self._persist_position_correction(
+                            position, entry_price=exchange_order.average_price
+                        )
+                    except Exception as e:
                         position.entry_price = previous_entry_price
                         logger.critical(
-                            "DB/memory state diverged for position %s entry_price — rolled back in-memory",
+                            "DB/memory state diverged for position %s entry_price — rolled back in-memory: %s",
                             position.symbol,
+                            e,
+                            exc_info=True,
                         )
                         raise
 
@@ -1288,15 +1244,20 @@ class PositionReconciler:
                         )
 
                     # Persist corrected quantity/size to DB
+                    # Only include size fields if they were actually recalculated
+                    correction_kwargs: dict[str, float | None] = {"quantity": filled_qty}
+                    if entry_price and entry_price > 0 and entry_balance and entry_balance > 0:
+                        correction_kwargs["size"] = getattr(position, "size", None)
+                        correction_kwargs["current_size"] = getattr(position, "current_size", None)
+                        correction_kwargs["original_size"] = getattr(
+                            position, "original_size", None
+                        )
                     try:
                         self._persist_position_correction(
                             position,
-                            quantity=filled_qty,
-                            size=getattr(position, "size", None),
-                            current_size=getattr(position, "current_size", None),
-                            original_size=getattr(position, "original_size", None),
+                            **correction_kwargs,
                         )
-                    except Exception:
+                    except Exception as e:
                         # Rollback in-memory state to prevent DB/memory divergence
                         position.quantity = prev_quantity
                         if prev_size is not None:
@@ -1306,8 +1267,10 @@ class PositionReconciler:
                         if prev_original_size is not None and hasattr(position, "original_size"):
                             position.original_size = prev_original_size
                         logger.critical(
-                            "DB/memory state diverged for position %s quantity/size — rolled back in-memory",
+                            "DB/memory state diverged for position %s quantity/size — rolled back in-memory: %s",
                             position.symbol,
+                            e,
+                            exc_info=True,
                         )
                         raise
 
@@ -1342,9 +1305,7 @@ class PositionReconciler:
                 try:
                     self.db_manager.close_position(db_pos_id)
                 except Exception as e:
-                    logger.warning(
-                        "Failed to close DB position %s: %s", db_pos_id, e
-                    )
+                    logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
         return result
 
@@ -1379,10 +1340,7 @@ class PositionReconciler:
                         from src.data_providers.exchange_interface import OrderSide
 
                         side = getattr(position, "side", "long")
-                        side_is_long = (
-                            side == PositionSide.LONG
-                            or str(side).lower() == "long"
-                        )
+                        side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                         # Scale quantity by remaining size after partial exits
                         qty = getattr(position, "quantity", 0) or 0.0
@@ -1414,8 +1372,7 @@ class PositionReconciler:
                                     )
                                 except Exception as e:
                                     logger.warning(
-                                        "Failed to persist re-placed SL order ID "
-                                        "for %s: %s",
+                                        "Failed to persist re-placed SL order ID " "for %s: %s",
                                         position.symbol,
                                         e,
                                     )
@@ -1516,10 +1473,7 @@ class PositionReconciler:
                         from src.data_providers.exchange_interface import OrderSide
 
                         side = getattr(position, "side", "long")
-                        side_is_long = (
-                            side == PositionSide.LONG
-                            or str(side).lower() == "long"
-                        )
+                        side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                         # position.quantity is already set to the remaining held
                         # amount (accounting for both partial exits and partial
@@ -1549,8 +1503,7 @@ class PositionReconciler:
                                     )
                                 except Exception as e:
                                     logger.warning(
-                                        "Failed to persist re-placed SL order ID "
-                                        "for %s: %s",
+                                        "Failed to persist re-placed SL order ID " "for %s: %s",
                                         position.symbol,
                                         e,
                                     )
@@ -1597,30 +1550,18 @@ class PositionReconciler:
                 self.position_tracker.remove_position(position.order_id)
                 # Close the DB position with SL fill details
                 db_pos_id = getattr(position, "db_position_id", None)
-                exit_price = (
-                    float(sl_order.average_price)
-                    if sl_order.average_price
-                    else None
-                )
+                exit_price = float(sl_order.average_price) if sl_order.average_price else None
                 if db_pos_id:
                     try:
-                        self.db_manager.close_position(
-                            db_pos_id, exit_price=exit_price
-                        )
+                        self.db_manager.close_position(db_pos_id, exit_price=exit_price)
                     except Exception as e:
-                        logger.warning(
-                            "Failed to close DB position %s: %s", db_pos_id, e
-                        )
+                        logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
                 # Realize P&L so session balance stays correct
-                self._realize_pnl_on_close(
-                    position, exit_price, "stop_loss_filled_offline"
-                )
+                self._realize_pnl_on_close(position, exit_price, "stop_loss_filled_offline")
 
         except Exception as e:
-            logger.warning(
-                "Failed to verify stop-loss order %s: %s", sl_order_id, e
-            )
+            logger.warning("Failed to verify stop-loss order %s: %s", sl_order_id, e)
 
     @staticmethod
     def _extract_base_asset(symbol: str) -> str:
@@ -1634,9 +1575,7 @@ class PositionReconciler:
                 return symbol[: -len(quote)]
         return symbol
 
-    def _verify_asset_holdings(
-        self, position: Any, result: ReconciliationResult
-    ) -> None:
+    def _verify_asset_holdings(self, position: Any, result: ReconciliationResult) -> None:
         """Verify the bot holds the expected asset on exchange.
 
         Detects positions closed externally (e.g., manual sell on Binance UI)
@@ -1734,9 +1673,7 @@ class PositionReconciler:
                     try:
                         self.db_manager.close_position(db_pos_id)
                     except Exception as e:
-                        logger.warning(
-                            "Failed to close DB position %s: %s", db_pos_id, e
-                        )
+                        logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
                 # Realize P&L — no exit price available for external closes,
                 # so skip balance update (P&L is unknown)
@@ -1746,9 +1683,7 @@ class PositionReconciler:
                     symbol,
                 )
         except Exception as e:
-            logger.warning(
-                "Asset holdings check failed for %s: %s", base_asset, e
-            )
+            logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
 
     def _estimate_position_notional(self) -> float:
         """Estimate total notional value of open positions using entry prices.
@@ -1894,10 +1829,7 @@ class PositionReconciler:
 
         # Calculate realized P&L (long: sell higher = profit)
         side = getattr(position, "side", "long")
-        side_is_short = (
-            side == PositionSide.SHORT
-            or str(side).lower() == "short"
-        )
+        side_is_short = side == PositionSide.SHORT or str(side).lower() == "short"
         if side_is_short:
             pnl = (entry_price - exit_price) * qty
         else:
@@ -1907,8 +1839,7 @@ class PositionReconciler:
             current_balance = self.db_manager.get_current_balance(self.session_id)
             if current_balance is None or current_balance < 0:
                 logger.warning(
-                    "Cannot realize P&L — unable to read current balance "
-                    "(session_id=%s)",
+                    "Cannot realize P&L — unable to read current balance " "(session_id=%s)",
                     self.session_id,
                 )
                 return
@@ -2005,10 +1936,9 @@ class PositionReconciler:
             with self.db_manager.get_session() as session:
                 db_pos = session.query(DBPosition).filter_by(id=db_pos_id).first()
                 if not db_pos:
-                    logger.warning(
-                        "Position %d not found in DB for correction", db_pos_id
+                    raise RuntimeError(
+                        f"Position {db_pos_id} not found in DB; cannot persist correction"
                     )
-                    return
                 for field_name, value in corrections.items():
                     setattr(db_pos, field_name, value)
                 session.commit()
@@ -2019,9 +1949,7 @@ class PositionReconciler:
                 list(corrections.keys()),
             )
         except Exception as e:
-            logger.error(
-                "Failed to persist position corrections for %d: %s", db_pos_id, e
-            )
+            logger.error("Failed to persist position corrections for %d: %s", db_pos_id, e)
             raise
 
     def _persist_audit(self, audit: AuditEvent) -> None:
@@ -2095,9 +2023,7 @@ class PeriodicReconciler:
             daemon=True,
         )
         self._thread.start()
-        logger.info(
-            "Periodic reconciler started (interval=%ds)", self.interval
-        )
+        logger.info("Periodic reconciler started (interval=%ds)", self.interval)
 
     def stop(self) -> None:
         """Stop the periodic reconciliation daemon."""
@@ -2147,9 +2073,7 @@ class PeriodicReconciler:
                 continue
 
             try:
-                exchange_order = self.exchange.get_order(
-                    exchange_order_id, position.symbol
-                )
+                exchange_order = self.exchange.get_order(exchange_order_id, position.symbol)
                 if not exchange_order:
                     continue
 
@@ -2215,9 +2139,7 @@ class PeriodicReconciler:
                 position_qty = qty
 
             try:
-                base_asset = PositionReconciler._extract_base_asset(
-                    position.symbol
-                )
+                base_asset = PositionReconciler._extract_base_asset(position.symbol)
                 balance = self.exchange.get_balance(base_asset)
                 if balance is None:
                     logger.warning(
@@ -2262,9 +2184,7 @@ class PeriodicReconciler:
                     if severity > max_severity:
                         max_severity = severity
             except Exception as e:
-                logger.warning(
-                    "Asset holdings check failed for %s: %s", order_key, e
-                )
+                logger.warning("Asset holdings check failed for %s: %s", order_key, e)
 
         # 2. Verify stop-loss orders are still active on exchange
         for order_key, position in list(positions_snapshot.items()):
@@ -2286,11 +2206,7 @@ class PeriodicReconciler:
 
                 if sl_order and sl_order.status == ExOrderStatus.FILLED:
                     # SL triggered — remove position from tracker + close in DB
-                    exit_price = (
-                        float(sl_order.average_price)
-                        if sl_order.average_price
-                        else None
-                    )
+                    exit_price = float(sl_order.average_price) if sl_order.average_price else None
                     self.db_manager.log_audit_event(
                         session_id=self.session_id,
                         entity_type="position",
@@ -2304,12 +2220,9 @@ class PeriodicReconciler:
                     self.position_tracker.remove_position(order_key)
                     db_pos_id = getattr(position, "db_position_id", None)
                     if db_pos_id is not None:
-                        self.db_manager.close_position(
-                            db_pos_id, exit_price=exit_price
-                        )
+                        self.db_manager.close_position(db_pos_id, exit_price=exit_price)
                     logger.warning(
-                        "Stop-loss filled for %s @ %s (periodic check) — "
-                        "removed position %s",
+                        "Stop-loss filled for %s @ %s (periodic check) — " "removed position %s",
                         position.symbol,
                         exit_price,
                         order_key,
@@ -2318,14 +2231,10 @@ class PeriodicReconciler:
                         max_severity = Severity.HIGH
 
                 elif (
-                    sl_order
-                    and sl_order.status
-                    in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED)
+                    sl_order and sl_order.status in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED)
                 ) or sl_order is None:
                     # SL cancelled/expired/missing — attempt re-placement
-                    status_desc = (
-                        sl_order.status.value if sl_order else "MISSING"
-                    )
+                    status_desc = sl_order.status.value if sl_order else "MISSING"
                     logger.warning(
                         "Stop-loss %s for %s is %s — attempting re-placement",
                         sl_order_id,
@@ -2335,23 +2244,15 @@ class PeriodicReconciler:
                     position.stop_loss_order_id = None
 
                     stop_price = getattr(position, "stop_loss", None)
-                    if (
-                        stop_price
-                        and hasattr(self.exchange, "place_stop_loss_order")
-                    ):
+                    if stop_price and hasattr(self.exchange, "place_stop_loss_order"):
                         try:
                             from src.data_providers.exchange_interface import (
                                 OrderSide,
                             )
 
                             side = getattr(position, "side", "long")
-                            side_is_long = (
-                                side == PositionSide.LONG
-                                or str(side).lower() == "long"
-                            )
-                            sl_side = (
-                                OrderSide.SELL if side_is_long else OrderSide.BUY
-                            )
+                            side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
+                            sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                             # Compute held qty accounting for partial exits
                             qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
@@ -2367,15 +2268,12 @@ class PeriodicReconciler:
                             if new_sl_id:
                                 position.stop_loss_order_id = new_sl_id
                                 logger.info(
-                                    "Re-placed stop-loss for %s: %s @ %.2f "
-                                    "(periodic check)",
+                                    "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
                                     position.symbol,
                                     new_sl_id,
                                     stop_price,
                                 )
-                                db_pos_id = getattr(
-                                    position, "db_position_id", None
-                                )
+                                db_pos_id = getattr(position, "db_position_id", None)
                                 if db_pos_id is not None:
                                     try:
                                         self.db_manager.update_position(
@@ -2384,8 +2282,7 @@ class PeriodicReconciler:
                                         )
                                     except Exception as e:
                                         logger.warning(
-                                            "Failed to persist re-placed SL "
-                                            "order ID for %s: %s",
+                                            "Failed to persist re-placed SL " "order ID for %s: %s",
                                             position.symbol,
                                             e,
                                         )
@@ -2451,9 +2348,7 @@ class PeriodicReconciler:
                                     symbol,
                                 )
                                 try:
-                                    self.exchange.cancel_order(
-                                        order.order_id, symbol
-                                    )
+                                    self.exchange.cancel_order(order.order_id, symbol)
                                     logger.info(
                                         "Cancelled orphaned order %s on %s",
                                         order.order_id,
@@ -2525,10 +2420,7 @@ class PeriodicReconciler:
             except Exception as e:
                 logger.error("on_critical callback failed: %s", e)
 
-
-    def _place_missing_stop_loss(
-        self, position: Any, order_key: str
-    ) -> None:
+    def _place_missing_stop_loss(self, position: Any, order_key: str) -> None:
         """Place a stop-loss for a position that has none (e.g. phantom from timeout).
 
         Computes a default stop price from the position's stop_loss attribute
