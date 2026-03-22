@@ -54,6 +54,7 @@ class EntryExecutionResult:
     slippage_cost: float = 0.0
     error: str | None = None
     client_order_id: str | None = None
+    ambiguous: bool = False
 
 
 @dataclass
@@ -412,6 +413,16 @@ class LiveExecutionEngine:
                 order_id = f"paper_{int(time.time() * 1000)}"
                 logger.info("PAPER TRADE - Would open %s position on %s", side.value, symbol)
 
+            # Detect phantom order: when place_order returns None (timeout/network),
+            # _execute_live_order returns (client_order_id, client_order_id) to block
+            # duplicate entries. The order may or may not have filled on the exchange,
+            # so mark the result as ambiguous for the caller to handle safely.
+            is_ambiguous = (
+                client_order_id is not None
+                and order_id is not None
+                and order_id == client_order_id
+            )
+
             return EntryExecutionResult(
                 success=True,
                 order_id=order_id,
@@ -422,6 +433,7 @@ class LiveExecutionEngine:
                 entry_fee=entry_fee,
                 slippage_cost=slippage_cost,
                 client_order_id=client_order_id,
+                ambiguous=is_ambiguous,
             )
 
         except (ValueError, ArithmeticError, TypeError) as e:

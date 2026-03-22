@@ -73,6 +73,7 @@ class LiveEntryResult:
     executed: bool = False
     reasons: list[str] | None = None
     error: str | None = None
+    ambiguous: bool = False
 
 
 class LiveEntryHandler:
@@ -412,6 +413,7 @@ class LiveEntryHandler:
             slippage_cost=exec_result.slippage_cost,
             executed=True,
             reasons=signal.reasons,
+            ambiguous=exec_result.ambiguous,
         )
 
     def _extract_entry_plan(

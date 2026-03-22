@@ -2630,6 +2630,21 @@ class LiveTradingEngine:
                 f"Position Opened: {symbol} {side.value} @ ${position.entry_price:.2f}"
             )
 
+            # Ambiguous entry: order submission timed out so we don't know if/how
+            # much actually filled. Track the phantom position (so the reconciler can
+            # resolve it on restart) but do NOT place a stop-loss and immediately
+            # enter close-only mode to prevent further exposure.
+            if result.ambiguous:
+                logger.critical(
+                    "Ambiguous order submission for %s (order_id=%s) — "
+                    "entering close-only mode until restart reconciles the phantom position. "
+                    "No stop-loss placed.",
+                    symbol,
+                    position.order_id,
+                )
+                self._enter_close_only_mode()
+                return
+
             # Place server-side stop-loss order for protection with retry logic
             if self.enable_live_trading and stop_loss and self.exchange_interface:
                 sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
