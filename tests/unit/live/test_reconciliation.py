@@ -313,19 +313,20 @@ class TestPositionReconciler:
     def test_reconcile_position_sl_cancelled_clears_reference(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
-        """Cancelled stop-loss clears stale reference and flags for re-placement."""
+        """Cancelled stop-loss clears stale reference and re-places SL."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         pos = MockPosition(stop_loss_order_id="sl_canc_1", db_position_id=20)
         entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
         sl_order = MockExchangeOrder(order_id="sl_canc_1", status=ExOS.CANCELLED)
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_1"
 
         result = reconciler.reconcile_position(pos)
         # Position stays open — not removed from tracker
         mock_position_tracker.remove_position.assert_not_called()
-        # Stale SL reference cleared
-        assert pos.stop_loss_order_id is None
+        # Stale SL reference cleared and re-placed with new SL
+        assert pos.stop_loss_order_id == "new_sl_1"
         # Correction recorded with MEDIUM severity
         assert result.severity >= Severity.MEDIUM
         sl_corrections = [
@@ -337,27 +338,32 @@ class TestPositionReconciler:
         assert sl_corrections[0].old_value == "sl_canc_1"
         assert sl_corrections[0].new_value is None
         mock_db.log_audit_event.assert_called()
+        # SL was re-placed on exchange
+        mock_exchange.place_stop_loss_order.assert_called_once()
 
     def test_reconcile_position_sl_expired_clears_reference(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
-        """Expired stop-loss clears stale reference and flags for re-placement."""
+        """Expired stop-loss clears stale reference and re-places SL."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         pos = MockPosition(stop_loss_order_id="sl_exp_1", db_position_id=21)
         entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
         sl_order = MockExchangeOrder(order_id="sl_exp_1", status=ExOS.EXPIRED)
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_exp"
 
         result = reconciler.reconcile_position(pos)
         mock_position_tracker.remove_position.assert_not_called()
-        assert pos.stop_loss_order_id is None
+        # SL re-placed after clearing stale reference
+        assert pos.stop_loss_order_id == "new_sl_exp"
         assert result.severity >= Severity.MEDIUM
         sl_corrections = [
             c for c in result.corrections
             if "expired" in c.reason and c.field == "stop_loss_order_id"
         ]
         assert len(sl_corrections) == 1
+        mock_exchange.place_stop_loss_order.assert_called_once()
 
     def test_reconcile_position_legacy_no_ids(self, reconciler):
         """Legacy position without exchange IDs is skipped."""

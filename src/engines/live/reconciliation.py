@@ -1063,7 +1063,99 @@ class PositionReconciler:
         if sl_order_id:
             self._verify_stop_loss(position, sl_order_id, result)
 
-        # 3. Verify asset holdings — detect external closes
+        # 3. Place missing exchange stop-loss for positions that have a SL price
+        # but no exchange SL order (e.g. phantom positions from timeout, or any
+        # case where SL placement was missed before shutdown).
+        if result.status != "corrected" and not getattr(
+            position, "stop_loss_order_id", None
+        ):
+            sl_price = getattr(position, "stop_loss", None)
+            if not sl_price:
+                # No stop_loss price either — compute a default one
+                entry_price = getattr(position, "entry_price", None) or 0.0
+                if entry_price > 0:
+                    side = getattr(position, "side", "long")
+                    side_is_short = (
+                        side == PositionSide.SHORT
+                        or str(side).lower() == "short"
+                    )
+                    if side_is_short:
+                        sl_price = entry_price * (1.0 + DEFAULT_STOP_LOSS_PCT)
+                    else:
+                        sl_price = entry_price * (1.0 - DEFAULT_STOP_LOSS_PCT)
+                    position.stop_loss = sl_price
+                    logger.warning(
+                        "Position %s has no stop-loss price; applied default "
+                        "%.2f%% stop at %.4f (entry=%.4f, side=%s)",
+                        position.symbol,
+                        DEFAULT_STOP_LOSS_PCT * 100,
+                        sl_price,
+                        entry_price,
+                        side,
+                    )
+
+            if sl_price and hasattr(self.exchange, "place_stop_loss_order"):
+                try:
+                    from src.data_providers.exchange_interface import OrderSide
+
+                    side = getattr(position, "side", "long")
+                    side_is_long = (
+                        side == PositionSide.LONG
+                        or str(side).lower() == "long"
+                    )
+                    sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
+                    # Scale quantity by remaining size after partial exits
+                    qty = getattr(position, "quantity", 0) or 0.0
+                    current = getattr(position, "current_size", None)
+                    original = getattr(position, "original_size", None)
+                    if current and original and original > 0:
+                        qty = qty * (current / original)
+                    new_sl_id = self.exchange.place_stop_loss_order(
+                        symbol=position.symbol,
+                        side=sl_side,
+                        quantity=qty,
+                        stop_price=sl_price,
+                    )
+                    if new_sl_id:
+                        position.stop_loss_order_id = new_sl_id
+                        logger.info(
+                            "Placed missing stop-loss for %s: %s @ %.2f",
+                            position.symbol,
+                            new_sl_id,
+                            sl_price,
+                        )
+                        # Persist to DB
+                        db_pos_id = getattr(position, "db_position_id", None)
+                        if db_pos_id is not None:
+                            try:
+                                self.db_manager.update_position(
+                                    position_id=db_pos_id,
+                                    stop_loss_order_id=new_sl_id,
+                                    stop_loss=sl_price,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "Failed to persist SL order ID for %s: %s",
+                                    position.symbol,
+                                    e,
+                                )
+                    else:
+                        logger.critical(
+                            "Failed to place missing stop-loss for %s — "
+                            "position is unprotected",
+                            position.symbol,
+                        )
+                        result.severity = Severity.CRITICAL
+                except Exception as e:
+                    logger.critical(
+                        "Exception placing missing stop-loss for %s: %s — "
+                        "position is unprotected",
+                        position.symbol,
+                        e,
+                    )
+                    result.severity = Severity.CRITICAL
+
+        # 4. Verify asset holdings — detect external closes
         if result.status != "corrected":
             self._verify_asset_holdings(position, result)
 
@@ -1142,6 +1234,8 @@ class PositionReconciler:
                         position.size = new_size
                         if hasattr(position, "current_size"):
                             position.current_size = new_size
+                        if hasattr(position, "original_size"):
+                            position.original_size = new_size
                         logger.info(
                             "Size recalculated for %s: %s → %.6f",
                             position.symbol,
