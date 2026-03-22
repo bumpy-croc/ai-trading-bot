@@ -809,7 +809,7 @@ class PositionReconciler:
         qty = getattr(position, "quantity", 0) or 0.0
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current and original and original > 0:
+        if current is not None and original is not None and original > 0:
             qty = qty * (current / original)
 
         if qty <= 0:
@@ -1089,7 +1089,7 @@ class PositionReconciler:
                     qty = getattr(position, "quantity", 0) or 0.0
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    if current and original and original > 0:
+                    if current is not None and original is not None and original > 0:
                         qty = qty * (current / original)
                     new_sl_id = self.exchange.place_stop_loss_order(
                         symbol=position.symbol,
@@ -1346,7 +1346,7 @@ class PositionReconciler:
                         qty = getattr(position, "quantity", 0) or 0.0
                         current = getattr(position, "current_size", None)
                         original = getattr(position, "original_size", None)
-                        if current and original and original > 0:
+                        if current is not None and original is not None and original > 0:
                             qty = qty * (current / original)
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
@@ -1410,23 +1410,33 @@ class PositionReconciler:
                     held_qty = position.quantity
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    if current and original and original > 0:
+                    if current is not None and original is not None and original > 0:
                         held_qty = position.quantity * (current / original)
                     # After SL fill, what remains
                     remaining_qty = max(held_qty - filled_qty, 0.0)
-                    # Update position.quantity to the remaining amount directly.
-                    # The replacement SL uses this quantity without further scaling.
-                    position.quantity = remaining_qty
+
+                    # Reduce current_size proportionally instead of mutating quantity.
+                    # Other code paths scale `quantity * (current_size / original_size)`
+                    # to compute held amount, so mutating quantity directly would cause
+                    # double-reduction in P&L calculations, notional estimates, and the
+                    # periodic asset-holdings check.
+                    if original is not None and original > 0 and position.quantity > 0:
+                        remaining_fraction = remaining_qty / max(position.quantity, 1e-9)
+                        if hasattr(position, "current_size"):
+                            position.current_size = original * remaining_fraction
+                    else:
+                        # Fallback: no size tracking, update quantity directly
+                        position.quantity = remaining_qty
 
                     partial_audit = AuditEvent(
                         entity_type="position",
                         entity_id=getattr(position, "db_position_id", None),
-                        field="quantity",
-                        old_value=str(old_quantity),
-                        new_value=str(position.quantity),
+                        field="current_size",
+                        old_value=str(current or old_quantity),
+                        new_value=str(getattr(position, "current_size", remaining_qty)),
                         reason=(
                             f"SL order {sl_order.status.value.lower()} after partial fill "
-                            f"of {filled_qty} — reduced position quantity"
+                            f"of {filled_qty} — reduced position size"
                         ),
                         severity=Severity.MEDIUM,
                     )
@@ -1434,13 +1444,12 @@ class PositionReconciler:
                     result.corrections.append(partial_audit)
                     logger.warning(
                         "Stop-loss %s for %s was %s with partial fill of %s — "
-                        "reduced position quantity from %s to %s",
+                        "reduced position size (remaining_qty=%.8f)",
                         sl_order_id,
                         position.symbol,
                         sl_order.status.value,
                         filled_qty,
-                        old_quantity,
-                        position.quantity,
+                        remaining_qty,
                     )
 
                 audit = AuditEvent(
@@ -1475,10 +1484,20 @@ class PositionReconciler:
                         side = getattr(position, "side", "long")
                         side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                        # position.quantity is already set to the remaining held
-                        # amount (accounting for both partial exits and partial
-                        # SL fills), so no further scaling is needed.
+                        # Scale quantity by current_size/original_size to get
+                        # actual held amount after partial exits and SL fills.
                         qty = getattr(position, "quantity", 0) or 0.0
+                        cs = getattr(position, "current_size", None)
+                        os_ = getattr(position, "original_size", None)
+                        if cs is not None and os_ is not None and os_ > 0:
+                            qty = qty * (cs / os_)
+                        # Position is flat — no SL needed
+                        if qty <= 0:
+                            logger.info(
+                                "Position %s is flat after partial SL fill — skipping SL re-placement",
+                                position.symbol,
+                            )
+                            return
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
                             side=sl_side,
@@ -1493,17 +1512,25 @@ class PositionReconciler:
                                 new_sl_id,
                                 position.stop_loss,
                             )
-                            # Persist the new SL order ID to DB
+                            # Persist new SL order ID and updated current_size
+                            # so restart doesn't reload stale values.
                             db_pos_id = getattr(position, "db_position_id", None)
                             if db_pos_id is not None:
                                 try:
+                                    update_kwargs: dict[str, Any] = {
+                                        "stop_loss_order_id": new_sl_id,
+                                    }
+                                    _cs = getattr(position, "current_size", None)
+                                    if _cs is not None:
+                                        update_kwargs["current_size"] = _cs
                                     self.db_manager.update_position(
                                         position_id=db_pos_id,
-                                        stop_loss_order_id=new_sl_id,
+                                        **update_kwargs,
                                     )
                                 except Exception as e:
                                     logger.warning(
-                                        "Failed to persist re-placed SL order ID " "for %s: %s",
+                                        "Failed to persist re-placed SL / current_size "
+                                        "for %s: %s",
                                         position.symbol,
                                         e,
                                     )
@@ -1583,6 +1610,12 @@ class PositionReconciler:
         tracked position quantity. Uses 50% threshold to catch full external
         closes while tolerating partial exits.
         """
+        # Skip short positions — shorts don't hold the base asset on spot,
+        # so checking spot balance would falsely flag them as externally closed.
+        side = getattr(position, "side", None)
+        if side == PositionSide.SHORT or str(side).lower() == "short":
+            return
+
         symbol = position.symbol
         base_asset = self._extract_base_asset(symbol)
         # Use quantity (actual asset amount), not size (balance fraction).
@@ -1594,7 +1627,7 @@ class PositionReconciler:
 
         current_size = getattr(position, "current_size", None)
         original_size = getattr(position, "original_size", None)
-        if current_size and original_size and original_size > 0:
+        if current_size is not None and original_size is not None and original_size > 0:
             position_qty = qty * (current_size / original_size)
         else:
             position_qty = qty
@@ -1704,7 +1737,7 @@ class PositionReconciler:
                 # Scale by current_size/original_size to account for partial exits
                 current = getattr(position, "current_size", None)
                 original = getattr(position, "original_size", None)
-                if current and original and original > 0:
+                if current is not None and original is not None and original > 0:
                     qty = qty * (current / original)
                 total += qty * price
         return total
@@ -1824,7 +1857,7 @@ class PositionReconciler:
         # P&L on the full original quantity, doubling the realized amount.
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current and original and original > 0:
+        if current is not None and original is not None and original > 0:
             qty = qty * (current / original)
 
         # Calculate realized P&L (long: sell higher = profit)
@@ -2124,6 +2157,11 @@ class PeriodicReconciler:
         # support is added, the check must aggregate tracked quantities before
         # comparing against the exchange balance.
         for order_key, position in list(positions_snapshot.items()):
+            # Skip short positions — shorts don't hold the base asset on spot
+            side = getattr(position, "side", None)
+            if side == PositionSide.SHORT or str(side).lower() == "short":
+                continue
+
             # Use quantity (actual asset amount), not size (balance fraction).
             # Scale by current_size/original_size to account for partial exits
             # that reduce current_size but leave quantity unchanged.
@@ -2133,7 +2171,7 @@ class PeriodicReconciler:
 
             current_size = getattr(position, "current_size", None)
             original_size = getattr(position, "original_size", None)
-            if current_size and original_size and original_size > 0:
+            if current_size is not None and original_size is not None and original_size > 0:
                 position_qty = qty * (current_size / original_size)
             else:
                 position_qty = qty
@@ -2243,6 +2281,28 @@ class PeriodicReconciler:
                     )
                     position.stop_loss_order_id = None
 
+                    # Account for partial SL fills before re-placement.
+                    # If the SL partially executed, reduce current_size
+                    # so the replacement uses the correct held quantity.
+                    if sl_order is not None:
+                        partial_fill = getattr(sl_order, "filled_quantity", None) or 0.0
+                        if partial_fill > 0:
+                            pos_qty = getattr(position, "quantity", 0) or 0.0
+                            current = getattr(position, "current_size", None)
+                            original = getattr(position, "original_size", None)
+                            if current is not None and original is not None and original > 0 and pos_qty > 0:
+                                held = pos_qty * (current / original)
+                                remaining = max(held - partial_fill, 0.0)
+                                position.current_size = original * (remaining / max(pos_qty, 1e-9))
+                            else:
+                                if pos_qty > 0:
+                                    position.quantity = max(pos_qty - partial_fill, 0.0)
+                            logger.info(
+                                "Periodic: partial SL fill %.8f for %s — adjusted position size",
+                                partial_fill,
+                                position.symbol,
+                            )
+
                     stop_price = getattr(position, "stop_loss", None)
                     if stop_price and hasattr(self.exchange, "place_stop_loss_order"):
                         try:
@@ -2257,8 +2317,16 @@ class PeriodicReconciler:
                             qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if current and original and original > 0:
+                            if current is not None and original is not None and original > 0:
                                 qty = qty * (current / original)
+                            # Position is flat — skip SL, remove from tracker
+                            if qty <= 0:
+                                logger.info(
+                                    "Position %s is flat after partial SL fill "
+                                    "— skipping SL re-placement (periodic)",
+                                    position.symbol,
+                                )
+                                continue
                             new_sl_id = self.exchange.place_stop_loss_order(
                                 symbol=position.symbol,
                                 side=sl_side,
@@ -2276,9 +2344,15 @@ class PeriodicReconciler:
                                 db_pos_id = getattr(position, "db_position_id", None)
                                 if db_pos_id is not None:
                                     try:
+                                        _update_kw: dict[str, Any] = {
+                                            "stop_loss_order_id": new_sl_id,
+                                        }
+                                        _cs = getattr(position, "current_size", None)
+                                        if _cs is not None:
+                                            _update_kw["current_size"] = _cs
                                         self.db_manager.update_position(
                                             position_id=db_pos_id,
-                                            stop_loss_order_id=new_sl_id,
+                                            **_update_kw,
                                         )
                                     except Exception as e:
                                         logger.warning(
@@ -2380,7 +2454,7 @@ class PeriodicReconciler:
                             # Scale by current_size/original_size for partial exits
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if current and original and original > 0:
+                            if current is not None and original is not None and original > 0:
                                 qty = qty * (current / original)
                             position_notional += qty * price
                     expected_usdt = db_balance - position_notional
@@ -2465,7 +2539,7 @@ class PeriodicReconciler:
             qty = getattr(position, "quantity", 0) or 0.0
             current = getattr(position, "current_size", None)
             original = getattr(position, "original_size", None)
-            if current and original and original > 0:
+            if current is not None and original is not None and original > 0:
                 qty = qty * (current / original)
 
             new_sl_id = self.exchange.place_stop_loss_order(
