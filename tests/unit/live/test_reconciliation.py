@@ -2008,7 +2008,7 @@ class TestPeriodicReconcilerSLVerification:
 
         entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
         sl_order = MockExchangeOrder(
-            order_id="sl_periodic_2", status=ExOS.CANCELLED
+            order_id="sl_periodic_2", status=ExOS.CANCELLED, filled_quantity=0.0
         )
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
         mock_exchange.get_open_orders.return_value = []
@@ -2028,9 +2028,9 @@ class TestPeriodicReconcilerSLVerification:
         assert call_kwargs.kwargs["quantity"] == pytest.approx(0.5)
         assert call_kwargs.kwargs["stop_price"] == 45000.0
         assert pos.stop_loss_order_id == "new_sl_99"
-        # Persisted to DB
+        # Persisted to DB (includes current_size for restart durability)
         mock_db.update_position.assert_called_once_with(
-            position_id=51, stop_loss_order_id="new_sl_99"
+            position_id=51, stop_loss_order_id="new_sl_99", current_size=0.5
         )
 
     def test_cycle_replaces_missing_sl(
@@ -2082,7 +2082,7 @@ class TestPeriodicReconcilerSLVerification:
 
         entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
         sl_order = MockExchangeOrder(
-            order_id="sl_periodic_4", status=ExOS.EXPIRED
+            order_id="sl_periodic_4", status=ExOS.EXPIRED, filled_quantity=0.0
         )
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
         mock_exchange.get_open_orders.return_value = []

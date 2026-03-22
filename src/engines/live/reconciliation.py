@@ -1501,17 +1501,24 @@ class PositionReconciler:
                                 new_sl_id,
                                 position.stop_loss,
                             )
-                            # Persist the new SL order ID to DB
+                            # Persist new SL order ID and updated current_size
+                            # so restart doesn't reload stale values.
                             db_pos_id = getattr(position, "db_position_id", None)
                             if db_pos_id is not None:
                                 try:
+                                    update_kwargs: dict[str, Any] = {
+                                        "stop_loss_order_id": new_sl_id,
+                                    }
+                                    _cs = getattr(position, "current_size", None)
+                                    if _cs is not None:
+                                        update_kwargs["current_size"] = _cs
                                     self.db_manager.update_position(
                                         position_id=db_pos_id,
-                                        stop_loss_order_id=new_sl_id,
+                                        **update_kwargs,
                                     )
                                 except Exception as e:
                                     logger.warning(
-                                        "Failed to persist re-placed SL order ID "
+                                        "Failed to persist re-placed SL / current_size "
                                         "for %s: %s",
                                         position.symbol,
                                         e,
@@ -2232,6 +2239,28 @@ class PeriodicReconciler:
                     )
                     position.stop_loss_order_id = None
 
+                    # Account for partial SL fills before re-placement.
+                    # If the SL partially executed, reduce current_size
+                    # so the replacement uses the correct held quantity.
+                    if sl_order is not None:
+                        partial_fill = getattr(sl_order, "filled_quantity", None) or 0.0
+                        if partial_fill > 0:
+                            pos_qty = getattr(position, "quantity", 0) or 0.0
+                            current = getattr(position, "current_size", None)
+                            original = getattr(position, "original_size", None)
+                            if current and original and original > 0 and pos_qty > 0:
+                                held = pos_qty * (current / original)
+                                remaining = max(held - partial_fill, 0.0)
+                                position.current_size = original * (remaining / max(pos_qty, 1e-9))
+                            else:
+                                if pos_qty > 0:
+                                    position.quantity = max(pos_qty - partial_fill, 0.0)
+                            logger.info(
+                                "Periodic: partial SL fill %.8f for %s — adjusted position size",
+                                partial_fill,
+                                position.symbol,
+                            )
+
                     stop_price = getattr(position, "stop_loss", None)
                     if (
                         stop_price
@@ -2276,9 +2305,15 @@ class PeriodicReconciler:
                                 )
                                 if db_pos_id is not None:
                                     try:
+                                        _update_kw: dict[str, Any] = {
+                                            "stop_loss_order_id": new_sl_id,
+                                        }
+                                        _cs = getattr(position, "current_size", None)
+                                        if _cs is not None:
+                                            _update_kw["current_size"] = _cs
                                         self.db_manager.update_position(
                                             position_id=db_pos_id,
-                                            stop_loss_order_id=new_sl_id,
+                                            **_update_kw,
                                         )
                                     except Exception as e:
                                         logger.warning(
