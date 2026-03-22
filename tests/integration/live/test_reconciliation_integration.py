@@ -11,7 +11,8 @@ References:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -33,11 +34,15 @@ from src.engines.live.reconciliation import (
 # ---------- Lightweight mock dataclasses ----------
 
 
+def _unique_order_id() -> str:
+    return f"exc_{uuid.uuid4().hex[:8]}"
+
+
 @dataclass
 class MockExchangeOrder:
     """Minimal exchange order mock matching exchange_interface.Order fields."""
 
-    order_id: str = "exc_123"
+    order_id: str = field(default_factory=_unique_order_id)
     symbol: str = "BTCUSDT"
     status: ExOrderStatus = ExOrderStatus.FILLED
     average_price: float | None = 50000.0
@@ -130,7 +135,7 @@ class TestReconciliationIntegration:
         db_manager: DatabaseManager,
         session_id: int,
         *,
-        client_order_id: str = "atb_BTCUSDT_long_1234_abcd",
+        client_order_id: str | None = None,
         symbol: str = "BTCUSDT",
         side: str = "LONG",
         order_type: str = "ENTRY",
@@ -138,6 +143,8 @@ class TestReconciliationIntegration:
         price: float = 50000.0,
     ) -> int:
         """Insert a PENDING_SUBMIT order journal entry and return its ID."""
+        if client_order_id is None:
+            client_order_id = f"atb_test_{uuid.uuid4().hex[:12]}"
         return db_manager.create_order_journal_entry(
             session_id=session_id,
             client_order_id=client_order_id,
@@ -160,10 +167,14 @@ class TestReconciliationIntegration:
         quantity: float = 0.001,
         stop_loss: float | None = 48000.0,
         stop_loss_order_id: str | None = "sl_orig_001",
-        exchange_order_id: str = "exc_123",
-        client_order_id: str = "atb_BTCUSDT_long_seed_1234",
+        exchange_order_id: str | None = None,
+        client_order_id: str | None = None,
     ) -> tuple[int, LivePosition]:
         """Create a position in DB and tracker, return (db_id, position)."""
+        if exchange_order_id is None:
+            exchange_order_id = _unique_order_id()
+        if client_order_id is None:
+            client_order_id = f"atb_test_{uuid.uuid4().hex[:12]}"
         db_id = db_manager.log_position(
             symbol=symbol,
             side="LONG",
