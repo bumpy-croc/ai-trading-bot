@@ -265,7 +265,24 @@ def phase_crash(
             "  2. Run: railway service restart --environment development\n"
             "  3. Re-run this phase to validate recovery"
         )
-        return _validate_crash_recovery(db, timeout)
+        # Capture current trade count as baseline before restart
+        db.expire_all()
+        session = (
+            db.query(TradingSession)
+            .filter(TradingSession.strategy_name == "ChaosTest")
+            .filter(TradingSession.is_active.is_(True))
+            .order_by(desc(TradingSession.start_time))
+            .first()
+        )
+        baseline_trades = 0
+        if session:
+            baseline_trades = (
+                db.query(func.count(Trade.id))
+                .filter(Trade.session_id == session.id)
+                .scalar()
+            ) or 0
+        logger.info("Railway baseline: %d trades before restart", baseline_trades)
+        return _validate_crash_recovery(db, timeout, baseline_trades)
 
     proc = _start_bot()
     run_start = datetime.now(UTC)
@@ -323,9 +340,7 @@ def phase_crash(
         logger.info("Restarting bot after crash...")
         proc = _start_bot()
 
-        return _validate_crash_recovery(
-            db, timeout / 2, pre_crash_trade_count, pre_crash_session_id
-        )
+        return _validate_crash_recovery(db, timeout / 2, pre_crash_trade_count)
 
     finally:
         _graceful_stop(proc)
@@ -335,7 +350,6 @@ def _validate_crash_recovery(
     db: Session,
     timeout: float,
     pre_crash_trade_count: int = 0,
-    pre_crash_session_id: int | None = None,
 ) -> bool:
     """Verify the bot recovered and made progress after restart.
 
@@ -417,15 +431,17 @@ def phase_balance(
 
         db.expire_all()
 
-        # Get the session started during this run (scope to current phase)
-        session = (
+        # Get the active ChaosTest session. In local mode, scope to sessions
+        # started during this run. In Railway mode, the bot may have been
+        # running before this script, so accept any active session.
+        session_query = (
             db.query(TradingSession)
             .filter(TradingSession.strategy_name == "ChaosTest")
             .filter(TradingSession.is_active.is_(True))
-            .filter(TradingSession.start_time >= run_start)
-            .order_by(desc(TradingSession.start_time))
-            .first()
         )
+        if not railway:
+            session_query = session_query.filter(TradingSession.start_time >= run_start)
+        session = session_query.order_by(desc(TradingSession.start_time)).first()
         if not session:
             logger.error("No active ChaosTest session found")
             return False
