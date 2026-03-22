@@ -24,9 +24,6 @@ from src.config.constants import (
 from src.data_providers.exchange_interface import OrderSide
 from src.data_providers.exchange_interface import OrderStatus as ExOrderStatus
 from src.database.manager import DatabaseManager
-from src.database.models import (
-    ReconciliationAuditEvent,
-)
 from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
 from src.engines.live.reconciliation import (
     PeriodicReconciler,
@@ -204,17 +201,9 @@ class TestReconciliationIntegration:
         position_tracker.track_recovered_position(position, db_id)
         return db_id, position
 
-    def _query_audit_events(
-        self, db_manager: DatabaseManager, session_id: int
-    ) -> list[ReconciliationAuditEvent]:
-        """Query all audit events for a session."""
-        with db_manager.get_session() as session:
-            return (
-                session.query(ReconciliationAuditEvent)
-                .filter(ReconciliationAuditEvent.session_id == session_id)
-                .order_by(ReconciliationAuditEvent.id)
-                .all()
-            )
+    def _query_audit_events(self, db_manager: DatabaseManager, session_id: int) -> list[dict]:
+        """Query all audit events for a session via DatabaseManager."""
+        return db_manager.get_audit_events(session_id, limit=500)
 
     # ================================================================
     # Group 1: Pending Order Resolution
@@ -292,7 +281,7 @@ class TestReconciliationIntegration:
         # Audit event persisted with CANCELLED
         audits = self._query_audit_events(db_manager, session_id)
         assert len(audits) >= 1
-        assert audits[0].new_value == "CANCELLED"
+        assert audits[0]["new_value"] == "CANCELLED"
 
     def test_resolve_pending_order_not_found_submitted_marks_unresolved(
         self, reconciler, mock_exchange, db_manager, session_id
@@ -322,7 +311,7 @@ class TestReconciliationIntegration:
 
         # Audit event with UNRESOLVED
         audits = self._query_audit_events(db_manager, session_id)
-        assert any(a.new_value == "UNRESOLVED" for a in audits)
+        assert any(a["new_value"] == "UNRESOLVED" for a in audits)
 
     def test_resolve_pending_order_partially_filled(
         self, reconciler, mock_exchange, db_manager, session_id, position_tracker
@@ -679,7 +668,7 @@ class TestReconciliationIntegration:
 
         # Audit event with CLOSED_EXTERNALLY
         audits = self._query_audit_events(db_manager, session_id)
-        assert any("externally" in (a.reason or "").lower() for a in audits)
+        assert any("externally" in (a["reason"] or "").lower() for a in audits)
 
     def test_periodic_sl_filled_closes_position(
         self,
@@ -719,7 +708,7 @@ class TestReconciliationIntegration:
 
         # Audit event with CLOSED_BY_SL
         audits = self._query_audit_events(db_manager, session_id)
-        assert any("stop-loss" in (a.reason or "").lower() for a in audits)
+        assert any("stop-loss" in (a["reason"] or "").lower() for a in audits)
 
     def test_periodic_orphaned_order_cancelled(
         self,
@@ -810,6 +799,35 @@ class TestReconciliationIntegration:
         new_balance = db_manager.get_current_balance(session_id)
         assert abs(new_balance - 5050.0) < 1.0
 
+    def test_periodic_exchange_api_failure_completes_gracefully(
+        self,
+        periodic_reconciler,
+        mock_exchange,
+        db_manager,
+        session_id,
+        position_tracker,
+    ):
+        """Exchange API ConnectionError during cycle does not crash the reconciler."""
+        # Arrange — position exists, but exchange raises on every API call
+        _, position = self._seed_position(
+            db_manager,
+            session_id,
+            position_tracker,
+            stop_loss_order_id="sl_active_001",
+        )
+        mock_exchange.get_order.side_effect = ConnectionError("Exchange unreachable")
+        mock_exchange.get_balance.side_effect = ConnectionError("Exchange unreachable")
+        mock_exchange.get_open_orders.side_effect = ConnectionError("Exchange unreachable")
+
+        # Act — cycle should complete without raising
+        periodic_reconciler._reconcile_cycle()
+
+        # Assert — position still tracked (no false removal on API failure)
+        assert len(position_tracker.positions) == 1
+
+        # on_critical NOT called (API failure is transient, not a state issue)
+        periodic_reconciler.on_critical.assert_not_called()
+
     # ================================================================
     # Group 5: Remaining Paths
     # ================================================================
@@ -893,16 +911,15 @@ class TestReconciliationIntegration:
         assert len(audits) >= 1
 
         audit = audits[0]
-        assert audit.session_id == session_id
-        assert audit.entity_type == "order"
-        assert audit.entity_id is not None
-        assert audit.field == "status"
-        assert audit.old_value is not None
-        assert audit.new_value == "CANCELLED"
-        assert audit.reason is not None
-        assert len(audit.reason) > 0
-        assert audit.severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
-        assert audit.timestamp is not None
+        assert audit["entity_type"] == "order"
+        assert audit["entity_id"] is not None
+        assert audit["field"] == "status"
+        assert audit["old_value"] is not None
+        assert audit["new_value"] == "CANCELLED"
+        assert audit["reason"] is not None
+        assert len(audit["reason"]) > 0
+        assert audit["severity"] in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+        assert audit["timestamp"] is not None
 
     def test_reconcile_balance_corrects_db_balance(
         self,
@@ -929,7 +946,7 @@ class TestReconciliationIntegration:
 
         # Audit event persisted
         audits = self._query_audit_events(db_manager, session_id)
-        balance_audits = [a for a in audits if a.entity_type == "balance"]
+        balance_audits = [a for a in audits if a["entity_type"] == "balance"]
         assert len(balance_audits) >= 1
 
     def test_position_recovery_with_partial_exits_scales_sl_quantity(
