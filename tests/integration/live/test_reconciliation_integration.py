@@ -335,13 +335,14 @@ class TestReconciliationIntegration:
         mock_exchange.cancel_order.return_value = True
 
         # Act — reconciliation may encounter DB UNIQUE constraint on exchange_order_id
-        # when log_position and update_order_journal both use the same exchange order ID.
-        # This is expected behavior: the position is still tracked in memory.
+        # when log_position and update_order_journal both set the same value.
+        # Catch only IntegrityError; any other exception should fail the test.
         try:
             reconciler.resolve_pending_orders()
         except IntegrityError:
-            # DB integrity errors may propagate from UNIQUE constraint on
-            # exchange_order_id; verify side effects anyway
+            # Known issue: log_position creates a duplicate Order row with the same
+            # exchange_order_id that update_order_journal already set. The position
+            # is still tracked in memory despite the DB constraint violation.
             pass
 
         # Assert — position tracked in memory regardless of DB integrity issues
@@ -857,9 +858,10 @@ class TestReconciliationIntegration:
         call_kwargs = mock_exchange.place_stop_loss_order.call_args
         expected_stop = 50000.0 * (1.0 - DEFAULT_STOP_LOSS_PCT)
         # Check stop_price is close to expected default — try kwargs first, then positional
+        # place_stop_loss_order(symbol, side, quantity, stop_price, ...) → index 3
         actual_stop = call_kwargs.kwargs.get("stop_price")
-        if actual_stop is None and len(call_kwargs.args) > 2:
-            actual_stop = call_kwargs.args[2]
+        if actual_stop is None and len(call_kwargs.args) > 3:
+            actual_stop = call_kwargs.args[3]
         assert actual_stop is not None, f"stop_price not found in call_args: {call_kwargs}"
         assert abs(actual_stop - expected_stop) < 1.0
 
@@ -918,7 +920,7 @@ class TestReconciliationIntegration:
         assert audit["new_value"] == "CANCELLED"
         assert audit["reason"] is not None
         assert len(audit["reason"]) > 0
-        assert audit["severity"] in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+        assert audit["severity"] == Severity.LOW.value
         assert audit["timestamp"] is not None
 
     def test_reconcile_balance_corrects_db_balance(
