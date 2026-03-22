@@ -451,6 +451,8 @@ class LiveTradingEngine:
 
         # Trading state
         self.is_running = False
+        self._close_only_mode = False  # No new entries when True; exits still run
+        self._periodic_reconciler = None  # Set during start() for live trading
         self.completed_trades: list[Trade] = []
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
@@ -631,6 +633,8 @@ class LiveTradingEngine:
             enable_live_trading=self.enable_live_trading,
             exchange_interface=self.exchange_interface,
         )
+        # Wire db_manager for order journaling (session_id set during start())
+        self.live_execution_engine.db_manager = self.db_manager
 
         # Entry handler
         self.live_entry_handler = entry_handler or LiveEntryHandler(
@@ -1221,6 +1225,10 @@ class LiveTradingEngine:
             if hasattr(self.strategy, "session_id"):
                 self.strategy.session_id = self.trading_session_id
 
+            # Wire session_id and strategy_name to execution engine for order journaling
+            self.live_execution_engine.session_id = self.trading_session_id
+            self.live_execution_engine.strategy_name = self._strategy_name()
+
         # Perform account synchronization if available
         self._pending_balance_correction = False
         self._pending_corrected_balance = None
@@ -1286,6 +1294,23 @@ class LiveTradingEngine:
             self.order_tracker.start()
             logger.info("📡 Order tracker started")
 
+        # Start periodic reconciler (live trading only, not paper mode)
+        if self.enable_live_trading and self.exchange_interface and self.trading_session_id:
+            try:
+                from src.engines.live.reconciliation import PeriodicReconciler
+
+                self._periodic_reconciler = PeriodicReconciler(
+                    exchange_interface=self.exchange_interface,
+                    position_tracker=self.live_position_tracker,
+                    db_manager=self.db_manager,
+                    session_id=self.trading_session_id,
+                    on_critical=self._enter_close_only_mode,
+                )
+                self._periodic_reconciler.start()
+                logger.info("🔄 Periodic reconciler started")
+            except Exception as e:
+                logger.warning("Failed to start periodic reconciler: %s", e)
+
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(
             target=self._trading_loop, args=(symbol, timeframe, max_steps)
@@ -1302,6 +1327,20 @@ class LiveTradingEngine:
         finally:
             self.stop()
 
+    def _enter_close_only_mode(self) -> None:
+        """Enter close-only mode: no new entries, exits/stops/trailing still active."""
+        if not self._close_only_mode:
+            self._close_only_mode = True
+            logger.critical(
+                "🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review"
+            )
+
+    def resume_trading(self) -> None:
+        """Resume normal trading after close-only mode review."""
+        if self._close_only_mode:
+            self._close_only_mode = False
+            logger.info("✅ Close-only mode deactivated — normal trading resumed")
+
     def stop(self) -> None:
         """Stop the trading engine gracefully"""
         if not self.is_running:
@@ -1311,7 +1350,12 @@ class LiveTradingEngine:
         self.is_running = False
         self.stop_event.set()
 
-        # Stop order tracker first
+        # Stop periodic reconciler
+        if self._periodic_reconciler:
+            self._periodic_reconciler.stop()
+            logger.info("🔄 Periodic reconciler stopped")
+
+        # Stop order tracker
         if self.order_tracker:
             self.order_tracker.stop()
             logger.info("📡 Order tracker stopped")
@@ -2030,6 +2074,11 @@ class LiveTradingEngine:
     ):
         """Check if new positions should be opened"""
 
+        # Close-only mode: skip all entry signals, exits/stops still active
+        if self._close_only_mode:
+            logger.debug("Close-only mode active — skipping entry check")
+            return
+
         use_runtime = self._is_runtime_strategy()
         entry_signal = False
         position_size = 0.0
@@ -2580,6 +2629,21 @@ class LiveTradingEngine:
             self._send_alert(
                 f"Position Opened: {symbol} {side.value} @ ${position.entry_price:.2f}"
             )
+
+            # Ambiguous entry: order submission timed out so we don't know if/how
+            # much actually filled. Track the phantom position (so the reconciler can
+            # resolve it on restart) but do NOT place a stop-loss and immediately
+            # enter close-only mode to prevent further exposure.
+            if result.ambiguous:
+                logger.critical(
+                    "Ambiguous order submission for %s (order_id=%s) — "
+                    "entering close-only mode until restart reconciles the phantom position. "
+                    "No stop-loss placed.",
+                    symbol,
+                    position.order_id,
+                )
+                self._enter_close_only_mode()
+                return
 
             # Place server-side stop-loss order for protection with retry logic
             if self.enable_live_trading and stop_loss and self.exchange_interface:
@@ -3532,6 +3596,9 @@ class LiveTradingEngine:
                 # session will be created below, preventing writes to a closed session.
                 if source == "active":
                     self.trading_session_id = session_id
+                    # Wire session context to execution engine so journaling works
+                    self.live_execution_engine.session_id = session_id
+                    self.live_execution_engine.strategy_name = self._strategy_name()
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,
@@ -3583,6 +3650,11 @@ class LiveTradingEngine:
                     )
                     entry_balance = float(self.current_balance)
 
+                # Resolve the tracker key: prefer entry_order_id (exchange),
+                # fall back to database ID string for backward compat
+                entry_order_id = pos_data.get("entry_order_id")
+                tracker_key = entry_order_id or str(pos_data["id"])
+
                 position = Position(
                     symbol=pos_data["symbol"],
                     side=PositionSide(side_value),
@@ -3596,7 +3668,12 @@ class LiveTradingEngine:
                     unrealized_pnl_percent=float(
                         pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
                     ),
-                    order_id=str(pos_data["id"]),  # Use database ID as order_id
+                    quantity=pos_data.get("quantity"),
+                    order_id=tracker_key,  # Backward compat: used as _positions dict key
+                    tracker_key=tracker_key,
+                    exchange_order_id=entry_order_id,
+                    client_order_id=pos_data.get("client_order_id"),
+                    db_position_id=pos_data["id"],
                     stop_loss_order_id=pos_data.get("stop_loss_order_id"),
                 )
 
@@ -3661,38 +3738,125 @@ class LiveTradingEngine:
         """
         Reconcile local positions with exchange state on startup.
 
-        This detects positions that were closed while the bot was offline
-        (e.g., by stop-loss orders triggering) and updates local state accordingly.
+        Delegates to PositionReconciler for comprehensive order-based verification.
+        Falls back to legacy SL-based reconciliation if reconciler unavailable.
         """
         if not self.exchange_interface or not self.enable_live_trading:
             return
 
         positions_snapshot = self.live_position_tracker.positions
+
+        # Run PositionReconciler regardless of position count — resolve_pending_orders
+        # must execute even when no positions were recovered (e.g. entry submitted but
+        # never persisted as a position before crash).
+        if self.trading_session_id:
+            try:
+                from src.engines.live.reconciliation import (
+                    PositionReconciler,
+                    Severity,
+                )
+
+                reconciler = PositionReconciler(
+                    exchange_interface=self.exchange_interface,
+                    position_tracker=self.live_position_tracker,
+                    db_manager=self.db_manager,
+                    session_id=self.trading_session_id,
+                    max_position_size=self.max_position_size,
+                )
+
+                if not positions_snapshot:
+                    logger.info("📊 No local positions to reconcile — checking pending orders")
+                    results = reconciler.resolve_pending_orders()
+
+                    # Process results even with no positions — a filled entry
+                    # order may create a position, and critical issues must
+                    # still trigger close-only mode.
+                    critical_count = sum(
+                        1 for r in results if r.severity == Severity.CRITICAL
+                    )
+                    if critical_count > 0:
+                        logger.critical(
+                            "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
+                            critical_count,
+                        )
+                        self._close_only_mode = True
+
+                    for r in results:
+                        if r.status == "corrected" and r.severity >= Severity.HIGH:
+                            for correction in r.corrections:
+                                logger.warning(
+                                    "⚠️ Auto-corrected %s #%s: %s",
+                                    r.entity_type,
+                                    r.entity_id,
+                                    correction.reason,
+                                )
+
+                    if results:
+                        corrections = sum(len(r.corrections) for r in results)
+                        logger.info(
+                            "✅ Pending order resolution complete: %d results, %d corrections, %d critical",
+                            len(results),
+                            corrections,
+                            critical_count,
+                        )
+                    return
+
+                logger.info("🔄 Reconciling %s positions with exchange...", len(positions_snapshot))
+                results = reconciler.reconcile_startup(positions_snapshot)
+
+                # Check for critical issues
+                critical_count = sum(
+                    1 for r in results if r.severity == Severity.CRITICAL
+                )
+                if critical_count > 0:
+                    logger.critical(
+                        "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
+                        critical_count,
+                    )
+                    self._close_only_mode = True
+
+                # Log HIGH severity auto-corrections (cancelled entries, SL fills)
+                for r in results:
+                    if r.status == "corrected" and r.severity >= Severity.HIGH:
+                        for correction in r.corrections:
+                            logger.warning(
+                                "⚠️ Auto-corrected %s #%s: %s",
+                                r.entity_type,
+                                r.entity_id,
+                                correction.reason,
+                            )
+
+                corrections = sum(len(r.corrections) for r in results)
+                logger.info(
+                    "✅ Reconciliation complete: %d results, %d corrections, %d critical",
+                    len(results),
+                    corrections,
+                    critical_count,
+                )
+                return
+            except Exception as e:
+                logger.warning(
+                    "PositionReconciler failed, falling back to legacy reconciliation: %s", e
+                )
+
+        # Legacy fallback: SL-based reconciliation (requires positions)
         if not positions_snapshot:
             logger.info("📊 No local positions to reconcile")
             return
 
-        logger.info("🔄 Reconciling %s positions with exchange...", len(positions_snapshot))
-
         try:
-            # Get open orders from exchange
             exchange_orders = self.exchange_interface.get_open_orders()
             exchange_order_ids = {order.order_id for order in exchange_orders}
 
-            # Check each local position
             positions_to_close = []
             for _order_id, position in positions_snapshot.items():
-                # Check if the position's entry order is still open (shouldn't be for filled orders)
-                # More importantly, check if stop-loss order is still active
                 if position.stop_loss_order_id:
                     if position.stop_loss_order_id not in exchange_order_ids:
-                        # Stop-loss order is gone - may have triggered
                         logger.warning(
                             "⚠️ Stop-loss order %s not found on exchange for %s - position may have closed",
                             position.stop_loss_order_id,
                             position.symbol,
                         )
-                        # Check if we can verify the order status
                         try:
                             sl_order = self.exchange_interface.get_order(
                                 position.stop_loss_order_id, position.symbol

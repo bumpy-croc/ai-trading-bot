@@ -14,7 +14,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.config.constants import (
     DEFAULT_FEE_RATE,
@@ -23,9 +23,6 @@ from src.config.constants import (
 from src.data_providers.exchange_interface import OrderSide, OrderStatus, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +49,12 @@ class EntryExecutionResult:
     executed_price: float = 0.0
     position_value: float = 0.0
     quantity: float = 0.0
+    requested_quantity: float = 0.0
     entry_fee: float = 0.0
     slippage_cost: float = 0.0
     error: str | None = None
+    client_order_id: str | None = None
+    ambiguous: bool = False
 
 
 @dataclass
@@ -105,6 +105,12 @@ class LiveExecutionEngine:
                 "Provide exchange_interface or set enable_live_trading=False."
             )
 
+        # Optional: database manager and session_id for order journaling
+        # Set by trading engine after initialization
+        self.db_manager: Any = None
+        self.session_id: int | None = None
+        self.strategy_name: str = "unknown"
+
         # Use shared cost calculator for all fee and slippage calculations
         self._cost_calculator = CostCalculator(
             fee_rate=fee_rate,
@@ -149,7 +155,12 @@ class LiveExecutionEngine:
             return None
 
     def _is_filled_status(self, status: Any) -> bool:
-        """Return True when the order status indicates a fill."""
+        """Return True when the order status indicates any fill (full or partial).
+
+        Used in execute_entry/execute_exit to decide whether to extract fill
+        data from the exchange order response. PARTIALLY_FILLED orders contain
+        valid fill data that must be captured.
+        """
         if isinstance(status, OrderStatus):
             return status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
         if isinstance(status, str):
@@ -158,6 +169,20 @@ class LiveExecutionEngine:
                 OrderStatus.FILLED.value,
                 OrderStatus.PARTIALLY_FILLED.value,
             )
+        return False
+
+    def _is_journal_confirmed_status(self, status: Any) -> bool:
+        """Return True only for fully filled orders (journal CONFIRMED status).
+
+        Used in journal updates to distinguish CONFIRMED (fully filled) from
+        SUBMITTED (still pending). PARTIALLY_FILLED orders remain SUBMITTED
+        until fully filled.
+        """
+        if isinstance(status, OrderStatus):
+            return status == OrderStatus.FILLED
+        if isinstance(status, str):
+            normalized = status.upper()
+            return normalized == OrderStatus.FILLED.value
         return False
 
     def _adjust_cost_totals(self, fee_delta: float, slippage_delta: float) -> None:
@@ -327,10 +352,14 @@ class LiveExecutionEngine:
                 )
 
             quantity = position_value / executed_price
+            requested_quantity = quantity  # Preserve before fill data overwrites
 
             # Execute real order if enabled
+            client_order_id: str | None = None
             if self.enable_live_trading:
-                order_id = self._execute_live_order(symbol, side, position_value, executed_price)
+                order_id, client_order_id = self._execute_live_order(
+                    symbol, side, position_value, executed_price
+                )
                 if not order_id:
                     return EntryExecutionResult(
                         success=False,
@@ -384,14 +413,27 @@ class LiveExecutionEngine:
                 order_id = f"paper_{int(time.time() * 1000)}"
                 logger.info("PAPER TRADE - Would open %s position on %s", side.value, symbol)
 
+            # Detect phantom order: when place_order returns None (timeout/network),
+            # _execute_live_order returns (client_order_id, client_order_id) to block
+            # duplicate entries. The order may or may not have filled on the exchange,
+            # so mark the result as ambiguous for the caller to handle safely.
+            is_ambiguous = (
+                client_order_id is not None
+                and order_id is not None
+                and order_id == client_order_id
+            )
+
             return EntryExecutionResult(
                 success=True,
                 order_id=order_id,
                 executed_price=executed_price,
                 position_value=position_value,
                 quantity=quantity,
+                requested_quantity=requested_quantity,
                 entry_fee=entry_fee,
                 slippage_cost=slippage_cost,
+                client_order_id=client_order_id,
+                ambiguous=is_ambiguous,
             )
 
         except (ValueError, ArithmeticError, TypeError) as e:
@@ -410,6 +452,7 @@ class LiveExecutionEngine:
         position_notional: float,
         liquidity: str | None = None,
         apply_slippage: bool = True,
+        position_db_id: int | None = None,
     ) -> ExitExecutionResult:
         """Execute an exit order with fees and slippage.
 
@@ -421,6 +464,8 @@ class LiveExecutionEngine:
             position_notional: Notional value of position.
             liquidity: Liquidity classification for fee and slippage handling.
             apply_slippage: When False, slippage is suppressed.
+            position_db_id: Database row ID for the position being closed.
+                Used to link exit journal entries to their position for crash recovery.
 
         Returns:
             ExitExecutionResult with execution details.
@@ -470,6 +515,7 @@ class LiveExecutionEngine:
                     quantity,
                     position_notional=position_notional,
                     order_id=order_id,
+                    position_db_id=position_db_id,
                 )
                 if not close_order_id:
                     return ExitExecutionResult(
@@ -541,7 +587,7 @@ class LiveExecutionEngine:
         side: PositionSide,
         value: float,
         price: float,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """Execute a real market order via exchange with idempotency.
 
         Generates a client order ID based on timestamp and order details to prevent
@@ -554,7 +600,7 @@ class LiveExecutionEngine:
             price: Expected price.
 
         Returns:
-            Order ID if successful, None otherwise.
+            Tuple of (exchange_order_id, client_order_id). Both None on failure.
         """
         # CRITICAL VALIDATION: Never allow live trading mode without exchange interface
         if self.exchange_interface is None:
@@ -564,11 +610,11 @@ class LiveExecutionEngine:
                     "CRITICAL: Live trading enabled but no exchange interface configured! "
                     "This would create fake orders. Aborting order placement."
                 )
-                return None
+                return None, None
             else:
                 # Paper trading mode - this is expected
                 logger.debug("Paper trading mode - generating simulated order ID")
-                return f"paper_{int(time.time() * 1000)}"
+                return f"paper_{int(time.time() * 1000)}", None
 
         try:
             # Defensive validation - should already be validated by caller but check anyway
@@ -578,7 +624,7 @@ class LiveExecutionEngine:
                     price,
                     symbol,
                 )
-                return None
+                return None, None
 
             if value <= 0 or not math.isfinite(value):
                 logger.error(
@@ -586,31 +632,108 @@ class LiveExecutionEngine:
                     value,
                     symbol,
                 )
-                return None
+                return None, None
 
             order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
             quantity = value / price
             quantity = self._normalize_quantity(symbol, quantity, value)
             if quantity <= 0:
-                return None
+                return None, None
 
             # Generate deterministic client order ID for idempotency
-            # Format: atb_SYMBOL_SIDE_TIMESTAMP_UUID
-            # UUID prevents collision if multiple orders placed within same millisecond
+            # Format: atb_{timestamp_hex}_{uuid8} (~24 chars, within Binance 36-char limit)
+            # Symbol and side are already in the order params, so omitted from the ID
             timestamp_ms = int(time.time() * 1000)
             unique_suffix = uuid.uuid4().hex[:8]
-            client_order_id = f"atb_{symbol}_{side.value}_{timestamp_ms}_{unique_suffix}"
+            client_order_id = f"atb_{timestamp_ms:x}_{unique_suffix}"
 
-            return self.exchange_interface.place_order(
-                symbol=symbol,
-                side=order_side,
-                order_type=OrderType.MARKET,
-                quantity=quantity,
-                client_order_id=client_order_id,
+            # Journal the order BEFORE submission (crash recovery anchor)
+            if self.db_manager and self.session_id:
+                try:
+                    self.db_manager.create_order_journal_entry(
+                        session_id=self.session_id,
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=side.value,
+                        order_type="ENTRY",
+                        quantity=quantity,
+                        strategy_name=self.strategy_name,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to journal entry order: %s", e)
+                    # Journal failure means no crash-recovery anchor exists.
+                    # Proceeding would risk a phantom position on restart.
+                    return None, None
+
+            try:
+                order_result = self.exchange_interface.place_order(
+                    symbol=symbol,
+                    side=order_side,
+                    order_type=OrderType.MARKET,
+                    quantity=quantity,
+                    client_order_id=client_order_id,
+                )
+            except ValueError as e:
+                # Definitively rejected by exchange (invalid params, insufficient
+                # balance, etc.). The order was NOT placed, so mark as FAILED and
+                # return (None, None) — no phantom position should be created.
+                logger.error(
+                    "Order definitively rejected for %s: %s — no position created",
+                    symbol,
+                    e,
+                )
+                if self.db_manager and self.session_id:
+                    try:
+                        self.db_manager.update_order_journal(client_order_id, "FAILED")
+                    except Exception as journal_err:
+                        logger.warning("Failed to mark order as FAILED: %s", journal_err)
+                return None, None
+
+            if order_result is None:
+                # Order may have been placed despite returning None (timeout/network error),
+                # so mark as UNKNOWN rather than FAILED — the reconciler resolves on restart.
+                # Return client_order_id as the order_id so execute_entry creates a tracked
+                # position. This blocks duplicate entries for the same symbol. If the order
+                # never actually filled, the startup reconciler cleans up the phantom position.
+                if self.db_manager and self.session_id:
+                    try:
+                        self.db_manager.update_order_journal(client_order_id, "UNKNOWN")
+                    except Exception as e:
+                        logger.warning("Failed to mark order as UNKNOWN: %s", e)
+                return client_order_id, client_order_id
+
+            # Extract order_id and update journal with exchange data
+            exchange_order_id = (
+                order_result.order_id if hasattr(order_result, "order_id") else str(order_result)
             )
-        except (ConnectionError, TimeoutError, ValueError) as e:
+            if self.db_manager and self.session_id:
+                try:
+                    fill_price = getattr(order_result, "average_price", None)
+                    fill_qty = getattr(order_result, "filled_quantity", None)
+                    commission = getattr(order_result, "commission", None)
+                    # Only mark CONFIRMED when the order is fully filled;
+                    # use SUBMITTED for partial fills still pending on exchange
+                    order_status = getattr(order_result, "status", None)
+                    journal_status = (
+                        "CONFIRMED"
+                        if self._is_journal_confirmed_status(order_status)
+                        else "SUBMITTED"
+                    )
+                    self.db_manager.update_order_journal(
+                        client_order_id=client_order_id,
+                        status=journal_status,
+                        exchange_order_id=exchange_order_id,
+                        fill_price=float(fill_price) if fill_price is not None else None,
+                        fill_quantity=float(fill_qty) if fill_qty is not None else None,
+                        commission=float(commission) if commission is not None else None,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to update entry order journal: %s", e)
+
+            return exchange_order_id, client_order_id
+        except (ConnectionError, TimeoutError) as e:
             logger.error("Live order execution failed: %s", e)
-            return None
+            return None, None
 
     def _close_live_order(
         self,
@@ -619,6 +742,7 @@ class LiveExecutionEngine:
         quantity: float,
         position_notional: float,
         order_id: str | None = None,
+        position_db_id: int | None = None,
     ) -> str | None:
         """Close a real market order via exchange.
 
@@ -627,6 +751,8 @@ class LiveExecutionEngine:
             side: Position side to close.
             quantity: Quantity to close.
             order_id: Order ID to close.
+            position_db_id: Database row ID for the position being closed.
+                Links exit journal entries to their position for crash recovery.
 
         Returns:
             Order ID if successful, None otherwise.
@@ -646,22 +772,81 @@ class LiveExecutionEngine:
                 return None
 
             # Generate deterministic client order ID for exit order idempotency
-            # Use UUID to prevent collision, timestamp for ordering
+            # Format: atbx_{timestamp_hex}_{uuid8} (~25 chars, within Binance 36-char limit)
+            # Symbol and side are already in the order params, so omitted from the ID
             timestamp_ms = int(time.time() * 1000)
-            close_side_str = "SELL" if side == PositionSide.LONG else "BUY"
             unique_suffix = uuid.uuid4().hex[:8]
-            client_order_id = f"atb_close_{symbol}_{close_side_str}_{timestamp_ms}_{unique_suffix}"
-            if order_id:
-                # Include original order ID for traceability
-                client_order_id = f"{client_order_id}_{order_id[:8]}"
+            client_order_id = f"atbx_{timestamp_ms:x}_{unique_suffix}"
 
-            close_order_id = self.exchange_interface.place_order(
+            # Journal the exit order BEFORE submission (crash recovery anchor)
+            if self.db_manager and self.session_id:
+                try:
+                    self.db_manager.create_order_journal_entry(
+                        session_id=self.session_id,
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=side.value,
+                        order_type="FULL_EXIT",
+                        quantity=quantity,
+                        strategy_name=self.strategy_name,
+                        position_id=position_db_id,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to journal exit order: %s", e)
+                    # Journal failure means no crash-recovery anchor exists.
+                    # Proceeding would risk losing track of the exit on restart.
+                    return None
+
+            close_result = self.exchange_interface.place_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
                 client_order_id=client_order_id,
             )
+            # Extract order_id string for backward compat
+            close_order_id = None
+            if close_result is not None:
+                close_order_id = (
+                    close_result.order_id
+                    if hasattr(close_result, "order_id")
+                    else str(close_result)
+                )
+
+            # Update journal with result
+            if self.db_manager and self.session_id:
+                try:
+                    if close_order_id:
+                        fill_price = getattr(close_result, "average_price", None)
+                        fill_qty = getattr(close_result, "filled_quantity", None)
+                        commission = getattr(close_result, "commission", None)
+                        # Only mark CONFIRMED when the order is fully filled;
+                        # use SUBMITTED for partial fills still pending on exchange
+                        order_status = getattr(close_result, "status", None)
+                        journal_status = (
+                            "CONFIRMED"
+                            if self._is_journal_confirmed_status(order_status)
+                            else "SUBMITTED"
+                        )
+                        self.db_manager.update_order_journal(
+                            client_order_id=client_order_id,
+                            status=journal_status,
+                            exchange_order_id=close_order_id,
+                            fill_price=float(fill_price) if fill_price is not None else None,
+                            fill_quantity=float(fill_qty) if fill_qty is not None else None,
+                            commission=float(commission) if commission is not None else None,
+                            position_id=position_db_id,
+                        )
+                    else:
+                        # Order may have been placed despite returning None
+                        # (timeout/network error), so mark as UNKNOWN — the
+                        # reconciler resolves on restart
+                        self.db_manager.update_order_journal(
+                            client_order_id, "UNKNOWN", position_id=position_db_id
+                        )
+                except Exception as e:
+                    logger.warning("Failed to update exit order journal: %s", e)
+
             if close_order_id:
                 logger.info(
                     "Live close order placed: %s %s qty=%.8f order_id=%s",

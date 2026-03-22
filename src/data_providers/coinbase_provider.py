@@ -427,11 +427,12 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         stop_price: float | None = None,
         time_in_force: str = "GTC",
         client_order_id: str | None = None,
-    ) -> str | None:
+    ) -> Order | None:
         """
         Place an order on Coinbase Advanced Trade API.
 
         Note: Coinbase Advanced Trade API supports client_order_id for idempotency.
+        Returns Order object for interface compatibility; fill data may be partial.
         """
         try:
             cb_type = self._convert_to_cb_type(order_type)
@@ -458,8 +459,29 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             if client_order_id:
                 body["client_order_id"] = client_order_id
 
-            order = self._request("POST", "/orders", body=body, auth=True)
-            return order.get("id")
+            resp = self._request("POST", "/orders", body=body, auth=True)
+            order_id = resp.get("id")
+            if not order_id:
+                return None
+            from datetime import UTC, datetime
+
+            now = datetime.now(UTC)
+            return Order(
+                order_id=order_id,
+                symbol=symbol,
+                side=side,
+                order_type=order_type,
+                quantity=quantity,
+                price=price,
+                status=OrderStatus.PENDING,
+                filled_quantity=0.0,
+                average_price=None,
+                commission=0.0,
+                commission_asset="USD",
+                create_time=now,
+                update_time=now,
+                client_order_id=client_order_id,
+            )
         except Exception as e:
             logger.error(f"Failed to place order: {e}")
             return None
@@ -492,6 +514,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         quantity: float,
         stop_price: float,
         limit_price: float | None = None,
+        client_order_id: str | None = None,
     ) -> str | None:
         """
         Place a server-side stop-loss order on Coinbase.

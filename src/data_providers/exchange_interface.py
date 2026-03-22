@@ -84,6 +84,7 @@ class Order:
     update_time: datetime
     stop_price: float | None = None
     time_in_force: str = "GTC"
+    client_order_id: str | None = None  # Our atb_... idempotency key
 
 
 @dataclass
@@ -181,9 +182,9 @@ class ExchangeInterface(ABC):
         stop_price: float | None = None,
         time_in_force: str = "GTC",
         client_order_id: str | None = None,
-    ) -> str | None:
+    ) -> Order | None:
         """
-        Place a new order and return order ID.
+        Place a new order and return full Order object with fill data.
 
         Args:
             symbol: Trading pair symbol
@@ -196,7 +197,9 @@ class ExchangeInterface(ABC):
             client_order_id: Optional client-generated order ID for idempotency
 
         Returns:
-            Exchange order ID if successful, None otherwise
+            Order object with fill data if successful, None otherwise.
+            For backward compatibility, callers that only need the order ID
+            can access result.order_id.
         """
         pass
 
@@ -218,6 +221,7 @@ class ExchangeInterface(ABC):
         quantity: float,
         stop_price: float,
         limit_price: float | None = None,
+        client_order_id: str | None = None,
     ) -> str | None:
         """
         Place a server-side stop-loss order.
@@ -233,11 +237,41 @@ class ExchangeInterface(ABC):
             stop_price: Price that triggers the stop order
             limit_price: Optional limit price for STOP_LOSS_LIMIT orders.
                          If None, uses stop_price * 0.99 for sells, * 1.01 for buys.
+            client_order_id: Optional client-generated order ID for idempotency.
 
         Returns:
             Order ID from exchange, or None on failure
         """
         pass
+
+    def get_order_by_client_id(self, client_order_id: str, symbol: str) -> Order | None:
+        """Get an order by our client_order_id (atb_... idempotency key).
+
+        Default implementation returns None (not supported). Providers should
+        override when the exchange supports origClientOrderId queries.
+        """
+        logger.warning("get_order_by_client_id not implemented for this exchange")
+        return None
+
+    def get_all_orders(
+        self, symbol: str, start_time: datetime | None = None, limit: int = 100
+    ) -> list[Order]:
+        """Get all orders (open + closed) for a symbol within a time window.
+
+        Default implementation returns empty list. Providers should override.
+        """
+        logger.warning("get_all_orders not implemented for this exchange")
+        return []
+
+    def get_my_trades(
+        self, symbol: str, order_id: str | None = None, start_time: datetime | None = None
+    ) -> list[Trade]:
+        """Get account trades, optionally filtered by order_id or start_time.
+
+        Default implementation delegates to get_recent_trades. Providers should
+        override for accurate fill aggregation.
+        """
+        return self.get_recent_trades(symbol, limit=500)
 
     @abstractmethod
     def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:

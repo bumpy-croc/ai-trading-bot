@@ -414,6 +414,7 @@ class LiveExitHandler:
             position_notional=position_notional,
             liquidity=liquidity,
             apply_slippage=apply_slippage,
+            position_db_id=position.db_position_id,
         )
 
         if not execution_result.success:

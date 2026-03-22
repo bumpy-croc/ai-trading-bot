@@ -228,7 +228,7 @@ class LivePositionTracker:
                     size=position.size,
                     entry_balance=position.entry_balance,
                     strategy_name=strategy_name or "unknown",
-                    entry_order_id=order_id,
+                    entry_order_id=position.exchange_order_id or order_id,
                     stop_loss=position.stop_loss,
                     take_profit=position.take_profit,
                     quantity=quantity,
@@ -236,6 +236,7 @@ class LivePositionTracker:
                     trailing_stop_activated=False,
                     trailing_stop_price=None,
                     breakeven_triggered=False,
+                    client_order_id=position.client_order_id,
                 )
                 # Initialize partial fields in DB
                 self.db_manager.update_position(
@@ -250,6 +251,8 @@ class LivePositionTracker:
 
         with self._positions_lock:
             self._position_db_ids[order_id] = db_id
+            if db_id is not None:
+                position.db_position_id = db_id
         return db_id
 
     def track_recovered_position(self, position: LivePosition, db_id: int | None) -> None:
@@ -876,6 +879,8 @@ class LivePositionTracker:
                     stop_loss=float(db_pos.stop_loss) if db_pos.stop_loss else None,
                     take_profit=float(db_pos.take_profit) if db_pos.take_profit else None,
                     order_id=db_pos.entry_order_id,
+                    exchange_order_id=db_pos.entry_order_id,
+                    client_order_id=getattr(db_pos, "client_order_id", None),
                     original_size=float(db_pos.original_size) if db_pos.original_size else None,
                     current_size=float(db_pos.current_size) if db_pos.current_size else None,
                     partial_exits_taken=int(db_pos.partial_exits_taken or 0),
