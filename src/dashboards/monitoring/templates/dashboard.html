@@ -21,7 +21,12 @@
                 <i class="fas fa-chart-line me-2"></i>
                 Trading Bot Monitor
             </a>
-            <div class="navbar-nav ms-auto">
+            <div class="navbar-nav ms-auto d-flex flex-row align-items-center gap-3">
+                <div class="connection-status" id="connectionStatus">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span class="status-text" id="statusText">Connecting...</span>
+                </div>
+                <span class="navbar-text text-muted small" id="lastUpdateTime"></span>
                 <button class="btn btn-outline-primary btn-sm" id="configToggle">
                     <i class="fas fa-cog me-1"></i>
                     Settings
@@ -72,7 +77,7 @@
             <div class="col-md-3 mb-3">
                 <div class="metric-card dynamic-risk-card" id="metric_dynamic_risk_factor">
                     <div class="metric-title">
-                        Dynamic Risk 
+                        Dynamic Risk
                         <i class="fas fa-circle risk-status-indicator" id="riskStatusIndicator" title="Risk adjustment status"></i>
                     </div>
                     <div class="metric-value">1.0x</div>
@@ -106,10 +111,18 @@
         <div class="row mb-4">
             <div class="col-12">
                 <div class="chart-container">
-                    <h5 class="section-title">
-                        <i class="fas fa-chart-area"></i>
-                        Performance
-                    </h5>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="section-title mb-0">
+                            <i class="fas fa-chart-area"></i>
+                            Performance
+                        </h5>
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Chart time range">
+                            <button type="button" class="btn btn-outline-secondary chart-range-btn" data-days="1">24h</button>
+                            <button type="button" class="btn btn-outline-secondary chart-range-btn active" data-days="7">7d</button>
+                            <button type="button" class="btn btn-outline-secondary chart-range-btn" data-days="30">30d</button>
+                            <button type="button" class="btn btn-outline-secondary chart-range-btn" data-days="90">90d</button>
+                        </div>
+                    </div>
                     <canvas id="performanceChart"></canvas>
                 </div>
             </div>
@@ -123,6 +136,7 @@
                         <span>
                             <i class="fas fa-wallet"></i>
                             Active Positions
+                            <span class="badge bg-primary ms-2" id="positionCount">0</span>
                         </span>
                         <div class="btn-group" role="group" aria-label="Close target display options">
                             <button id="toggleCloseTargetDisplay" class="btn btn-sm btn-outline-secondary" title="Toggle between currency and percentage display">
@@ -152,7 +166,9 @@
                             </thead>
                         <tbody>
                             <tr>
-                                <td colspan="11" class="text-center">Loading...</td>
+                                <td colspan="11" class="text-center text-muted py-4">
+                                    <i class="fas fa-spinner fa-spin me-2"></i>Loading positions...
+                                </td>
                             </tr>
                         </tbody>
                         </table>
@@ -168,6 +184,7 @@
                     <h5 class="section-title p-3 mb-0">
                         <i class="fas fa-exchange-alt"></i>
                         Recent Trades
+                        <span class="badge bg-primary ms-2" id="tradeCount">0</span>
                     </h5>
                     <div class="table-responsive">
                         <table class="table table-hover" id="tradesTable">
@@ -179,11 +196,15 @@
                                     <th>Entry</th>
                                     <th>Exit</th>
                                     <th>P&L</th>
+                                    <th>Reason</th>
+                                    <th>Time</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr>
-                                    <td colspan="6" class="text-center">Loading...</td>
+                                    <td colspan="8" class="text-center text-muted py-4">
+                                        <i class="fas fa-spinner fa-spin me-2"></i>Loading trades...
+                                    </td>
                                 </tr>
                             </tbody>
                         </table>
@@ -230,7 +251,7 @@
                                 </label>
                             </div>
                         </div>
-                        
+
                         <div class="mb-3">
                             <h6>Tooltip Information</h6>
                             <div class="form-check">
@@ -252,12 +273,12 @@
                                 </label>
                             </div>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="maxTooltipLength" class="form-label">Maximum tooltip length (characters)</label>
                             <input type="number" class="form-control" id="maxTooltipLength" value="200" min="50" max="500">
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="refreshInterval" class="form-label">Refresh interval (milliseconds)</label>
                             <input type="number" class="form-control" id="refreshInterval" value="5000" min="1000" max="30000" step="1000">
@@ -315,6 +336,7 @@
     <div class="overlay" id="overlay"></div>
 
     <!-- JavaScript Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
 

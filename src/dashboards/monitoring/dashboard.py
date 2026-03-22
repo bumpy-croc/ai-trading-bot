@@ -31,6 +31,7 @@ else:
 
 # Standard library imports
 import argparse
+import json
 import logging
 import threading
 import time
@@ -113,7 +114,7 @@ class MonitoringDashboard:
     Real-time monitoring dashboard for the trading bot
     """
 
-    def __init__(self, db_url: str | None = None, update_interval: int = 3600):
+    def __init__(self, db_url: str | None = None, update_interval: int = 30):
         # Calculate absolute paths for templates and static files
         templates_path = src_path / "dashboards" / "monitoring" / "templates"
         static_path = src_path / "dashboards" / "monitoring" / "static"
@@ -142,12 +143,14 @@ class MonitoringDashboard:
             class _OfflineProvider:  # minimal stub implementation
                 """Fallback provider that returns empty data so the UI still loads."""
 
-                def get_current_price(self, symbol: str):
-                    return 0.0
+                def get_current_price(self, symbol: str):  # noqa: ARG002
+                    # Return None instead of 0.0 so callers can distinguish
+                    # "offline" from "price is actually zero"
+                    return None
 
                 def get_historical_data(
-                    self, symbol: str, timeframe: str, start, end
-                ):  # noqa: D401
+                    self, symbol: str, timeframe: str, start, end  # noqa: ARG002
+                ):
                     return pd.DataFrame()
 
             self.data_provider = _OfflineProvider()
@@ -740,61 +743,79 @@ class MonitoringDashboard:
             return 0.0
 
     def _get_risk_per_trade(self) -> float:
-        """Get average risk per trade"""
-        # This would typically come from the risk manager configuration
-        return 1.0  # Default 1% risk per trade
-
-    def _get_sharpe_ratio(self) -> float:
-        """Calculate Sharpe ratio"""
+        """Get risk per trade from the most recent trading session config."""
         try:
-            # Get daily returns from account snapshots
             query = """
-            SELECT balance, DATE(timestamp) as date
-            FROM account_history
-            ORDER BY timestamp
+            SELECT strategy_config
+            FROM trading_sessions
+            ORDER BY start_time DESC
+            LIMIT 1
             """
             result = self.db_manager.execute_query(query)
+            if result and result[0].get("strategy_config"):
+                config = result[0]["strategy_config"]
+                if isinstance(config, str):
+                    config = json.loads(config)
+                # Check nested config structures for risk_per_trade.
+                # Use `is not None` instead of `or` to avoid skipping a valid 0 value.
+                for source in [
+                    config,
+                    config.get("risk", {}),
+                    config.get("risk_manager", {}),
+                ]:
+                    risk = source.get("risk_per_trade")
+                    if risk is not None:
+                        return self._safe_float(risk)
+            return 1.0  # Default 1% if not found in config
+        except Exception as e:
+            logger.debug(f"Could not read risk_per_trade from session config: {e}")
+            return 1.0
 
-            if len(result) < 2:
+    def _get_daily_balance_series(self) -> pd.Series:
+        """Query account_history and return a daily last-balance Series.
+
+        Shared by Sharpe, volatility, and drawdown calculations to avoid
+        repeating the same query and aggregation logic.
+        Returns an empty Series when data is insufficient.
+        """
+        query = """
+        SELECT balance, DATE(timestamp) as date
+        FROM account_history
+        ORDER BY timestamp
+        """
+        result = self.db_manager.execute_query(query)
+        if len(result) < 2:
+            return pd.Series(dtype=float)
+
+        df = pd.DataFrame(result)
+        df["balance"] = df["balance"].apply(self._safe_float)
+        return df.groupby("date")["balance"].last()
+
+    def _get_sharpe_ratio(self) -> float:
+        """Calculate Sharpe ratio from daily balance snapshots."""
+        try:
+            daily_balance = self._get_daily_balance_series()
+            if daily_balance.empty:
                 return 0.0
-
-            # Calculate daily returns
-            df = pd.DataFrame(result)
-            # Convert balance column to float to handle Decimal types
-            df["balance"] = df["balance"].apply(self._safe_float)
-            # Aggregate to daily last to ensure daily frequency
-            daily_balance = df.groupby("date")["balance"].last()
             return perf_sharpe(daily_balance)
-
         except Exception as e:
             logger.error(f"Error calculating Sharpe ratio: {e}")
             return 0.0
 
     def _get_volatility(self) -> float:
-        """Calculate portfolio volatility"""
+        """Calculate annualized portfolio volatility from daily returns."""
         try:
-            # Similar to Sharpe ratio calculation but return std dev
-            query = """
-            SELECT balance, DATE(timestamp) as date
-            FROM account_history
-            ORDER BY timestamp
-            """
-            result = self.db_manager.execute_query(query)
-
-            if len(result) < 2:
+            daily_balance = self._get_daily_balance_series()
+            if len(daily_balance) < 2:
                 return 0.0
 
-            df = pd.DataFrame(result)
-            # Convert balance column to float to handle Decimal types
-            df["balance"] = df["balance"].apply(self._safe_float)
-            df["daily_return"] = df["balance"].pct_change()
-            df = df.dropna()
-
-            if len(df) == 0:
+            daily_returns = daily_balance.pct_change().dropna()
+            if len(daily_returns) == 0:
                 return 0.0
 
-            return df["daily_return"].std() * (252**0.5) * 100  # Annualized volatility %
-
+            # Annualized volatility: daily std * sqrt(365) for crypto (24/7 markets)
+            vol = daily_returns.std() * (365**0.5) * 100
+            return 0.0 if pd.isna(vol) else float(vol)
         except Exception as e:
             logger.error(f"Error calculating volatility: {e}")
             return 0.0
@@ -921,11 +942,32 @@ class MonitoringDashboard:
             logger.error(f"Error getting current strategy: {e}")
             return "Unknown"
 
-    def _get_price_change_24h(self) -> float:
-        """Get 24h price change percentage"""
+    def _get_active_symbol(self) -> str:
+        """Get the symbol from the most recent active position, or fall back to session config."""
         try:
+            positions = self.db_manager.get_active_positions()
+            if positions:
+                symbol = str(positions[0].get("symbol", ""))
+                if symbol:
+                    return symbol
+            # Fall back to most recent session
+            query = """
+            SELECT symbol FROM trading_sessions
+            ORDER BY start_time DESC LIMIT 1
+            """
+            result = self.db_manager.execute_query(query)
+            if result and result[0].get("symbol"):
+                return str(result[0]["symbol"])
+        except Exception as e:
+            logger.warning("Failed to determine active symbol, falling back to default: %s", e)
+        return "BTCUSDT"  # Final fallback
+
+    def _get_price_change_24h(self) -> float:
+        """Get 24h price change percentage for the active trading symbol."""
+        try:
+            symbol = self._get_active_symbol()
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=2), datetime.now(UTC)
+                symbol, "1h", datetime.now(UTC) - timedelta(days=2), datetime.now(UTC)
             )
             if len(df) >= 2:
                 current_price = df.iloc[-1]["close"]
@@ -937,12 +979,13 @@ class MonitoringDashboard:
             return 0.0
 
     def _get_current_rsi(self) -> float:
-        """Get current RSI value"""
+        """Get current RSI value for the active trading symbol."""
         try:
             from src.tech.indicators.core import calculate_rsi
 
+            symbol = self._get_active_symbol()
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=30), datetime.now(UTC)
+                symbol, "1h", datetime.now(UTC) - timedelta(days=30), datetime.now(UTC)
             )
             if len(df) > 14:
                 rsi = calculate_rsi(df["close"], period=14)
@@ -953,23 +996,24 @@ class MonitoringDashboard:
             return 50.0
 
     def _get_ema_trend(self) -> str:
-        """Get EMA trend direction"""
+        """Get EMA trend direction for the active trading symbol."""
         try:
             from src.tech.indicators.core import calculate_ema
 
+            symbol = self._get_active_symbol()
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=30), datetime.now(UTC)
+                symbol, "1h", datetime.now(UTC) - timedelta(days=30), datetime.now(UTC)
             )
-            if len(df) > 50:
-                ema_short = calculate_ema(df["close"], period=9)
-                ema_long = calculate_ema(df["close"], period=21)
+            if len(df) <= 50:
+                return "Neutral"
 
-                if len(ema_short) > 0 and len(ema_long) > 0:
-                    if ema_short.iloc[-1] > ema_long.iloc[-1]:
-                        return "Bullish"
-                    else:
-                        return "Bearish"
-            return "Neutral"
+            ema_short = calculate_ema(df["close"], period=9)
+            ema_long = calculate_ema(df["close"], period=21)
+
+            if len(ema_short) == 0 or len(ema_long) == 0:
+                return "Neutral"
+
+            return "Bullish" if ema_short.iloc[-1] > ema_long.iloc[-1] else "Bearish"
         except Exception as e:
             logger.error(f"Error getting EMA trend: {e}")
             return "Neutral"
@@ -1002,8 +1046,9 @@ class MonitoringDashboard:
                 return "No Data"
 
             last_update = pd.to_datetime(result[0]["timestamp"])
-            # Use naive UTC to avoid tz-naive/aware comparison errors
-            time_diff = (datetime.utcnow() - last_update.replace(tzinfo=None)).total_seconds()
+            if last_update.tzinfo is None:
+                last_update = last_update.tz_localize(UTC)
+            time_diff = (datetime.now(UTC) - last_update).total_seconds()
 
             if time_diff < 300:  # 5 minutes
                 return "Active"
@@ -1061,35 +1106,18 @@ class MonitoringDashboard:
     # ========== RISK METRICS ==========
 
     def _get_current_drawdown(self) -> float:
-        """Get current drawdown from peak"""
+        """Get current drawdown from peak using full balance history."""
         try:
-            query = """
-            SELECT balance, timestamp
-            FROM account_history
-            ORDER BY timestamp ASC
-            LIMIT 100
-            """
-            result = self.db_manager.execute_query(query)
-
-            if len(result) < 2:
+            daily_balance = self._get_daily_balance_series()
+            if len(daily_balance) < 2:
                 return 0.0
 
-            # Convert to DataFrame for easier calculation
-            df = pd.DataFrame(result)
-            df["balance"] = df["balance"].apply(self._safe_float)
+            current_peak = daily_balance.cummax().iloc[-1]
+            if current_peak <= 0:
+                return 0.0
 
-            # Calculate running maximum (peak) in chronological order
-            df["peak"] = df["balance"].cummax()
-
-            # Calculate drawdown at the latest point
-            current_balance = df["balance"].iloc[-1]
-            current_peak = df["peak"].iloc[-1]
-
-            if current_peak > 0:
-                drawdown = ((current_peak - current_balance) / current_peak) * 100
-                return max(0.0, float(drawdown))
-            return 0.0
-
+            drawdown = ((current_peak - daily_balance.iloc[-1]) / current_peak) * 100
+            return max(0.0, float(drawdown))
         except Exception as e:
             logger.error(f"Error calculating current drawdown: {e}")
             return 0.0
@@ -1165,34 +1193,32 @@ class MonitoringDashboard:
             return 100.0
 
     def _get_avg_slippage(self) -> float:
-        """Get average slippage percentage"""
+        """Get average slippage from order fill data (intended vs filled price)."""
         try:
-            # Calculate slippage as difference between expected and actual execution price
-            # This is a simplified calculation - in practice you'd track intended vs actual prices
+            # Compare intended order price vs actual filled price
             query = """
-            SELECT
-                entry_price,
-                exit_price,
-                side
-            FROM trades
-            WHERE exit_time > NOW() - INTERVAL '24 hours'
-            AND exit_time IS NOT NULL
-            LIMIT 50
+            SELECT price, filled_price
+            FROM orders
+            WHERE filled_price IS NOT NULL
+            AND price IS NOT NULL
+            AND price > 0
+            AND filled_at > NOW() - INTERVAL '24 hours'
+            LIMIT 100
             """
             result = self.db_manager.execute_query(query)
 
             if not result:
                 return 0.0
 
-            # Simple slippage estimation based on price movement
             total_slippage = 0.0
             count = 0
-
-            for _trade in result:
-                # Estimate slippage as 0.01-0.05% of trade value
-                estimated_slippage = 0.02  # 0.02% average slippage
-                total_slippage += estimated_slippage
-                count += 1
+            for order in result:
+                intended = self._safe_float(order.get("price", 0))
+                filled = self._safe_float(order.get("filled_price", 0))
+                if intended > 0 and filled > 0:
+                    slippage_pct = abs(filled - intended) / intended * 100
+                    total_slippage += slippage_pct
+                    count += 1
 
             return total_slippage / count if count > 0 else 0.0
 
@@ -1207,17 +1233,29 @@ class MonitoringDashboard:
             result = self.db_manager.execute_query(query)
             if result and "failed_count" in result[0]:
                 return result[0]["failed_count"]
-            else:
-                return 0
+            return 0
         except Exception as e:
             logger.error(f"Error getting failed orders count: {e}")
             return 0
 
     def _get_order_latency(self) -> float:
-        """Get average order execution latency in milliseconds"""
-        # This would require detailed order execution tracking
-        # For now, return a reasonable estimate
-        return 50.0  # 50ms average latency
+        """Get average order execution latency from order timestamps."""
+        try:
+            # Calculate actual latency from order creation to fill
+            query = """
+            SELECT AVG(EXTRACT(EPOCH FROM (filled_at - created_at)) * 1000) as avg_latency_ms
+            FROM orders
+            WHERE filled_at IS NOT NULL
+            AND created_at IS NOT NULL
+            AND filled_at > NOW() - INTERVAL '24 hours'
+            """
+            result = self.db_manager.execute_query(query)
+            if result and result[0].get("avg_latency_ms") is not None:
+                return self._safe_float(result[0]["avg_latency_ms"])
+            return 0.0
+        except Exception as e:
+            logger.debug(f"Could not calculate order latency: {e}")
+            return 0.0
 
     def _get_execution_quality(self) -> float:
         """Get overall execution quality score (0-100)"""
@@ -1347,7 +1385,7 @@ class MonitoringDashboard:
             logger.error(f"Error getting recent trade outcomes: {e}")
             return "Unknown"
 
-    def _get_profit_factor(self) -> float:
+    def _get_profit_factor(self) -> float | None:
         """Get profit factor (gross profit / gross loss)"""
         try:
             query = """
@@ -1366,15 +1404,14 @@ class MonitoringDashboard:
             gross_loss = self._safe_float(result[0].get("gross_loss") or 0.0)
 
             if gross_loss == 0:
-                # Avoid division by zero; if no losses yet, profit factor is undefined -> return 0
-                return 0.0
+                return None if gross_profit > 0 else 0.0
 
             return gross_profit / gross_loss
         except Exception as e:
             logger.error(f"Error calculating profit factor: {e}")
             return 0.0
 
-    def _get_avg_win_loss_ratio(self) -> float:
+    def _get_avg_win_loss_ratio(self) -> float | None:
         """Get average win to loss ratio"""
         try:
             query = """
@@ -1393,7 +1430,7 @@ class MonitoringDashboard:
             avg_loss = self._safe_float(result[0].get("avg_loss") or 0.0)
 
             if avg_loss == 0:
-                return 0.0
+                return None if avg_win > 0 else 0.0
 
             return avg_win / avg_loss
         except Exception as e:
@@ -1826,7 +1863,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--db-url", help="Database URL")
     parser.add_argument(
-        "--update-interval", type=int, default=3600, help="Update interval in seconds"
+        "--update-interval", type=int, default=30, help="Update interval in seconds"
     )
 
     args = parser.parse_args()

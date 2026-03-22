@@ -512,8 +512,8 @@ class TestProductionReadiness:
         # Test shutdown
         engine.stop()
 
-        # Verify clean shutdown
-        # Paper mode preserves positions (only live mode closes on shutdown)
+        # Verify clean shutdown — paper mode preserves positions for restart recovery
+        assert len(engine.positions) == 1
         assert not engine.is_running
 
     def test_configuration_validation(self):

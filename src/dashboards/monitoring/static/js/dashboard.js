@@ -6,7 +6,8 @@ class TradingDashboard {
         this.chart = null;
         this.lastMetrics = {};
         this.positionsTableColumnCount = 11; // Number of columns in positions table
-        this.tradesTableColumnCount = 6; // Number of columns in trades table
+        this.tradesTableColumnCount = 8; // Number of columns in trades table
+        this.chartDays = 7; // Default chart range
         this.showCloseTargetPercentages = false; // Toggle for percentage display in close targets
         
         // * Configuration options for Close Target display
@@ -84,22 +85,60 @@ class TradingDashboard {
             this.updateTrades(trades);
 
             // Load performance data
-            const performanceResponse = await fetch('/api/performance?days=7');
-            const performance = await performanceResponse.json();
-            this.updatePerformanceChart(performance);
+            await this._loadPerformanceData();
+
+            // Update last update timestamp
+            this._updateLastUpdateTime();
 
         } catch (error) {
             console.error('Error loading initial data:', error);
         }
     }
 
+    async _loadPerformanceData() {
+        try {
+            const performanceResponse = await fetch(`/api/performance?days=${this.chartDays}`);
+            const performance = await performanceResponse.json();
+            this.updatePerformanceChart(performance);
+        } catch (error) {
+            console.error('Error loading performance data:', error);
+        }
+    }
+
+    _setConnectionStatus(status) {
+        const dot = document.getElementById('statusDot');
+        const text = document.getElementById('statusText');
+        if (!dot || !text) return;
+
+        dot.className = 'status-dot';
+        if (status === 'connected') {
+            dot.classList.add('connected');
+            text.textContent = 'Live';
+        } else if (status === 'disconnected') {
+            dot.classList.add('disconnected');
+            text.textContent = 'Disconnected';
+        } else {
+            text.textContent = 'Connecting...';
+        }
+    }
+
+    _updateLastUpdateTime() {
+        const el = document.getElementById('lastUpdateTime');
+        if (el) {
+            const now = new Date();
+            el.textContent = `Updated ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}`;
+        }
+    }
+
     setupSocketHandlers() {
         this.socket.on('connect', () => {
             console.log('Connected to monitoring dashboard');
+            this._setConnectionStatus('connected');
         });
 
         this.socket.on('disconnect', () => {
             console.log('Disconnected from monitoring dashboard');
+            this._setConnectionStatus('disconnected');
             this.showConnectionError();
         });
 
@@ -421,6 +460,16 @@ class TradingDashboard {
             }
         });
 
+        // Chart range selector
+        document.querySelectorAll('.chart-range-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.chart-range-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                this.chartDays = parseInt(e.target.dataset.days);
+                this._loadPerformanceData();
+            });
+        });
+
         // * Toggle close target display format
         const toggleButton = document.getElementById('toggleCloseTargetDisplay');
         if (toggleButton) {
@@ -735,6 +784,12 @@ class TradingDashboard {
     }
 
     formatMetricValueOverride(key, value, format) {
+        // Handle null values (e.g. profit factor / win-loss ratio with no losses)
+        if (value === null) {
+            if (key === 'profit_factor' || key === 'avg_win_loss_ratio') return '\u221E';
+            return '-';
+        }
+
         // Force specific keys to expected formats regardless of config
         const integerKeys = new Set(['active_positions_count', 'total_trades', 'failed_orders']);
         const currencyKeys = new Set(['current_balance', 'daily_pnl', 'weekly_pnl', 'total_pnl', 'position_sizes', 'total_position_value', 'available_margin', 'unrealized_pnl']);
@@ -1263,6 +1318,10 @@ class TradingDashboard {
         const tbody = document.querySelector('#positionsTable tbody');
         if (!tbody) return;
 
+        // Update position count badge
+        const countBadge = document.getElementById('positionCount');
+        if (countBadge) countBadge.textContent = positions ? positions.length : 0;
+
         try {
             if (!positions || positions.length === 0) {
             // * Enhanced no positions message with debugging help
@@ -1303,29 +1362,31 @@ class TradingDashboard {
                 console.error('Error calculating close target for position:', position.symbol, error);
                 closeTarget = { text: 'Error', type: 'neutral', tooltip: 'Error calculating close target', error: true };
             }
+            const pnlSign = unrealizedPnl >= 0 ? '+' : '';
+            const pnlClass = unrealizedPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
             return `
-            <tr role="row" aria-label="Position ${position.symbol} ${position.side}">
-                <td role="cell" aria-label="Symbol">${position.symbol}</td>
+            <tr role="row" aria-label="Position ${this._escapeHtml(position.symbol)} ${this._escapeHtml(position.side)}">
+                <td role="cell" aria-label="Symbol" class="mono">${this._escapeHtml(position.symbol)}</td>
                 <td role="cell" aria-label="Position side">
-                    <span class="badge ${position.side === 'long' ? 'bg-success' : 'bg-danger'}" 
+                    <span class="badge ${position.side === 'long' ? 'bg-success' : 'bg-danger'}"
                           aria-label="${position.side === 'long' ? 'Long position' : 'Short position'}">
-                        ${position.side}
+                        ${this._escapeHtml(position.side)}
                     </span>
                 </td>
-                <td role="cell" aria-label="Position size">${this.formatQuantity(position.symbol, quantity)}</td>
-                <td role="cell" aria-label="Entry price">${this.formatCurrency(entryPrice)}</td>
-                <td role="cell" aria-label="Current price">${this.formatCurrency(currentPrice)}</td>
-                <td role="cell" class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}" 
+                <td role="cell" aria-label="Position size" class="mono">${this.formatQuantity(position.symbol, quantity)}</td>
+                <td role="cell" aria-label="Entry price" class="mono">${this.formatCurrency(entryPrice)}</td>
+                <td role="cell" aria-label="Current price" class="mono">${this.formatCurrency(currentPrice)}</td>
+                <td role="cell" class="${pnlClass} mono"
                     aria-label="Unrealized P&L: ${this.formatCurrency(unrealizedPnl)}">
-                    ${this.formatCurrency(unrealizedPnl)}
+                    ${pnlSign}${this.formatCurrency(unrealizedPnl)}
                 </td>
-                <td role="cell" aria-label="Trailing stop loss">${trailSL}</td>
+                <td role="cell" aria-label="Trailing stop loss" class="mono">${trailSL}</td>
                 <td role="cell" aria-label="Breakeven status">${beBadge}</td>
-                <td role="cell" class="${mfe >= 0 ? 'text-success' : 'text-muted'}" 
+                <td role="cell" class="${mfe >= 0 ? 'text-success' : 'text-muted'} mono"
                     aria-label="Maximum favorable excursion: ${(mfe * 100).toFixed(2)}%">
                     ${(mfe * 100).toFixed(2)}%
                 </td>
-                <td role="cell" class="${mae <= 0 ? 'text-danger' : 'text-muted'}" 
+                <td role="cell" class="${mae <= 0 ? 'text-danger' : 'text-muted'} mono"
                     aria-label="Maximum adverse excursion: ${(mae * 100).toFixed(2)}%">
                     ${(mae * 100).toFixed(2)}%
                 </td>
@@ -1357,8 +1418,12 @@ class TradingDashboard {
         const tbody = document.querySelector('#tradesTable tbody');
         if (!tbody) return;
 
+        // Update trade count badge
+        const countBadge = document.getElementById('tradeCount');
+        if (countBadge) countBadge.textContent = trades ? trades.length : 0;
+
         if (!trades || trades.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="${this.tradesTableColumnCount}" class="text-center">No recent trades</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${this.tradesTableColumnCount}" class="text-center text-muted py-4">No recent trades</td></tr>`;
             return;
         }
 
@@ -1367,26 +1432,77 @@ class TradingDashboard {
             const quantity = typeof trade.quantity === 'number' ? trade.quantity : 0;
             const entryPrice = typeof trade.entry_price === 'number' ? trade.entry_price : 0.0;
             const exitPrice = typeof trade.exit_price === 'number' ? trade.exit_price : 0.0;
+            const exitReason = trade.exit_reason || '-';
+            const exitTime = trade.exit_time ? this._formatTradeTime(trade.exit_time) : '-';
+            const pnlClass = pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+            const pnlSign = pnl >= 0 ? '+' : '';
+            const reasonBadge = this._getExitReasonBadge(exitReason);
             return `
             <tr>
-                <td>${trade.symbol}</td>
-                <td><span class="badge ${trade.side && trade.side.toLowerCase() === 'buy' ? 'bg-success' : 'bg-danger'}">${trade.side}</span></td>
-                <td>${this.formatQuantity(trade.symbol, quantity)}</td>
-                <td>${this.formatCurrency(entryPrice)}</td>
-                <td>${this.formatCurrency(exitPrice)}</td>
-                <td class="${pnl >= 0 ? 'text-success' : 'text-danger'}">
-                    ${this.formatCurrency(pnl)}
-                </td>
+                <td class="mono">${this._escapeHtml(trade.symbol)}</td>
+                <td><span class="badge ${trade.side && trade.side.toLowerCase() === 'long' ? 'bg-success' : 'bg-danger'}">${this._escapeHtml(trade.side)}</span></td>
+                <td class="mono">${this.formatQuantity(trade.symbol, quantity)}</td>
+                <td class="mono">${this.formatCurrency(entryPrice)}</td>
+                <td class="mono">${this.formatCurrency(exitPrice)}</td>
+                <td class="${pnlClass} mono">${pnlSign}${this.formatCurrency(pnl)}</td>
+                <td>${reasonBadge}</td>
+                <td class="text-muted">${exitTime}</td>
             </tr>
             `;
         }).join('');
     }
 
-    initializeChart() {
-        const ctx = document.getElementById('performanceChart');
-        if (!ctx) return;
+    _formatTradeTime(timestamp) {
+        const d = new Date(timestamp);
+        if (isNaN(d.getTime())) return '-';
+        const now = new Date();
+        const diffMs = now - d;
+        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+        const diffDays = Math.floor(diffHours / 24);
 
-        this.chart = new Chart(ctx, {
+        if (diffDays > 0) return `${diffDays}d ago`;
+        if (diffHours > 0) return `${diffHours}h ago`;
+        const diffMinutes = Math.floor(diffMs / (1000 * 60));
+        return `${diffMinutes}m ago`;
+    }
+
+    _escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    _getExitReasonBadge(reason) {
+        const r = String(reason).toLowerCase();
+        const badgeMap = {
+            'take_profit': { class: 'bg-success', label: 'TP' },
+            'stop_loss': { class: 'bg-danger', label: 'SL' },
+            'trailing_stop': { class: 'bg-warning', label: 'TS' },
+            'partial_exit': { class: 'bg-info', label: 'PE' },
+            'signal': { class: 'bg-primary', label: 'Signal' },
+            'manual': { class: 'bg-secondary', label: 'Manual' },
+        };
+        const match = Object.entries(badgeMap).find(([key]) => r.includes(key));
+        if (match) {
+            return `<span class="badge ${match[1].class}">${match[1].label}</span>`;
+        }
+        return `<span class="badge bg-secondary">${this._escapeHtml(reason)}</span>`;
+    }
+
+    initializeChart() {
+        const canvas = document.getElementById('performanceChart');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+
+        // Create gradient fill
+        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 300);
+        gradient.addColorStop(0, 'rgba(37, 99, 235, 0.2)');
+        gradient.addColorStop(1, 'rgba(37, 99, 235, 0.0)');
+
+        this.chart = new Chart(canvas, {
             type: 'line',
             data: {
                 labels: [],
@@ -1394,17 +1510,34 @@ class TradingDashboard {
                     label: 'Portfolio Value',
                     data: [],
                     borderColor: 'rgb(37, 99, 235)',
-                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
-                    tension: 0.1
+                    backgroundColor: gradient,
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0,
+                    pointHitRadius: 8,
+                    pointHoverRadius: 4,
+                    pointHoverBackgroundColor: 'rgb(37, 99, 235)',
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                interaction: {
+                    intersect: false,
+                    mode: 'index',
+                },
                 scales: {
+                    x: {
+                        grid: { color: 'rgba(51, 65, 85, 0.3)', drawBorder: false },
+                        ticks: { color: '#64748b', font: { size: 11 }, maxTicksLimit: 8 },
+                    },
                     y: {
                         beginAtZero: false,
+                        grid: { color: 'rgba(51, 65, 85, 0.3)', drawBorder: false },
                         ticks: {
+                            color: '#64748b',
+                            font: { size: 11 },
                             callback: (value) => {
                                 const num = typeof value === 'number' ? value : Number(value);
                                 return this.formatCurrency(isNaN(num) ? 0 : num);
@@ -1413,8 +1546,18 @@ class TradingDashboard {
                     }
                 },
                 plugins: {
-                    legend: {
-                        display: false
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                        titleColor: '#f1f5f9',
+                        bodyColor: '#94a3b8',
+                        borderColor: '#334155',
+                        borderWidth: 1,
+                        padding: 10,
+                        displayColors: false,
+                        callbacks: {
+                            label: (context) => `Balance: ${this.formatCurrency(context.parsed.y)}`,
+                        }
                     }
                 }
             }
@@ -1430,12 +1573,18 @@ class TradingDashboard {
             return;
         }
 
+        // Format labels based on time range
+        const useTimeFormat = this.chartDays <= 1;
         this.chart.data.labels = data.timestamps.map(ts => {
             const d = new Date(ts);
-            return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+            if (isNaN(d.getTime())) return '';
+            if (useTimeFormat) {
+                return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            }
+            return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
         });
         this.chart.data.datasets[0].data = data.balances.map(v => (typeof v === 'number' ? v : Number(v)) || 0);
-        this.chart.update();
+        this.chart.update('none'); // Skip animation on data update for smoother experience
     }
 
     toggleConfigPanel() {
