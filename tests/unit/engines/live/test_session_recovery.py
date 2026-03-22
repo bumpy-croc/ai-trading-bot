@@ -28,13 +28,14 @@ def make_engine(enable_live_trading: bool = False) -> LiveTradingEngine:
     strategy = create_ml_basic_strategy()
 
     db_patch = patch("src.engines.live.trading_engine.DatabaseManager")
+    config_patch = patch("src.engines.live.trading_engine.get_config", return_value={})
     # Live trading mode requires an exchange interface and provider setup
     exchange_patch = patch(
         "src.engines.live.trading_engine._create_exchange_provider",
         return_value=(MagicMock(), "mock"),
     ) if enable_live_trading else patch("builtins.id", side_effect=id)  # no-op patch
 
-    with db_patch, exchange_patch:
+    with db_patch, config_patch, exchange_patch:
         engine = LiveTradingEngine(
             strategy=strategy,
             data_provider=mock_data_provider,
