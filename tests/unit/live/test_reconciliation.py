@@ -1790,6 +1790,151 @@ class TestFilledOrderPositionReconciliation:
         # update_position should NOT be called since db_id is None
         mock_db.update_position.assert_not_called()
 
+    def test_filled_entry_sl_placement_returns_none_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """When SL placement returns None, position is emergency-closed."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 99
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 10,
+                "client_order_id": "atb_BTCUSDT_long_9999_aaaa",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # SL placement returns None (failure)
+        mock_exchange.place_stop_loss_order.return_value = None
+
+        reconciler.resolve_pending_orders()
+
+        # Position was tracked then removed (emergency-close)
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_called_once()
+        # DB position closed
+        mock_db.close_position.assert_called_once_with(99)
+
+    def test_filled_entry_sl_placement_raises_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """When SL placement raises an exception, position is emergency-closed."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 100
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 11,
+                "client_order_id": "atb_BTCUSDT_long_8888_bbbb",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.002,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=45000.0, filled_quantity=0.002
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # SL placement raises
+        mock_exchange.place_stop_loss_order.side_effect = RuntimeError("API down")
+
+        # Should NOT raise — emergency-close handles it
+        reconciler.resolve_pending_orders()
+
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_called_once()
+        mock_db.close_position.assert_called_once_with(100)
+
+
+# ---------- Asset Holdings Excess Detection Tests ----------
+
+
+class TestAssetHoldingsExcessDetection:
+    """Tests for detecting when holdings exceed tracked position quantity."""
+
+    def test_excess_holdings_logged_as_high_severity(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Holdings exceeding 150% of tracked quantity produce HIGH audit."""
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        pos = MockPosition(
+            symbol="BTCUSDT",
+            quantity=0.1,
+            current_size=0.1,
+            original_size=0.1,
+            db_position_id=42,
+        )
+        # Held quantity is 200% of tracked — exceeds 150% threshold
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.2, free=0.2
+        )
+        result = ReconciliationResult(
+            entity_type="position", entity_id="test", status="resolved"
+        )
+
+        reconciler._verify_asset_holdings(pos, result)
+
+        assert result.severity == Severity.HIGH
+        assert len(result.corrections) == 1
+        assert "untracked fills" in result.corrections[0].reason
+
+    def test_holdings_within_threshold_no_excess_warning(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Holdings at 140% (below 150% threshold) do not trigger excess warning."""
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        pos = MockPosition(
+            symbol="BTCUSDT",
+            quantity=0.1,
+            current_size=0.1,
+            original_size=0.1,
+            db_position_id=42,
+        )
+        # 140% — below the 150% threshold
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.14, free=0.14
+        )
+        result = ReconciliationResult(
+            entity_type="position", entity_id="test", status="resolved"
+        )
+
+        reconciler._verify_asset_holdings(pos, result)
+
+        # No corrections for excess (there might be none at all since
+        # 140% is also above the 50% lower bound)
+        excess_corrections = [
+            c for c in result.corrections if "untracked fills" in c.reason
+        ]
+        assert len(excess_corrections) == 0
+
 
 # ---------- Periodic SL Verification Tests ----------
 

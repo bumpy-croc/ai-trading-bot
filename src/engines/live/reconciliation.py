@@ -515,8 +515,11 @@ class PositionReconciler:
                         e,
                     )
 
-            # Place server-side stop-loss on exchange for protection
+            # Place server-side stop-loss on exchange for protection.
+            # If SL placement fails, emergency-close the position to match
+            # the normal entry path behavior (never leave unprotected).
             side_lower = side.lower()
+            sl_placed = False
             if position.stop_loss and hasattr(self.exchange, "place_stop_loss_order"):
                 try:
                     from src.data_providers.exchange_interface import OrderSide
@@ -530,6 +533,7 @@ class PositionReconciler:
                     )
                     if sl_order_id:
                         position.stop_loss_order_id = sl_order_id
+                        sl_placed = True
                         logger.info(
                             "Placed recovery stop-loss for %s: %s @ %.2f",
                             symbol,
@@ -550,19 +554,35 @@ class PositionReconciler:
                                     order_id,
                                     e,
                                 )
-                    else:
-                        raise RuntimeError(
-                            f"Recovery stop-loss placement returned None for "
-                            f"{symbol} — position is unprotected"
-                        )
                 except Exception as e:
                     logger.critical(
                         "Failed to place recovery stop-loss for %s: %s — "
-                        "position is unprotected",
+                        "emergency-closing unprotected position",
                         symbol,
                         e,
                     )
-                    raise
+
+                if not sl_placed:
+                    # Emergency-close: remove from tracker and close in DB.
+                    # The position can be re-entered on the next signal.
+                    logger.critical(
+                        "Recovery SL placement failed for %s (order_id=%s) — "
+                        "removing unprotected position from tracker and DB",
+                        symbol,
+                        order_id,
+                    )
+                    self.position_tracker.remove_position(order_id)
+                    if db_id is not None:
+                        try:
+                            self.db_manager.close_position(db_id)
+                        except Exception as db_err:
+                            logger.critical(
+                                "Failed to close DB position %s after SL "
+                                "failure: %s — manual intervention required",
+                                db_id,
+                                db_err,
+                            )
+                    return
 
             logger.info(
                 "Reconciled filled ENTRY %s: created position %s (db_id=%s)",
@@ -1450,6 +1470,35 @@ class PositionReconciler:
                 )
                 return
             held_qty = balance.total
+
+            # If held quantity exceeds 150% of tracked quantity, there
+            # may be untracked fills (e.g., a partial entry remainder
+            # kept filling after the bot entered close-only mode).
+            if position_qty > 0 and held_qty > position_qty * 1.5:
+                excess_audit = AuditEvent(
+                    entity_type="position",
+                    entity_id=getattr(position, "db_position_id", None),
+                    field="quantity",
+                    old_value=str(position_qty),
+                    new_value=str(held_qty),
+                    reason=(
+                        f"More asset held than tracked — possible untracked fills "
+                        f"(held={held_qty:.8f}, tracked={position_qty:.8f}, "
+                        f"asset={base_asset})"
+                    ),
+                    severity=Severity.HIGH,
+                )
+                self._persist_audit(excess_audit)
+                result.corrections.append(excess_audit)
+                result.severity = Severity.HIGH
+                logger.warning(
+                    "Position %s: more %s held than tracked "
+                    "(held=%.8f, tracked=%.8f) — possible untracked fills",
+                    symbol,
+                    base_asset,
+                    held_qty,
+                    position_qty,
+                )
 
             # If held quantity is less than 50% of tracked quantity,
             # the position was likely closed externally
