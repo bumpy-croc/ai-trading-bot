@@ -21,18 +21,6 @@ For features involving exchange interaction, crash recovery, or position state m
 
 Each scenario needs: a code path, a test, and a state recovery mechanism.
 
-### What Am I Touching?
-
-| If you're working on... | Read these sections carefully |
-|------------------------|------------------------------|
-| Live trading / order execution | State Management, Position Fields, Error Handling (exchange), Thread Safety |
-| Reconciliation / crash recovery | State Management, Position Fields, Database, Planning (above) |
-| Strategies / backtesting | Backtest-Live Parity, Arithmetic, Architecture |
-| ML models / prediction | Input Validation, Resource Management, External API Calls |
-| Database operations | Database & Transactions, Error Handling (DB divergence) |
-| API integrations | External API Calls, Timezone, Security |
-| UI / dashboard | Security (XSS, auth, redirect) |
-
 ---
 
 Follow standard SOLID, KISS, YAGNI, and composition-over-inheritance principles. Design for failure (timeouts, retries, circuit breakers) and observability (structured logging, metrics) by default.
