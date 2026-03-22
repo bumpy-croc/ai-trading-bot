@@ -204,17 +204,18 @@ class TestCreateChaosTestStrategy:
         assert overrides["stop_loss_pct"] == 0.01
         assert overrides["take_profit_pct"] == 0.02
 
-        # Partial operations
+        # Partial operations (flat keys matching engine hydration)
         partial = overrides["partial_operations"]
-        assert partial["enabled"] is True
-        assert partial["scale_out"]["enabled"] is True
-        assert partial["scale_out"]["targets"] == [0.005, 0.01]
-        assert partial["scale_in"]["enabled"] is True
+        assert partial["exit_targets"] == [0.005, 0.01]
+        assert partial["exit_sizes"] == [0.3, 0.3]
+        assert partial["scale_in_thresholds"] == [-0.003]
+        assert partial["scale_in_sizes"] == [0.5]
+        assert partial["max_scale_ins"] == 1
 
-        # Trailing stop
+        # Trailing stop (engine-expected keys)
         trailing = overrides["trailing_stop"]
-        assert trailing["enabled"] is True
-        assert trailing["activation_pct"] == 0.005
+        assert trailing["activation_threshold"] == 0.005
+        assert trailing["trailing_distance_pct"] == 0.003
 
     def test_ignore_signal_reversal_metadata(self):
         """Strategy has ignore_signal_reversal flag set."""

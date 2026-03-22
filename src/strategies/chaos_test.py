@@ -286,23 +286,15 @@ def create_chaos_test_strategy(
             "stop_loss_pct": stop_loss_pct,
             "take_profit_pct": take_profit_pct,
             "partial_operations": {
-                "enabled": True,
-                "scale_out": {
-                    "enabled": True,
-                    "targets": [0.005, 0.01],
-                    "sizes": [0.3, 0.3],
-                },
-                "scale_in": {
-                    "enabled": True,
-                    "threshold": -0.003,
-                    "max_additions": 1,
-                    "size_fraction": 0.5,
-                },
+                "exit_targets": [0.005, 0.01],
+                "exit_sizes": [0.3, 0.3],
+                "scale_in_thresholds": [-0.003],
+                "scale_in_sizes": [0.5],
+                "max_scale_ins": 1,
             },
             "trailing_stop": {
-                "enabled": True,
-                "activation_pct": 0.005,
-                "trail_pct": 0.003,
+                "activation_threshold": 0.005,
+                "trailing_distance_pct": 0.003,
             },
         }
     )

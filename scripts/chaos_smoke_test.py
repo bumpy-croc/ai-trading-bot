@@ -120,11 +120,12 @@ def _start_bot(extra_args: Sequence[str] | None = None) -> subprocess.Popen:
         cmd.extend(extra_args)
 
     logger.info("Starting bot: %s", " ".join(cmd))
+    # Redirect to devnull to avoid pipe buffer deadlock on long-running processes
     return subprocess.Popen(
         cmd,
         cwd=_PROJECT_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
 
@@ -203,8 +204,9 @@ def phase_journal(
             if not order.internal_order_id:
                 errors.append(f"Order id={order.id} missing internal_order_id")
 
-            if order.status not in set(OrderStatus):
-                errors.append(f"Order id={order.id} has invalid status: {order.status}")
+            # Verify filled orders have a filled timestamp
+            if order.status == OrderStatus.FILLED and not order.filled_at:
+                errors.append(f"Order id={order.id} is FILLED but missing filled_at timestamp")
 
         if errors:
             for err in errors:
@@ -216,7 +218,7 @@ def phase_journal(
         # Check for reconciliation audit events (may not exist if PR #576 not merged)
         try:
             result = db.execute(
-                text("SELECT count(*) FROM reconciliation_audit_events WHERE created_at >= :start"),
+                text("SELECT count(*) FROM reconciliation_audit_events WHERE timestamp >= :start"),
                 {"start": run_start},
             )
             audit_count = result.scalar()
@@ -227,6 +229,7 @@ def phase_journal(
             else:
                 logger.info("PASS: No reconciliation audit events (clean run)")
         except ProgrammingError:
+            db.rollback()  # Reset session after SQL error to avoid poisoning later phases
             logger.warning(
                 "reconciliation_audit_events table not present (PR #576 not merged yet)"
             )
@@ -262,7 +265,7 @@ def phase_crash(
             "  2. Run: railway service restart --environment development\n"
             "  3. Re-run this phase to validate recovery"
         )
-        return _validate_crash_recovery(db, timeout)
+        return _validate_crash_recovery(db, timeout, pre_crash_pos_id=None)
 
     proc = _start_bot()
     run_start = datetime.now(UTC)
@@ -285,6 +288,7 @@ def phase_crash(
             return False
 
         # Capture position state before crash
+        db.expire_all()
         open_pos = (
             db.query(Position)
             .filter(Position.strategy_name == "ChaosTest")
@@ -296,9 +300,17 @@ def phase_crash(
             logger.error("No open position found despite poll success")
             return False
 
+        pre_crash_pos_id = open_pos.id
         pre_crash_entry = float(open_pos.entry_price)
         pre_crash_symbol = open_pos.symbol
-        logger.info("Open position: symbol=%s entry=%.2f", pre_crash_symbol, pre_crash_entry)
+        pre_crash_session_id = open_pos.session_id
+        logger.info(
+            "Pre-crash state: position_id=%d symbol=%s entry=%.2f session=%s",
+            pre_crash_pos_id,
+            pre_crash_symbol,
+            pre_crash_entry,
+            pre_crash_session_id,
+        )
 
         # Hard kill
         _kill_bot(proc)
@@ -308,30 +320,59 @@ def phase_crash(
         logger.info("Restarting bot after crash...")
         proc = _start_bot()
 
-        return _validate_crash_recovery(db, timeout / 2)
+        return _validate_crash_recovery(
+            db, timeout / 2, pre_crash_pos_id, pre_crash_session_id
+        )
 
     finally:
         _graceful_stop(proc)
 
 
-def _validate_crash_recovery(db: Session, timeout: float) -> bool:
-    """Verify that the bot recovered a position or completed a trade after restart."""
+def _validate_crash_recovery(
+    db: Session,
+    timeout: float,
+    pre_crash_pos_id: int | None = None,
+    pre_crash_session_id: int | None = None,
+) -> bool:
+    """Verify post-restart recovery by checking for a new session and trade activity.
 
-    def _post_restart_activity() -> bool:
+    If pre_crash_pos_id is provided, verifies that the bot started a new session
+    (distinct from the crashed one) and completed at least one trade, proving it
+    recovered and resumed trading rather than just existing.
+    """
+
+    def _post_restart_recovery() -> bool:
         db.expire_all()
-        return (
+        # Find the newest active session
+        new_session = (
             db.query(TradingSession)
             .filter(TradingSession.strategy_name == "ChaosTest")
             .filter(TradingSession.is_active.is_(True))
             .order_by(desc(TradingSession.start_time))
             .first()
-        ) is not None
+        )
+        if not new_session:
+            return False
 
-    if not _poll_until(_post_restart_activity, timeout, description="post-restart activity"):
-        logger.error("Bot did not resume trading after restart")
+        # Must be a different session than the crashed one
+        if pre_crash_session_id and new_session.id == pre_crash_session_id:
+            return False
+
+        # Verify the new session has completed at least one trade
+        trade_count = (
+            db.query(func.count(Trade.id))
+            .filter(Trade.session_id == new_session.id)
+            .scalar()
+        )
+        return (trade_count or 0) > 0
+
+    if not _poll_until(
+        _post_restart_recovery, timeout, description="post-restart recovery"
+    ):
+        logger.error("Bot did not recover and resume trading after restart")
         return False
 
-    logger.info("PASS: Bot resumed trading after crash recovery")
+    logger.info("PASS: Bot started new session and completed trades after crash recovery")
     return True
 
 
@@ -377,11 +418,12 @@ def phase_balance(
 
         db.expire_all()
 
-        # Get the active session
+        # Get the session started during this run (scope to current phase)
         session = (
             db.query(TradingSession)
             .filter(TradingSession.strategy_name == "ChaosTest")
             .filter(TradingSession.is_active.is_(True))
+            .filter(TradingSession.start_time >= run_start)
             .order_by(desc(TradingSession.start_time))
             .first()
         )
@@ -467,8 +509,8 @@ def phase_sl_reconciliation(db: Session, timeout: float, railway: bool) -> bool:
         "\n"
         "  5. Verify via DB query:\n"
         "     SELECT * FROM reconciliation_audit_events\n"
-        "       WHERE event_type LIKE '%%stop_loss%%'\n"
-        "       ORDER BY created_at DESC LIMIT 5;\n"
+        "       WHERE reason LIKE '%%stop_loss%%'\n"
+        "       ORDER BY timestamp DESC LIMIT 5;\n"
     )
 
     if not railway:
@@ -484,8 +526,8 @@ def phase_sl_reconciliation(db: Session, timeout: float, railway: bool) -> bool:
             result = db.execute(
                 text(
                     "SELECT count(*) FROM reconciliation_audit_events "
-                    "WHERE created_at >= :start "
-                    "AND event_type LIKE :pattern"
+                    "WHERE timestamp >= :start "
+                    "AND reason LIKE :pattern"
                 ),
                 {"start": run_start, "pattern": "%stop_loss%"},
             )
@@ -499,8 +541,8 @@ def phase_sl_reconciliation(db: Session, timeout: float, railway: bool) -> bool:
         logger.info("PASS: SL reconciliation audit events detected")
         return True
 
-    logger.warning("No SL reconciliation events found within timeout. Manual verification needed.")
-    return True  # Don't fail automated runs on manual phase
+    logger.error("FAIL: No SL reconciliation events found within timeout.")
+    return False
 
 
 # ---------------------------------------------------------------------------
