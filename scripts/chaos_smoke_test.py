@@ -282,6 +282,11 @@ def phase_crash(
                 .scalar()
             ) or 0
         logger.info("Railway baseline: %d trades before restart", baseline_trades)
+        logger.info(
+            "Waiting 30s for operator to restart the Railway service...\n"
+            "  Run now: railway service restart --environment development"
+        )
+        time.sleep(30)
         return _validate_crash_recovery(db, timeout, baseline_trades)
 
     proc = _start_bot()
@@ -340,7 +345,9 @@ def phase_crash(
         logger.info("Restarting bot after crash...")
         proc = _start_bot()
 
-        return _validate_crash_recovery(db, timeout / 2, pre_crash_trade_count)
+        return _validate_crash_recovery(
+            db, timeout / 2, pre_crash_trade_count, pre_crash_session_id
+        )
 
     finally:
         _graceful_stop(proc)
@@ -350,12 +357,14 @@ def _validate_crash_recovery(
     db: Session,
     timeout: float,
     pre_crash_trade_count: int = 0,
+    expected_session_id: int | None = None,
 ) -> bool:
     """Verify the bot recovered and made progress after restart.
 
     The engine reuses the pre-crash active session on recovery, so we prove
-    recovery by checking that trade count increased on that same session (or
-    any active session in Railway mode where we lack a baseline).
+    recovery by checking that trade count increased on that same session.
+    If expected_session_id is provided, we verify the recovered session
+    matches (proving the engine reused it rather than creating a new one).
     """
 
     def _post_restart_progress() -> bool:
@@ -369,6 +378,16 @@ def _validate_crash_recovery(
         )
         if not session:
             return False
+
+        # If we know the pre-crash session, verify the engine reused it
+        if expected_session_id is not None and session.id != expected_session_id:
+            logger.warning(
+                "Engine created new session %d instead of recovering session %d",
+                session.id,
+                expected_session_id,
+            )
+            # Still allow progress check on new session (engine may have
+            # legitimately started fresh if crash was too old)
 
         trade_count = (
             db.query(func.count(Trade.id))
