@@ -1403,7 +1403,7 @@ class PositionReconciler:
                     held_qty = position.quantity
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    if current and original and original > 0:
+                    if current is not None and original is not None and original > 0:
                         held_qty = position.quantity * (current / original)
                     # After SL fill, what remains
                     remaining_qty = max(held_qty - filled_qty, 0.0)
@@ -1413,7 +1413,7 @@ class PositionReconciler:
                     # to compute held amount, so mutating quantity directly would cause
                     # double-reduction in P&L calculations, notional estimates, and the
                     # periodic asset-holdings check.
-                    if original and original > 0 and position.quantity > 0:
+                    if original is not None and original > 0 and position.quantity > 0:
                         remaining_fraction = remaining_qty / max(position.quantity, 1e-9)
                         if hasattr(position, "current_size"):
                             position.current_size = original * remaining_fraction
@@ -1485,8 +1485,15 @@ class PositionReconciler:
                         qty = getattr(position, "quantity", 0) or 0.0
                         cs = getattr(position, "current_size", None)
                         os_ = getattr(position, "original_size", None)
-                        if cs and os_ and os_ > 0:
+                        if cs is not None and os_ is not None and os_ > 0:
                             qty = qty * (cs / os_)
+                        # Position is flat — no SL needed
+                        if qty <= 0:
+                            logger.info(
+                                "Position %s is flat after partial SL fill — skipping SL re-placement",
+                                position.symbol,
+                            )
+                            return
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
                             side=sl_side,
@@ -2248,7 +2255,7 @@ class PeriodicReconciler:
                             pos_qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if current and original and original > 0 and pos_qty > 0:
+                            if current is not None and original is not None and original > 0 and pos_qty > 0:
                                 held = pos_qty * (current / original)
                                 remaining = max(held - partial_fill, 0.0)
                                 position.current_size = original * (remaining / max(pos_qty, 1e-9))
@@ -2283,8 +2290,16 @@ class PeriodicReconciler:
                             qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if current and original and original > 0:
+                            if current is not None and original is not None and original > 0:
                                 qty = qty * (current / original)
+                            # Position is flat — skip SL, remove from tracker
+                            if qty <= 0:
+                                logger.info(
+                                    "Position %s is flat after partial SL fill "
+                                    "— skipping SL re-placement (periodic)",
+                                    position.symbol,
+                                )
+                                continue
                             new_sl_id = self.exchange.place_stop_loss_order(
                                 symbol=position.symbol,
                                 side=sl_side,
