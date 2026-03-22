@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
@@ -334,18 +333,11 @@ class TestReconciliationIntegration:
         )
         mock_exchange.cancel_order.return_value = True
 
-        # Act — reconciliation may encounter DB UNIQUE constraint on exchange_order_id
-        # when log_position and update_order_journal both set the same value.
-        # Catch only IntegrityError; any other exception should fail the test.
-        try:
-            reconciler.resolve_pending_orders()
-        except IntegrityError:
-            # Known issue: log_position creates a duplicate Order row with the same
-            # exchange_order_id that update_order_journal already set. The position
-            # is still tracked in memory despite the DB constraint violation.
-            pass
+        # Act — log_position reuses the existing journal entry by client_order_id,
+        # avoiding duplicate exchange_order_id violations.
+        reconciler.resolve_pending_orders()
 
-        # Assert — position tracked in memory regardless of DB integrity issues
+        # Assert — position tracked in memory and persisted to DB
         assert len(position_tracker.positions) == 1
 
         # Remainder cancelled on exchange

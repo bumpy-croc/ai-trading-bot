@@ -2171,10 +2171,11 @@ class TestPartialSLFillQuantityCalculation:
 
         result = reconciler.reconcile_position(pos)
 
-        # position.quantity updated to remaining held amount: 0.3
-        assert pos.quantity == pytest.approx(0.3)
+        # quantity stays at 1.0; current_size reduced to reflect remaining held
+        assert pos.quantity == pytest.approx(1.0)
+        assert pos.current_size == pytest.approx(0.3)
 
-        # Replacement SL placed for 0.3 BTC (not 0.4 from old calculation)
+        # Replacement SL placed for 0.3 BTC (scaled: 1.0 * 0.3/1.0)
         mock_exchange.place_stop_loss_order.assert_called_once()
         call_kwargs = mock_exchange.place_stop_loss_order.call_args
         assert call_kwargs.kwargs["quantity"] == pytest.approx(0.3)
@@ -2213,7 +2214,9 @@ class TestPartialSLFillQuantityCalculation:
 
         reconciler.reconcile_position(pos)
 
-        assert pos.quantity == pytest.approx(0.7)
+        # quantity stays at 1.0; current_size reduced to reflect remaining held
+        assert pos.quantity == pytest.approx(1.0)
+        assert pos.current_size == pytest.approx(0.7)
         call_kwargs = mock_exchange.place_stop_loss_order.call_args
         assert call_kwargs.kwargs["quantity"] == pytest.approx(0.7)
 
@@ -2286,7 +2289,9 @@ class TestPartialSLFillQuantityCalculation:
 
         reconciler.reconcile_position(pos)
 
-        assert pos.quantity == pytest.approx(0.15)
+        # quantity stays at 1.0; current_size reduced to reflect remaining
+        assert pos.quantity == pytest.approx(1.0)
+        assert pos.current_size == pytest.approx(0.15)
         call_kwargs = mock_exchange.place_stop_loss_order.call_args
         assert call_kwargs.kwargs["quantity"] == pytest.approx(0.15)
 

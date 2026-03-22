@@ -972,25 +972,46 @@ class DatabaseManager:
                 # Flush to get position.id without committing
                 session.flush()
 
-                # Create ENTRY order for the position
-                entry_order = Order(
-                    position_id=position.id,
-                    order_type=OrderType.ENTRY,
-                    status=OrderStatus.FILLED,  # Already filled since position exists
-                    exchange_order_id=entry_order_id,  # Use the entry_order_id
-                    internal_order_id=f"entry_{position.id}_{int(datetime.now(UTC).timestamp())}",
-                    client_order_id=client_order_id,
-                    symbol=symbol,
-                    side=side,
-                    quantity=Decimal(str(quantity or size)),
-                    price=Decimal(str(entry_price)),
-                    filled_quantity=Decimal(str(quantity or size)),
-                    filled_price=Decimal(str(entry_price)),
-                    filled_at=datetime.now(UTC),
-                    strategy_name=strategy_name,
-                    session_id=position.session_id,
-                )
-                session.add(entry_order)
+                # Link or create ENTRY order for the position.
+                # A pre-submit journal entry may already exist from
+                # create_order_journal_entry() — update it instead of
+                # inserting a duplicate (exchange_order_id is UNIQUE).
+                entry_order = None
+                if client_order_id:
+                    entry_order = (
+                        session.query(Order)
+                        .filter(Order.client_order_id == client_order_id)
+                        .first()
+                    )
+
+                if entry_order is not None:
+                    # Update existing journal entry with fill details
+                    entry_order.position_id = position.id
+                    entry_order.status = OrderStatus.FILLED
+                    entry_order.exchange_order_id = entry_order_id
+                    entry_order.filled_quantity = Decimal(str(quantity or size))
+                    entry_order.filled_price = Decimal(str(entry_price))
+                    entry_order.filled_at = datetime.now(UTC)
+                else:
+                    # No journal entry exists — create fresh order row
+                    entry_order = Order(
+                        position_id=position.id,
+                        order_type=OrderType.ENTRY,
+                        status=OrderStatus.FILLED,
+                        exchange_order_id=entry_order_id,
+                        internal_order_id=f"entry_{position.id}_{int(datetime.now(UTC).timestamp())}",
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=side,
+                        quantity=Decimal(str(quantity or size)),
+                        price=Decimal(str(entry_price)),
+                        filled_quantity=Decimal(str(quantity or size)),
+                        filled_price=Decimal(str(entry_price)),
+                        filled_at=datetime.now(UTC),
+                        strategy_name=strategy_name,
+                        session_id=position.session_id,
+                    )
+                    session.add(entry_order)
 
                 # Single atomic commit for both position and order
                 session.commit()

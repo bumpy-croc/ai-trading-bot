@@ -1407,19 +1407,29 @@ class PositionReconciler:
                         held_qty = position.quantity * (current / original)
                     # After SL fill, what remains
                     remaining_qty = max(held_qty - filled_qty, 0.0)
-                    # Update position.quantity to the remaining amount directly.
-                    # The replacement SL uses this quantity without further scaling.
-                    position.quantity = remaining_qty
+
+                    # Reduce current_size proportionally instead of mutating quantity.
+                    # Other code paths scale `quantity * (current_size / original_size)`
+                    # to compute held amount, so mutating quantity directly would cause
+                    # double-reduction in P&L calculations, notional estimates, and the
+                    # periodic asset-holdings check.
+                    if original and original > 0 and position.quantity > 0:
+                        remaining_fraction = remaining_qty / max(position.quantity, 1e-9)
+                        if hasattr(position, "current_size"):
+                            position.current_size = original * remaining_fraction
+                    else:
+                        # Fallback: no size tracking, update quantity directly
+                        position.quantity = remaining_qty
 
                     partial_audit = AuditEvent(
                         entity_type="position",
                         entity_id=getattr(position, "db_position_id", None),
-                        field="quantity",
-                        old_value=str(old_quantity),
-                        new_value=str(position.quantity),
+                        field="current_size",
+                        old_value=str(current or old_quantity),
+                        new_value=str(getattr(position, "current_size", remaining_qty)),
                         reason=(
                             f"SL order {sl_order.status.value.lower()} after partial fill "
-                            f"of {filled_qty} — reduced position quantity"
+                            f"of {filled_qty} — reduced position size"
                         ),
                         severity=Severity.MEDIUM,
                     )
@@ -1427,13 +1437,12 @@ class PositionReconciler:
                     result.corrections.append(partial_audit)
                     logger.warning(
                         "Stop-loss %s for %s was %s with partial fill of %s — "
-                        "reduced position quantity from %s to %s",
+                        "reduced position size (remaining_qty=%.8f)",
                         sl_order_id,
                         position.symbol,
                         sl_order.status.value,
                         filled_qty,
-                        old_quantity,
-                        position.quantity,
+                        remaining_qty,
                     )
 
                 audit = AuditEvent(
@@ -1471,10 +1480,13 @@ class PositionReconciler:
                             or str(side).lower() == "long"
                         )
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                        # position.quantity is already set to the remaining held
-                        # amount (accounting for both partial exits and partial
-                        # SL fills), so no further scaling is needed.
+                        # Scale quantity by current_size/original_size to get
+                        # actual held amount after partial exits and SL fills.
                         qty = getattr(position, "quantity", 0) or 0.0
+                        cs = getattr(position, "current_size", None)
+                        os_ = getattr(position, "original_size", None)
+                        if cs and os_ and os_ > 0:
+                            qty = qty * (cs / os_)
                         new_sl_id = self.exchange.place_stop_loss_order(
                             symbol=position.symbol,
                             side=sl_side,
@@ -1594,6 +1606,12 @@ class PositionReconciler:
         tracked position quantity. Uses 50% threshold to catch full external
         closes while tolerating partial exits.
         """
+        # Skip short positions — shorts don't hold the base asset on spot,
+        # so checking spot balance would falsely flag them as externally closed.
+        side = getattr(position, "side", None)
+        if side == PositionSide.SHORT or str(side).lower() == "short":
+            return
+
         symbol = position.symbol
         base_asset = self._extract_base_asset(symbol)
         # Use quantity (actual asset amount), not size (balance fraction).
@@ -2075,6 +2093,11 @@ class PeriodicReconciler:
         # support is added, the check must aggregate tracked quantities before
         # comparing against the exchange balance.
         for order_key, position in list(positions_snapshot.items()):
+            # Skip short positions — shorts don't hold the base asset on spot
+            side = getattr(position, "side", None)
+            if side == PositionSide.SHORT or str(side).lower() == "short":
+                continue
+
             # Use quantity (actual asset amount), not size (balance fraction).
             # Scale by current_size/original_size to account for partial exits
             # that reduce current_size but leave quantity unchanged.
