@@ -1351,6 +1351,155 @@ class TestFilledOrderPositionReconciliation:
         assert call_kwargs["partial_exits_taken"] == 1
         assert call_kwargs["last_partial_exit_price"] == 52000.0
 
+    def test_filled_partial_exit_resizes_stop_loss(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """PARTIAL_EXIT filled cancels old SL and places new one with correct qty."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            db_position_id=15,
+            current_size=0.1,
+            original_size=0.1,
+            size=0.1,
+            quantity=0.002,
+            stop_loss=48000.0,
+            stop_loss_order_id="old_sl_123",
+        )
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {"order_456": pos}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 5,
+                "client_order_id": "atbx_BTCUSDT_exit_9999",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.0005,
+                "status": "SUBMITTED",
+                "order_type": "PARTIAL_EXIT",
+                "position_id": 15,
+                "size_fraction": 0.03,
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=52000.0, filled_quantity=0.0005
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_456"
+
+        results = reconciler.resolve_pending_orders()
+        assert len(results) == 1
+
+        # Old SL cancelled
+        mock_exchange.cancel_order.assert_called_once_with("old_sl_123", "BTCUSDT")
+
+        # New SL placed with remaining quantity: 0.002 * (0.07 / 0.1) = 0.0014
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        sl_call = mock_exchange.place_stop_loss_order.call_args
+        assert sl_call.kwargs["symbol"] == "BTCUSDT"
+        assert sl_call.kwargs["stop_price"] == 48000.0
+        assert sl_call.kwargs["quantity"] == pytest.approx(0.0014)
+
+        # Position updated with new SL order ID
+        assert pos.stop_loss_order_id == "new_sl_456"
+
+        # DB updated with new SL order ID (second call after size update)
+        update_calls = mock_db.update_position.call_args_list
+        sl_update = [c for c in update_calls if "stop_loss_order_id" in c.kwargs]
+        assert len(sl_update) == 1
+        assert sl_update[0].kwargs["stop_loss_order_id"] == "new_sl_456"
+
+    def test_filled_partial_exit_no_sl_resize_when_no_sl(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """PARTIAL_EXIT without stop-loss does not attempt SL resize."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            db_position_id=16,
+            current_size=0.1,
+            original_size=0.1,
+            size=0.1,
+            quantity=0.002,
+            stop_loss=None,
+            stop_loss_order_id=None,
+        )
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {"order_789": pos}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 6,
+                "client_order_id": "atbx_BTCUSDT_exit_1111",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.0005,
+                "status": "SUBMITTED",
+                "order_type": "PARTIAL_EXIT",
+                "position_id": 16,
+                "size_fraction": 0.03,
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=52000.0, filled_quantity=0.0005
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+
+        reconciler.resolve_pending_orders()
+
+        # No SL cancel or placement attempted
+        mock_exchange.cancel_order.assert_not_called()
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
+    def test_filled_partial_exit_sl_cancel_failure_keeps_old_sl(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """If SL cancel fails, keep old SL rather than leaving position unprotected."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            db_position_id=17,
+            current_size=0.1,
+            original_size=0.1,
+            size=0.1,
+            quantity=0.002,
+            stop_loss=48000.0,
+            stop_loss_order_id="old_sl_999",
+        )
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {"order_abc": pos}
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 7,
+                "client_order_id": "atbx_BTCUSDT_exit_2222",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.0005,
+                "status": "SUBMITTED",
+                "order_type": "PARTIAL_EXIT",
+                "position_id": 17,
+                "size_fraction": 0.03,
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=52000.0, filled_quantity=0.0005
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        mock_exchange.cancel_order.side_effect = Exception("Network error")
+
+        reconciler.resolve_pending_orders()
+
+        # Old SL kept since cancel failed
+        assert pos.stop_loss_order_id == "old_sl_999"
+        # No new SL placement attempted
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
     def test_filled_entry_uses_db_balance_for_sizing(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):

@@ -674,6 +674,9 @@ class PositionReconciler:
                         new_size,
                     )
 
+                    # Cancel and re-place stop-loss with correct remaining quantity
+                    self._resize_stop_loss_after_partial_exit(target_pos)
+
                 # Update DB position with reduced size
                 try:
                     if size_fraction > 0:
@@ -706,6 +709,105 @@ class PositionReconciler:
                 e,
             )
             raise
+
+    def _resize_stop_loss_after_partial_exit(self, position: object) -> None:
+        """Cancel and re-place stop-loss with correct remaining quantity.
+
+        After a partial exit reduces current_size, the existing stop-loss
+        order still has the old (larger) quantity. This cancels the stale
+        SL and places a new one sized to the remaining position.
+        """
+        sl_order_id = getattr(position, "stop_loss_order_id", None)
+        stop_loss = getattr(position, "stop_loss", None)
+        if not sl_order_id or not stop_loss:
+            return
+        if not hasattr(self.exchange, "place_stop_loss_order"):
+            return
+
+        symbol = getattr(position, "symbol", "")
+        db_pos_id = getattr(position, "db_position_id", None)
+
+        # Cancel the old stop-loss order
+        try:
+            self.exchange.cancel_order(sl_order_id, symbol)
+            logger.info(
+                "Cancelled stale stop-loss %s for %s after partial exit",
+                sl_order_id,
+                symbol,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to cancel stale stop-loss %s for %s: %s",
+                sl_order_id,
+                symbol,
+                e,
+            )
+            # If cancel fails, keep the old SL — better oversized than none
+            return
+
+        position.stop_loss_order_id = None  # type: ignore[attr-defined]
+
+        # Compute remaining quantity based on current_size / original_size
+        qty = getattr(position, "quantity", 0) or 0.0
+        current = getattr(position, "current_size", None)
+        original = getattr(position, "original_size", None)
+        if current and original and original > 0:
+            qty = qty * (current / original)
+
+        if qty <= 0:
+            return
+
+        # Place new stop-loss with correct remaining quantity
+        try:
+            from src.data_providers.exchange_interface import OrderSide
+
+            side = getattr(position, "side", "long")
+            side_is_long = (
+                side == PositionSide.LONG or str(side).lower() == "long"
+            )
+            sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
+            new_sl_id = self.exchange.place_stop_loss_order(
+                symbol=symbol,
+                side=sl_side,
+                quantity=qty,
+                stop_price=stop_loss,
+            )
+            if new_sl_id:
+                position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
+                logger.info(
+                    "Replaced stop-loss for %s after partial exit: %s @ %.2f "
+                    "(qty=%.6f)",
+                    symbol,
+                    new_sl_id,
+                    stop_loss,
+                    qty,
+                )
+                # Persist the new SL order ID to DB
+                if db_pos_id is not None:
+                    try:
+                        self.db_manager.update_position(
+                            position_id=db_pos_id,
+                            stop_loss_order_id=new_sl_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to persist resized SL order ID "
+                            "for %s: %s",
+                            symbol,
+                            e,
+                        )
+            else:
+                logger.warning(
+                    "Failed to place resized stop-loss for %s — no order ID "
+                    "returned",
+                    symbol,
+                )
+        except Exception as e:
+            logger.warning(
+                "Failed to place resized stop-loss for %s: %s",
+                symbol,
+                e,
+            )
 
     def _handle_not_found_order(
         self, order_data: dict, status: str, result: ReconciliationResult
