@@ -83,6 +83,7 @@ class TestChaosSignalGenerator:
         signal = gen.generate_signal(df, index)
         assert signal.direction == SignalDirection.SELL
         assert signal.metadata["trigger"] == "rsi_overbought"
+        assert signal.metadata["enter_short"] is True
         assert signal.confidence == 0.9
 
     def test_forced_alternation_after_max_hold(self):
@@ -97,6 +98,7 @@ class TestChaosSignalGenerator:
         signal = gen.generate_signal(df, 20)
         assert signal.direction == SignalDirection.SELL
         assert signal.metadata["trigger"] == "forced_alternation"
+        assert signal.metadata["enter_short"] is True
 
     def test_forced_alternation_flips_sell_to_buy(self):
         """Forced alternation flips SELL to BUY."""
@@ -123,6 +125,32 @@ class TestChaosSignalGenerator:
         signal = gen.generate_signal(df, 20)
         if signal.direction == SignalDirection.HOLD:
             assert gen._candles_in_position == 2
+
+    def test_same_direction_rsi_increments_counter(self):
+        """Sustained RSI in same direction increments counter toward forced flip."""
+        gen = ChaosSignalGenerator(max_hold_candles=3, rsi_period=14)
+        df = _make_ohlcv(50)
+        df["rsi"] = 20.0  # Force sustained oversold (BUY direction)
+
+        # First BUY signal sets direction
+        signal1 = gen.generate_signal(df, 20)
+        assert signal1.direction == SignalDirection.BUY
+        assert gen._candles_in_position == 1
+
+        # Second BUY signal increments (same direction)
+        signal2 = gen.generate_signal(df, 21)
+        assert signal2.direction == SignalDirection.BUY
+        assert gen._candles_in_position == 2
+
+        # Third BUY signal increments to 3 (equals max_hold_candles)
+        signal3 = gen.generate_signal(df, 22)
+        assert signal3.direction == SignalDirection.BUY
+        assert gen._candles_in_position == 3
+
+        # Fourth candle: counter >= max_hold_candles, forced SELL
+        signal4 = gen.generate_signal(df, 23)
+        assert signal4.direction == SignalDirection.SELL
+        assert signal4.metadata["trigger"] == "forced_alternation"
 
     def test_high_confidence_output(self):
         """All non-HOLD signals have 0.9 confidence."""

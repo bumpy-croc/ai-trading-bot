@@ -265,7 +265,7 @@ def phase_crash(
             "  2. Run: railway service restart --environment development\n"
             "  3. Re-run this phase to validate recovery"
         )
-        return _validate_crash_recovery(db, timeout, pre_crash_pos_id=None)
+        return _validate_crash_recovery(db, timeout)
 
     proc = _start_bot()
     run_start = datetime.now(UTC)
@@ -300,16 +300,19 @@ def phase_crash(
             logger.error("No open position found despite poll success")
             return False
 
-        pre_crash_pos_id = open_pos.id
-        pre_crash_entry = float(open_pos.entry_price)
-        pre_crash_symbol = open_pos.symbol
         pre_crash_session_id = open_pos.session_id
+        pre_crash_trade_count = (
+            db.query(func.count(Trade.id))
+            .filter(Trade.session_id == pre_crash_session_id)
+            .scalar()
+        ) or 0
         logger.info(
-            "Pre-crash state: position_id=%d symbol=%s entry=%.2f session=%s",
-            pre_crash_pos_id,
-            pre_crash_symbol,
-            pre_crash_entry,
+            "Pre-crash state: position=%s symbol=%s entry=%.2f session=%s trades=%d",
+            open_pos.id,
+            open_pos.symbol,
+            float(open_pos.entry_price),
             pre_crash_session_id,
+            pre_crash_trade_count,
         )
 
         # Hard kill
@@ -321,7 +324,7 @@ def phase_crash(
         proc = _start_bot()
 
         return _validate_crash_recovery(
-            db, timeout / 2, pre_crash_pos_id, pre_crash_session_id
+            db, timeout / 2, pre_crash_trade_count, pre_crash_session_id
         )
 
     finally:
@@ -331,48 +334,44 @@ def phase_crash(
 def _validate_crash_recovery(
     db: Session,
     timeout: float,
-    pre_crash_pos_id: int | None = None,
+    pre_crash_trade_count: int = 0,
     pre_crash_session_id: int | None = None,
 ) -> bool:
-    """Verify post-restart recovery by checking for a new session and trade activity.
+    """Verify the bot recovered and made progress after restart.
 
-    If pre_crash_pos_id is provided, verifies that the bot started a new session
-    (distinct from the crashed one) and completed at least one trade, proving it
-    recovered and resumed trading rather than just existing.
+    The engine reuses the pre-crash active session on recovery, so we prove
+    recovery by checking that trade count increased on that same session (or
+    any active session in Railway mode where we lack a baseline).
     """
 
-    def _post_restart_recovery() -> bool:
+    def _post_restart_progress() -> bool:
         db.expire_all()
-        # Find the newest active session
-        new_session = (
+        session = (
             db.query(TradingSession)
             .filter(TradingSession.strategy_name == "ChaosTest")
             .filter(TradingSession.is_active.is_(True))
             .order_by(desc(TradingSession.start_time))
             .first()
         )
-        if not new_session:
+        if not session:
             return False
 
-        # Must be a different session than the crashed one
-        if pre_crash_session_id and new_session.id == pre_crash_session_id:
-            return False
-
-        # Verify the new session has completed at least one trade
         trade_count = (
             db.query(func.count(Trade.id))
-            .filter(Trade.session_id == new_session.id)
+            .filter(Trade.session_id == session.id)
             .scalar()
-        )
-        return (trade_count or 0) > 0
+        ) or 0
+
+        # Prove progress: more trades than before the crash
+        return trade_count > pre_crash_trade_count
 
     if not _poll_until(
-        _post_restart_recovery, timeout, description="post-restart recovery"
+        _post_restart_progress, timeout, description="post-restart trade progress"
     ):
-        logger.error("Bot did not recover and resume trading after restart")
+        logger.error("Bot did not complete new trades after restart")
         return False
 
-    logger.info("PASS: Bot started new session and completed trades after crash recovery")
+    logger.info("PASS: Bot recovered session and completed new trades after crash")
     return True
 
 
@@ -460,12 +459,17 @@ def phase_balance(
             drift,
         )
 
-        # Tolerance: 2% of initial balance to account for cumulative trading
-        # fees that are deducted from the DB balance but not reflected in
-        # Trade.pnl (which is gross).
-        max_drift = initial_balance * 0.02
+        # Tolerance: 1% of initial balance to account for cumulative trading
+        # fees deducted from the DB balance but not reflected in Trade.pnl
+        # (which stores gross PnL). For a $1000 balance with small trades,
+        # expected fee drift is typically $1-5.
+        max_drift = initial_balance * 0.01
         if drift > max_drift:
-            logger.error("FAIL: Balance drift %.4f exceeds threshold %.4f (2%% of initial)", drift, max_drift)
+            logger.error(
+                "FAIL: Balance drift %.4f exceeds threshold %.4f (1%% of initial)",
+                drift,
+                max_drift,
+            )
             return False
 
         logger.info("PASS: Balance drift %.6f within tolerance (<%.2f)", drift, max_drift)

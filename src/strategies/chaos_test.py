@@ -112,17 +112,20 @@ class ChaosSignalGenerator(SignalGenerator):
             )
             self._last_direction = forced_direction
             self._candles_in_position = 1
+            meta: dict[str, Any] = {
+                "generator": self.name,
+                "index": index,
+                "rsi": rsi_value,
+                "trigger": "forced_alternation",
+                "candles_held": self.max_hold_candles,
+            }
+            if forced_direction == SignalDirection.SELL:
+                meta["enter_short"] = True
             return Signal(
                 direction=forced_direction,
                 strength=0.8,
                 confidence=0.9,
-                metadata={
-                    "generator": self.name,
-                    "index": index,
-                    "rsi": rsi_value,
-                    "trigger": "forced_alternation",
-                    "candles_held": self.max_hold_candles,
-                },
+                metadata=meta,
             )
 
         # RSI-based signals
@@ -137,21 +140,29 @@ class ChaosSignalGenerator(SignalGenerator):
             trigger = "rsi_overbought"
 
         if direction != SignalDirection.HOLD:
-            self._last_direction = direction
-            self._candles_in_position = 1
+            if direction != self._last_direction:
+                # New direction: reset counter
+                self._last_direction = direction
+                self._candles_in_position = 1
+            else:
+                # Same direction as current position: count toward forced flip
+                self._candles_in_position += 1
+            meta_rsi: dict[str, Any] = {
+                "generator": self.name,
+                "index": index,
+                "rsi": rsi_value,
+                "trigger": trigger,
+            }
+            if direction == SignalDirection.SELL:
+                meta_rsi["enter_short"] = True
             return Signal(
                 direction=direction,
                 strength=0.8,
                 confidence=0.9,
-                metadata={
-                    "generator": self.name,
-                    "index": index,
-                    "rsi": rsi_value,
-                    "trigger": trigger,
-                },
+                metadata=meta_rsi,
             )
 
-        # No signal -- increment hold counter
+        # No directional signal -- increment hold counter toward forced alternation
         if self._last_direction != SignalDirection.HOLD:
             self._candles_in_position += 1
 
