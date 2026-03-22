@@ -203,10 +203,21 @@ def phase_journal(
         for order in orders:
             if not order.internal_order_id:
                 errors.append(f"Order id={order.id} missing internal_order_id")
+            if not order.client_order_id:
+                errors.append(f"Order id={order.id} missing client_order_id (idempotency key)")
 
             # Verify filled orders have a filled timestamp
             if order.status == OrderStatus.FILLED and not order.filled_at:
                 errors.append(f"Order id={order.id} is FILLED but missing filled_at timestamp")
+
+        # Verify client_order_id uniqueness — duplicate journal rows indicate
+        # the IntegrityError fix in log_position is not working correctly.
+        client_ids = [o.client_order_id for o in orders if o.client_order_id]
+        if len(client_ids) != len(set(client_ids)):
+            errors.append(
+                f"Duplicate client_order_ids found: {len(client_ids)} total vs "
+                f"{len(set(client_ids))} unique"
+            )
 
         if errors:
             for err in errors:

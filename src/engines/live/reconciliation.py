@@ -1211,6 +1211,8 @@ class PositionReconciler:
                         exchange_order.average_price,
                     )
                     position.entry_price = exchange_order.average_price
+                    # Persist corrected entry_price to DB
+                    self._persist_position_correction(position, entry_price=exchange_order.average_price)
 
             # Check fill quantity matches position quantity
             filled_qty = getattr(exchange_order, "filled_quantity", None)
@@ -1260,6 +1262,15 @@ class PositionReconciler:
                             old_size,
                             new_size,
                         )
+
+                    # Persist corrected quantity/size to DB
+                    self._persist_position_correction(
+                        position,
+                        quantity=filled_qty,
+                        size=getattr(position, "size", None),
+                        current_size=getattr(position, "current_size", None),
+                        original_size=getattr(position, "original_size", None),
+                    )
 
         elif exchange_order.status in (
             ExOrderStatus.CANCELLED,
@@ -1898,6 +1909,66 @@ class PositionReconciler:
                 getattr(position, "symbol", "unknown"),
                 e,
             )
+
+    def _persist_position_correction(
+        self,
+        position: Any,
+        entry_price: float | None = None,
+        quantity: float | None = None,
+        size: float | None = None,
+        current_size: float | None = None,
+        original_size: float | None = None,
+    ) -> None:
+        """Write corrected position fields back to the database.
+
+        All corrections are applied in a single transaction to prevent
+        partial writes (e.g. new size with old quantity) on commit failure.
+        """
+        db_pos_id = getattr(position, "db_position_id", None)
+        if db_pos_id is None:
+            return
+
+        from decimal import Decimal
+
+        from src.database.models import Position as DBPosition
+
+        corrections: dict[str, Any] = {}
+        if entry_price is not None:
+            corrections["entry_price"] = Decimal(str(entry_price))
+        if quantity is not None:
+            corrections["quantity"] = Decimal(str(quantity))
+        if size is not None:
+            corrections["size"] = Decimal(str(size))
+        if current_size is not None:
+            corrections["current_size"] = Decimal(str(current_size))
+        if original_size is not None:
+            corrections["original_size"] = Decimal(str(original_size))
+
+        if not corrections:
+            return
+
+        try:
+            with self.db_manager.get_session() as session:
+                db_pos = session.query(DBPosition).filter_by(id=db_pos_id).first()
+                if not db_pos:
+                    logger.warning(
+                        "Position %d not found in DB for correction", db_pos_id
+                    )
+                    return
+                for field_name, value in corrections.items():
+                    setattr(db_pos, field_name, value)
+                session.commit()
+
+            logger.info(
+                "Persisted position corrections to DB for position %d: %s",
+                db_pos_id,
+                list(corrections.keys()),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to persist position corrections for %d: %s", db_pos_id, e
+            )
+            raise
 
     def _persist_audit(self, audit: AuditEvent) -> None:
         """Persist an audit event to the database."""
