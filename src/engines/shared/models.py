@@ -159,7 +159,13 @@ class BasePosition:
     unrealized_pnl: float = 0.0
     unrealized_pnl_percent: float = 0.0
     # Order tracking (live: exchange order ID, backtest: None or synthetic)
+    # DEPRECATED: Use exchange_order_id for exchange lookups. order_id kept for backward compat.
     order_id: str | None = None
+    # Reconciliation identifier fields
+    tracker_key: str | None = None  # Internal dict key in position_tracker
+    exchange_order_id: str | None = None  # Binance numeric order ID
+    client_order_id: str | None = None  # Our atb_... idempotency key
+    db_position_id: int | None = None  # Database row ID for this position
     # Extended metadata for engine-specific data (currently unused, reserved for future extensions)
     # Example use cases: custom risk parameters, strategy-specific tags, A/B test groups
     metadata: dict[str, Any] = field(default_factory=dict)

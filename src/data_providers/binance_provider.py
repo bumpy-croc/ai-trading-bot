@@ -709,11 +709,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 price=float(order_data.get("price", 0)) if order_data.get("price") != "0" else None,
                 status=self._convert_order_status(order_data["status"]),
                 filled_quantity=float(order_data.get("executedQty", 0)),
-                average_price=(
-                    float(order_data.get("avgPrice", 0))
-                    if order_data.get("avgPrice") and order_data.get("avgPrice") != "0"
-                    else None
-                ),
+                average_price=self._extract_average_price(order_data),
                 commission=0.0,  # Will be updated from trade history
                 commission_asset="",
                 create_time=datetime.fromtimestamp(int(order_data["time"]) / 1000, tz=UTC),
@@ -724,10 +720,32 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     else None
                 ),
                 time_in_force=order_data.get("timeInForce", "GTC"),
+                client_order_id=order_data.get("clientOrderId"),
             )
         except (KeyError, ValueError, TypeError) as e:
             logger.error("Failed to parse order data: %s. Data: %s", e, order_data)
             return None
+
+    @staticmethod
+    def _extract_average_price(order_data: dict) -> float | None:
+        """Extract average fill price from Binance order data.
+
+        Binance spot endpoints return executedQty and cummulativeQuoteQty
+        but not always avgPrice. Falls back to computing the average from
+        cummulativeQuoteQty / executedQty when avgPrice is missing or zero.
+        """
+        avg_price_raw = order_data.get("avgPrice")
+        if avg_price_raw and str(avg_price_raw) != "0":
+            return float(avg_price_raw)
+
+        # Fallback: derive from cummulativeQuoteQty / executedQty
+        exec_qty = float(order_data.get("executedQty", 0))
+        if exec_qty > 0:
+            cum_quote = float(order_data.get("cummulativeQuoteQty", 0))
+            if cum_quote > 0:
+                return cum_quote / exec_qty
+
+        return None
 
     def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         """Get all open orders"""
@@ -818,12 +836,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         stop_price: float | None = None,
         time_in_force: str = "GTC",
         client_order_id: str | None = None,
-    ) -> str | None:
+    ) -> Order | None:
         """
-        Place a new order and return order ID.
+        Place a new order and return full Order object with fill data.
 
         Uses client_order_id for idempotency - if provided and an order with the same
         client ID already exists, Binance will reject the duplicate order.
+        For market orders, requests FULL response type to capture fill data at placement.
         """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place order")
@@ -859,6 +878,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             if time_in_force != "GTC":
                 order_params["timeInForce"] = time_in_force
 
+            # Request full response for market orders to capture fill data at placement
+            if order_type == OrderType.MARKET:
+                order_params["newOrderRespType"] = "FULL"
+
             # Add client order ID for idempotency if provided
             if client_order_id:
                 order_params["newClientOrderId"] = client_order_id
@@ -872,26 +895,129 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.error(f"Order placed but no orderId in response: {response}")
                 return None
 
+            # Parse full response into Order object
+            order_obj = self._parse_placement_response(response, symbol, side, order_type)
+
             logger.info(
                 f"Order placed successfully: {symbol} {side.value} {quantity} order_id={order_id}"
             )
-            return order_id
+            return order_obj
 
         except BinanceOrderException as e:
             error_msg = str(e)
-            # Check if this is a duplicate client order ID error (idempotency working as expected)
-            if client_order_id and ("Duplicate order sent" in error_msg or "-2010" in error_msg):
+            error_code = getattr(e, "code", None)
+
+            # Check if this is a duplicate client order ID error (idempotency).
+            # Require BOTH conditions: -2010 alone covers other rejections
+            # (insufficient balance, etc.) that are NOT duplicates.
+            if client_order_id and (
+                "Duplicate order sent" in error_msg and error_code == -2010
+            ):
                 logger.warning(
                     f"Duplicate client order ID detected: {client_order_id}. "
                     "This order may have already been placed. Check order status manually."
                 )
-                # Return None to signal failure, but log as warning since idempotency prevented duplicate
                 return None
-            logger.error(f"Binance order error: {e}")
+
+            # Definitive rejections: the exchange explicitly rejected the order,
+            # so it was NOT placed. Raise ValueError so the caller can distinguish
+            # this from ambiguous network/timeout errors (which return None).
+            definitive_codes = {
+                -1013,  # LOT_SIZE / MIN_NOTIONAL filter failure
+                -1021,  # TIMESTAMP out of recv window
+                -1100,  # Illegal characters in parameter
+                -1101,  # Too many parameters
+                -1102,  # Mandatory parameter missing
+                -1106,  # Parameter not required
+                -1111,  # Precision over maximum for asset
+                -1116,  # Order type not supported
+                -2010,  # NEW_ORDER_REJECTED (insufficient balance, etc.)
+                -2013,  # Order does not exist
+                -2015,  # Invalid API key / permissions
+            }
+            if error_code in definitive_codes:
+                logger.error(
+                    "Order definitively rejected by Binance (code=%s): %s",
+                    error_code,
+                    error_msg,
+                )
+                raise ValueError(
+                    f"Order rejected by exchange (code={error_code}): {error_msg}"
+                ) from e
+
+            # Ambiguous error (unknown code, network-adjacent): return None so the
+            # caller treats it as "order may or may not have been placed".
+            logger.error(f"Binance order error (ambiguous, code={error_code}): {e}")
             return None
         except Exception as e:
             logger.error(f"Failed to place order: {e}")
             return None
+
+    def _parse_placement_response(
+        self,
+        response: dict,
+        symbol: str,
+        side: OrderSide,
+        order_type: OrderType,
+    ) -> Order:
+        """Parse a Binance order placement response into an Order object.
+
+        For FULL responses (market orders), aggregates fill data from the fills array.
+        """
+        now = datetime.now(UTC)
+        order_id = str(response.get("orderId", ""))
+        client_oid = response.get("clientOrderId")
+        status_str = response.get("status", "NEW")
+
+        # Map Binance status to our OrderStatus
+        status_map = {
+            "NEW": OrderStatus.PENDING,
+            "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
+            "FILLED": OrderStatus.FILLED,
+            "CANCELED": OrderStatus.CANCELLED,
+            "REJECTED": OrderStatus.REJECTED,
+            "EXPIRED": OrderStatus.EXPIRED,
+        }
+        status = status_map.get(status_str, OrderStatus.PENDING)
+
+        # Aggregate fill data from fills array (FULL response type)
+        fills = response.get("fills", [])
+        total_qty = 0.0
+        total_cost = 0.0
+        total_commission = 0.0
+        commission_asset = ""
+        for fill in fills:
+            qty = float(fill.get("qty", 0))
+            px = float(fill.get("price", 0))
+            total_qty += qty
+            total_cost += qty * px
+            total_commission += float(fill.get("commission", 0))
+            commission_asset = fill.get("commissionAsset", commission_asset)
+
+        avg_price = total_cost / total_qty if total_qty > 0 else None
+
+        # Fallback to top-level fields if no fills array
+        if total_qty == 0:
+            total_qty = float(response.get("executedQty", 0))
+            cum_quote = float(response.get("cummulativeQuoteQty", 0))
+            avg_price = cum_quote / total_qty if total_qty > 0 else None
+
+        return Order(
+            order_id=order_id,
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            quantity=float(response.get("origQty", 0)),
+            price=float(response.get("price", 0)) or None,
+            status=status,
+            filled_quantity=total_qty,
+            average_price=avg_price,
+            commission=total_commission,
+            commission_asset=commission_asset,
+            create_time=now,
+            update_time=now,
+            client_order_id=client_oid,
+        )
 
     @with_rate_limit_retry(max_retries=3, base_delay=1.0)
     def place_stop_loss_order(
@@ -901,6 +1027,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         quantity: float,
         stop_price: float,
         limit_price: float | None = None,
+        client_order_id: str | None = None,
     ) -> str | None:
         """
         Place a server-side stop-loss order on Binance.
@@ -947,15 +1074,18 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 if step_size > 0:
                     quantity = round(quantity / step_size) * step_size
 
-            response = self._client.create_order(
-                symbol=symbol,
-                side=binance_side,
-                type="STOP_LOSS_LIMIT",
-                quantity=quantity,
-                stopPrice=str(stop_price),
-                price=str(limit_price),
-                timeInForce="GTC",
-            )
+            sl_params = {
+                "symbol": symbol,
+                "side": binance_side,
+                "type": "STOP_LOSS_LIMIT",
+                "quantity": quantity,
+                "stopPrice": str(stop_price),
+                "price": str(limit_price),
+                "timeInForce": "GTC",
+            }
+            if client_order_id:
+                sl_params["newClientOrderId"] = client_order_id
+            response = self._client.create_order(**sl_params)
 
             order_id = str(response.get("orderId", ""))
             if not order_id:
@@ -1014,6 +1144,81 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         except Exception as e:
             logger.error(f"Failed to cancel all orders: {e}")
             return False
+
+    @with_rate_limit_retry(max_retries=3, base_delay=1.0)
+    def get_order_by_client_id(self, client_order_id: str, symbol: str) -> Order | None:
+        """Query Binance for an order by our client_order_id (origClientOrderId)."""
+        if not BINANCE_AVAILABLE or not self._client:
+            return None
+        try:
+            response = self._client.get_order(
+                symbol=symbol, origClientOrderId=client_order_id
+            )
+            return self._parse_order_data(response)
+        except BinanceOrderException as e:
+            if "-2013" in str(e):  # Order does not exist
+                return None
+            logger.error("Failed to get order by client_id %s: %s", client_order_id, e)
+            return None
+        except Exception as e:
+            logger.error("Failed to get order by client_id %s: %s", client_order_id, e)
+            return None
+
+    @with_rate_limit_retry(max_retries=3, base_delay=1.0)
+    def get_all_orders(
+        self, symbol: str, start_time: datetime | None = None, limit: int = 100
+    ) -> list[Order]:
+        """Get all orders (open + closed) for a symbol within a time window."""
+        if not BINANCE_AVAILABLE or not self._client:
+            return []
+        try:
+            params: dict[str, Any] = {"symbol": symbol, "limit": limit}
+            if start_time is not None:
+                params["startTime"] = int(start_time.timestamp() * 1000)
+            raw_orders = self._client.get_all_orders(**params)
+            parsed = [self._parse_order_data(o) for o in raw_orders if o]
+            return [o for o in parsed if o is not None]
+        except Exception as e:
+            logger.error("Failed to get all orders for %s: %s", symbol, e)
+            return []
+
+    @with_rate_limit_retry(max_retries=3, base_delay=1.0)
+    def get_my_trades(
+        self, symbol: str, order_id: str | None = None, start_time: datetime | None = None
+    ) -> list[Trade]:
+        """Get account trades, optionally filtered by order_id or start_time."""
+        if not BINANCE_AVAILABLE or not self._client:
+            return []
+        try:
+            params: dict[str, Any] = {"symbol": symbol, "limit": 500}
+            if order_id is not None:
+                params["orderId"] = int(order_id)
+            if start_time is not None:
+                params["startTime"] = int(start_time.timestamp() * 1000)
+            raw_trades = self._client.get_my_trades(**params)
+            result = []
+            for t in raw_trades:
+                try:
+                    trade_time = t.get("time", 0)
+                    result.append(
+                        Trade(
+                            trade_id=str(t["id"]),
+                            order_id=str(t["orderId"]),
+                            symbol=t["symbol"],
+                            side=OrderSide.BUY if t["isBuyer"] else OrderSide.SELL,
+                            quantity=float(t["qty"]),
+                            price=float(t["price"]),
+                            commission=float(t["commission"]),
+                            commission_asset=t["commissionAsset"],
+                            time=datetime.fromtimestamp(trade_time / 1000, tz=UTC),
+                        )
+                    )
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.warning("Skipping malformed trade: %s", e)
+            return result
+        except Exception as e:
+            logger.error("Failed to get my trades for %s: %s", symbol, e)
+            return []
 
     def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         """Get trading symbol information"""

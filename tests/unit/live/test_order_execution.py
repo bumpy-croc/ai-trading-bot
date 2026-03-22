@@ -227,15 +227,27 @@ class TestExecuteEntry:
         assert result.success is False
         mock_exchange.place_order.assert_not_called()
 
-    def test_execute_entry_place_fails(self, execution_engine_with_exchange, mock_exchange):
-        """Order returns failure when exchange place_order fails."""
+    def test_execute_entry_place_returns_none_creates_phantom(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """When place_order returns None (timeout), a phantom position is created.
+
+        This prevents duplicate entries: the caller gets a tracked position that
+        blocks further buys for the same symbol. The startup reconciler cleans up
+        phantom positions if the order never actually filled on the exchange.
+        """
         mock_exchange.place_order.return_value = None
 
         result = execution_engine_with_exchange.execute_entry(
             "BTCUSDT", PositionSide.LONG, 0.1, 50000.0, 10000.0
         )
 
-        assert result.success is False
+        # Phantom position is treated as success to block duplicate entries
+        assert result.success is True
+        assert result.order_id is not None
+        assert result.client_order_id is not None
+        # order_id equals client_order_id for phantom positions
+        assert result.order_id == result.client_order_id
 
     def test_execute_entry_no_symbol_info(self, execution_engine_with_exchange, mock_exchange):
         """Order succeeds without symbol info (uses defaults)."""
