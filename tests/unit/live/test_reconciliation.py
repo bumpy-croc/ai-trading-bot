@@ -2289,3 +2289,277 @@ class TestPartialSLFillQuantityCalculation:
         assert pos.quantity == pytest.approx(0.15)
         call_kwargs = mock_exchange.place_stop_loss_order.call_args
         assert call_kwargs.kwargs["quantity"] == pytest.approx(0.15)
+
+
+# ---------- Periodic SL Placement for Unprotected Positions ----------
+
+
+class TestPeriodicMissingStopLoss:
+    """Tests for periodic reconciler placing SL on positions without one."""
+
+    def test_periodic_places_sl_for_position_without_sl_order_id(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Periodic reconciler places SL for position missing stop_loss_order_id."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_200",
+            stop_loss=48000.0,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=42,
+        )
+        mock_position_tracker.positions = {"pos_1": pos}
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_123"
+        mock_db.get_current_balance.return_value = 10000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=MagicMock(),
+        )
+        reconciler._reconcile_cycle()
+
+        # SL should have been placed
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        call_kwargs = mock_exchange.place_stop_loss_order.call_args.kwargs
+        assert call_kwargs["stop_price"] == 48000.0
+        assert call_kwargs["quantity"] == pytest.approx(0.1)
+        # Position should now have the SL order ID
+        assert pos.stop_loss_order_id == "new_sl_123"
+
+    def test_periodic_computes_default_sl_when_stop_loss_is_none(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Periodic reconciler computes default SL when position.stop_loss is None."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_201",
+            stop_loss=None,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=43,
+            side="long",
+        )
+        mock_position_tracker.positions = {"pos_2": pos}
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_default"
+        mock_db.get_current_balance.return_value = 10000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=MagicMock(),
+        )
+        reconciler._reconcile_cycle()
+
+        # SL should have been placed with default stop price
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        call_kwargs = mock_exchange.place_stop_loss_order.call_args.kwargs
+        # Default long SL = entry * (1 - DEFAULT_STOP_LOSS_PCT)
+        from src.config.constants import DEFAULT_STOP_LOSS_PCT
+
+        expected_stop = 50000.0 * (1.0 - DEFAULT_STOP_LOSS_PCT)
+        assert call_kwargs["stop_price"] == pytest.approx(expected_stop)
+        assert pos.stop_loss == pytest.approx(expected_stop)
+        assert pos.stop_loss_order_id == "new_sl_default"
+
+    def test_periodic_missing_sl_placement_failure_logs_critical(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """When SL placement fails for unprotected position, CRITICAL is logged."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_202",
+            stop_loss=48000.0,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=44,
+        )
+        mock_position_tracker.positions = {"pos_3": pos}
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        # SL placement returns None (failure)
+        mock_exchange.place_stop_loss_order.return_value = None
+        mock_db.get_current_balance.return_value = 10000.0
+
+        on_critical = MagicMock()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=on_critical,
+        )
+        reconciler._reconcile_cycle()
+
+        # SL placement was attempted
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        # Position should still have no SL order ID
+        assert pos.stop_loss_order_id is None
+
+
+# ---------- Emergency Sell Verification Tests ----------
+
+
+class TestEmergencySellVerification:
+    """Tests that emergency sell result is verified before removing position."""
+
+    def test_emergency_sell_returns_none_keeps_position_tracked(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """When emergency sell returns None, position stays tracked and result is CRITICAL."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 55
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 20,
+                "client_order_id": "atb_BTCUSDT_long_7777_cccc",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # SL placement returns None (triggers emergency close path)
+        mock_exchange.place_stop_loss_order.return_value = None
+        # Emergency sell also returns None (timeout)
+        mock_exchange.place_order.return_value = None
+
+        # RuntimeError is caught by _handle_found_order -> result is CRITICAL/unresolved
+        results = reconciler.resolve_pending_orders()
+
+        # Position was tracked but NOT removed
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()
+        # DB position NOT closed
+        mock_db.close_position.assert_not_called()
+        # Result should be unresolved with CRITICAL severity
+        assert any(r.status == "unresolved" and r.severity == Severity.CRITICAL for r in results)
+
+    def test_emergency_sell_confirmed_removes_position(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """When emergency sell returns an Order, position is removed."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 56
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 21,
+                "client_order_id": "atb_BTCUSDT_long_6666_dddd",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # SL placement returns None (triggers emergency close path)
+        mock_exchange.place_stop_loss_order.return_value = None
+        # Emergency sell succeeds (returns an Order object)
+        mock_exchange.place_order.return_value = MagicMock()
+
+        reconciler.resolve_pending_orders()
+
+        # Position was tracked then removed (emergency-close confirmed)
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_called_once()
+        # DB position closed
+        mock_db.close_position.assert_called_once_with(56)
+
+    def test_emergency_sell_exception_keeps_position_tracked(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """When emergency sell raises an exception, position stays tracked."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 57
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 22,
+                "client_order_id": "atb_BTCUSDT_long_5555_eeee",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # SL placement returns None (triggers emergency close path)
+        mock_exchange.place_stop_loss_order.return_value = None
+        # Emergency sell raises exception
+        mock_exchange.place_order.side_effect = ConnectionError("Network error")
+
+        # RuntimeError is caught by _handle_found_order -> result is CRITICAL/unresolved
+        results = reconciler.resolve_pending_orders()
+
+        # Position was tracked but NOT removed
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        # Result should be unresolved with CRITICAL severity
+        assert any(r.status == "unresolved" and r.severity == Severity.CRITICAL for r in results)

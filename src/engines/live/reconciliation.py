@@ -575,6 +575,7 @@ class PositionReconciler:
                     )
 
                     # Attempt to actually sell the asset on exchange
+                    sell_result = None
                     try:
                         from src.data_providers.exchange_interface import (
                             OrderSide,
@@ -586,19 +587,27 @@ class PositionReconciler:
                             if side_lower == "long"
                             else OrderSide.BUY
                         )
-                        self.exchange.place_order(
+                        sell_result = self.exchange.place_order(
                             symbol=symbol,
                             side=sell_side,
                             order_type=OrderType.MARKET,
                             quantity=fill_qty,
                         )
-                        logger.critical(
-                            "Emergency-closed recovered %s position on "
-                            "exchange (qty=%.8f, side=%s)",
-                            symbol,
-                            fill_qty,
-                            sell_side,
-                        )
+                        if sell_result is not None:
+                            logger.critical(
+                                "Emergency-closed recovered %s position on "
+                                "exchange (qty=%.8f, side=%s)",
+                                symbol,
+                                fill_qty,
+                                sell_side,
+                            )
+                        else:
+                            logger.critical(
+                                "Emergency sell returned None for %s "
+                                "(qty=%.8f) — keeping position tracked",
+                                symbol,
+                                fill_qty,
+                            )
                     except Exception as sell_err:
                         logger.critical(
                             "CRITICAL: Emergency sell FAILED for %s "
@@ -609,18 +618,27 @@ class PositionReconciler:
                             sell_err,
                         )
 
-                    self.position_tracker.remove_position(order_id)
-                    if db_id is not None:
-                        try:
-                            self.db_manager.close_position(db_id)
-                        except Exception as db_err:
-                            logger.critical(
-                                "Failed to close DB position %s after SL "
-                                "failure: %s — manual intervention required",
-                                db_id,
-                                db_err,
-                            )
-                    return
+                    if sell_result is not None:
+                        # Sell confirmed — safe to remove position
+                        self.position_tracker.remove_position(order_id)
+                        if db_id is not None:
+                            try:
+                                self.db_manager.close_position(db_id)
+                            except Exception as db_err:
+                                logger.critical(
+                                    "Failed to close DB position %s after SL "
+                                    "failure: %s — manual intervention required",
+                                    db_id,
+                                    db_err,
+                                )
+                        return
+                    else:
+                        # Sell ambiguous — keep position tracked, trigger
+                        # close-only mode in the caller via RuntimeError
+                        raise RuntimeError(
+                            f"Emergency sell ambiguous for {symbol} — "
+                            f"position kept tracked, entering close-only mode"
+                        )
 
             logger.info(
                 "Reconciled filled ENTRY %s: created position %s (db_id=%s)",
@@ -2127,6 +2145,11 @@ class PeriodicReconciler:
         for order_key, position in list(positions_snapshot.items()):
             sl_order_id = getattr(position, "stop_loss_order_id", None)
             if not sl_order_id:
+                # Position has no SL order (e.g. phantom from timeout) —
+                # attempt to place one so it is protected at runtime.
+                self._place_missing_stop_loss(position, order_key)
+                if Severity.HIGH > max_severity:
+                    max_severity = Severity.HIGH
                 continue
 
             try:
@@ -2376,6 +2399,99 @@ class PeriodicReconciler:
                 self.on_critical()
             except Exception as e:
                 logger.error("on_critical callback failed: %s", e)
+
+
+    def _place_missing_stop_loss(
+        self, position: Any, order_key: str
+    ) -> None:
+        """Place a stop-loss for a position that has none (e.g. phantom from timeout).
+
+        Computes a default stop price from the position's stop_loss attribute
+        or falls back to DEFAULT_STOP_LOSS_PCT from entry_price.
+        """
+        stop_price = getattr(position, "stop_loss", None)
+        entry_price = getattr(position, "entry_price", None)
+        side = getattr(position, "side", "long")
+        side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
+
+        # Compute default stop price if none stored on the position
+        if not stop_price and entry_price and entry_price > 0:
+            if side_is_long:
+                stop_price = entry_price * (1.0 - DEFAULT_STOP_LOSS_PCT)
+            else:
+                stop_price = entry_price * (1.0 + DEFAULT_STOP_LOSS_PCT)
+            position.stop_loss = stop_price
+            logger.warning(
+                "Position %s has no stop_loss; computed default %.4f "
+                "(entry=%.4f, side=%s, pct=%.2f%%)",
+                order_key,
+                stop_price,
+                entry_price,
+                side,
+                DEFAULT_STOP_LOSS_PCT * 100,
+            )
+
+        if not stop_price or not hasattr(self.exchange, "place_stop_loss_order"):
+            logger.critical(
+                "Cannot place missing SL for %s — no stop_price or exchange "
+                "does not support SL orders",
+                order_key,
+            )
+            return
+
+        try:
+            from src.data_providers.exchange_interface import OrderSide
+
+            sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
+
+            # Compute held qty accounting for partial exits
+            qty = getattr(position, "quantity", 0) or 0.0
+            current = getattr(position, "current_size", None)
+            original = getattr(position, "original_size", None)
+            if current and original and original > 0:
+                qty = qty * (current / original)
+
+            new_sl_id = self.exchange.place_stop_loss_order(
+                symbol=position.symbol,
+                side=sl_side,
+                quantity=qty,
+                stop_price=stop_price,
+            )
+            if new_sl_id:
+                position.stop_loss_order_id = new_sl_id
+                logger.info(
+                    "Placed missing stop-loss for %s: %s @ %.2f (periodic check)",
+                    position.symbol,
+                    new_sl_id,
+                    stop_price,
+                )
+                db_pos_id = getattr(position, "db_position_id", None)
+                if db_pos_id is not None:
+                    try:
+                        self.db_manager.update_position(
+                            position_id=db_pos_id,
+                            stop_loss_order_id=new_sl_id,
+                            stop_loss=stop_price,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to persist SL order ID for %s: %s",
+                            position.symbol,
+                            e,
+                        )
+            else:
+                logger.critical(
+                    "Failed to place missing stop-loss for %s — position "
+                    "is unprotected (periodic check)",
+                    position.symbol,
+                )
+        except Exception as e:
+            logger.critical(
+                "Exception placing missing stop-loss for %s: %s — position "
+                "is unprotected (periodic check)",
+                position.symbol,
+                e,
+            )
 
 
 # ---------- Discrepancy Handling ----------
