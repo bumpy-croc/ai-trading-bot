@@ -73,6 +73,7 @@ class LiveEntryResult:
     executed: bool = False
     reasons: list[str] | None = None
     error: str | None = None
+    ambiguous: bool = False
 
 
 class LiveEntryHandler:
@@ -360,7 +361,9 @@ class LiveEntryHandler:
             )
             # Fall back to raw balance to prevent negative basis in P&L calculations
             entry_balance = balance
-        # Create position with actual quantity from execution
+        # Create position with actual quantity from execution.
+        # Populate exchange_order_id and client_order_id so the PeriodicReconciler
+        # can match this position to exchange orders without a restart cycle.
         position = LivePosition(
             symbol=symbol,
             side=signal.side,
@@ -372,9 +375,37 @@ class LiveEntryHandler:
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             order_id=exec_result.order_id,
+            exchange_order_id=exec_result.order_id,
+            client_order_id=exec_result.client_order_id,
             original_size=signal.size_fraction,
             current_size=signal.size_fraction,
         )
+
+        # Scale position size down for partial fills so exit sizing is correct.
+        # exec_result.quantity reflects actual filled qty; compare against the
+        # originally requested qty (before fill data overwrites) to detect partial fills.
+        actual_qty = getattr(exec_result, "quantity", 0.0) or 0.0
+        requested_qty = getattr(exec_result, "requested_quantity", 0.0) or 0.0
+        if (
+            isinstance(actual_qty, (int, float))
+            and isinstance(requested_qty, (int, float))
+            and actual_qty > 0
+            and requested_qty > 0
+        ):
+            fill_ratio = actual_qty / requested_qty
+            if fill_ratio < 0.99:  # Partial fill
+                position.size *= fill_ratio
+                position.original_size = position.size
+                position.current_size = position.size
+                logger.warning(
+                    "Partial fill for %s: %.1f%% filled (qty=%.8f / requested=%.8f) — "
+                    "scaled position size to %.6f",
+                    symbol,
+                    fill_ratio * 100,
+                    actual_qty,
+                    requested_qty,
+                    position.size,
+                )
 
         return LiveEntryResult(
             position=position,
@@ -382,6 +413,7 @@ class LiveEntryHandler:
             slippage_cost=exec_result.slippage_cost,
             executed=True,
             reasons=signal.reasons,
+            ambiguous=exec_result.ambiguous,
         )
 
     def _extract_entry_plan(

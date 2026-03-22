@@ -54,6 +54,21 @@ MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 ZERO_VALUE = 0.0
 
 
+def _resolve_basis_balance(trade: Trade, balance: float | None) -> float:
+    """Resolve the basis balance for P&L and notional calculations.
+
+    Prefers entry_balance stored on the trade; falls back to the
+    caller-supplied current balance so calculations scale correctly with
+    the actual account size instead of a hard-coded constant.
+    """
+    entry_balance = getattr(trade, "entry_balance", None)
+    if entry_balance is not None and entry_balance > 0:
+        return float(entry_balance)
+    if balance is not None and balance > 0:
+        return float(balance)
+    return DEFAULT_BASIS_BALANCE_FALLBACK
+
+
 @dataclass
 class ExitCheckResult:
     """Result of checking exit conditions."""
@@ -74,6 +89,7 @@ class PartialOpsResult:
     realized_pnl: float
     partial_exits: list[dict]
     scale_ins: list[dict]
+    scale_in_fees: float = 0.0
 
 
 class ExitHandler:
@@ -235,6 +251,7 @@ class ExitHandler:
         df: pd.DataFrame,
         index: int,
         indicators: dict | None = None,
+        balance: float | None = None,
     ) -> PartialOpsResult:
         """Check and execute partial exits and scale-ins.
 
@@ -245,6 +262,8 @@ class ExitHandler:
             df: DataFrame with market data.
             index: Current candle index.
             indicators: Extracted indicators (unused, kept for compatibility).
+            balance: Current account balance, used as fallback for basis_balance
+                when entry_balance is unavailable.
 
         Returns:
             PartialOpsResult with realized PnL and actions taken.
@@ -259,6 +278,7 @@ class ExitHandler:
         realized_pnl = 0.0
         partial_exits = []
         scale_ins = []
+        total_scale_in_fees = 0.0
 
         try:
             # Check partial exits (loop until no more triggers)
@@ -292,13 +312,7 @@ class ExitHandler:
                 if exit_size_of_current is None:
                     break
 
-                # Get basis balance for PnL calculation
-                entry_balance = getattr(trade, "entry_balance", None)
-                basis_balance = (
-                    float(entry_balance)
-                    if entry_balance is not None and entry_balance > 0
-                    else DEFAULT_BASIS_BALANCE_FALLBACK
-                )
+                basis_balance = _resolve_basis_balance(trade, balance)
 
                 # Execute partial exit via position tracker
                 pnl = self.position_tracker.apply_partial_exit(
@@ -347,12 +361,25 @@ class ExitHandler:
                     add_effective = min(delta_add, remaining_daily)
 
                     if add_effective > 0:
+                        # Calculate scale-in fees (same as initial entry fees)
+                        scale_basis = _resolve_basis_balance(trade, balance)
+                        scale_notional = scale_basis * add_effective
+                        side_str = to_side_string(trade.side)
+                        scale_fee, scale_slippage = self.execution_engine.calculate_scale_in_costs(
+                            price=current_price,
+                            notional=scale_notional,
+                            side=side_str,
+                        )
+                        total_scale_in_fees += scale_fee
+
                         self.position_tracker.apply_scale_in(add_effective)
 
                         scale_ins.append(
                             {
                                 "size": add_effective,
                                 "price": current_price,
+                                "fee": scale_fee,
+                                "slippage": scale_slippage,
                             }
                         )
 
@@ -372,6 +399,7 @@ class ExitHandler:
             realized_pnl=realized_pnl,
             partial_exits=partial_exits,
             scale_ins=scale_ins,
+            scale_in_fees=total_scale_in_fees,
         )
 
     def check_exit_conditions(

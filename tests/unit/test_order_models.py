@@ -31,7 +31,8 @@ class TestOrderModels:
         assert OrderType.PARTIAL_EXIT.value == "PARTIAL_EXIT"
         assert OrderType.SCALE_IN.value == "SCALE_IN"
         assert OrderType.FULL_EXIT.value == "FULL_EXIT"
-        assert len(OrderType) == 4
+        assert OrderType.STOP_LOSS.value == "STOP_LOSS"
+        assert len(OrderType) == 5
 
     def test_order_model_attributes(self):
         """Test Order model has all required attributes."""

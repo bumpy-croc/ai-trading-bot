@@ -1136,6 +1136,7 @@ class Backtester:
             df=df,
             index=index,
             indicators=indicators,
+            balance=self.balance,
         )
         # Validate realized P&L before updating balance to prevent corruption
         if not math.isfinite(partial_result.realized_pnl):
@@ -1145,6 +1146,16 @@ class Backtester:
             )
         else:
             self.balance += partial_result.realized_pnl
+
+        # Deduct scale-in fees from balance (scale-ins incur exchange fees
+        # just like initial entries)
+        if not math.isfinite(partial_result.scale_in_fees):
+            logger.critical(
+                "Invalid scale_in_fees from partial exit: %s - skipping fee deduction",
+                partial_result.scale_in_fees,
+            )
+        elif partial_result.scale_in_fees > 0:
+            self.balance -= partial_result.scale_in_fees
 
         # Update MFE/MAE
         self.position_tracker.update_metrics(current_price, current_time)

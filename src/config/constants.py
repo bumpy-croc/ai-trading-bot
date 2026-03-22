@@ -320,6 +320,13 @@ DEFAULT_MAX_LEVERAGE = 3.0  # Maximum leverage multiplier (safety cap)
 DEFAULT_LEVERAGE_DECAY_RATE = 0.15  # Exponential decay rate for smooth transitions
 DEFAULT_MIN_REGIME_BARS = 5  # Minimum bars in regime before conviction scaling
 
+# Reconciliation Constants
+DEFAULT_RECONCILIATION_INTERVAL_SECONDS = 60  # Periodic reconciliation check interval
+DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT = 0.05  # 5% balance discrepancy triggers CRITICAL
+DEFAULT_RECONCILIATION_DUST_THRESHOLD = 0.00001  # Ignore dust-level asset discrepancies
+DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT = 0.01  # 1% qty tolerance for order matching
+DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN = 10  # Minutes for timestamp matching
+
 # TFT (Temporal Fusion Transformer) Model Defaults
 DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
 DEFAULT_TFT_HIDDEN_SIZE = 64  # Hidden dimension for GRN and attention layers
