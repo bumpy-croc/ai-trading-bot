@@ -638,7 +638,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # Extract base asset from symbol filter (e.g. "ETHUSDT" -> "ETH")
             target_base_asset: str | None = None
             if symbol:
-                target_base_asset = symbol.replace("USDT", "").replace("BUSD", "")
+                target_base_asset = symbol.removesuffix("USDT").removesuffix("BUSD")
 
             # For spot trading, we consider holdings as "positions"
             balances = self.get_balances()
@@ -650,56 +650,56 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 # Skip assets not matching the target symbol to conserve API weight
                 if target_base_asset and balance.asset != target_base_asset:
                     continue
-                    # Get current price for the asset
-                    try:
-                        ticker = self._client.get_symbol_ticker(
-                            symbol=SymbolFactory.to_exchange_symbol(
-                                f"{balance.asset}-USD", "binance"
-                            )
+                # Get current price for the asset
+                try:
+                    ticker = self._client.get_symbol_ticker(
+                        symbol=SymbolFactory.to_exchange_symbol(
+                            f"{balance.asset}-USD", "binance"
                         )
+                    )
 
-                        # Validate ticker response before accessing price
-                        if not isinstance(ticker, dict) or "price" not in ticker:
-                            logger.warning(
-                                "Invalid ticker response for %s: %s. Position not loaded.",
-                                balance.asset,
-                                ticker,
-                            )
-                            continue
-
-                        current_price = float(ticker["price"])
-
-                        # Validate price is finite to prevent inf/nan in positions
-                        if not math.isfinite(current_price) or current_price <= 0:
-                            logger.warning(
-                                "Invalid price %.8f for %s. Position not loaded.",
-                                current_price,
-                                balance.asset,
-                            )
-                            continue
-
-                        position = Position(
-                            symbol=f"{balance.asset}USDT",
-                            side="long",
-                            size=balance.total,
-                            entry_price=current_price,  # Simplified - we don't track entry price for holdings
-                            current_price=current_price,
-                            unrealized_pnl=0.0,  # Simplified
-                            margin_type="spot",
-                            leverage=1.0,
-                            order_id="",  # No order ID for holdings
-                            open_time=datetime.now(UTC),  # Simplified
-                            last_update_time=datetime.now(UTC),
-                        )
-                        positions.append(position)
-
-                    except Exception as e:
+                    # Validate ticker response before accessing price
+                    if not isinstance(ticker, dict) or "price" not in ticker:
                         logger.warning(
-                            "Failed to load position for %s (balance %.8f): %s",
+                            "Invalid ticker response for %s: %s. Position not loaded.",
                             balance.asset,
-                            balance.total,
-                            e,
+                            ticker,
                         )
+                        continue
+
+                    current_price = float(ticker["price"])
+
+                    # Validate price is finite to prevent inf/nan in positions
+                    if not math.isfinite(current_price) or current_price <= 0:
+                        logger.warning(
+                            "Invalid price %.8f for %s. Position not loaded.",
+                            current_price,
+                            balance.asset,
+                        )
+                        continue
+
+                    position = Position(
+                        symbol=f"{balance.asset}USDT",
+                        side="long",
+                        size=balance.total,
+                        entry_price=current_price,  # Simplified - we don't track entry price for holdings
+                        current_price=current_price,
+                        unrealized_pnl=0.0,  # Simplified
+                        margin_type="spot",
+                        leverage=1.0,
+                        order_id="",  # No order ID for holdings
+                        open_time=datetime.now(UTC),  # Simplified
+                        last_update_time=datetime.now(UTC),
+                    )
+                    positions.append(position)
+
+                except Exception as e:
+                    logger.warning(
+                        "Failed to load position for %s (balance %.8f): %s",
+                        balance.asset,
+                        balance.total,
+                        e,
+                    )
 
             return positions
 
