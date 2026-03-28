@@ -64,12 +64,16 @@ class AccountSynchronizer:
         self.session_id = session_id
         self.last_sync_time: datetime | None = None
 
-    def sync_account_data(self, force: bool = False) -> SyncResult:
+    def sync_account_data(
+        self, force: bool = False, symbol: str | None = None
+    ) -> SyncResult:
         """
         Synchronize all account data from the exchange.
 
         Args:
             force: Force sync even if recently synced
+            symbol: If provided, only sync positions/orders for this symbol
+                    to conserve API weight
 
         Returns:
             SyncResult with synchronization status and data
@@ -91,8 +95,8 @@ class AccountSynchronizer:
                         timestamp=datetime.now(UTC),
                     )
 
-            # Get data from exchange
-            exchange_data = self.exchange.sync_account_data()
+            # Get data from exchange (filter by symbol to save API weight)
+            exchange_data = self.exchange.sync_account_data(symbol=symbol)
 
             if not exchange_data.get("sync_successful", False):
                 error_msg = exchange_data.get("error", "Unknown error")

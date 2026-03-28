@@ -11,6 +11,7 @@ providing a single interface for all Binance operations including:
 
 import logging
 import math
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -69,11 +70,28 @@ RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too 
 STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005  # 0.5% slippage
 
 
+def _parse_ban_expiry(error_message: str) -> float | None:
+    """Extract ban expiry timestamp from Binance -1003 error message.
+
+    Returns seconds until ban expires, or None if not parseable.
+    """
+    match = re.search(r"banned until (\d{13})", str(error_message))
+    if match:
+        ban_epoch_ms = int(match.group(1))
+        now_ms = time.time() * 1000
+        remaining_s = (ban_epoch_ms - now_ms) / 1000
+        return max(remaining_s, 0)
+    return None
+
+
 def with_rate_limit_retry(
     max_retries: int = 3, base_delay: float = 1.0
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Decorator to handle rate limits with exponential backoff.
+
+    If the error contains a ban expiry timestamp, waits until the ban
+    lifts instead of using blind exponential backoff.
 
     Args:
         max_retries: Maximum number of retry attempts
@@ -94,11 +112,23 @@ def with_rate_limit_retry(
                     error_code = getattr(e, "code", 0)
                     if error_code in RATE_LIMIT_ERROR_CODES:
                         if attempt < max_retries:
-                            delay = base_delay * (2**attempt)
-                            logger.warning(
-                                f"Rate limited (code {error_code}), retrying in {delay}s "
-                                f"(attempt {attempt + 1}/{max_retries})"
-                            )
+                            # Use ban expiry if available, otherwise exponential backoff
+                            ban_wait = _parse_ban_expiry(str(e))
+                            if ban_wait and ban_wait > 0:
+                                # Cap at 5 minutes to avoid excessively long waits
+                                delay = min(ban_wait + 1, 300)
+                                logger.warning(
+                                    "IP banned for %.0fs, waiting until ban expires "
+                                    "(attempt %d/%d)",
+                                    ban_wait, attempt + 1, max_retries,
+                                )
+                            else:
+                                delay = base_delay * (2**attempt)
+                                logger.warning(
+                                    "Rate limited (code %d), retrying in %.1fs "
+                                    "(attempt %d/%d)",
+                                    error_code, delay, attempt + 1, max_retries,
+                                )
                             time.sleep(delay)
                             last_exception = e
                             continue
@@ -594,18 +624,32 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return None
 
     def get_positions(self, symbol: str | None = None) -> list[Position]:
-        """Get open positions (for spot trading, this returns holdings as positions)"""
+        """Get open positions (for spot trading, this returns holdings as positions).
+
+        Args:
+            symbol: If provided, only fetch position for this symbol (e.g. "ETHUSDT").
+                    Saves API weight by skipping ticker calls for unrelated assets.
+        """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning empty positions")
             return []
 
         try:
+            # Extract base asset from symbol filter (e.g. "ETHUSDT" -> "ETH")
+            target_base_asset: str | None = None
+            if symbol:
+                target_base_asset = symbol.replace("USDT", "").replace("BUSD", "")
+
             # For spot trading, we consider holdings as "positions"
             balances = self.get_balances()
             positions = []
 
             for balance in balances:
-                if balance.asset != "USDT" and balance.total > 0:
+                if balance.asset == "USDT" or balance.total <= 0:
+                    continue
+                # Skip assets not matching the target symbol to conserve API weight
+                if target_base_asset and balance.asset != target_base_asset:
+                    continue
                     # Get current price for the asset
                     try:
                         ticker = self._client.get_symbol_ticker(
