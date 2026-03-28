@@ -70,12 +70,15 @@ RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too 
 STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005  # 0.5% slippage
 
 
+_BAN_EXPIRY_PATTERN = re.compile(r"banned until (\d{13})")
+
+
 def _parse_ban_expiry(error_message: str) -> float | None:
     """Extract ban expiry timestamp from Binance -1003 error message.
 
     Returns seconds until ban expires, or None if not parseable.
     """
-    match = re.search(r"banned until (\d{13})", str(error_message))
+    match = _BAN_EXPIRY_PATTERN.search(str(error_message))
     if match:
         ban_epoch_ms = int(match.group(1))
         now_ms = time.time() * 1000
@@ -636,10 +639,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return []
 
         try:
-            # Extract base asset from symbol filter (e.g. "ETHUSDT" -> "ETH")
+            # Filter balances to only the trading symbol's base asset to skip
+            # unnecessary ticker API calls for dust/unrelated holdings
             target_base_asset: str | None = None
             if symbol:
-                target_base_asset = symbol.removesuffix("USDT").removesuffix("BUSD")
+                for quote in ("USDT", "BUSD", "USD"):
+                    if symbol.endswith(quote) and len(symbol) > len(quote):
+                        target_base_asset = symbol[: -len(quote)]
+                        break
 
             # For spot trading, we consider holdings as "positions"
             balances = self.get_balances()
