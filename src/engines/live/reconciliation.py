@@ -1762,7 +1762,18 @@ class PositionReconciler:
         position notional values. In spot trading, buying BTC reduces USDT by
         the purchase amount, so raw DB balance minus position notional gives
         the expected USDT on exchange.
+
+        Skipped in margin mode — cross-margin USDT balance includes short sale
+        proceeds and doesn't reflect true equity without subtracting liabilities.
         """
+        if self._use_margin:
+            logger.info("Skipping startup balance reconciliation in margin mode")
+            return ReconciliationResult(
+                entity_type="balance",
+                entity_id=None,
+                status="skipped",
+            )
+
         result = ReconciliationResult(
             entity_type="balance",
             entity_id=None,
