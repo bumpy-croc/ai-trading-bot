@@ -73,32 +73,42 @@ STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005  # 0.5% slippage
 _BAN_EXPIRY_PATTERN = re.compile(r"banned until (\d{13})")
 
 
-def _parse_ban_expiry(error_message: str) -> float | None:
+def _parse_ban_expiry(error_message: str, now_ms: int | None = None) -> float | None:
     """Extract ban expiry timestamp from Binance -1003 error message.
+
+    Args:
+        error_message: The error message string from Binance.
+        now_ms: Current time in milliseconds (injectable for testing).
 
     Returns seconds until ban expires, or None if not parseable.
     """
     match = _BAN_EXPIRY_PATTERN.search(str(error_message))
     if match:
         ban_epoch_ms = int(match.group(1))
-        now_ms = time.time() * 1000
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
         remaining_s = (ban_epoch_ms - now_ms) / 1000
         return max(remaining_s, 0)
     return None
 
 
 def with_rate_limit_retry(
-    max_retries: int = 3, base_delay: float = 1.0
+    max_retries: int = 6, base_delay: float = 1.0, ban_safe: bool = False
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Decorator to handle rate limits with exponential backoff.
 
     If the error contains a ban expiry timestamp, waits until the ban
-    lifts instead of using blind exponential backoff.
+    lifts instead of using blind exponential backoff. With 6 retries
+    capped at 60s each, handles bans up to ~6 minutes.
 
     Args:
-        max_retries: Maximum number of retry attempts
+        max_retries: Maximum number of retry attempts (default 6 to cover
+                     common 5-minute Binance bans at 60s per retry)
         base_delay: Base delay in seconds (doubles each retry)
+        ban_safe: If True, only retry transient -1015 errors (too many
+                  orders). Raises immediately on -1003 (IP ban) to avoid
+                  blocking safety-critical paths like stop-loss placement.
 
     Returns:
         Decorated function that retries on rate limit errors
@@ -114,6 +124,10 @@ def with_rate_limit_retry(
                 except BinanceAPIException as e:
                     error_code = getattr(e, "code", 0)
                     if error_code in RATE_LIMIT_ERROR_CODES:
+                        # In ban_safe mode, only retry -1015 (transient).
+                        # Raise -1003 (IP ban) immediately — caller handles it.
+                        if ban_safe and error_code == -1003:
+                            raise
                         if attempt < max_retries:
                             # Use ban expiry if available, otherwise exponential backoff
                             ban_wait = _parse_ban_expiry(str(e))
@@ -1071,9 +1085,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             client_order_id=client_oid,
         )
 
-    # No @with_rate_limit_retry — stop-loss placement is safety-critical.
-    # Sleeping during a ban leaves the position unprotected. The caller
-    # (trading engine) handles SL failure by entering close-only mode.
+    # Only retry transient -1015 (too many orders), NOT -1003 (IP ban).
+    # IP bans last minutes — sleeping blocks SL placement and leaves the
+    # position unprotected. The caller handles -1003 by entering close-only mode.
+    @with_rate_limit_retry(max_retries=2, base_delay=1.0, ban_safe=True)
     def place_stop_loss_order(
         self,
         symbol: str,
