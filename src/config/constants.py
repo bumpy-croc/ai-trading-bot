@@ -321,7 +321,7 @@ DEFAULT_LEVERAGE_DECAY_RATE = 0.15  # Exponential decay rate for smooth transiti
 DEFAULT_MIN_REGIME_BARS = 5  # Minimum bars in regime before conviction scaling
 
 # Reconciliation Constants
-DEFAULT_RECONCILIATION_INTERVAL_SECONDS = 300  # Periodic reconciliation check interval (5 min to conserve Binance API weight)
+DEFAULT_RECONCILIATION_INTERVAL_SECONDS = 120  # Periodic reconciliation check interval (2 min — balances SL re-protection speed vs API weight)
 DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT = 0.05  # 5% balance discrepancy triggers CRITICAL
 DEFAULT_RECONCILIATION_DUST_THRESHOLD = 0.00001  # Ignore dust-level asset discrepancies
 DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT = 0.01  # 1% qty tolerance for order matching

@@ -1064,7 +1064,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             client_order_id=client_oid,
         )
 
-    @with_rate_limit_retry(max_retries=3, base_delay=1.0)
+    # No @with_rate_limit_retry — stop-loss placement is safety-critical.
+    # Sleeping during a ban leaves the position unprotected. The caller
+    # (trading engine) handles SL failure by entering close-only mode.
     def place_stop_loss_order(
         self,
         symbol: str,
