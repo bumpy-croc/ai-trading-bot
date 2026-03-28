@@ -56,9 +56,7 @@ MAX_CALLBACK_RETRIES = 5
 # Maximum consecutive API errors before force-removing a tracked order.
 # Prevents infinite error loops when the exchange persistently rejects requests
 # for a specific order (e.g. Binance -1100 for invalid orderId format).
-# Set to 10 to tolerate transient network/API issues (typically 1-3 polls) while
-# preventing permanent polling of unreachable orders. At a 5-second poll interval
-# this gives ~50 seconds of tolerance before force-removal with a CRITICAL alert.
+# At a 10-second poll interval this gives ~100 seconds of tolerance.
 MAX_API_ERROR_RETRIES = 10
 
 
@@ -194,9 +192,32 @@ class OrderTracker:
                     self.exchange.get_order, order_id, tracked.symbol
                 )
                 if not order:
-                    # If order disappeared from exchange AND callback previously failed,
-                    # untrack to prevent ghost-order memory leak (matches CANCELLED path logic).
-                    if tracked.callback_failure_count > 0:
+                    # None return counts as an API error — get_order_by_client_id()
+                    # swallows exceptions and returns None, so the except block below
+                    # is never reached for client order ID failures.
+                    tracked.api_error_count += 1
+                    if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
+                        logger.critical(
+                            "CRITICAL: Order %s on %s returned None for %d consecutive "
+                            "polls. Force-removing to prevent infinite polling. "
+                            "MANUAL RECONCILIATION REQUIRED.",
+                            order_id,
+                            tracked.symbol,
+                            tracked.api_error_count,
+                            exc_info=True,
+                        )
+                        if self.on_cancel:
+                            try:
+                                self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
+                            except Exception as cb_err:
+                                logger.error(
+                                    "Cancel callback failed for force-removed order %s: %s",
+                                    order_id,
+                                    cb_err,
+                                    exc_info=True,
+                                )
+                        self.stop_tracking(order_id)
+                    elif tracked.callback_failure_count > 0:
                         logger.critical(
                             "CRITICAL: Order %s on %s no longer returned by exchange after "
                             "%d failed callback attempts. Force-removing to prevent permanent "
@@ -204,10 +225,16 @@ class OrderTracker:
                             order_id,
                             tracked.symbol,
                             tracked.callback_failure_count,
+                            exc_info=True,
                         )
                         self.stop_tracking(order_id)
                     else:
-                        logger.warning("Could not fetch order %s - may have expired", order_id)
+                        logger.warning(
+                            "Could not fetch order %s (attempt %d/%d) - may have expired",
+                            order_id,
+                            tracked.api_error_count,
+                            MAX_API_ERROR_RETRIES,
+                        )
                     continue
 
                 # Reset API error counter on any successful response
@@ -225,6 +252,7 @@ class OrderTracker:
                         tracked.symbol,
                         tracked.api_error_count,
                         e,
+                        exc_info=True,
                     )
                     # Call cancel callback BEFORE stop_tracking so the callback
                     # can still access order metadata if needed
@@ -236,6 +264,7 @@ class OrderTracker:
                                 "Cancel callback failed for force-removed order %s: %s",
                                 order_id,
                                 cb_err,
+                                exc_info=True,
                             )
                     self.stop_tracking(order_id)
                 else:
