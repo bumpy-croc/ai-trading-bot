@@ -197,8 +197,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         config = get_config()
 
         # Margin vs spot account routing (A1)
-        self._use_margin = config.get("BINANCE_ACCOUNT_TYPE", "margin").lower() == "margin"
-        self._is_live = config.get("TRADING_MODE", "paper").lower() == "live"
+        account_type = config.get("BINANCE_ACCOUNT_TYPE", "spot") or "spot"
+        self._use_margin: bool = account_type.lower() == "margin"
+        trading_mode = config.get("TRADING_MODE", "paper") or "paper"
+        self._is_live: bool = trading_mode.lower() == "live"
         self._margin_symbol_verified: set[str] = set()
 
         # Get credentials from config if not provided
@@ -766,7 +768,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             for balance_data in account_info.get("balances", []):
                 free = float(balance_data.get("free", 0))
                 locked = float(balance_data.get("locked", 0))
-                total = free + locked
+                if self._use_margin:
+                    # In margin mode, netAsset = free + locked - borrowed - interest
+                    total = float(balance_data.get("netAsset", free + locked))
+                else:
+                    total = free + locked
 
                 if total > 0:  # Only include non-zero balances
                     balance = AccountBalance(
@@ -797,7 +803,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 if balance_data["asset"] == asset:
                     free = float(balance_data.get("free", 0))
                     locked = float(balance_data.get("locked", 0))
-                    total = free + locked
+                    if self._use_margin:
+                        # In margin mode, netAsset = free + locked - borrowed - interest
+                        total = float(balance_data.get("netAsset", free + locked))
+                    else:
+                        total = free + locked
 
                     return AccountBalance(
                         asset=asset,

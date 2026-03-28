@@ -59,8 +59,9 @@ class AccountSynchronizer:
             exchange: Exchange interface for API calls
             db_manager: Database manager for local data
             session_id: Current trading session ID
-            use_margin: If True, skip balance/position sync — margin account
-                balances include borrowed amounts and don't reflect true state.
+            use_margin: Whether margin trading mode is active. When True,
+                balance/position sync is skipped since margin account balances
+                include borrowed amounts and don't reflect true equity.
         """
         self.exchange = exchange
         self.db_manager = db_manager

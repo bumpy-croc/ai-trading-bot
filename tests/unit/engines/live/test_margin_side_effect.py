@@ -288,3 +288,192 @@ def test_reconciler_stop_loss_has_auto_repay():
     mock_exchange.place_stop_loss_order.assert_called_once()
     call_kwargs = mock_exchange.place_stop_loss_order.call_args.kwargs
     assert call_kwargs.get("side_effect_type") == "AUTO_REPAY"
+
+
+# ---------------------------------------------------------------------------
+# C5: PositionReconciler (startup) — use_margin guard on _verify_asset_holdings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_startup_reconciler_accepts_use_margin():
+    """PositionReconciler must accept use_margin param and store it."""
+    from src.engines.live.reconciliation import PositionReconciler
+
+    reconciler = PositionReconciler(
+        exchange_interface=MagicMock(),
+        position_tracker=MagicMock(),
+        db_manager=MagicMock(),
+        session_id=1,
+        max_position_size=0.1,
+        use_margin=True,
+    )
+    assert reconciler._use_margin is True
+
+
+@pytest.mark.fast
+def test_startup_reconciler_defaults_margin_false():
+    """PositionReconciler defaults to use_margin=False."""
+    from src.engines.live.reconciliation import PositionReconciler
+
+    reconciler = PositionReconciler(
+        exchange_interface=MagicMock(),
+        position_tracker=MagicMock(),
+        db_manager=MagicMock(),
+        session_id=1,
+    )
+    assert reconciler._use_margin is False
+
+
+@pytest.mark.fast
+def test_startup_reconciler_skips_verify_asset_holdings_in_margin_mode():
+    """_verify_asset_holdings should be a no-op in margin mode."""
+    from src.engines.live.reconciliation import (
+        PositionReconciler,
+        ReconciliationResult,
+    )
+
+    exchange = MagicMock()
+    reconciler = PositionReconciler(
+        exchange_interface=exchange,
+        position_tracker=MagicMock(),
+        db_manager=MagicMock(),
+        session_id=1,
+        use_margin=True,
+    )
+
+    position = MagicMock()
+    position.symbol = "BTCUSDT"
+    position.side = "long"
+    position.quantity = 1.0
+    position.current_size = 1.0
+    position.original_size = 1.0
+
+    result = ReconciliationResult(
+        entity_type="position",
+        entity_id="BTCUSDT",
+        status="ok",
+        corrections=[],
+    )
+
+    reconciler._verify_asset_holdings(position, result)
+    exchange.get_balance.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# C6: get_balances() / get_balance() — netAsset in margin mode
+# ---------------------------------------------------------------------------
+
+
+def _make_binance_provider(*, use_margin: bool = False):
+    """Create a BinanceProvider with mocked client and optional margin mode."""
+    from unittest.mock import patch
+
+    with patch("src.data_providers.binance_provider.get_config") as mock_config:
+        mock_config_obj = MagicMock()
+        mock_config_obj.get.return_value = None
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+
+        with patch("src.data_providers.binance_provider.Client"):
+            from src.data_providers.binance_provider import BinanceProvider
+
+            provider = BinanceProvider(
+                api_key="test_key_1234567890abcdef",
+                api_secret="test_secret_1234567890abcdef",
+                testnet=True,
+            )
+            provider._use_margin = use_margin
+            return provider
+
+
+@pytest.mark.fast
+def test_margin_get_balances_uses_net_asset():
+    """In margin mode, total should be netAsset, not free+locked."""
+    provider = _make_binance_provider(use_margin=True)
+    provider._call_get_account = MagicMock(return_value={
+        "balances": [
+            {
+                "asset": "BTC",
+                "free": "1.5",
+                "locked": "0.5",
+                # netAsset = free + locked - borrowed - interest = 1.0
+                "netAsset": "1.0",
+            },
+            {
+                "asset": "USDT",
+                "free": "10000.0",
+                "locked": "0.0",
+                "netAsset": "8000.0",
+            },
+        ]
+    })
+
+    balances = provider.get_balances()
+    btc = next(b for b in balances if b.asset == "BTC")
+    usdt = next(b for b in balances if b.asset == "USDT")
+
+    assert btc.total == 1.0
+    assert usdt.total == 8000.0
+    assert btc.free == 1.5
+    assert btc.locked == 0.5
+
+
+@pytest.mark.fast
+def test_spot_get_balances_uses_free_plus_locked():
+    """In spot mode, total should remain free+locked (no regression)."""
+    provider = _make_binance_provider(use_margin=False)
+    provider._call_get_account = MagicMock(return_value={
+        "balances": [
+            {"asset": "BTC", "free": "1.5", "locked": "0.5", "netAsset": "1.0"},
+        ]
+    })
+
+    balances = provider.get_balances()
+    btc = next(b for b in balances if b.asset == "BTC")
+    assert btc.total == 2.0  # free + locked, NOT netAsset
+
+
+@pytest.mark.fast
+def test_margin_get_balance_uses_net_asset():
+    """In margin mode, get_balance() should use netAsset for total."""
+    provider = _make_binance_provider(use_margin=True)
+    provider._call_get_account = MagicMock(return_value={
+        "balances": [
+            {"asset": "BTC", "free": "1.5", "locked": "0.5", "netAsset": "1.0"},
+        ]
+    })
+
+    balance = provider.get_balance("BTC")
+    assert balance is not None
+    assert balance.total == 1.0
+
+
+@pytest.mark.fast
+def test_spot_get_balance_uses_free_plus_locked():
+    """In spot mode, get_balance() should use free+locked."""
+    provider = _make_binance_provider(use_margin=False)
+    provider._call_get_account = MagicMock(return_value={
+        "balances": [
+            {"asset": "BTC", "free": "1.5", "locked": "0.5"},
+        ]
+    })
+
+    balance = provider.get_balance("BTC")
+    assert balance is not None
+    assert balance.total == 2.0
+
+
+@pytest.mark.fast
+def test_margin_get_balances_fallback_when_no_net_asset():
+    """If netAsset is missing in margin mode, fall back to free+locked."""
+    provider = _make_binance_provider(use_margin=True)
+    provider._call_get_account = MagicMock(return_value={
+        "balances": [
+            {"asset": "BTC", "free": "1.5", "locked": "0.5"},
+        ]
+    })
+
+    balances = provider.get_balances()
+    btc = next(b for b in balances if b.asset == "BTC")
+    assert btc.total == 2.0  # Fallback: free + locked
