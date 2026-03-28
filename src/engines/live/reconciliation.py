@@ -525,6 +525,7 @@ class PositionReconciler:
                         side=sl_side,
                         quantity=fill_qty,
                         stop_price=position.stop_loss,
+                        side_effect_type="AUTO_REPAY",
                     )
                     if sl_order_id:
                         position.stop_loss_order_id = sl_order_id
@@ -582,6 +583,7 @@ class PositionReconciler:
                             side=sell_side,
                             order_type=OrderType.MARKET,
                             quantity=fill_qty,
+                            side_effect_type="AUTO_REPAY",
                         )
                         if sell_result is not None:
                             logger.critical(
@@ -827,6 +829,7 @@ class PositionReconciler:
                 side=sl_side,
                 quantity=qty,
                 stop_price=stop_loss,
+                side_effect_type="AUTO_REPAY",
             )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
@@ -1096,6 +1099,7 @@ class PositionReconciler:
                         side=sl_side,
                         quantity=qty,
                         stop_price=sl_price,
+                        side_effect_type="AUTO_REPAY",
                     )
                     if new_sl_id:
                         position.stop_loss_order_id = new_sl_id
@@ -1353,6 +1357,7 @@ class PositionReconciler:
                             side=sl_side,
                             quantity=qty,
                             stop_price=position.stop_loss,
+                            side_effect_type="AUTO_REPAY",
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
@@ -1503,6 +1508,7 @@ class PositionReconciler:
                             side=sl_side,
                             quantity=qty,
                             stop_price=position.stop_loss,
+                            side_effect_type="AUTO_REPAY",
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
@@ -2021,6 +2027,7 @@ class PeriodicReconciler:
         session_id: int,
         interval: float = DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
         on_critical: Any = None,
+        use_margin: bool = False,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -2031,6 +2038,8 @@ class PeriodicReconciler:
             session_id: Current trading session ID.
             interval: Seconds between reconciliation cycles.
             on_critical: Callback invoked on CRITICAL severity (e.g., enter close-only mode).
+            use_margin: If True, skip spot-specific checks (asset holdings) that
+                don't apply to cross-margin accounts.
         """
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
@@ -2038,6 +2047,7 @@ class PeriodicReconciler:
         self.session_id = session_id
         self.interval = interval
         self.on_critical = on_critical
+        self._use_margin = use_margin
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -2151,12 +2161,18 @@ class PeriodicReconciler:
                 logger.warning("Failed to verify position %s: %s", order_key, e)
 
         # 1b. Verify asset holdings for each position — detect external closes.
+        # Skip in margin mode — spot balance checks don't apply to cross-margin
+        # where asset balances include borrowed amounts and don't reflect positions.
         # NOTE: This per-position check compares held asset balance against the
         # individual position's quantity. For a single-symbol bot (at most 1
         # position per asset), this is correct. If multi-position-per-asset
         # support is added, the check must aggregate tracked quantities before
         # comparing against the exchange balance.
         for order_key, position in list(positions_snapshot.items()):
+            # Skip in margin mode — spot-specific check
+            if self._use_margin:
+                break
+
             # Skip short positions — shorts don't hold the base asset on spot
             side = getattr(position, "side", None)
             if side == PositionSide.SHORT or str(side).lower() == "short":
@@ -2332,6 +2348,7 @@ class PeriodicReconciler:
                                 side=sl_side,
                                 quantity=qty,
                                 stop_price=stop_price,
+                                side_effect_type="AUTO_REPAY",
                             )
                             if new_sl_id:
                                 position.stop_loss_order_id = new_sl_id
@@ -2439,53 +2456,57 @@ class PeriodicReconciler:
             logger.warning("Orphaned order check failed: %s", e)
 
         # 4. Verify balance (accounting for position notional values)
-        try:
-            usdt_balance = self.exchange.get_balance("USDT")
-            if usdt_balance:
-                db_balance = self.db_manager.get_current_balance(self.session_id)
-                if db_balance > 0:
-                    # Subtract position notional to get expected USDT
-                    position_notional = 0.0
-                    for position in positions_snapshot.values():
-                        # Use quantity (actual asset amount), not size (balance fraction)
-                        qty = getattr(position, "quantity", None) or 0.0
-                        price = getattr(position, "entry_price", 0)
-                        if qty > 0 and price > 0:
-                            # Scale by current_size/original_size for partial exits
-                            current = getattr(position, "current_size", None)
-                            original = getattr(position, "original_size", None)
-                            if current is not None and original is not None and original > 0:
-                                qty = qty * (current / original)
-                            position_notional += qty * price
-                    expected_usdt = db_balance - position_notional
-                    # Use abs(expected_usdt) to avoid false CRITICAL when
-                    # expected_usdt is negative (e.g. position notional >
-                    # db_balance due to price appreciation)
-                    comparison_base = max(abs(expected_usdt), db_balance * 0.01)
-                    diff_pct = abs(usdt_balance.total - expected_usdt) / comparison_base
-                    if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
-                        max_severity = Severity.CRITICAL
-                        logger.critical(
-                            "Balance discrepancy: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
-                            "[db=$%.2f, position_notional=$%.2f]",
-                            expected_usdt,
-                            usdt_balance.total,
-                            diff_pct * 100,
-                            db_balance,
-                            position_notional,
-                        )
-                        # Correct DB balance to match actual total capital.
-                        # DB balance represents total capital (USDT + position
-                        # notional), not just free USDT on exchange.
-                        corrected_balance = usdt_balance.total + position_notional
-                        self.db_manager.update_balance(
-                            corrected_balance,
-                            "reconciliation_balance_correction",
-                            "system",
-                            self.session_id,
-                        )
-        except Exception as e:
-            logger.warning("Balance check failed: %s", e)
+        # Skip in margin mode — spot balance doesn't reflect margin account state.
+        if not self._use_margin:
+            try:
+                usdt_balance = self.exchange.get_balance("USDT")
+                if usdt_balance:
+                    db_balance = self.db_manager.get_current_balance(self.session_id)
+                    if db_balance > 0:
+                        # Subtract position notional to get expected USDT
+                        position_notional = 0.0
+                        for position in positions_snapshot.values():
+                            # Use quantity (actual asset amount), not size (balance fraction)
+                            qty = getattr(position, "quantity", None) or 0.0
+                            price = getattr(position, "entry_price", 0)
+                            if qty > 0 and price > 0:
+                                # Scale by current_size/original_size for partial exits
+                                current = getattr(position, "current_size", None)
+                                original = getattr(position, "original_size", None)
+                                if current is not None and original is not None and original > 0:
+                                    qty = qty * (current / original)
+                                position_notional += qty * price
+                        expected_usdt = db_balance - position_notional
+                        # Use abs(expected_usdt) to avoid false CRITICAL when
+                        # expected_usdt is negative (e.g. position notional >
+                        # db_balance due to price appreciation)
+                        comparison_base = max(abs(expected_usdt), db_balance * 0.01)
+                        diff_pct = abs(usdt_balance.total - expected_usdt) / comparison_base
+                        if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
+                            max_severity = Severity.CRITICAL
+                            logger.critical(
+                                "Balance discrepancy: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
+                                "[db=$%.2f, position_notional=$%.2f]",
+                                expected_usdt,
+                                usdt_balance.total,
+                                diff_pct * 100,
+                                db_balance,
+                                position_notional,
+                            )
+                            # Correct DB balance to match actual total capital.
+                            # DB balance represents total capital (USDT + position
+                            # notional), not just free USDT on exchange.
+                            corrected_balance = usdt_balance.total + position_notional
+                            self.db_manager.update_balance(
+                                corrected_balance,
+                                "reconciliation_balance_correction",
+                                "system",
+                                self.session_id,
+                            )
+            except Exception as e:
+                logger.warning("Balance check failed: %s", e)
+        else:
+            logger.debug("Skipping balance verification in margin mode")
 
         # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:
@@ -2547,6 +2568,7 @@ class PeriodicReconciler:
                 side=sl_side,
                 quantity=qty,
                 stop_price=stop_price,
+                side_effect_type="AUTO_REPAY",
             )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id
