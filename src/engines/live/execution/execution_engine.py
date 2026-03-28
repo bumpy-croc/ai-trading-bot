@@ -665,6 +665,11 @@ class LiveExecutionEngine:
                     # Proceeding would risk a phantom position on restart.
                     return None, None
 
+            # Determine margin side_effect_type based on position side:
+            # - Long entry (BUY): None — use existing USDT, no borrow needed
+            # - Short entry (SELL): "MARGIN_BUY" — borrow asset to sell
+            entry_side_effect = "MARGIN_BUY" if side == PositionSide.SHORT else None
+
             try:
                 order_result = self.exchange_interface.place_order(
                     symbol=symbol,
@@ -672,6 +677,7 @@ class LiveExecutionEngine:
                     order_type=OrderType.MARKET,
                     quantity=quantity,
                     client_order_id=client_order_id,
+                    side_effect_type=entry_side_effect,
                 )
             except ValueError as e:
                 # Definitively rejected by exchange (invalid params, insufficient
@@ -803,6 +809,7 @@ class LiveExecutionEngine:
                 order_type=OrderType.MARKET,
                 quantity=quantity,
                 client_order_id=client_order_id,
+                side_effect_type="AUTO_REPAY",
             )
             # Extract order_id string for backward compat
             close_order_id = None

@@ -2679,6 +2679,7 @@ class LiveTradingEngine:
                             side=sl_side,
                             quantity=quantity,
                             stop_price=stop_loss,
+                            side_effect_type="AUTO_REPAY",
                         )
                         if sl_order_id:
                             break

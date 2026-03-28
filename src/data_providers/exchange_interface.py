@@ -182,6 +182,7 @@ class ExchangeInterface(ABC):
         stop_price: float | None = None,
         time_in_force: str = "GTC",
         client_order_id: str | None = None,
+        side_effect_type: str | None = None,
     ) -> Order | None:
         """
         Place a new order and return full Order object with fill data.
@@ -195,6 +196,8 @@ class ExchangeInterface(ABC):
             stop_price: Stop price (required for STOP orders)
             time_in_force: Time in force (GTC, IOC, FOK)
             client_order_id: Optional client-generated order ID for idempotency
+            side_effect_type: Margin order intent (MARGIN_BUY, AUTO_REPAY, etc.).
+                              Only used by margin-capable exchanges; ignored by spot.
 
         Returns:
             Order object with fill data if successful, None otherwise.
@@ -222,6 +225,7 @@ class ExchangeInterface(ABC):
         stop_price: float,
         limit_price: float | None = None,
         client_order_id: str | None = None,
+        side_effect_type: str | None = None,
     ) -> str | None:
         """
         Place a server-side stop-loss order.
@@ -238,6 +242,8 @@ class ExchangeInterface(ABC):
             limit_price: Optional limit price for STOP_LOSS_LIMIT orders.
                          If None, uses stop_price * 0.99 for sells, * 1.01 for buys.
             client_order_id: Optional client-generated order ID for idempotency.
+            side_effect_type: Margin order intent (AUTO_REPAY for stop-losses).
+                              Only used by margin-capable exchanges; ignored by spot.
 
         Returns:
             Order ID from exchange, or None on failure

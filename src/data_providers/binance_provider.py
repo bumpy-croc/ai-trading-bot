@@ -1074,6 +1074,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         stop_price: float | None = None,
         time_in_force: str = "GTC",
         client_order_id: str | None = None,
+        side_effect_type: str | None = None,
     ) -> Order | None:
         """
         Place a new order and return full Order object with fill data.
@@ -1124,6 +1125,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             if client_order_id:
                 order_params["newClientOrderId"] = client_order_id
                 logger.debug(f"Placing order with client ID: {client_order_id}")
+
+            # Pass margin intent to dispatch method (injected into margin orders only)
+            if side_effect_type:
+                order_params["sideEffectType"] = side_effect_type
 
             # Place the order
             response = self._call_create_order(**order_params)
@@ -1269,6 +1274,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         stop_price: float,
         limit_price: float | None = None,
         client_order_id: str | None = None,
+        side_effect_type: str | None = None,
     ) -> str | None:
         """
         Place a server-side stop-loss order on Binance.
@@ -1326,6 +1332,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             }
             if client_order_id:
                 sl_params["newClientOrderId"] = client_order_id
+            if side_effect_type:
+                sl_params["sideEffectType"] = side_effect_type
             response = self._call_create_order(**sl_params)
 
             order_id = str(response.get("orderId", ""))

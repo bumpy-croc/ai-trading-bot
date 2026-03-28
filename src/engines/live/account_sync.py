@@ -50,6 +50,7 @@ class AccountSynchronizer:
         exchange: ExchangeInterface,
         db_manager: DatabaseManager,
         session_id: int | None = None,
+        use_margin: bool = False,
     ):
         """
         Initialize the account synchronizer.
@@ -58,10 +59,13 @@ class AccountSynchronizer:
             exchange: Exchange interface for API calls
             db_manager: Database manager for local data
             session_id: Current trading session ID
+            use_margin: If True, skip balance/position sync — margin account
+                balances include borrowed amounts and don't reflect true state.
         """
         self.exchange = exchange
         self.db_manager = db_manager
         self.session_id = session_id
+        self._use_margin = use_margin
         self.last_sync_time: datetime | None = None
 
     def sync_account_data(
@@ -108,11 +112,19 @@ class AccountSynchronizer:
                     timestamp=datetime.now(UTC),
                 )
 
-            # Sync balances
-            balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
-
-            # Sync positions
-            position_sync_result = self._sync_positions(exchange_data.get("positions", []))
+            # Sync balances and positions — skip in margin mode where spot
+            # balances include borrowed amounts and don't reflect true state.
+            if not self._use_margin:
+                balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
+                position_sync_result = self._sync_positions(
+                    exchange_data.get("positions", [])
+                )
+            else:
+                balance_sync_result = {"synced": False, "reason": "skipped in margin mode"}
+                position_sync_result = {"synced": False, "reason": "skipped in margin mode"}
+                logger.info(
+                    "Skipping balance/position sync in margin mode — using internal tracking"
+                )
 
             # Sync orders
             order_sync_result = self._sync_orders(exchange_data.get("open_orders", []))
