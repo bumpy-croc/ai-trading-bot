@@ -8,6 +8,7 @@ It supports both paper trading (simulation) and live trading with real money.
 
 import argparse
 import logging
+import os
 import sys
 
 from src.config.constants import (
@@ -71,11 +72,16 @@ def parse_args():
 
     # Trading parameters
     parser.add_argument(
-        "--symbol", default="BTCUSDT", help="Trading pair symbol (e.g., BTCUSDT, ETHUSDT)"
+        "--symbol",
+        default=os.getenv("TRADING_PAIR", "BTCUSDT"),
+        help="Trading pair symbol (e.g., BTCUSDT, ETHUSDT). Env: TRADING_PAIR",
     )
     parser.add_argument("--timeframe", default="1h", help="Candle timeframe")
     parser.add_argument(
-        "--balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
+        "--balance",
+        type=float,
+        default=float(os.getenv("INITIAL_BALANCE", str(DEFAULT_INITIAL_BALANCE))),
+        help="Initial balance. Env: INITIAL_BALANCE",
     )
     parser.add_argument(
         "--max-position",
@@ -148,7 +154,16 @@ def parse_args():
     # Sentiment analysis
     parser.add_argument("--use-sentiment", action="store_true", help="Enable sentiment analysis")
 
-    return parser.parse_args()
+    parsed = parser.parse_args()
+
+    # Allow TRADING_MODE env var to enable live trading without CLI flags.
+    # CLI flags (--live-trading / --paper-trading) take precedence.
+    trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+    if trading_mode == "live" and not parsed.paper_trading:
+        parsed.live_trading = True
+        parsed.i_understand_the_risks = True
+
+    return parsed
 
 
 def validate_configuration(args):
