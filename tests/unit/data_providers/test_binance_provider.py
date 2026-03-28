@@ -961,3 +961,121 @@ class TestMarginSymbolValidation:
 
         with pytest.raises(RuntimeError, match="does not support margin trading"):
             provider._call_create_order(symbol="BADUSDT", side="BUY", type="MARKET", quantity=0.1)
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginSideEffectIntegration:
+    """Verify side_effect_type flows through place_order/place_stop_loss_order."""
+
+    # Minimal exchange_info symbol data that satisfies get_symbol_info
+    _ETHUSDT_SYMBOL = {
+        "symbol": "ETHUSDT",
+        "baseAsset": "ETH",
+        "quoteAsset": "USDT",
+        "status": "TRADING",
+        "filters": [
+            {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+            {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
+            {"filterType": "MIN_NOTIONAL", "minNotional": "10"},
+        ],
+    }
+
+    def _make_margin_provider(self, mock_config, mock_client_class):
+        """Create a margin-mode provider with all mocks configured."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [],
+        }
+        mock_client.get_margin_symbol.return_value = {
+            "isMarginTrade": True,
+            "isBuyAllowed": True,
+            "isSellAllowed": True,
+        }
+        mock_client.get_exchange_info.return_value = {
+            "symbols": [self._ETHUSDT_SYMBOL],
+        }
+        mock_client.create_margin_order.return_value = {
+            "orderId": "99",
+            "status": "FILLED",
+            "origQty": "0.1",
+            "executedQty": "0.1",
+            "cummulativeQuoteQty": "200.0",
+            "fills": [],
+        }
+        return BinanceProvider(), mock_client
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_place_order_passes_side_effect_type(self, mock_config, mock_client_class):
+        """place_order() injects sideEffectType into margin create_margin_order call."""
+        from src.data_providers.exchange_interface import OrderType
+
+        provider, mock_client = self._make_margin_provider(mock_config, mock_client_class)
+
+        provider.place_order(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            quantity=0.05,
+            side_effect_type="MARGIN_BUY",
+        )
+
+        call_kwargs = mock_client.create_margin_order.call_args.kwargs
+        assert call_kwargs["sideEffectType"] == "MARGIN_BUY"
+        assert call_kwargs["isIsolated"] == "FALSE"
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_place_stop_loss_passes_side_effect_type(self, mock_config, mock_client_class):
+        """place_stop_loss_order() injects sideEffectType into margin order."""
+        provider, mock_client = self._make_margin_provider(mock_config, mock_client_class)
+
+        provider.place_stop_loss_order(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            quantity=0.05,
+            stop_price=1800.0,
+            side_effect_type="AUTO_REPAY",
+        )
+
+        call_kwargs = mock_client.create_margin_order.call_args.kwargs
+        assert call_kwargs["sideEffectType"] == "AUTO_REPAY"
+        assert call_kwargs["isIsolated"] == "FALSE"
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_place_order_no_side_effect_in_spot_mode(self, mock_config, mock_client_class):
+        """place_order() does not inject sideEffectType in spot mode."""
+        from src.data_providers.exchange_interface import OrderType
+
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "spot"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_exchange_info.return_value = {
+            "symbols": [self._ETHUSDT_SYMBOL],
+        }
+        mock_client.create_order.return_value = {
+            "orderId": "99",
+            "status": "FILLED",
+            "origQty": "0.1",
+            "executedQty": "0.1",
+            "cummulativeQuoteQty": "200.0",
+            "fills": [],
+        }
+
+        provider = BinanceProvider()
+        provider.place_order(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            quantity=0.05,
+            side_effect_type="MARGIN_BUY",
+        )
+
+        call_kwargs = mock_client.create_order.call_args.kwargs
+        assert "sideEffectType" not in call_kwargs
