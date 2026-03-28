@@ -283,8 +283,8 @@ class ExchangeInterface(ABC):
         Synchronize all account data from the exchange.
 
         Args:
-            symbol: If provided, only fetch positions for this symbol to conserve
-                    API weight. Balances and orders are always fetched in full.
+            symbol: If provided, only fetch positions and orders for this symbol
+                    to conserve API weight. Balances are always fetched in full.
 
         Returns:
             Dictionary containing all synchronized data

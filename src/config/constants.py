@@ -165,7 +165,7 @@ DEFAULT_MARKET_DATA_LIMIT = 500  # Default number of candles to fetch
 DEFAULT_THREAD_JOIN_TIMEOUT = 30  # Timeout for main thread join in seconds
 DEFAULT_ORDER_TRACKER_TIMEOUT = 10  # Timeout for order tracker thread join
 DEFAULT_REQUEST_TIMEOUT = 10  # Timeout for HTTP requests (webhooks, etc.)
-DEFAULT_ORDER_POLL_INTERVAL = 30  # Seconds between order status checks (30s to stay within Binance 1200 weight/min limit)
+DEFAULT_ORDER_POLL_INTERVAL = 10  # Seconds between order status checks (2 weight per order per poll, ~12 weight/min per order)
 
 # Account Synchronization Constants
 DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES = 5  # Minimum minutes between account syncs

@@ -115,12 +115,13 @@ def with_rate_limit_retry(
                             # Use ban expiry if available, otherwise exponential backoff
                             ban_wait = _parse_ban_expiry(str(e))
                             if ban_wait and ban_wait > 0:
-                                # Cap at 5 minutes to avoid excessively long waits
-                                delay = min(ban_wait + 1, 300)
+                                # Cap at 60s per retry to stay responsive. If ban is
+                                # longer, the next retry will re-parse and wait again.
+                                delay = min(ban_wait + 2, 60)
                                 logger.warning(
-                                    "IP banned for %.0fs, waiting until ban expires "
+                                    "IP banned for %.0fs, waiting %.0fs before retry "
                                     "(attempt %d/%d)",
-                                    ban_wait, attempt + 1, max_retries,
+                                    ban_wait, delay, attempt + 1, max_retries,
                                 )
                             else:
                                 delay = base_delay * (2**attempt)
