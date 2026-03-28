@@ -1235,7 +1235,9 @@ class LiveTradingEngine:
         if self.account_synchronizer and self.enable_live_trading:
             try:
                 logger.info("🔄 Performing initial account synchronization...")
-                sync_result = self.account_synchronizer.sync_account_data(force=True)
+                sync_result = self.account_synchronizer.sync_account_data(
+                    force=True, symbol=self._active_symbol
+                )
                 if sync_result.success:
                     logger.info("✅ Account synchronization completed")
                     # Update session ID for synchronizer
@@ -1712,7 +1714,9 @@ class LiveTradingEngine:
                     # Perform periodic account synchronization
                     if self.account_synchronizer and self.enable_live_trading:
                         try:
-                            sync_result = self.account_synchronizer.sync_account_data()
+                            sync_result = self.account_synchronizer.sync_account_data(
+                                symbol=self._active_symbol
+                            )
                             if sync_result.success:
                                 logger.debug("Periodic account sync completed")
                             else:

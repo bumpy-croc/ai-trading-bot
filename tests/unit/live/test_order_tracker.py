@@ -37,7 +37,7 @@ def test_order_tracker_initialization(mock_exchange):
     # Default parameters
     tracker = OrderTracker(exchange=mock_exchange)
     assert tracker.exchange == mock_exchange
-    assert tracker.poll_interval == 5
+    assert tracker.poll_interval == 10
     assert tracker.on_fill is None
     assert tracker.on_partial_fill is None
     assert tracker.on_cancel is None

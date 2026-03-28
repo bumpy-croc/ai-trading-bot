@@ -278,9 +278,13 @@ class ExchangeInterface(ABC):
         """Get trading symbol information (min qty, price precision, etc.)"""
         pass
 
-    def sync_account_data(self) -> dict[str, Any]:
+    def sync_account_data(self, symbol: str | None = None) -> dict[str, Any]:
         """
         Synchronize all account data from the exchange.
+
+        Args:
+            symbol: If provided, only fetch positions and orders for this symbol
+                    to conserve API weight. Balances are always fetched in full.
 
         Returns:
             Dictionary containing all synchronized data
@@ -294,11 +298,12 @@ class ExchangeInterface(ABC):
             # Get balances
             balances = self.get_balances()
 
-            # Get positions (if supported)
-            positions = self.get_positions()
+            # Get positions — filter by symbol to avoid fetching tickers for
+            # every dust asset in the account (saves ~1 API weight per asset)
+            positions = self.get_positions(symbol=symbol)
 
             # Get open orders
-            open_orders = self.get_open_orders()
+            open_orders = self.get_open_orders(symbol=symbol)
 
             sync_data = {
                 "timestamp": datetime.now(UTC),

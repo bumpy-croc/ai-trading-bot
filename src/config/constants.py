@@ -165,7 +165,7 @@ DEFAULT_MARKET_DATA_LIMIT = 500  # Default number of candles to fetch
 DEFAULT_THREAD_JOIN_TIMEOUT = 30  # Timeout for main thread join in seconds
 DEFAULT_ORDER_TRACKER_TIMEOUT = 10  # Timeout for order tracker thread join
 DEFAULT_REQUEST_TIMEOUT = 10  # Timeout for HTTP requests (webhooks, etc.)
-DEFAULT_ORDER_POLL_INTERVAL = 5  # Seconds between order status checks
+DEFAULT_ORDER_POLL_INTERVAL = 10  # Seconds between order status checks (2 weight per order per poll, ~12 weight/min per order)
 
 # Account Synchronization Constants
 DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES = 5  # Minimum minutes between account syncs
@@ -321,7 +321,7 @@ DEFAULT_LEVERAGE_DECAY_RATE = 0.15  # Exponential decay rate for smooth transiti
 DEFAULT_MIN_REGIME_BARS = 5  # Minimum bars in regime before conviction scaling
 
 # Reconciliation Constants
-DEFAULT_RECONCILIATION_INTERVAL_SECONDS = 60  # Periodic reconciliation check interval
+DEFAULT_RECONCILIATION_INTERVAL_SECONDS = 120  # Periodic reconciliation check interval (2 min — balances SL re-protection speed vs API weight)
 DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT = 0.05  # 5% balance discrepancy triggers CRITICAL
 DEFAULT_RECONCILIATION_DUST_THRESHOLD = 0.00001  # Ignore dust-level asset discrepancies
 DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT = 0.01  # 1% qty tolerance for order matching

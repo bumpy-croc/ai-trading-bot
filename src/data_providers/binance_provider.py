@@ -11,6 +11,7 @@ providing a single interface for all Binance operations including:
 
 import logging
 import math
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -69,15 +70,45 @@ RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too 
 STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005  # 0.5% slippage
 
 
+_BAN_EXPIRY_PATTERN = re.compile(r"banned until (\d{13})")
+
+
+def _parse_ban_expiry(error_message: str, now_ms: int | None = None) -> float | None:
+    """Extract ban expiry timestamp from Binance -1003 error message.
+
+    Args:
+        error_message: The error message string from Binance.
+        now_ms: Current time in milliseconds (injectable for testing).
+
+    Returns seconds until ban expires, or None if not parseable.
+    """
+    match = _BAN_EXPIRY_PATTERN.search(str(error_message))
+    if match:
+        ban_epoch_ms = int(match.group(1))
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
+        remaining_s = (ban_epoch_ms - now_ms) / 1000
+        return max(remaining_s, 0)
+    return None
+
+
 def with_rate_limit_retry(
-    max_retries: int = 3, base_delay: float = 1.0
+    max_retries: int = 6, base_delay: float = 1.0, ban_safe: bool = False
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Decorator to handle rate limits with exponential backoff.
 
+    If the error contains a ban expiry timestamp, waits until the ban
+    lifts instead of using blind exponential backoff. With 6 retries
+    capped at 60s each, handles bans up to ~6 minutes.
+
     Args:
-        max_retries: Maximum number of retry attempts
+        max_retries: Maximum number of retry attempts (default 6 to cover
+                     common 5-minute Binance bans at 60s per retry)
         base_delay: Base delay in seconds (doubles each retry)
+        ban_safe: If True, only retry transient -1015 errors (too many
+                  orders). Raises immediately on -1003 (IP ban) to avoid
+                  blocking safety-critical paths like stop-loss placement.
 
     Returns:
         Decorated function that retries on rate limit errors
@@ -93,12 +124,29 @@ def with_rate_limit_retry(
                 except BinanceAPIException as e:
                     error_code = getattr(e, "code", 0)
                     if error_code in RATE_LIMIT_ERROR_CODES:
+                        # In ban_safe mode, only retry -1015 (transient).
+                        # Raise -1003 (IP ban) immediately — caller handles it.
+                        if ban_safe and error_code == -1003:
+                            raise
                         if attempt < max_retries:
-                            delay = base_delay * (2**attempt)
-                            logger.warning(
-                                f"Rate limited (code {error_code}), retrying in {delay}s "
-                                f"(attempt {attempt + 1}/{max_retries})"
-                            )
+                            # Use ban expiry if available, otherwise exponential backoff
+                            ban_wait = _parse_ban_expiry(str(e))
+                            if ban_wait and ban_wait > 0:
+                                # Cap at 60s per retry to stay responsive. If ban is
+                                # longer, the next retry will re-parse and wait again.
+                                delay = min(ban_wait + 2, 60)
+                                logger.warning(
+                                    "IP banned for %.0fs, waiting %.0fs before retry "
+                                    "(attempt %d/%d)",
+                                    ban_wait, delay, attempt + 1, max_retries,
+                                )
+                            else:
+                                delay = base_delay * (2**attempt)
+                                logger.warning(
+                                    "Rate limited (code %d), retrying in %.1fs "
+                                    "(attempt %d/%d)",
+                                    error_code, delay, attempt + 1, max_retries,
+                                )
                             time.sleep(delay)
                             last_exception = e
                             continue
@@ -594,68 +642,86 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return None
 
     def get_positions(self, symbol: str | None = None) -> list[Position]:
-        """Get open positions (for spot trading, this returns holdings as positions)"""
+        """Get open positions (for spot trading, this returns holdings as positions).
+
+        Args:
+            symbol: If provided, only fetch position for this symbol (e.g. "ETHUSDT").
+                    Saves API weight by skipping ticker calls for unrelated assets.
+        """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning empty positions")
             return []
 
         try:
+            # Filter balances to only the trading symbol's base asset to skip
+            # unnecessary ticker API calls for dust/unrelated holdings
+            target_base_asset: str | None = None
+            if symbol:
+                for quote in ("USDT", "BUSD", "USD"):
+                    if symbol.endswith(quote) and len(symbol) > len(quote):
+                        target_base_asset = symbol[: -len(quote)]
+                        break
+
             # For spot trading, we consider holdings as "positions"
             balances = self.get_balances()
             positions = []
 
             for balance in balances:
-                if balance.asset != "USDT" and balance.total > 0:
-                    # Get current price for the asset
-                    try:
-                        ticker = self._client.get_symbol_ticker(
-                            symbol=SymbolFactory.to_exchange_symbol(
-                                f"{balance.asset}-USD", "binance"
-                            )
+                if balance.asset == "USDT" or balance.total <= 0:
+                    continue
+                # Skip assets not matching the target symbol to conserve API weight
+                if target_base_asset and balance.asset != target_base_asset:
+                    continue
+                # Get current price for the asset
+                try:
+                    ticker = self._client.get_symbol_ticker(
+                        symbol=SymbolFactory.to_exchange_symbol(
+                            f"{balance.asset}-USD", "binance"
                         )
+                    )
 
-                        # Validate ticker response before accessing price
-                        if not isinstance(ticker, dict) or "price" not in ticker:
-                            logger.warning(
-                                "Invalid ticker response for %s: %s. Position not loaded.",
-                                balance.asset,
-                                ticker,
-                            )
-                            continue
-
-                        current_price = float(ticker["price"])
-
-                        # Validate price is finite to prevent inf/nan in positions
-                        if not math.isfinite(current_price) or current_price <= 0:
-                            logger.warning(
-                                "Invalid price %.8f for %s. Position not loaded.",
-                                current_price,
-                                balance.asset,
-                            )
-                            continue
-
-                        position = Position(
-                            symbol=f"{balance.asset}USDT",
-                            side="long",
-                            size=balance.total,
-                            entry_price=current_price,  # Simplified - we don't track entry price for holdings
-                            current_price=current_price,
-                            unrealized_pnl=0.0,  # Simplified
-                            margin_type="spot",
-                            leverage=1.0,
-                            order_id="",  # No order ID for holdings
-                            open_time=datetime.now(UTC),  # Simplified
-                            last_update_time=datetime.now(UTC),
-                        )
-                        positions.append(position)
-
-                    except Exception as e:
+                    # Validate ticker response before accessing price
+                    if not isinstance(ticker, dict) or "price" not in ticker:
                         logger.warning(
-                            "Failed to load position for %s (balance %.8f): %s",
+                            "Invalid ticker response for %s: %s. Position not loaded.",
                             balance.asset,
-                            balance.total,
-                            e,
+                            ticker,
                         )
+                        continue
+
+                    current_price = float(ticker["price"])
+
+                    # Validate price is finite to prevent inf/nan in positions
+                    if not math.isfinite(current_price) or current_price <= 0:
+                        logger.warning(
+                            "Invalid price %.8f for %s. Position not loaded.",
+                            current_price,
+                            balance.asset,
+                        )
+                        continue
+
+                    position = Position(
+                        symbol=f"{balance.asset}USDT",
+                        side="long",
+                        size=balance.total,
+                        entry_price=current_price,  # Simplified - we don't track entry price for holdings
+                        current_price=current_price,
+                        unrealized_pnl=0.0,  # Simplified
+                        margin_type="spot",
+                        leverage=1.0,
+                        order_id="",  # No order ID for holdings
+                        open_time=datetime.now(UTC),  # Simplified
+                        last_update_time=datetime.now(UTC),
+                    )
+                    positions.append(position)
+
+                except Exception as e:
+                    logger.warning(
+                        "Failed to load position for %s (balance %.8f): %s",
+                        balance.asset,
+                        balance.total,
+                        e,
+                    )
 
             return positions
 
@@ -1019,7 +1085,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             client_order_id=client_oid,
         )
 
-    @with_rate_limit_retry(max_retries=3, base_delay=1.0)
+    # Only retry transient -1015 (too many orders), NOT -1003 (IP ban).
+    # IP bans last minutes — sleeping blocks SL placement and leaves the
+    # position unprotected. The caller handles -1003 by entering close-only mode.
+    @with_rate_limit_retry(max_retries=2, base_delay=1.0, ban_safe=True)
     def place_stop_loss_order(
         self,
         symbol: str,
