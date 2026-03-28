@@ -196,6 +196,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         config = get_config()
 
+        # Margin vs spot account routing (A1)
+        self._use_margin = config.get("BINANCE_ACCOUNT_TYPE", "margin").lower() == "margin"
+        self._is_live = config.get("TRADING_MODE", "paper").lower() == "live"
+        self._margin_symbol_verified: set[str] = set()
+
         # Get credentials from config if not provided
         if api_key is None:
             api_key = config.get("BINANCE_API_KEY")
@@ -330,6 +335,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             test_response = self._client.get_server_time()
             logger.debug(f"Server time test successful: {test_response}")
 
+            # A3: Verify margin account capabilities at startup
+            if self._use_margin:
+                self._verify_margin_account()
+
+        except RuntimeError:
+            # Let RuntimeErrors from margin verification propagate directly
+            raise
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
@@ -341,6 +353,15 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 f"Testnet mode: {self.testnet}. "
                 f"Falling back to offline stub."
             )
+
+            # A2: Fail-fast — refuse to fall back to offline stub in live margin mode.
+            # Placing dummy margin orders on an offline client risks fund loss.
+            if self._use_margin and self._is_live:
+                raise RuntimeError(
+                    f"FATAL: Cannot initialize Binance client in live margin mode. "
+                    f"Refusing to fall back to offline stub — placing dummy margin orders "
+                    f"risks fund loss. Error: {error_type}: {error_msg}"
+                ) from e
 
             # Log additional context if it's a recursion error
             if "recursion" in error_msg.lower() or "maximum recursion" in error_msg.lower():
@@ -393,6 +414,39 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             def cancel_all_orders(self, *args, **kwargs):
                 return []
+
+            def get_all_orders(self, *args, **kwargs):
+                return []
+
+            # Margin API stubs
+            def get_margin_account(self):
+                return {
+                    "userAssets": [],
+                    "tradeEnabled": False,
+                    "borrowEnabled": False,
+                    "marginLevel": "999",
+                }
+
+            def create_margin_order(self, *args, **kwargs):
+                return {"orderId": "12345"}
+
+            def cancel_margin_order(self, *args, **kwargs):
+                return {"orderId": "12345"}
+
+            def get_margin_order(self, *args, **kwargs):
+                return {}
+
+            def get_open_margin_orders(self, *args, **kwargs):
+                return []
+
+            def get_all_margin_orders(self, *args, **kwargs):
+                return []
+
+            def get_margin_trades(self, *args, **kwargs):
+                return []
+
+            def get_margin_symbol(self, *args, **kwargs):
+                return {"isMarginTrade": True, "isBuyAllowed": True, "isSellAllowed": True}
 
             def get_exchange_info(self):
                 return {"symbols": []}
@@ -541,6 +595,124 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             ) from e
 
     # ========================================
+    # Margin / Spot Dispatch Layer
+    # ========================================
+
+    def _verify_margin_account(self):
+        """Verify margin account capabilities at startup."""
+        try:
+            margin_info = self._client.get_margin_account()
+            trade_enabled = margin_info.get("tradeEnabled", False)
+            borrow_enabled = margin_info.get("borrowEnabled", False)
+            margin_level = margin_info.get("marginLevel", "N/A")
+
+            if not trade_enabled:
+                raise RuntimeError("Margin account tradeEnabled=False — cannot trade")
+            if not borrow_enabled:
+                raise RuntimeError("Margin account borrowEnabled=False — cannot borrow for shorts")
+
+            logger.info(
+                "Margin account verified: tradeEnabled=%s, borrowEnabled=%s, marginLevel=%s",
+                trade_enabled, borrow_enabled, margin_level,
+            )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            if self._is_live:
+                raise RuntimeError(f"Failed to verify margin account capabilities: {e}") from e
+            logger.warning("Could not verify margin account (non-live mode): %s", e)
+
+    def _verify_margin_symbol(self, symbol: str):
+        """Verify symbol supports margin trading. Called lazily on first order."""
+        try:
+            info = self._client.get_margin_symbol(symbol=symbol)
+            if not info.get("isMarginTrade", False):
+                raise RuntimeError(f"Symbol {symbol} does not support margin trading")
+            if not info.get("isBuyAllowed", False):
+                raise RuntimeError(f"Symbol {symbol}: buy not allowed for margin")
+            if not info.get("isSellAllowed", False):
+                raise RuntimeError(f"Symbol {symbol}: sell not allowed for margin")
+            logger.info("Margin symbol %s verified: margin trading enabled", symbol)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Failed to verify margin symbol {symbol}: {e}") from e
+
+    def _call_get_account(self) -> dict:
+        """Fetch account data, normalizing margin response to spot format."""
+        if self._use_margin:
+            raw = self._client.get_margin_account()
+            # Normalize userAssets -> balances for downstream compatibility
+            raw["balances"] = [
+                {
+                    "asset": a["asset"],
+                    "free": a["free"],
+                    "locked": a["locked"],
+                    "borrowed": a.get("borrowed", "0"),
+                    "interest": a.get("interest", "0"),
+                    "netAsset": a.get("netAsset", a["free"]),
+                }
+                for a in raw.get("userAssets", [])
+            ]
+            raw["canTrade"] = raw.get("tradeEnabled", False)
+            return raw
+        return self._client.get_account()
+
+    def _call_create_order(self, **params) -> dict:
+        """Place order via margin or spot API."""
+        if self._use_margin:
+            # Lazy symbol validation on first margin order
+            symbol = params.get("symbol", "")
+            if symbol and symbol not in self._margin_symbol_verified:
+                self._verify_margin_symbol(symbol)
+                self._margin_symbol_verified.add(symbol)
+
+            params["isIsolated"] = "FALSE"
+            # Inject sideEffectType if provided (pop to avoid double-passing)
+            side_effect = params.pop("sideEffectType", None)
+            if side_effect:
+                params["sideEffectType"] = side_effect
+            return self._client.create_margin_order(**params)
+        # Remove margin-specific params for spot
+        params.pop("sideEffectType", None)
+        return self._client.create_order(**params)
+
+    def _call_get_order(self, **params) -> dict:
+        """Get order via margin or spot API."""
+        if self._use_margin:
+            params["isIsolated"] = "FALSE"
+            return self._client.get_margin_order(**params)
+        return self._client.get_order(**params)
+
+    def _call_get_open_orders(self, **params) -> list:
+        """Get open orders via margin or spot API."""
+        if self._use_margin:
+            params["isIsolated"] = "FALSE"
+            return self._client.get_open_margin_orders(**params)
+        return self._client.get_open_orders(**params)
+
+    def _call_get_my_trades(self, **params) -> list:
+        """Get trades via margin or spot API."""
+        if self._use_margin:
+            params["isIsolated"] = "FALSE"
+            return self._client.get_margin_trades(**params)
+        return self._client.get_my_trades(**params)
+
+    def _call_cancel_order(self, **params) -> dict:
+        """Cancel order via margin or spot API."""
+        if self._use_margin:
+            params["isIsolated"] = "FALSE"
+            return self._client.cancel_margin_order(**params)
+        return self._client.cancel_order(**params)
+
+    def _call_get_all_orders(self, **params) -> list:
+        """Get all orders via margin or spot API."""
+        if self._use_margin:
+            params["isIsolated"] = "FALSE"
+            return self._client.get_all_margin_orders(**params)
+        return self._client.get_all_orders(**params)
+
+    # ========================================
     # ExchangeInterface Implementation
     # ========================================
 
@@ -566,7 +738,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return {}
 
         try:
-            account_info = self._client.get_account()
+            account_info = self._call_get_account()
             return {
                 "maker_commission": account_info.get("makerCommission"),
                 "taker_commission": account_info.get("takerCommission"),
@@ -588,7 +760,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return []
 
         try:
-            account_info = self._client.get_account()
+            account_info = self._call_get_account()
             balances = []
 
             for balance_data in account_info.get("balances", []):
@@ -619,7 +791,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return None
 
         try:
-            account_info = self._client.get_account()
+            account_info = self._call_get_account()
 
             for balance_data in account_info.get("balances", []):
                 if balance_data["asset"] == asset:
@@ -821,9 +993,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         try:
             if symbol:
-                orders_data = self._client.get_open_orders(symbol=symbol)
+                orders_data = self._call_get_open_orders(symbol=symbol)
             else:
-                orders_data = self._client.get_open_orders()
+                orders_data = self._call_get_open_orders()
 
             orders = []
             for order_data in orders_data:
@@ -844,7 +1016,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return None
 
         try:
-            order_data = self._client.get_order(symbol=symbol, orderId=order_id)
+            order_data = self._call_get_order(symbol=symbol, orderId=order_id)
             return self._parse_order_data(order_data)
 
         except Exception as e:
@@ -858,7 +1030,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return []
 
         try:
-            trades_data = self._client.get_my_trades(symbol=symbol, limit=limit)
+            trades_data = self._call_get_my_trades(symbol=symbol, limit=limit)
 
             trades = []
             for trade_data in trades_data:
@@ -954,7 +1126,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.debug(f"Placing order with client ID: {client_order_id}")
 
             # Place the order
-            response = self._client.create_order(**order_params)
+            response = self._call_create_order(**order_params)
 
             order_id = str(response.get("orderId", ""))
             if not order_id:
@@ -1154,7 +1326,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             }
             if client_order_id:
                 sl_params["newClientOrderId"] = client_order_id
-            response = self._client.create_order(**sl_params)
+            response = self._call_create_order(**sl_params)
 
             order_id = str(response.get("orderId", ""))
             if not order_id:
@@ -1181,7 +1353,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return False
 
         try:
-            self._client.cancel_order(symbol=symbol, orderId=order_id)
+            self._call_cancel_order(symbol=symbol, orderId=order_id)
             logger.info(f"Order cancelled successfully: {order_id}")
             return True
 
@@ -1200,7 +1372,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         try:
             if symbol:
-                self._client.cancel_all_orders(symbol=symbol)
+                orders = self._call_get_open_orders(symbol=symbol)
+                for order in orders:
+                    order_id = order.order_id if hasattr(order, "order_id") else str(order.get("orderId", ""))
+                    self._call_cancel_order(symbol=symbol, orderId=order_id)
             else:
                 # Cancel all orders for all symbols
                 open_orders = self.get_open_orders()
@@ -1220,7 +1395,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         if not BINANCE_AVAILABLE or not self._client:
             return None
         try:
-            response = self._client.get_order(
+            response = self._call_get_order(
                 symbol=symbol, origClientOrderId=client_order_id
             )
             return self._parse_order_data(response)
@@ -1244,7 +1419,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             params: dict[str, Any] = {"symbol": symbol, "limit": limit}
             if start_time is not None:
                 params["startTime"] = int(start_time.timestamp() * 1000)
-            raw_orders = self._client.get_all_orders(**params)
+            raw_orders = self._call_get_all_orders(**params)
             parsed = [self._parse_order_data(o) for o in raw_orders if o]
             return [o for o in parsed if o is not None]
         except Exception as e:
@@ -1264,7 +1439,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 params["orderId"] = int(order_id)
             if start_time is not None:
                 params["startTime"] = int(start_time.timestamp() * 1000)
-            raw_trades = self._client.get_my_trades(**params)
+            raw_trades = self._call_get_my_trades(**params)
             result = []
             for t in raw_trades:
                 try:

@@ -493,3 +493,471 @@ class TestPlaceStopLossOrder:
 
         # Assert
         assert result is None
+
+
+# ========================================
+# Margin Trading Tests
+# ========================================
+
+
+def _make_config_mock(overrides: dict | None = None):
+    """Create a config mock with sensible defaults and dict-backed .get().
+
+    Args:
+        overrides: Key-value pairs to override defaults (e.g. BINANCE_ACCOUNT_TYPE).
+
+    Returns:
+        Configured Mock object for get_config().
+    """
+    defaults = {
+        "BINANCE_ACCOUNT_TYPE": "spot",
+        "TRADING_MODE": "paper",
+        "ENV": "test",
+    }
+    if overrides:
+        defaults.update(overrides)
+
+    mock_config_obj = Mock()
+    mock_config_obj.get.side_effect = lambda key, default=None: defaults.get(key, default)
+    mock_config_obj.get_required.return_value = "fake_key"
+    mock_config_obj.get_float.return_value = 60.0
+    return mock_config_obj
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginFlag:
+    """Tests for margin flag initialization from config."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_flag_from_env_margin(self, mock_config, mock_client_class):
+        """Verify _use_margin=True when BINANCE_ACCOUNT_TYPE=margin."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [],
+        }
+
+        provider = BinanceProvider()
+        assert provider._use_margin is True
+        assert provider._is_live is False
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_flag_from_env_spot(self, mock_config, mock_client_class):
+        """Verify _use_margin=False when BINANCE_ACCOUNT_TYPE=spot."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "spot"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        provider = BinanceProvider()
+        assert provider._use_margin is False
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_is_live_flag(self, mock_config, mock_client_class):
+        """Verify _is_live=True when TRADING_MODE=live."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "spot",
+            "TRADING_MODE": "live",
+        })
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        provider = BinanceProvider()
+        assert provider._is_live is True
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_symbol_verified_cache_initialized(self, mock_config, mock_client_class):
+        """Verify _margin_symbol_verified set is initialized empty."""
+        mock_config.return_value = _make_config_mock()
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        provider = BinanceProvider()
+        assert provider._margin_symbol_verified == set()
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginFailFast:
+    """Tests for live+margin fail-fast on client init failure."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_live_mode_no_offline_fallback(self, mock_config, mock_client_class):
+        """Live+margin raises RuntimeError instead of falling back to offline stub."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "live",
+        })
+        mock_client_class.side_effect = Exception("Connection refused")
+
+        with pytest.raises(RuntimeError, match="FATAL.*live margin mode"):
+            BinanceProvider()
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_paper_mode_allows_offline_fallback(self, mock_config, mock_client_class):
+        """Paper+margin falls back to offline stub (no RuntimeError)."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "paper",
+        })
+        mock_client_class.side_effect = Exception("Connection refused")
+
+        provider = BinanceProvider()
+        assert provider._client is not None  # offline stub
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginStartupChecks:
+    """Tests for margin account verification at startup."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_startup_checks_pass(self, mock_config, mock_client_class):
+        """Startup passes when tradeEnabled and borrowEnabled are True."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [],
+        }
+
+        provider = BinanceProvider()
+        assert provider._use_margin is True
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_startup_trade_disabled_raises(self, mock_config, mock_client_class):
+        """RuntimeError raised when tradeEnabled=False."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": False,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+        }
+
+        with pytest.raises(RuntimeError, match="tradeEnabled=False"):
+            BinanceProvider()
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_startup_borrow_disabled_raises(self, mock_config, mock_client_class):
+        """RuntimeError raised when borrowEnabled=False."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": False,
+            "marginLevel": "2.5",
+        }
+
+        with pytest.raises(RuntimeError, match="borrowEnabled=False"):
+            BinanceProvider()
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_startup_api_error_live_raises(self, mock_config, mock_client_class):
+        """API error during margin verification in live mode raises RuntimeError."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "live",
+        })
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.side_effect = Exception("API timeout")
+
+        with pytest.raises(RuntimeError, match="Failed to verify margin account"):
+            BinanceProvider()
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_startup_api_error_paper_warns(self, mock_config, mock_client_class):
+        """API error during margin verification in paper mode logs warning, no raise."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "paper",
+        })
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.side_effect = Exception("API timeout")
+
+        # Should not raise — just warns
+        provider = BinanceProvider()
+        assert provider._use_margin is True
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginDispatch:
+    """Tests for margin/spot dispatch routing."""
+
+    def _make_provider(self, mock_config, mock_client_class, use_margin=True):
+        """Helper to create a provider with margin config."""
+        account_type = "margin" if use_margin else "spot"
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": account_type})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        if use_margin:
+            mock_client.get_margin_account.return_value = {
+                "tradeEnabled": True,
+                "borrowEnabled": True,
+                "marginLevel": "2.5",
+                "userAssets": [],
+            }
+            mock_client.get_margin_symbol.return_value = {
+                "isMarginTrade": True,
+                "isBuyAllowed": True,
+                "isSellAllowed": True,
+            }
+        provider = BinanceProvider()
+        return provider, mock_client
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_dispatch_routes_to_margin_methods(self, mock_config, mock_client_class):
+        """Dispatch methods call margin client methods when _use_margin=True."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, use_margin=True)
+
+        # _call_get_account
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "userAssets": [{"asset": "BTC", "free": "1.0", "locked": "0.0"}],
+        }
+        provider._call_get_account()
+        mock_client.get_margin_account.assert_called()
+
+        # _call_create_order
+        mock_client.create_margin_order.return_value = {"orderId": "123"}
+        provider._call_create_order(symbol="BTCUSDT", side="BUY", type="MARKET", quantity=0.1)
+        mock_client.create_margin_order.assert_called()
+
+        # _call_get_order
+        provider._call_get_order(symbol="BTCUSDT", orderId="123")
+        mock_client.get_margin_order.assert_called()
+
+        # _call_get_open_orders
+        mock_client.get_open_margin_orders.return_value = []
+        provider._call_get_open_orders(symbol="BTCUSDT")
+        mock_client.get_open_margin_orders.assert_called()
+
+        # _call_get_my_trades
+        mock_client.get_margin_trades.return_value = []
+        provider._call_get_my_trades(symbol="BTCUSDT")
+        mock_client.get_margin_trades.assert_called()
+
+        # _call_cancel_order
+        provider._call_cancel_order(symbol="BTCUSDT", orderId="123")
+        mock_client.cancel_margin_order.assert_called()
+
+        # _call_get_all_orders
+        mock_client.get_all_margin_orders.return_value = []
+        provider._call_get_all_orders(symbol="BTCUSDT")
+        mock_client.get_all_margin_orders.assert_called()
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_spot_dispatch_routes_to_spot_methods(self, mock_config, mock_client_class):
+        """Dispatch methods call spot client methods when _use_margin=False."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, use_margin=False)
+
+        # _call_get_account
+        mock_client.get_account.return_value = {"balances": [], "canTrade": True}
+        provider._call_get_account()
+        mock_client.get_account.assert_called()
+
+        # _call_create_order
+        mock_client.create_order.return_value = {"orderId": "123"}
+        provider._call_create_order(symbol="BTCUSDT", side="BUY", type="MARKET", quantity=0.1)
+        mock_client.create_order.assert_called()
+
+        # _call_get_order
+        provider._call_get_order(symbol="BTCUSDT", orderId="123")
+        mock_client.get_order.assert_called()
+
+        # _call_get_open_orders
+        mock_client.get_open_orders.return_value = []
+        provider._call_get_open_orders(symbol="BTCUSDT")
+        mock_client.get_open_orders.assert_called()
+
+        # _call_get_my_trades
+        mock_client.get_my_trades.return_value = []
+        provider._call_get_my_trades(symbol="BTCUSDT")
+        mock_client.get_my_trades.assert_called()
+
+        # _call_cancel_order
+        provider._call_cancel_order(symbol="BTCUSDT", orderId="123")
+        mock_client.cancel_order.assert_called()
+
+        # _call_get_all_orders
+        mock_client.get_all_orders.return_value = []
+        provider._call_get_all_orders(symbol="BTCUSDT")
+        mock_client.get_all_orders.assert_called()
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_dispatch_adds_isIsolated_false(self, mock_config, mock_client_class):
+        """Margin dispatch injects isIsolated=FALSE for cross-margin mode."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, use_margin=True)
+
+        mock_client.get_open_margin_orders.return_value = []
+        provider._call_get_open_orders(symbol="BTCUSDT")
+        call_kwargs = mock_client.get_open_margin_orders.call_args.kwargs
+        assert call_kwargs["isIsolated"] == "FALSE"
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_spot_dispatch_strips_sideEffectType(self, mock_config, mock_client_class):
+        """Spot dispatch removes sideEffectType param to avoid Binance error."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, use_margin=False)
+
+        mock_client.create_order.return_value = {"orderId": "123"}
+        provider._call_create_order(
+            symbol="BTCUSDT", side="BUY", type="MARKET", quantity=0.1,
+            sideEffectType="MARGIN_BUY",
+        )
+        call_kwargs = mock_client.create_order.call_args.kwargs
+        assert "sideEffectType" not in call_kwargs
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginBalanceNormalization:
+    """Tests for margin account balance normalization."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_balance_normalization(self, mock_config, mock_client_class):
+        """_call_get_account normalizes userAssets to balances format."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [
+                {
+                    "asset": "BTC",
+                    "free": "1.0",
+                    "locked": "0.5",
+                    "borrowed": "0.2",
+                    "interest": "0.001",
+                    "netAsset": "1.299",
+                },
+                {
+                    "asset": "USDT",
+                    "free": "10000",
+                    "locked": "0",
+                    "borrowed": "0",
+                    "interest": "0",
+                    "netAsset": "10000",
+                },
+            ],
+        }
+        mock_client.get_margin_symbol.return_value = {
+            "isMarginTrade": True,
+            "isBuyAllowed": True,
+            "isSellAllowed": True,
+        }
+
+        provider = BinanceProvider()
+        result = provider._call_get_account()
+
+        assert "balances" in result
+        assert len(result["balances"]) == 2
+        btc_bal = result["balances"][0]
+        assert btc_bal["asset"] == "BTC"
+        assert btc_bal["free"] == "1.0"
+        assert btc_bal["locked"] == "0.5"
+        assert btc_bal["borrowed"] == "0.2"
+        assert btc_bal["interest"] == "0.001"
+        assert btc_bal["netAsset"] == "1.299"
+        assert result["canTrade"] is True
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_spot_balance_passthrough(self, mock_config, mock_client_class):
+        """_call_get_account returns spot account data unchanged."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "spot"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        spot_data = {"balances": [{"asset": "BTC", "free": "1.0", "locked": "0"}], "canTrade": True}
+        mock_client.get_account.return_value = spot_data
+
+        provider = BinanceProvider()
+        result = provider._call_get_account()
+        assert result == spot_data
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginSymbolValidation:
+    """Tests for lazy margin symbol validation."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_symbol_validation_on_first_order(self, mock_config, mock_client_class):
+        """Symbol is validated on first margin order, cached for subsequent ones."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [],
+        }
+        mock_client.get_margin_symbol.return_value = {
+            "isMarginTrade": True,
+            "isBuyAllowed": True,
+            "isSellAllowed": True,
+        }
+        mock_client.create_margin_order.return_value = {"orderId": "123"}
+
+        provider = BinanceProvider()
+        # Reset call count after __init__ verification
+        mock_client.get_margin_symbol.reset_mock()
+
+        # First order triggers validation
+        provider._call_create_order(symbol="BTCUSDT", side="BUY", type="MARKET", quantity=0.1)
+        assert mock_client.get_margin_symbol.call_count == 1
+
+        # Second order with same symbol skips validation
+        provider._call_create_order(symbol="BTCUSDT", side="SELL", type="MARKET", quantity=0.1)
+        assert mock_client.get_margin_symbol.call_count == 1  # Still 1
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_symbol_not_supported_raises(self, mock_config, mock_client_class):
+        """RuntimeError raised if symbol doesn't support margin trading."""
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [],
+        }
+        # Return unsupported on the order-time check
+        mock_client.get_margin_symbol.side_effect = [
+            # Called during _call_create_order for symbol validation
+            {"isMarginTrade": False, "isBuyAllowed": True, "isSellAllowed": True},
+        ]
+        mock_client.create_margin_order.return_value = {"orderId": "123"}
+
+        provider = BinanceProvider()
+
+        with pytest.raises(RuntimeError, match="does not support margin trading"):
+            provider._call_create_order(symbol="BADUSDT", side="BUY", type="MARKET", quantity=0.1)
