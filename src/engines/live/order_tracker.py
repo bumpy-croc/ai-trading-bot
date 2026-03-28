@@ -35,6 +35,10 @@ class TrackedOrder:
     # After MAX_CALLBACK_RETRIES the order is force-removed to prevent an
     # unbounded retry loop when the callback fails deterministically.
     callback_failure_count: int = 0
+    # Counts consecutive API errors when polling get_order() for this order.
+    # After MAX_API_ERROR_RETRIES, the order is force-removed to prevent an
+    # infinite error loop (e.g. Binance -1100 for invalid orderId format).
+    api_error_count: int = 0
 
 
 # Maximum polls with invalid data before force-removing a tracked order.
@@ -48,6 +52,14 @@ MAX_INVALID_DATA_RETRIES = 10
 # deterministic bugs rather than transient issues. At a 5-second poll interval
 # this gives ~25 seconds before the order is force-removed with a CRITICAL alert.
 MAX_CALLBACK_RETRIES = 5
+
+# Maximum consecutive API errors before force-removing a tracked order.
+# Prevents infinite error loops when the exchange persistently rejects requests
+# for a specific order (e.g. Binance -1100 for invalid orderId format).
+# Set to 10 to tolerate transient network/API issues (typically 1-3 polls) while
+# preventing permanent polling of unreachable orders. At a 5-second poll interval
+# this gives ~50 seconds of tolerance before force-removal with a CRITICAL alert.
+MAX_API_ERROR_RETRIES = 10
 
 
 class OrderTracker:
@@ -198,10 +210,42 @@ class OrderTracker:
                         logger.warning("Could not fetch order %s - may have expired", order_id)
                     continue
 
+                # Reset API error counter on any successful response
+                tracked.api_error_count = 0
                 self._process_order_status(order_id, tracked, order)
 
             except Exception as e:
-                logger.warning("Failed to check order %s: %s", order_id, e)
+                tracked.api_error_count += 1
+                if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
+                    logger.critical(
+                        "CRITICAL: Order %s on %s failed %d consecutive API calls: %s. "
+                        "Force-removing to prevent infinite error loop. "
+                        "MANUAL RECONCILIATION REQUIRED.",
+                        order_id,
+                        tracked.symbol,
+                        tracked.api_error_count,
+                        e,
+                    )
+                    # Call cancel callback BEFORE stop_tracking so the callback
+                    # can still access order metadata if needed
+                    if self.on_cancel:
+                        try:
+                            self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
+                        except Exception as cb_err:
+                            logger.error(
+                                "Cancel callback failed for force-removed order %s: %s",
+                                order_id,
+                                cb_err,
+                            )
+                    self.stop_tracking(order_id)
+                else:
+                    logger.warning(
+                        "Failed to check order %s (attempt %d/%d): %s",
+                        order_id,
+                        tracked.api_error_count,
+                        MAX_API_ERROR_RETRIES,
+                        e,
+                    )
 
     def _process_order_status(self, order_id: str, tracked: TrackedOrder, order: Order) -> None:
         """

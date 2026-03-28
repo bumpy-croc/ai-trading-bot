@@ -493,3 +493,130 @@ class TestPlaceStopLossOrder:
 
         # Assert
         assert result is None
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestGetOrderIdRouting:
+    """Tests for get_order() routing between orderId and origClientOrderId."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_numeric_order_id_uses_order_id_param(self, mock_config, mock_client_class):
+        """Verify numeric order IDs use Binance orderId parameter."""
+        # Arrange
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_order.return_value = {
+            "orderId": 12345,
+            "symbol": "BTCUSDT",
+            "status": "FILLED",
+            "side": "BUY",
+            "type": "MARKET",
+            "origQty": "1.0",
+            "executedQty": "1.0",
+            "price": "50000.0",
+            "time": 1640995200000,
+        }
+
+        provider = BinanceProvider()
+
+        # Act
+        provider.get_order("12345", "BTCUSDT")
+
+        # Assert - uses orderId, not origClientOrderId
+        mock_client.get_order.assert_called_once_with(symbol="BTCUSDT", orderId="12345")
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_alphanumeric_order_id_delegates_to_get_order_by_client_id(
+        self, mock_config, mock_client_class
+    ):
+        """Verify alphanumeric order IDs delegate to get_order_by_client_id."""
+        # Arrange
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_order.return_value = {
+            "orderId": 12345,
+            "symbol": "BTCUSDT",
+            "status": "FILLED",
+            "side": "BUY",
+            "type": "MARKET",
+            "origQty": "1.0",
+            "executedQty": "1.0",
+            "price": "50000.0",
+            "time": 1640995200000,
+        }
+
+        provider = BinanceProvider()
+
+        # Act
+        provider.get_order("atb_19d360981ab_3a4b0d5a", "BTCUSDT")
+
+        # Assert - delegates to get_order_by_client_id which uses origClientOrderId
+        mock_client.get_order.assert_called_once_with(
+            symbol="BTCUSDT", origClientOrderId="atb_19d360981ab_3a4b0d5a"
+        )
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_underscore_order_id_delegates_to_get_order_by_client_id(
+        self, mock_config, mock_client_class
+    ):
+        """Verify order IDs with underscores delegate to get_order_by_client_id."""
+        # Arrange
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_order.return_value = {
+            "orderId": 99999,
+            "symbol": "ETHUSDT",
+            "status": "NEW",
+            "side": "SELL",
+            "type": "LIMIT",
+            "origQty": "2.0",
+            "executedQty": "0.0",
+            "price": "3000.0",
+            "time": 1640995200000,
+        }
+
+        provider = BinanceProvider()
+
+        # Act
+        provider.get_order("client_order_123", "ETHUSDT")
+
+        # Assert
+        mock_client.get_order.assert_called_once_with(
+            symbol="ETHUSDT", origClientOrderId="client_order_123"
+        )
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_get_order_returns_none_on_api_error(self, mock_config, mock_client_class):
+        """Verify get_order returns None when Binance API raises an error."""
+        # Arrange
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_order.side_effect = Exception("API error")
+
+        provider = BinanceProvider()
+
+        # Act
+        result = provider.get_order("atb_bad_id", "BTCUSDT")
+
+        # Assert
+        assert result is None
