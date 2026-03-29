@@ -1760,12 +1760,18 @@ class PositionReconciler:
 
             if is_short:
                 # Short positions create debt — check raw borrowed amount.
-                borrowed = 0.0
+                # None means API error — skip check to avoid deleting real positions.
+                borrowed = None
                 if hasattr(self.exchange, "get_margin_borrowed"):
                     borrowed = self.exchange.get_margin_borrowed(base_asset)
 
-                # Full close: no borrowed debt remaining
-                if borrowed <= 0:
+                if borrowed is None:
+                    logger.warning(
+                        "Could not verify borrowed amount for %s — skipping "
+                        "margin position check (transient API error)",
+                        symbol,
+                    )
+                elif borrowed <= 0:
                     logger.warning(
                         "Margin short for %s externally closed (borrowed %s=0). "
                         "Removing tracked position.",
@@ -2310,11 +2316,14 @@ class PeriodicReconciler:
                         pos_qty = qty
 
                     if is_short:
-                        # Short detection: use raw borrowed amount
-                        borrowed = 0.0
+                        # Short detection: use raw borrowed amount.
+                        # None = API error — skip to avoid deleting real positions.
+                        borrowed = None
                         if hasattr(self.exchange, "get_margin_borrowed"):
                             borrowed = self.exchange.get_margin_borrowed(base_asset)
-                        if borrowed <= 0:
+                        if borrowed is None:
+                            pass  # Unknown — retain position
+                        elif borrowed <= 0:
                             position_gone = True
                         elif pos_qty > 0 and borrowed < pos_qty * 0.5:
                             position_gone = True

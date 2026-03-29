@@ -675,13 +675,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                             f"to sell existing inventory instead of borrowing. "
                             f"Transfer {asset_name} out of Cross Margin before trading."
                         )
-                        # If borrowed > 0, this is likely a tracked position
-                        # recovering after restart — warn, don't block recovery.
-                        if borrowed > 0:
+                        # If borrowed > free, most of this holding is a tracked
+                        # position (short) recovering after restart. Warn, don't
+                        # block. If free >> borrowed, it's likely manual deposits
+                        # alongside dust borrow — block to prevent MARGIN_BUY
+                        # selling inventory instead of borrowing.
+                        if borrowed > 0 and borrowed >= free:
                             logger.warning(
-                                "%s (borrowed=%.8f — may be a recovering position)",
+                                "%s (borrowed=%.8f >= free=%.8f — recovering position)",
                                 msg,
                                 borrowed,
+                                free,
                             )
                         elif self._is_live:
                             raise RuntimeError(msg)
@@ -876,24 +880,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get balances: {e}")
             return []
 
-    def get_margin_borrowed(self, asset: str) -> float:
+    def get_margin_borrowed(self, asset: str) -> float | None:
         """Get borrowed amount for a specific asset in cross-margin account.
 
         Returns the raw borrowed quantity (not netAsset). Used by reconciliation
         to verify short positions still have outstanding debt.
-        Returns 0.0 if not in margin mode, asset not found, or on error.
+        Returns 0.0 if asset found with no debt, None on error or unavailable.
+        Callers must treat None as "unknown" and skip position removal.
         """
         if not self._use_margin or not BINANCE_AVAILABLE or not self._client:
-            return 0.0
+            return None
         try:
             account = self._call_get_account()
             for bal in account.get("balances", []):
                 if bal["asset"] == asset:
                     return float(bal.get("borrowed", "0"))
-            return 0.0
+            return 0.0  # Asset not in account — no debt
         except Exception as e:
             logger.warning("Failed to get borrowed amount for %s: %s", asset, e)
-            return 0.0
+            return None  # Unknown — caller must not assume position is closed
 
     def get_balance(self, asset: str) -> AccountBalance | None:
         """Get balance for a specific asset"""
