@@ -712,6 +712,86 @@ class TestMarginStartupChecks:
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginBaseAssetGuard:
+    """Tests for the non-USDT base asset startup guard."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_rejects_non_usdt_holdings_in_live_mode(self, mock_config, mock_client_class):
+        """Live margin mode raises if wallet holds significant non-USDT assets."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "live",
+        })
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [
+                {"asset": "USDT", "free": "100", "locked": "0", "netAsset": "100"},
+                {"asset": "ETH", "free": "0.05", "locked": "0", "netAsset": "0.05"},
+            ],
+        }
+        # Price lookup for ETH value estimation
+        mock_client.get_symbol_ticker.return_value = {"price": "2000"}
+
+        with pytest.raises(RuntimeError, match="holds.*ETH.*Transfer.*out"):
+            BinanceProvider()
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_allows_dust_holdings(self, mock_config, mock_client_class):
+        """Dust amounts (< $1) are ignored."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "live",
+        })
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [
+                {"asset": "USDT", "free": "100", "locked": "0", "netAsset": "100"},
+                {"asset": "ETH", "free": "0.0001", "locked": "0", "netAsset": "0.0001"},
+            ],
+        }
+        mock_client.get_symbol_ticker.return_value = {"price": "2000"}
+
+        # $0.20 worth of ETH — below $1 threshold, should not raise
+        provider = BinanceProvider()
+        assert provider._use_margin is True
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_warns_in_paper_mode(self, mock_config, mock_client_class):
+        """Paper mode warns but doesn't raise for non-USDT holdings."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "paper",
+        })
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [
+                {"asset": "USDT", "free": "100", "locked": "0", "netAsset": "100"},
+                {"asset": "ETH", "free": "0.05", "locked": "0", "netAsset": "0.05"},
+            ],
+        }
+        mock_client.get_symbol_ticker.return_value = {"price": "2000"}
+
+        # Paper mode — should warn, not raise
+        provider = BinanceProvider()
+        assert provider._use_margin is True
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 class TestMarginDispatch:
     """Tests for margin/spot dispatch routing."""
 
