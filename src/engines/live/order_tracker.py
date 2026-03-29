@@ -204,7 +204,6 @@ class OrderTracker:
                             order_id,
                             tracked.symbol,
                             tracked.api_error_count,
-                            exc_info=True,
                         )
                         if self.on_cancel:
                             try:
@@ -225,7 +224,6 @@ class OrderTracker:
                             order_id,
                             tracked.symbol,
                             tracked.callback_failure_count,
-                            exc_info=True,
                         )
                         self.stop_tracking(order_id)
                     else:
