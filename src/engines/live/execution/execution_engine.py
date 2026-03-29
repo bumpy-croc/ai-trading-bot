@@ -677,7 +677,7 @@ class LiveExecutionEngine:
                 # Guard: verify no significant free base asset that MARGIN_BUY
                 # would sell instead of borrowing. Prevents false shorts.
                 # Fail-closed: reject short on any lookup error.
-                use_margin = getattr(self.exchange_interface, "_use_margin", False)
+                use_margin = getattr(self.exchange_interface, "_use_margin", False) is True
                 if use_margin:
                     base_asset = symbol.replace("USDT", "").replace("BUSD", "")
                     try:
