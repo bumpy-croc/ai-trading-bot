@@ -327,6 +327,12 @@ DEFAULT_RECONCILIATION_DUST_THRESHOLD = 0.00001  # Ignore dust-level asset discr
 DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT = 0.01  # 1% qty tolerance for order matching
 DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN = 10  # Minutes for timestamp matching
 
+# WebSocket Stream Constants
+DEFAULT_WS_KLINE_STALENESS_THRESHOLD = 120  # Seconds before kline stream considered stale
+DEFAULT_WS_USER_STALENESS_THRESHOLD = 120  # Seconds before user stream considered stale (only when orders tracked)
+DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
+DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
+
 # TFT (Temporal Fusion Transformer) Model Defaults
 DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
 DEFAULT_TFT_HIDDEN_SIZE = 64  # Hidden dimension for GRN and attention layers

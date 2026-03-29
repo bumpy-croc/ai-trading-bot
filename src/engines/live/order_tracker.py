@@ -13,7 +13,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from src.config.constants import DEFAULT_ORDER_POLL_INTERVAL, DEFAULT_ORDER_TRACKER_TIMEOUT
-from src.data_providers.exchange_interface import ExchangeInterface, Order, OrderStatus
+from src.data_providers.exchange_interface import (
+    ExchangeInterface,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+)
+from src.engines.live.event_deduplicator import EventDeduplicator
 from src.infrastructure.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
@@ -75,6 +82,7 @@ class OrderTracker:
         on_fill: Callable[[str, str, float, float], None] | None = None,
         on_partial_fill: Callable[[str, str, float, float], None] | None = None,
         on_cancel: Callable[[str, str, float], None] | None = None,
+        event_deduplicator: EventDeduplicator | None = None,
     ):
         """
         Initialize the order tracker.
@@ -86,12 +94,16 @@ class OrderTracker:
             on_partial_fill: Callback(order_id, symbol, new_filled_qty, avg_price) for partial fills
             on_cancel: Callback(order_id, symbol, filled_qty) for cancelled/rejected orders.
                 filled_qty is the cumulative quantity filled before cancellation (0.0 if unfilled).
+            event_deduplicator: Optional deduplicator for WebSocket events. A default
+                instance is created if not provided.
         """
         self.exchange = exchange
         self.poll_interval = poll_interval
         self.on_fill = on_fill
         self.on_partial_fill = on_partial_fill
         self.on_cancel = on_cancel
+        self._dedup = event_deduplicator or EventDeduplicator()
+        self._polling_enabled = True  # Controls whether _poll_loop runs checks
 
         self._pending_orders: dict[str, TrackedOrder] = {}
         self._lock = threading.Lock()
@@ -171,7 +183,8 @@ class OrderTracker:
         """Main polling loop - runs in background thread."""
         while self._running:
             try:
-                self._check_orders()
+                if self._polling_enabled:
+                    self._check_orders()
             except Exception as e:
                 logger.error("Order tracking error: %s", e)
             # Use Event.wait() instead of time.sleep() for interruptible sleep
@@ -537,3 +550,107 @@ class OrderTracker:
             # Stop tracking even if callback fails - cancelled orders won't
             # re-appear on exchange so keeping them tracked is a memory leak.
             self.stop_tracking(order_id)
+
+    def process_execution_event(self, event: dict) -> None:
+        """Process a WebSocket executionReport event.
+
+        Extracts order data from Binance WS fields, deduplicates, and delegates
+        to the existing _process_order_status() for lifecycle handling.
+
+        Args:
+            event: Raw Binance executionReport payload with single-letter keys.
+        """
+        order_id = str(event.get("i", ""))
+        exec_type = str(event.get("x", ""))
+        exec_id = str(event.get("I", ""))
+
+        if self._dedup.is_duplicate(order_id, exec_type, exec_id):
+            return
+
+        with self._lock:
+            tracked = self._pending_orders.get(order_id)
+        if tracked is None:
+            return
+
+        cum_filled = float(event.get("z", 0))
+        cum_quote = float(event.get("Z", 0))
+        avg_price = cum_quote / cum_filled if cum_filled > 0 else 0.0
+
+        status = self._map_ws_status(str(event.get("X", "")))
+        if status is None:
+            return
+
+        order = Order(
+            order_id=order_id,
+            symbol=str(event.get("s", tracked.symbol)),
+            side=OrderSide(str(event.get("S", "BUY"))),
+            order_type=self._map_ws_order_type(str(event.get("o", "MARKET"))),
+            quantity=float(event.get("q", 0)),
+            price=float(event.get("p", 0)) or None,
+            status=status,
+            filled_quantity=cum_filled,
+            average_price=avg_price,
+            commission=float(event.get("n", 0)),
+            commission_asset=str(event.get("N", "")),
+            create_time=datetime.fromtimestamp(event.get("O", 0) / 1000, tz=UTC),
+            update_time=datetime.fromtimestamp(event.get("E", 0) / 1000, tz=UTC),
+            stop_price=float(event.get("P", 0)) or None,
+            time_in_force=str(event.get("f", "GTC")),
+            client_order_id=str(event.get("c", "")),
+        )
+
+        self._process_order_status(order_id, tracked, order)
+
+    @staticmethod
+    def _map_ws_status(ws_status: str) -> OrderStatus | None:
+        """Map a Binance WebSocket order status to our OrderStatus enum.
+
+        Args:
+            ws_status: Binance WS status string (e.g. "FILLED", "CANCELED").
+
+        Returns:
+            Mapped OrderStatus or None if the status is not recognised.
+        """
+        mapping = {
+            "NEW": OrderStatus.PENDING,
+            "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
+            "FILLED": OrderStatus.FILLED,
+            "CANCELED": OrderStatus.CANCELLED,  # Binance 1 L, our enum 2 Ls
+            "REJECTED": OrderStatus.REJECTED,
+            "EXPIRED": OrderStatus.EXPIRED,
+        }
+        return mapping.get(ws_status)
+
+    @staticmethod
+    def _map_ws_order_type(ws_type: str) -> OrderType:
+        """Map a Binance WebSocket order type to our OrderType enum.
+
+        Args:
+            ws_type: Binance WS order type string (e.g. "MARKET", "STOP_LOSS_LIMIT").
+
+        Returns:
+            Mapped OrderType, defaulting to MARKET for unknown types.
+        """
+        mapping = {
+            "MARKET": OrderType.MARKET,
+            "LIMIT": OrderType.LIMIT,
+            "STOP_LOSS": OrderType.STOP_LOSS,
+            "STOP_LOSS_LIMIT": OrderType.STOP_LOSS,
+            "TAKE_PROFIT": OrderType.TAKE_PROFIT,
+            "TAKE_PROFIT_LIMIT": OrderType.TAKE_PROFIT,
+        }
+        return mapping.get(ws_type, OrderType.MARKET)
+
+    def poll_once(self) -> None:
+        """Execute a single poll cycle. Used during WS to REST transitions."""
+        self._check_orders()
+
+    def disable_polling(self) -> None:
+        """Disable REST polling. Used when WebSocket is active."""
+        self._polling_enabled = False
+        logger.info("Order polling disabled — WebSocket active")
+
+    def enable_polling(self) -> None:
+        """Enable REST polling. Used when WebSocket fails."""
+        self._polling_enabled = True
+        logger.info("Order polling enabled — REST fallback active")

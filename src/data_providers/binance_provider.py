@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from functools import wraps
 from typing import Any, TypeVar
 
@@ -42,6 +43,7 @@ from .exchange_interface import (
 logger = logging.getLogger(__name__)
 
 try:
+    from binance import ThreadedWebsocketManager
     from binance.client import Client
     from binance.enums import SIDE_BUY, SIDE_SELL
     from binance.exceptions import BinanceAPIException, BinanceOrderException
@@ -53,6 +55,7 @@ except ImportError:
     Client = None
     BinanceAPIException = Exception
     BinanceOrderException = Exception
+    ThreadedWebsocketManager = None
     SIDE_BUY = "BUY"
     SIDE_SELL = "SELL"
     BINANCE_AVAILABLE = False
@@ -186,6 +189,16 @@ def with_rate_limit_retry(
     return decorator
 
 
+class WebSocketState(Enum):
+    """Connection state for WebSocket streams."""
+
+    DISCONNECTED = "disconnected"
+    PRIMARY = "primary"  # WS active, normal operation
+    RESYNCING = "resyncing"  # Gap detected, running REST reconciliation
+    REST_DEGRADED = "degraded"  # WS failed, using REST polling
+    SUSPENDED = "suspended"  # API ban active, waiting for ban expiry
+
+
 class BinanceProvider(DataProvider, ExchangeInterface):
     """
     Unified Binance provider that combines data fetching and exchange operations.
@@ -257,6 +270,18 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._client = None
             logger.info("Binance provider initialized in read-only mode (no credentials)")
             self._initialize_client()
+
+        # WebSocket stream state (initialized regardless of credentials)
+        self._twm: ThreadedWebsocketManager | None = None
+        self._ws_state = WebSocketState.DISCONNECTED
+        self._kline_socket_key: str | None = None
+        self._user_socket_key: str | None = None
+        self._on_kline_cb: Callable | None = None
+        self._on_user_event_cb: Callable | None = None
+        self._active_symbol: str | None = None
+        self._active_timeframe: str | None = None
+        self._last_kline_event_time = datetime.now(UTC)
+        self._last_user_event_time = datetime.now(UTC)
 
     @staticmethod
     def _validate_credentials(
@@ -1671,6 +1696,158 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             "EXPIRED": OrderStatus.EXPIRED,
         }
         return mapping.get(binance_status, OrderStatus.PENDING)
+
+
+    # ---------- WebSocket Stream Management ----------
+
+    def _ensure_twm(self) -> None:
+        """Lazily create the ThreadedWebsocketManager from existing config."""
+        if self._twm is not None:
+            return
+        twm_kwargs: dict[str, Any] = {
+            "api_key": self.api_key,
+            "api_secret": self.api_secret,
+        }
+        if self.testnet:
+            twm_kwargs["testnet"] = True
+        api_endpoint = get_binance_api_endpoint()
+        if api_endpoint == "binanceus":
+            twm_kwargs["tld"] = "us"
+        self._twm = ThreadedWebsocketManager(**twm_kwargs)
+        self._twm.start()
+
+    def start_kline_stream(
+        self, symbol: str, timeframe: str, on_kline: Callable[[dict], None]
+    ) -> bool:
+        """Start kline stream. Safe for paper mode (no credentials needed).
+
+        Args:
+            symbol: Trading pair symbol (e.g. 'BTCUSDT')
+            timeframe: Kline interval (e.g. '1h')
+            on_kline: Callback receiving raw kline event dicts
+
+        Returns:
+            True if stream started successfully, False on failure.
+        """
+        try:
+            self._ensure_twm()
+            self._active_symbol = symbol
+            self._active_timeframe = timeframe
+            self._on_kline_cb = on_kline
+
+            def _kline_callback(msg: dict) -> None:
+                """Route kline events, handling errors before user callback."""
+                if msg.get("e") == "error":
+                    logger.error("Kline WS error: %s", msg.get("m", "unknown"))
+                    self._on_ws_disconnect()
+                    return
+                self._last_kline_event_time = datetime.now(UTC)
+                on_kline(msg)
+
+            self._kline_socket_key = self._twm.start_kline_socket(
+                callback=_kline_callback, symbol=symbol, interval=timeframe
+            )
+            self._ws_state = WebSocketState.PRIMARY
+            self._last_kline_event_time = datetime.now(UTC)
+            return True
+        except Exception as e:
+            logger.error("Failed to start kline stream: %s", e)
+            return False
+
+    def start_user_stream(self, on_user_event: Callable[[dict], None]) -> bool:
+        """Start user data stream. Requires credentials. Live mode only.
+
+        Args:
+            on_user_event: Callback receiving raw user data event dicts
+
+        Returns:
+            True if stream started successfully, False on failure.
+        """
+        try:
+            self._ensure_twm()
+            self._on_user_event_cb = on_user_event
+
+            def _user_callback(msg: dict) -> None:
+                """Route user data events, handling errors before user callback."""
+                if msg.get("e") == "error":
+                    logger.error("User data WS error: %s", msg.get("m", "unknown"))
+                    self._on_ws_disconnect()
+                    return
+                self._last_user_event_time = datetime.now(UTC)
+                on_user_event(msg)
+
+            if self._use_margin:
+                self._user_socket_key = self._twm.start_margin_socket(
+                    callback=_user_callback
+                )
+            else:
+                self._user_socket_key = self._twm.start_user_socket(
+                    callback=_user_callback
+                )
+            self._last_user_event_time = datetime.now(UTC)
+            self._ws_state = WebSocketState.PRIMARY
+            return True
+        except Exception as e:
+            logger.error("Failed to start user data stream: %s", e)
+            return False
+
+    def stop_streams(self) -> None:
+        """Stop all WebSocket streams. Recreates TWM on reconnect."""
+        if self._twm:
+            self._twm.stop()
+            self._twm = None
+            self._kline_socket_key = None
+            self._user_socket_key = None
+            self._ws_state = WebSocketState.DISCONNECTED
+
+    @property
+    def ws_state(self) -> WebSocketState:
+        """Public read access to WebSocket connection state."""
+        return self._ws_state
+
+    @property
+    def ws_healthy(self) -> bool:
+        """Kline stream must be alive. User-data idleness is normal."""
+        if self._ws_state != WebSocketState.PRIMARY:
+            return False
+        kline_age = (datetime.now(UTC) - self._last_kline_event_time).total_seconds()
+        return kline_age < 120  # 2 min staleness threshold
+
+    def _on_ws_disconnect(self) -> None:
+        """Handle WebSocket disconnection. Sets state; engine handles resync."""
+        self._ws_state = WebSocketState.RESYNCING
+        logger.warning("WebSocket disconnected — entering RESYNCING state")
+
+    def reconnect_kline(self) -> bool:
+        """Reconnect kline stream only. Called by engine on kline staleness.
+
+        Returns:
+            True if reconnect succeeded, False otherwise.
+        """
+        try:
+            self.stop_streams()
+            return self.start_kline_stream(
+                self._active_symbol, self._active_timeframe, self._on_kline_cb
+            )
+        except Exception as e:
+            logger.error("Kline reconnect failed: %s", e)
+            return False
+
+    def reconnect_user(self) -> bool:
+        """Reconnect user data stream only. Called by engine on user-stream failure.
+
+        Returns:
+            True if reconnect succeeded, False otherwise.
+        """
+        try:
+            if self._user_socket_key and self._twm:
+                self._twm.stop_socket(self._user_socket_key)
+            if self._on_user_event_cb:
+                return self.start_user_stream(self._on_user_event_cb)
+            return False
+        except Exception as e:
+            logger.error("User stream reconnect failed: %s", e)
+            return False
 
 
 # Aliases for backward compatibility

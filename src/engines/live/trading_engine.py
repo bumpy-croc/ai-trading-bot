@@ -38,7 +38,7 @@ from src.config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
-from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.binance_provider import BinanceProvider, WebSocketState
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
 from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
@@ -460,6 +460,13 @@ class LiveTradingEngine:
         self.last_account_snapshot = None  # Track when we last logged account state
         self.timeframe: str | None = None  # Will be set when trading starts
         self._active_symbol: str | None = None
+
+        # WebSocket stream state (populated during start() if provider supports it)
+        self._kline_buffer = None
+        self._user_data_processor = None
+        self._ws_kline_active = False
+        self._ws_kline_provider = None
+        self._ws_health_thread = None
 
         # Performance tracker (unified with backtest engine)
         from src.performance.tracker import PerformanceTracker
@@ -1317,6 +1324,9 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.warning("Failed to start periodic reconciler: %s", e)
 
+        # Try to start WebSocket streams for reduced API weight
+        self._start_websocket_streams(symbol, timeframe)
+
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(
             target=self._trading_loop, args=(symbol, timeframe, max_steps)
@@ -1347,14 +1357,174 @@ class LiveTradingEngine:
             self._close_only_mode = False
             logger.info("✅ Close-only mode deactivated — normal trading resumed")
 
+    def _start_websocket_streams(self, symbol: str, timeframe: str) -> None:
+        """Initialize WebSocket streams for reduced API weight.
+
+        Kline streaming works in both paper and live mode.
+        User data streaming requires credentials (live mode only).
+        Falls back gracefully if provider doesn't support WebSocket.
+        """
+        from src.engines.live.kline_buffer import KlineBuffer
+        from src.engines.live.user_data_processor import UserDataProcessor
+
+        # Resolve the underlying BinanceProvider for kline streaming.
+        # CachedDataProvider wraps it; unwrap to access WS methods.
+        kline_provider = getattr(self.data_provider, "data_provider", self.data_provider)
+
+        # Kline streaming: paper + live mode
+        if hasattr(kline_provider, "start_kline_stream"):
+            try:
+                self._kline_buffer = KlineBuffer(symbol, timeframe, self.data_provider)
+                kline_started = kline_provider.start_kline_stream(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    on_kline=self._kline_buffer.on_kline,
+                )
+                if kline_started:
+                    self._ws_kline_active = True
+                    self._ws_kline_provider = kline_provider
+                    logger.info("Kline WebSocket stream active — REST data polling disabled")
+            except Exception as e:
+                logger.warning("Failed to start kline WebSocket stream: %s", e)
+
+        # User data streaming: live mode only
+        if (
+            self.enable_live_trading
+            and self.exchange_interface
+            and hasattr(self.exchange_interface, "start_user_stream")
+        ):
+            try:
+                self._user_data_processor = UserDataProcessor(
+                    order_tracker=self.order_tracker,
+                )
+                user_started = self.exchange_interface.start_user_stream(
+                    on_user_event=self._user_data_processor.enqueue,
+                )
+                if user_started:
+                    self._user_data_processor.start()
+                    if self.order_tracker:
+                        self.order_tracker.disable_polling()
+                    logger.info("User data WebSocket stream active — order polling disabled")
+            except Exception as e:
+                logger.warning("Failed to start user data WebSocket stream: %s", e)
+
+        # Start health monitor if any stream is active
+        if self._ws_kline_active or self._user_data_processor:
+            self._start_ws_health_monitor()
+
+    def _start_ws_health_monitor(self) -> None:
+        """Start daemon thread to monitor WebSocket stream health."""
+        self._ws_health_thread = threading.Thread(
+            target=self._ws_health_loop, daemon=True, name="WSHealthMonitor"
+        )
+        self._ws_health_thread.start()
+        logger.info("WebSocket health monitor started")
+
+    def _ws_health_loop(self) -> None:
+        """Monitor WebSocket streams and trigger reconnection on failure."""
+        from src.config.constants import DEFAULT_WS_HEALTH_CHECK_INTERVAL
+
+        while self.is_running and not self.stop_event.is_set():
+            try:
+                self._check_kline_health()
+                self._check_user_stream_health()
+            except Exception as e:
+                logger.error("WS health check error: %s", e, exc_info=True)
+            self.stop_event.wait(DEFAULT_WS_HEALTH_CHECK_INTERVAL)
+
+    def _check_kline_health(self) -> None:
+        """Check kline stream health and reconnect if stale."""
+        kline_provider = getattr(self, "_ws_kline_provider", None)
+        if not kline_provider or not self._ws_kline_active:
+            return
+        if not getattr(kline_provider, "ws_healthy", True):
+            logger.warning("Kline stream unhealthy — attempting reconnect")
+            self._handle_kline_disconnect()
+
+    def _check_user_stream_health(self) -> None:
+        """Check user data stream health and reconnect if needed."""
+        if not self.enable_live_trading or not self.exchange_interface:
+            return
+        exchange = self.exchange_interface
+        if getattr(exchange, "ws_state", None) != WebSocketState.PRIMARY:
+            return
+        # Only consider unhealthy when orders ARE being tracked
+        if self.order_tracker and self.order_tracker.get_tracked_count() > 0:
+            from src.config.constants import DEFAULT_WS_USER_STALENESS_THRESHOLD
+
+            last_event = getattr(exchange, "_last_user_event_time", None)
+            if last_event:
+                age = (datetime.now(UTC) - last_event).total_seconds()
+                if age > DEFAULT_WS_USER_STALENESS_THRESHOLD:
+                    logger.warning(
+                        "User data stream stale (%ds) with tracked orders — reconnecting",
+                        int(age),
+                    )
+                    self._handle_user_stream_disconnect()
+
+    def _handle_kline_disconnect(self) -> None:
+        """Handle kline stream failure. Resync from REST and attempt reconnect."""
+        kline_provider = getattr(self, "_ws_kline_provider", None)
+        if not kline_provider:
+            return
+        # Resync kline history from REST
+        if self._kline_buffer:
+            try:
+                self._kline_buffer.resync_from_rest(
+                    self.data_provider, self._active_symbol, self.timeframe
+                )
+            except Exception as e:
+                logger.error("Kline REST resync failed: %s", e)
+        # Attempt reconnect
+        if hasattr(kline_provider, "reconnect_kline") and kline_provider.reconnect_kline():
+            self._ws_kline_active = True
+            logger.info("Kline WebSocket reconnected")
+        else:
+            kline_provider._ws_state = WebSocketState.REST_DEGRADED
+            self._ws_kline_active = False
+            logger.warning("Kline reconnect failed — REST polling resumed")
+
+    def _handle_user_stream_disconnect(self) -> None:
+        """Handle user data stream failure. Resync orders and attempt reconnect."""
+        if not self.enable_live_trading or not self.exchange_interface:
+            return
+        # Resync order and position state from REST
+        if self.order_tracker:
+            self.order_tracker.poll_once()
+        if self._periodic_reconciler:
+            self._periodic_reconciler.reconcile_once()
+        # Attempt user stream reconnect
+        if (
+            hasattr(self.exchange_interface, "reconnect_user")
+            and self.exchange_interface.reconnect_user()
+        ):
+            if self.order_tracker:
+                self.order_tracker.disable_polling()
+            logger.info("User data WebSocket reconnected")
+        else:
+            self.exchange_interface._ws_state = WebSocketState.REST_DEGRADED
+            if self.order_tracker:
+                self.order_tracker.enable_polling()
+            logger.warning("User stream reconnect failed — order polling resumed")
+
     def stop(self) -> None:
-        """Stop the trading engine gracefully"""
+        """Stop the trading engine gracefully."""
         if not self.is_running:
             return
 
         logger.info("🛑 Stopping trading engine...")
         self.is_running = False
         self.stop_event.set()
+
+        # Stop inbound WS streams FIRST (no new events arrive)
+        kline_provider = getattr(self, "_ws_kline_provider", None)
+        if kline_provider and hasattr(kline_provider, "stop_streams"):
+            kline_provider.stop_streams()
+        if self.exchange_interface and hasattr(self.exchange_interface, "stop_streams"):
+            self.exchange_interface.stop_streams()
+        # Stop/drain UserDataProcessor (process remaining queued events)
+        if getattr(self, "_user_data_processor", None):
+            self._user_data_processor.stop()
 
         # Stop periodic reconciler
         if self._periodic_reconciler:
@@ -1448,8 +1618,9 @@ class LiveTradingEngine:
                 break
             steps += 1
             try:
-                # For mock and real providers, update live data if supported
-                if hasattr(self.data_provider, "update_live_data"):
+                # For mock and real providers, update live data if supported.
+                # Skip when WS kline cache is active (no REST needed).
+                if not self._ws_kline_active and hasattr(self.data_provider, "update_live_data"):
                     try:
                         self.data_provider.update_live_data(symbol, timeframe)
                     except Exception as e:
@@ -1819,9 +1990,34 @@ class LiveTradingEngine:
             return False, "readiness_check_error"
 
     def _get_latest_data(self, symbol: str, timeframe: str) -> pd.DataFrame | None:
-        """Fetch latest market data with error handling"""
+        """Fetch latest market data — from WS cache or REST.
+
+        During RESYNCING in live mode, returns None to freeze trading.
+        Paper mode falls back to REST immediately during RESYNCING.
+        """
         try:
-            # Fetch with a generous limit to satisfy indicator and ML warmups
+            ws_provider = getattr(self, "_ws_kline_provider", None)
+
+            # During resync in live mode, return None to trigger skip-cycle.
+            # Paper mode falls back to REST immediately (no exchange-side SL).
+            if (
+                self.enable_live_trading
+                and ws_provider
+                and getattr(ws_provider, "ws_state", None) == WebSocketState.RESYNCING
+            ):
+                logger.info("WebSocket resyncing — skipping data fetch")
+                return None
+
+            # Use WS cache if available and healthy
+            if (
+                self._kline_buffer
+                and self._kline_buffer.is_fresh
+                and ws_provider
+                and getattr(ws_provider, "ws_healthy", False)
+            ):
+                return self._kline_buffer.get_dataframe()
+
+            # Fallback to REST (existing behavior)
             df = self.data_provider.get_live_data(symbol, timeframe, limit=500)
             self.last_data_update = datetime.now(UTC)
             return df
@@ -3462,9 +3658,17 @@ class LiveTradingEngine:
         return int(interval)
 
     def _is_data_fresh(self, df: pd.DataFrame) -> bool:
-        """Check if the data is fresh enough to warrant processing"""
+        """Check if the data is fresh enough to warrant processing.
+
+        When WS kline cache is active, uses buffer freshness instead of
+        candle timestamps (which stay static for higher timeframes like 1h).
+        """
         if df is None or df.empty:
             return False
+
+        # Bypass candle-timestamp check when WS cache maintains freshness
+        if getattr(self, "_ws_kline_active", False) and self._kline_buffer:
+            return self._kline_buffer.is_fresh
 
         latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now(UTC)
         if isinstance(latest_timestamp, str):
