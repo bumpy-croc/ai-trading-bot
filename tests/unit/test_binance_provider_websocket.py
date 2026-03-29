@@ -91,7 +91,7 @@ class TestStartKlineStream:
         result = provider.start_kline_stream("BTCUSDT", "1h", callback)
 
         assert result is True
-        assert provider._ws_state == WebSocketState.PRIMARY
+        assert provider._kline_ws_state == WebSocketState.PRIMARY
         assert provider._kline_socket_key == "kline_key_123"
         mock_twm.start_kline_socket.assert_called_once()
 
@@ -157,7 +157,7 @@ class TestStartKlineStream:
 
         # Simulate error event
         captured_cb({"e": "error", "m": "test error"})
-        assert provider._ws_state == WebSocketState.RESYNCING
+        assert provider._kline_ws_state == WebSocketState.RESYNCING
 
 
 class TestStartUserStream:
@@ -214,7 +214,8 @@ class TestStopStreams:
         provider._twm = mock_twm
         provider._kline_socket_key = "key1"
         provider._user_socket_key = "key2"
-        provider._ws_state = WebSocketState.PRIMARY
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._user_ws_state = WebSocketState.PRIMARY
 
         provider.stop_streams()
 
@@ -222,7 +223,8 @@ class TestStopStreams:
         assert provider._twm is None
         assert provider._kline_socket_key is None
         assert provider._user_socket_key is None
-        assert provider._ws_state == WebSocketState.DISCONNECTED
+        assert provider._kline_ws_state == WebSocketState.DISCONNECTED
+        assert provider._user_ws_state == WebSocketState.DISCONNECTED
 
     @pytest.mark.fast
     def test_noop_when_no_twm(self, provider):
@@ -235,31 +237,48 @@ class TestWsProperties:
     """Tests for ws_state and ws_healthy properties."""
 
     @pytest.mark.fast
-    def test_ws_state_returns_current_state(self, provider):
-        """ws_state property reflects internal state."""
-        provider._ws_state = WebSocketState.PRIMARY
+    def test_ws_state_returns_worst_state(self, provider):
+        """ws_state property returns the worse of the two stream states."""
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._user_ws_state = WebSocketState.PRIMARY
         assert provider.ws_state == WebSocketState.PRIMARY
+
+        # User stream error should not affect kline-only ws_state check
+        provider._user_ws_state = WebSocketState.RESYNCING
+        assert provider.ws_state == WebSocketState.RESYNCING
+
+        provider._kline_ws_state = WebSocketState.REST_DEGRADED
+        provider._user_ws_state = WebSocketState.PRIMARY
+        assert provider.ws_state == WebSocketState.REST_DEGRADED
 
     @pytest.mark.fast
     def test_ws_healthy_true_when_primary_and_fresh(self, provider):
-        """ws_healthy returns True when PRIMARY and recent kline event."""
-        provider._ws_state = WebSocketState.PRIMARY
+        """ws_healthy returns True when kline PRIMARY and recent kline event."""
+        provider._kline_ws_state = WebSocketState.PRIMARY
         provider._last_kline_event_time = datetime.now(UTC)
         assert provider.ws_healthy is True
 
     @pytest.mark.fast
     def test_ws_healthy_false_when_stale(self, provider):
         """ws_healthy returns False when kline event is stale."""
-        provider._ws_state = WebSocketState.PRIMARY
+        provider._kline_ws_state = WebSocketState.PRIMARY
         provider._last_kline_event_time = datetime.now(UTC) - timedelta(seconds=130)
         assert provider.ws_healthy is False
 
     @pytest.mark.fast
-    def test_ws_healthy_false_when_not_primary(self, provider):
-        """ws_healthy returns False when not in PRIMARY state."""
-        provider._ws_state = WebSocketState.REST_DEGRADED
+    def test_ws_healthy_false_when_kline_not_primary(self, provider):
+        """ws_healthy returns False when kline not in PRIMARY state."""
+        provider._kline_ws_state = WebSocketState.REST_DEGRADED
         provider._last_kline_event_time = datetime.now(UTC)
         assert provider.ws_healthy is False
+
+    @pytest.mark.fast
+    def test_ws_healthy_true_even_when_user_stream_resyncing(self, provider):
+        """ws_healthy returns True when kline is PRIMARY even if user stream is RESYNCING."""
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._user_ws_state = WebSocketState.RESYNCING
+        provider._last_kline_event_time = datetime.now(UTC)
+        assert provider.ws_healthy is True
 
 
 class TestReconnect:
@@ -267,16 +286,19 @@ class TestReconnect:
 
     @pytest.mark.fast
     def test_reconnect_kline_stops_and_restarts(self, provider):
-        """reconnect_kline() stops streams and restarts kline stream."""
+        """reconnect_kline() stops only kline socket and restarts kline stream."""
         provider._active_symbol = "BTCUSDT"
         provider._active_timeframe = "1h"
         provider._on_kline_cb = MagicMock()
+        provider._kline_socket_key = "old_kline_key"
+        mock_twm = MagicMock()
+        provider._twm = mock_twm
 
-        with patch.object(provider, "stop_streams") as mock_stop, \
-             patch.object(provider, "start_kline_stream", return_value=True) as mock_start:
+        with patch.object(provider, "start_kline_stream", return_value=True) as mock_start:
             result = provider.reconnect_kline()
             assert result is True
-            mock_stop.assert_called_once()
+            mock_twm.stop_socket.assert_called_once_with("old_kline_key")
+            assert provider._kline_socket_key is None
             mock_start.assert_called_once_with("BTCUSDT", "1h", provider._on_kline_cb)
 
     @pytest.mark.fast
@@ -285,10 +307,13 @@ class TestReconnect:
         provider._active_symbol = "BTCUSDT"
         provider._active_timeframe = "1h"
         provider._on_kline_cb = MagicMock()
+        provider._kline_socket_key = "old_kline_key"
+        mock_twm = MagicMock()
+        mock_twm.stop_socket.side_effect = Exception("fail")
+        provider._twm = mock_twm
 
-        with patch.object(provider, "stop_streams", side_effect=Exception("fail")):
-            result = provider.reconnect_kline()
-            assert result is False
+        result = provider.reconnect_kline()
+        assert result is False
 
     @pytest.mark.fast
     def test_reconnect_user_restarts_user_stream(self, provider):
@@ -312,12 +337,23 @@ class TestReconnect:
         assert result is False
 
 
-class TestOnWsDisconnect:
-    """Tests for disconnect handler."""
+class TestOnStreamDisconnect:
+    """Tests for per-stream disconnect handlers."""
 
     @pytest.mark.fast
-    def test_sets_resyncing_state(self, provider):
-        """_on_ws_disconnect() transitions to RESYNCING."""
-        provider._ws_state = WebSocketState.PRIMARY
-        provider._on_ws_disconnect()
-        assert provider._ws_state == WebSocketState.RESYNCING
+    def test_kline_disconnect_sets_kline_resyncing(self, provider):
+        """_on_kline_disconnect() transitions kline state to RESYNCING."""
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._user_ws_state = WebSocketState.PRIMARY
+        provider._on_kline_disconnect()
+        assert provider._kline_ws_state == WebSocketState.RESYNCING
+        assert provider._user_ws_state == WebSocketState.PRIMARY
+
+    @pytest.mark.fast
+    def test_user_disconnect_sets_user_resyncing(self, provider):
+        """_on_user_disconnect() transitions user state to RESYNCING."""
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._user_ws_state = WebSocketState.PRIMARY
+        provider._on_user_disconnect()
+        assert provider._user_ws_state == WebSocketState.RESYNCING
+        assert provider._kline_ws_state == WebSocketState.PRIMARY

@@ -22,7 +22,7 @@ from typing import Any, TypeVar
 import pandas as pd
 
 from src.config import get_config
-from src.config.constants import DEFAULT_DATA_FETCH_TIMEOUT
+from src.config.constants import DEFAULT_DATA_FETCH_TIMEOUT, DEFAULT_WS_KLINE_STALENESS_THRESHOLD
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.trading.symbols.factory import SymbolFactory
@@ -273,7 +273,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         # WebSocket stream state (initialized regardless of credentials)
         self._twm: ThreadedWebsocketManager | None = None
-        self._ws_state = WebSocketState.DISCONNECTED
+        self._kline_ws_state = WebSocketState.DISCONNECTED
+        self._user_ws_state = WebSocketState.DISCONNECTED
         self._kline_socket_key: str | None = None
         self._user_socket_key: str | None = None
         self._on_kline_cb: Callable | None = None
@@ -1739,7 +1740,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 """Route kline events, handling errors before user callback."""
                 if msg.get("e") == "error":
                     logger.error("Kline WS error: %s", msg.get("m", "unknown"))
-                    self._on_ws_disconnect()
+                    self._on_kline_disconnect()
                     return
                 self._last_kline_event_time = datetime.now(UTC)
                 on_kline(msg)
@@ -1747,7 +1748,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._kline_socket_key = self._twm.start_kline_socket(
                 callback=_kline_callback, symbol=symbol, interval=timeframe
             )
-            self._ws_state = WebSocketState.PRIMARY
+            self._kline_ws_state = WebSocketState.PRIMARY
             self._last_kline_event_time = datetime.now(UTC)
             return True
         except Exception as e:
@@ -1771,7 +1772,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 """Route user data events, handling errors before user callback."""
                 if msg.get("e") == "error":
                     logger.error("User data WS error: %s", msg.get("m", "unknown"))
-                    self._on_ws_disconnect()
+                    self._on_user_disconnect()
                     return
                 self._last_user_event_time = datetime.now(UTC)
                 on_user_event(msg)
@@ -1785,7 +1786,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     callback=_user_callback
                 )
             self._last_user_event_time = datetime.now(UTC)
-            self._ws_state = WebSocketState.PRIMARY
+            self._user_ws_state = WebSocketState.PRIMARY
             return True
         except Exception as e:
             logger.error("Failed to start user data stream: %s", e)
@@ -1798,25 +1799,43 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._twm = None
             self._kline_socket_key = None
             self._user_socket_key = None
-            self._ws_state = WebSocketState.DISCONNECTED
+            self._kline_ws_state = WebSocketState.DISCONNECTED
+            self._user_ws_state = WebSocketState.DISCONNECTED
 
     @property
     def ws_state(self) -> WebSocketState:
-        """Public read access to WebSocket connection state."""
-        return self._ws_state
+        """Public read access to WebSocket connection state (worst of both streams).
+
+        Severity order: SUSPENDED > REST_DEGRADED > RESYNCING > PRIMARY > DISCONNECTED.
+        """
+        severity = {
+            WebSocketState.DISCONNECTED: 0,
+            WebSocketState.PRIMARY: 1,
+            WebSocketState.RESYNCING: 2,
+            WebSocketState.REST_DEGRADED: 3,
+            WebSocketState.SUSPENDED: 4,
+        }
+        if severity[self._kline_ws_state] >= severity[self._user_ws_state]:
+            return self._kline_ws_state
+        return self._user_ws_state
 
     @property
     def ws_healthy(self) -> bool:
         """Kline stream must be alive. User-data idleness is normal."""
-        if self._ws_state != WebSocketState.PRIMARY:
+        if self._kline_ws_state != WebSocketState.PRIMARY:
             return False
         kline_age = (datetime.now(UTC) - self._last_kline_event_time).total_seconds()
-        return kline_age < 120  # 2 min staleness threshold
+        return kline_age < DEFAULT_WS_KLINE_STALENESS_THRESHOLD
 
-    def _on_ws_disconnect(self) -> None:
-        """Handle WebSocket disconnection. Sets state; engine handles resync."""
-        self._ws_state = WebSocketState.RESYNCING
-        logger.warning("WebSocket disconnected — entering RESYNCING state")
+    def _on_kline_disconnect(self) -> None:
+        """Handle kline WebSocket disconnection. Sets kline state; engine handles resync."""
+        self._kline_ws_state = WebSocketState.RESYNCING
+        logger.warning("Kline WebSocket disconnected — entering RESYNCING state")
+
+    def _on_user_disconnect(self) -> None:
+        """Handle user data WebSocket disconnection. Sets user state; engine handles resync."""
+        self._user_ws_state = WebSocketState.RESYNCING
+        logger.warning("User data WebSocket disconnected — entering RESYNCING state")
 
     def reconnect_kline(self) -> bool:
         """Reconnect kline stream only. Called by engine on kline staleness.
@@ -1825,7 +1844,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             True if reconnect succeeded, False otherwise.
         """
         try:
-            self.stop_streams()
+            if self._kline_socket_key and self._twm:
+                self._twm.stop_socket(self._kline_socket_key)
+                self._kline_socket_key = None
             return self.start_kline_stream(
                 self._active_symbol, self._active_timeframe, self._on_kline_cb
             )

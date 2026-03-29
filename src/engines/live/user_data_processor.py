@@ -86,6 +86,9 @@ class UserDataProcessor(threading.Thread):
         self._stop_event.set()
         # Put sentinel to unblock the queue.get() call in run()
         self._queue.put(None)
+        # Wait for run() thread to finish its current event before draining
+        if self.is_alive():
+            self.join(timeout=5)
 
         # Drain remaining events to prevent missed fills during WS->REST handoff
         drained = 0

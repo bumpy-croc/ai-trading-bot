@@ -96,7 +96,7 @@ class TestGetLatestDataWithWebSocket:
         mock_engine.enable_live_trading = True
 
         mock_ws_provider = MagicMock()
-        mock_ws_provider.ws_state = WebSocketState.RESYNCING
+        mock_ws_provider._kline_ws_state = WebSocketState.RESYNCING
 
         mock_engine._ws_kline_provider = mock_ws_provider
         mock_engine._kline_buffer = MagicMock()

@@ -99,7 +99,7 @@ class TestCheckUserStreamHealth:
         """Should reconnect when user stream is stale and orders are tracked."""
         mock_engine.enable_live_trading = True
         mock_exchange = MagicMock()
-        mock_exchange.ws_state = WebSocketState.PRIMARY
+        mock_exchange._user_ws_state = WebSocketState.PRIMARY
         mock_exchange._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
         mock_engine.exchange_interface = mock_exchange
 
@@ -116,7 +116,7 @@ class TestCheckUserStreamHealth:
         """Should not trigger disconnect when no orders are tracked (idleness is normal)."""
         mock_engine.enable_live_trading = True
         mock_exchange = MagicMock()
-        mock_exchange.ws_state = WebSocketState.PRIMARY
+        mock_exchange._user_ws_state = WebSocketState.PRIMARY
         mock_exchange._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
         mock_engine.exchange_interface = mock_exchange
 
@@ -164,7 +164,7 @@ class TestHandleKlineDisconnect:
 
         mock_engine._handle_kline_disconnect()
 
-        assert mock_provider._ws_state == WebSocketState.REST_DEGRADED
+        assert mock_provider._kline_ws_state == WebSocketState.REST_DEGRADED
         assert mock_engine._ws_kline_active is False
 
 
@@ -210,5 +210,5 @@ class TestHandleUserStreamDisconnect:
 
         mock_engine._handle_user_stream_disconnect()
 
-        assert mock_exchange._ws_state == WebSocketState.REST_DEGRADED
+        assert mock_exchange._user_ws_state == WebSocketState.REST_DEGRADED
         mock_tracker.enable_polling.assert_called_once()

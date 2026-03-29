@@ -10,10 +10,9 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+from src.config.constants import DEFAULT_WS_KLINE_STALENESS_THRESHOLD
 
-# Freshness threshold — buffer is considered stale after this many seconds
-_FRESHNESS_TIMEOUT_SECONDS = 120  # 2 minutes without updates
+logger = logging.getLogger(__name__)
 
 
 class KlineBuffer:
@@ -62,38 +61,26 @@ class KlineBuffer:
         if not kline or "t" not in kline:
             return
 
-        self._lock.acquire()
-        try:
+        with self._lock:
             self._last_update = datetime.now(UTC)
 
             if self._df.empty:
-                # Nothing to compare against — parse and set
-                new_row = self._parse_kline(kline)
-                self._df = new_row
+                self._df = self._parse_kline(kline)
                 return
 
             event_ts = pd.Timestamp(kline["t"], unit="ms")
             tail_ts = self._df.index[-1]
 
             if event_ts < tail_ts:
-                # Stale event — older than current candle
                 return
 
-            is_closed = kline.get("x", False)
-
             if event_ts == tail_ts:
-                if is_closed:
-                    # Candle closed — replace tail with final values
-                    self._update_current_candle(kline)
-                else:
-                    # Open candle update — update tail in-place
-                    self._update_current_candle(kline)
+                # Update current candle (open or closed — same OHLCV write)
+                self._update_current_candle(kline)
             else:
                 # event_ts > tail_ts — new candle, roll window
                 new_row = self._parse_kline(kline)
                 self._df = pd.concat([self._df.iloc[1:], new_row])
-        finally:
-            self._lock.release()
 
     def get_dataframe(self) -> pd.DataFrame:
         """Return a thread-safe copy of the current OHLCV DataFrame.
@@ -101,11 +88,8 @@ class KlineBuffer:
         Returns:
             DataFrame with columns [open, high, low, close, volume] indexed by timestamp.
         """
-        self._lock.acquire()
-        try:
+        with self._lock:
             return self._df.copy()
-        finally:
-            self._lock.release()
 
     @property
     def is_fresh(self) -> bool:
@@ -115,7 +99,7 @@ class KlineBuffer:
             True if the last update was within the freshness timeout.
         """
         elapsed = (datetime.now(UTC) - self._last_update).total_seconds()
-        return elapsed < _FRESHNESS_TIMEOUT_SECONDS
+        return elapsed < DEFAULT_WS_KLINE_STALENESS_THRESHOLD
 
     def resync_from_rest(self, provider, symbol: str, timeframe: str) -> None:
         """Replace the entire buffer with fresh REST data after reconnection.
@@ -127,12 +111,9 @@ class KlineBuffer:
         """
         new_df = provider.get_live_data(symbol, timeframe, limit=500)
 
-        self._lock.acquire()
-        try:
+        with self._lock:
             self._df = new_df
             self._last_update = datetime.now(UTC)
-        finally:
-            self._lock.release()
 
         logger.info(
             "KlineBuffer resynced for %s %s with %d candles",

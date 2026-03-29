@@ -1434,10 +1434,9 @@ class LiveTradingEngine:
 
     def _check_kline_health(self) -> None:
         """Check kline stream health and reconnect if stale."""
-        kline_provider = getattr(self, "_ws_kline_provider", None)
-        if not kline_provider or not self._ws_kline_active:
+        if not self._ws_kline_provider or not self._ws_kline_active:
             return
-        if not getattr(kline_provider, "ws_healthy", True):
+        if not getattr(self._ws_kline_provider, "ws_healthy", True):
             logger.warning("Kline stream unhealthy — attempting reconnect")
             self._handle_kline_disconnect()
 
@@ -1446,26 +1445,27 @@ class LiveTradingEngine:
         if not self.enable_live_trading or not self.exchange_interface:
             return
         exchange = self.exchange_interface
-        if getattr(exchange, "ws_state", None) != WebSocketState.PRIMARY:
+        if getattr(exchange, "_user_ws_state", None) != WebSocketState.PRIMARY:
             return
-        # Only consider unhealthy when orders ARE being tracked
-        if self.order_tracker and self.order_tracker.get_tracked_count() > 0:
-            from src.config.constants import DEFAULT_WS_USER_STALENESS_THRESHOLD
+        if not self.order_tracker or self.order_tracker.get_tracked_count() == 0:
+            return
 
-            last_event = getattr(exchange, "_last_user_event_time", None)
-            if last_event:
-                age = (datetime.now(UTC) - last_event).total_seconds()
-                if age > DEFAULT_WS_USER_STALENESS_THRESHOLD:
-                    logger.warning(
-                        "User data stream stale (%ds) with tracked orders — reconnecting",
-                        int(age),
-                    )
-                    self._handle_user_stream_disconnect()
+        from src.config.constants import DEFAULT_WS_USER_STALENESS_THRESHOLD
+
+        last_event = getattr(exchange, "_last_user_event_time", None)
+        if not last_event:
+            return
+        age = (datetime.now(UTC) - last_event).total_seconds()
+        if age > DEFAULT_WS_USER_STALENESS_THRESHOLD:
+            logger.warning(
+                "User data stream stale (%ds) with tracked orders — reconnecting",
+                int(age),
+            )
+            self._handle_user_stream_disconnect()
 
     def _handle_kline_disconnect(self) -> None:
         """Handle kline stream failure. Resync from REST and attempt reconnect."""
-        kline_provider = getattr(self, "_ws_kline_provider", None)
-        if not kline_provider:
+        if not self._ws_kline_provider:
             return
         # Resync kline history from REST
         if self._kline_buffer:
@@ -1476,11 +1476,14 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.error("Kline REST resync failed: %s", e)
         # Attempt reconnect
-        if hasattr(kline_provider, "reconnect_kline") and kline_provider.reconnect_kline():
+        if (
+            hasattr(self._ws_kline_provider, "reconnect_kline")
+            and self._ws_kline_provider.reconnect_kline()
+        ):
             self._ws_kline_active = True
             logger.info("Kline WebSocket reconnected")
         else:
-            kline_provider._ws_state = WebSocketState.REST_DEGRADED
+            self._ws_kline_provider._kline_ws_state = WebSocketState.REST_DEGRADED
             self._ws_kline_active = False
             logger.warning("Kline reconnect failed — REST polling resumed")
 
@@ -1502,7 +1505,7 @@ class LiveTradingEngine:
                 self.order_tracker.disable_polling()
             logger.info("User data WebSocket reconnected")
         else:
-            self.exchange_interface._ws_state = WebSocketState.REST_DEGRADED
+            self.exchange_interface._user_ws_state = WebSocketState.REST_DEGRADED
             if self.order_tracker:
                 self.order_tracker.enable_polling()
             logger.warning("User stream reconnect failed — order polling resumed")
@@ -1517,13 +1520,12 @@ class LiveTradingEngine:
         self.stop_event.set()
 
         # Stop inbound WS streams FIRST (no new events arrive)
-        kline_provider = getattr(self, "_ws_kline_provider", None)
-        if kline_provider and hasattr(kline_provider, "stop_streams"):
-            kline_provider.stop_streams()
+        if self._ws_kline_provider and hasattr(self._ws_kline_provider, "stop_streams"):
+            self._ws_kline_provider.stop_streams()
         if self.exchange_interface and hasattr(self.exchange_interface, "stop_streams"):
             self.exchange_interface.stop_streams()
         # Stop/drain UserDataProcessor (process remaining queued events)
-        if getattr(self, "_user_data_processor", None):
+        if self._user_data_processor:
             self._user_data_processor.stop()
 
         # Stop periodic reconciler
@@ -1996,14 +1998,13 @@ class LiveTradingEngine:
         Paper mode falls back to REST immediately during RESYNCING.
         """
         try:
-            ws_provider = getattr(self, "_ws_kline_provider", None)
-
             # During resync in live mode, return None to trigger skip-cycle.
             # Paper mode falls back to REST immediately (no exchange-side SL).
             if (
                 self.enable_live_trading
-                and ws_provider
-                and getattr(ws_provider, "ws_state", None) == WebSocketState.RESYNCING
+                and self._ws_kline_provider
+                and getattr(self._ws_kline_provider, "_kline_ws_state", None)
+                == WebSocketState.RESYNCING
             ):
                 logger.info("WebSocket resyncing — skipping data fetch")
                 return None
@@ -2012,8 +2013,8 @@ class LiveTradingEngine:
             if (
                 self._kline_buffer
                 and self._kline_buffer.is_fresh
-                and ws_provider
-                and getattr(ws_provider, "ws_healthy", False)
+                and self._ws_kline_provider
+                and getattr(self._ws_kline_provider, "ws_healthy", False)
             ):
                 return self._kline_buffer.get_dataframe()
 
@@ -3667,7 +3668,7 @@ class LiveTradingEngine:
             return False
 
         # Bypass candle-timestamp check when WS cache maintains freshness
-        if getattr(self, "_ws_kline_active", False) and self._kline_buffer:
+        if self._ws_kline_active and self._kline_buffer:
             return self._kline_buffer.is_fresh
 
         latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now(UTC)
