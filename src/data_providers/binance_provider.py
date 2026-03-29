@@ -812,6 +812,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get balances: {e}")
             return []
 
+    def get_margin_borrowed(self, asset: str) -> float:
+        """Get borrowed amount for a specific asset in cross-margin account.
+
+        Returns the raw borrowed quantity (not netAsset). Used by reconciliation
+        to verify short positions still have outstanding debt.
+        Returns 0.0 if not in margin mode, asset not found, or on error.
+        """
+        if not self._use_margin or not BINANCE_AVAILABLE or not self._client:
+            return 0.0
+        try:
+            account = self._call_get_account()
+            for bal in account.get("balances", []):
+                if bal["asset"] == asset:
+                    return float(bal.get("borrowed", "0"))
+            return 0.0
+        except Exception as e:
+            logger.warning("Failed to get borrowed amount for %s: %s", asset, e)
+            return 0.0
+
     def get_balance(self, asset: str) -> AccountBalance | None:
         """Get balance for a specific asset"""
         if not BINANCE_AVAILABLE or not self._client:

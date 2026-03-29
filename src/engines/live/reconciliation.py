@@ -1750,23 +1750,20 @@ class PositionReconciler:
             balance = self.exchange.get_balance(base_asset)
 
             if is_short:
-                # Short positions create debt — check if borrowed amount exists.
-                # Use the raw balances to get the 'borrowed' field.
-                balances = self.exchange.get_balances()
+                # Short positions create debt — check raw borrowed amount.
+                # get_margin_borrowed returns the actual borrowed quantity,
+                # not netAsset which can be >= 0 even with outstanding debt.
                 borrowed = 0.0
-                for b in balances:
-                    if b.asset == base_asset:
-                        # AccountBalance doesn't have 'borrowed' field,
-                        # but if balance.total (netAsset) is negative, there's debt
-                        borrowed = abs(min(b.total, 0))
-                        break
+                if hasattr(self.exchange, "get_margin_borrowed"):
+                    borrowed = self.exchange.get_margin_borrowed(base_asset)
 
-                if borrowed == 0 and (balance is None or balance.total >= 0):
+                if borrowed <= 0:
                     logger.warning(
                         "Margin short for %s appears externally closed "
-                        "(no borrowed %s). Removing tracked position.",
+                        "(borrowed %s = %.8f). Removing tracked position.",
                         symbol,
                         base_asset,
+                        borrowed,
                     )
                     self.position_tracker.remove_position(position.order_id)
                     db_pos_id = getattr(position, "db_position_id", None)
@@ -2278,8 +2275,12 @@ class PeriodicReconciler:
                     position_gone = False
 
                     if is_short:
-                        # Short gone if no negative netAsset (no borrowed debt)
-                        if balance is None or balance.total >= 0:
+                        # Short gone if no borrowed debt. Use raw borrowed amount,
+                        # not netAsset (which can be >= 0 even with outstanding debt).
+                        borrowed = 0.0
+                        if hasattr(self.exchange, "get_margin_borrowed"):
+                            borrowed = self.exchange.get_margin_borrowed(base_asset)
+                        if borrowed <= 0:
                             position_gone = True
                     else:
                         # Long gone if no positive netAsset
