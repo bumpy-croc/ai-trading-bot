@@ -79,6 +79,22 @@ Follow standard SOLID, KISS, YAGNI, and composition-over-inheritance principles.
 
 ---
 
+## Exchange Mode & Account Type Safety
+
+When adding support for a new exchange mode (margin, futures, etc.) or modifying account-type-sensitive logic:
+
+- **Wire mode flags end-to-end.** If a class accepts a mode parameter (`use_margin`, `account_type`), verify every caller passes it. Dead-code flags that default to `False` are worse than no flag — they create false confidence. Search for every constructor call.
+- **Audit all consumers of exchange data.** Balance, position, and order semantics change between modes. `free + locked` is equity in spot but not in cross-margin (ignores liabilities). `netAsset` per asset is not account-level equity (excludes cross-asset liabilities). Use the right field for the context.
+- **Borrowed vs held.** For short position detection in margin, use raw `borrowed` amount, not `netAsset`. A short with `netAsset >= 0` still has outstanding debt if `borrowed > 0`.
+- **Error codes differ across API variants.** Spot and margin APIs return different error codes for the same failure (e.g. insufficient balance). Add margin-specific codes (-3027, -3028, -3041, -3067) to definitive reject sets. An unrecognized margin reject falling through to `return None` creates phantom positions.
+- **Config defaults must be safe for all deployment contexts.** If a mode enables borrowing or real-money operations, default to the safer option (`spot`, not `margin`). Dashboards, CLI tools, health checks, and Binance.US all instantiate providers without trading context.
+- **Enforce assumptions about wallet state at startup.** If the implementation assumes USDT-only collateral, check for non-USDT holdings and fail fast. Undocumented assumptions become fund-loss paths when the wallet state changes.
+- **Reconciliation must cover both startup and runtime.** A margin-aware check added only to `PositionReconciler` (startup) but not `PeriodicReconciler` (runtime) leaves a gap for positions closed during operation.
+- **Fallback/stub paths must respect safety constraints.** If live margin mode must never use an offline stub, guard ALL paths to the stub — both "SDK unavailable" and "client init failed" — not just one.
+- **Use quantity thresholds, not binary checks.** A position detection check that only asks "is borrowed > 0?" misses large partial external closes. Apply the same 50% tolerance threshold used in spot mode.
+
+---
+
 ## Arithmetic & Financial Calculations
 
 - Check `math.isfinite()` on any numeric value feeding into a trading decision.
@@ -317,3 +333,6 @@ Run through this before committing:
 - [ ] All external calls have timeouts. All shared state access is locked.
 - [ ] No unused imports, dead code, magic numbers without comments, or f-strings in logging.
 - [ ] If you touched one engine, check if the other needs the same change.
+- [ ] If you added a constructor parameter, verify every caller passes it (search for all instantiation sites).
+- [ ] If you added exchange-mode logic, verify both startup and periodic reconciliation paths are covered.
+- [ ] If you changed balance/position semantics, audit all consumers (sync, reconciliation, sizing, risk).

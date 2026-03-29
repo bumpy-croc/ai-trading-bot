@@ -194,6 +194,7 @@ See `docs/database.md` for Railway deployment and DB operations.
 |------------------------|----------------------------|----------------|
 | Live trading / order execution | State Management, Position Fields, Error Handling, Thread Safety | `docs/live_trading.md` |
 | Reconciliation / crash recovery | State Management, Position Fields, Database, Planning | `docs/live_trading.md`, `docs/database.md` |
+| Exchange modes / margin / futures | Exchange Mode & Account Type Safety, Error Handling, State Management | `docs/live_trading.md` |
 | Strategies / backtesting | Backtest-Live Parity, Arithmetic, Architecture | `docs/backtesting.md` |
 | ML models / prediction | Input Validation, Resource Management, External API Calls | `docs/prediction.md` |
 | Database operations | Database & Transactions, Error Handling | `docs/database.md` |
