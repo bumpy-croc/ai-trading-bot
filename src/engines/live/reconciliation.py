@@ -1790,26 +1790,34 @@ class PositionReconciler:
                     )
                     self._remove_phantom_position(position, result)
             else:
-                # Long positions hold the asset — check netAsset
-                held = balance.total if balance else 0.0
+                # Long positions hold the asset — check netAsset.
+                # None = API error — skip to avoid deleting real positions.
+                if balance is None:
+                    logger.warning(
+                        "Could not verify holdings for %s — skipping "
+                        "margin long check (transient API error)",
+                        symbol,
+                    )
+                else:
+                    held = balance.total
 
-                if held <= 0:
-                    logger.warning(
-                        "Margin long for %s externally closed (held %s=0). "
-                        "Removing tracked position.",
-                        symbol,
-                        base_asset,
-                    )
-                    self._remove_phantom_position(position, result)
-                elif position_qty > 0 and held < position_qty * 0.5:
-                    logger.warning(
-                        "Margin long for %s partially closed externally "
-                        "(held=%.8f, tracked=%.8f). Removing position.",
-                        symbol,
-                        held,
-                        position_qty,
-                    )
-                    self._remove_phantom_position(position, result)
+                    if held <= 0:
+                        logger.warning(
+                            "Margin long for %s externally closed (held %s=0). "
+                            "Removing tracked position.",
+                            symbol,
+                            base_asset,
+                        )
+                        self._remove_phantom_position(position, result)
+                    elif position_qty > 0 and held < position_qty * 0.5:
+                        logger.warning(
+                            "Margin long for %s partially closed externally "
+                            "(held=%.8f, tracked=%.8f). Removing position.",
+                            symbol,
+                            held,
+                            position_qty,
+                        )
+                        self._remove_phantom_position(position, result)
 
         except Exception as e:
             logger.warning(
@@ -2328,11 +2336,13 @@ class PeriodicReconciler:
                         elif pos_qty > 0 and borrowed < pos_qty * 0.5:
                             position_gone = True
                     else:
-                        # Long detection: check held quantity
-                        held = balance.total if balance else 0.0
-                        if held <= 0:
+                        # Long detection: check held quantity.
+                        # None = API error — skip to avoid deleting real positions.
+                        if balance is None:
+                            pass  # Unknown — retain position
+                        elif balance.total <= 0:
                             position_gone = True
-                        elif pos_qty > 0 and held < pos_qty * 0.5:
+                        elif pos_qty > 0 and balance.total < pos_qty * 0.5:
                             position_gone = True
 
                     if position_gone:
