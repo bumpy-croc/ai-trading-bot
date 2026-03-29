@@ -2263,7 +2263,51 @@ class PeriodicReconciler:
         # position per asset), this is correct. If multi-position-per-asset
         # support is added, the check must aggregate tracked quantities before
         # comparing against the exchange balance.
-        if not self._use_margin:
+        if self._use_margin:
+            # Margin mode: check borrowed balance for shorts, netAsset for longs
+            for order_key, position in list(positions_snapshot.items()):
+                try:
+                    symbol = position.symbol
+                    base_asset = PositionReconciler._extract_base_asset(symbol)
+                    side = getattr(position, "side", None)
+                    is_short = (
+                        side == PositionSide.SHORT or str(side).lower() == "short"
+                    )
+
+                    balance = self.exchange.get_balance(base_asset)
+                    position_gone = False
+
+                    if is_short:
+                        # Short gone if no negative netAsset (no borrowed debt)
+                        if balance is None or balance.total >= 0:
+                            position_gone = True
+                    else:
+                        # Long gone if no positive netAsset
+                        if balance is None or balance.total <= 0:
+                            position_gone = True
+
+                    if position_gone:
+                        logger.warning(
+                            "Margin position %s appears externally closed — "
+                            "removing from tracker",
+                            symbol,
+                        )
+                        self.position_tracker.remove_position(order_key)
+                        db_pos_id = getattr(position, "db_position_id", None)
+                        if db_pos_id is not None:
+                            try:
+                                self.db_manager.close_position(db_pos_id)
+                            except Exception as e:
+                                logger.warning(
+                                    "Failed to close DB position %s: %s", db_pos_id, e
+                                )
+                except Exception as e:
+                    logger.warning(
+                        "Margin position check failed for %s: %s",
+                        getattr(position, "symbol", "?"),
+                        e,
+                    )
+        else:
             for order_key, position in list(positions_snapshot.items()):
                 # Skip short positions — shorts don't hold the base asset on spot
                 side = getattr(position, "side", None)
