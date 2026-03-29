@@ -427,12 +427,14 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         stop_price: float | None = None,
         time_in_force: str = "GTC",
         client_order_id: str | None = None,
+        side_effect_type: str | None = None,
     ) -> Order | None:
         """
         Place an order on Coinbase Advanced Trade API.
 
         Note: Coinbase Advanced Trade API supports client_order_id for idempotency.
         Returns Order object for interface compatibility; fill data may be partial.
+        side_effect_type is accepted for interface compatibility but ignored (spot only).
         """
         try:
             cb_type = self._convert_to_cb_type(order_type)
@@ -515,6 +517,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         stop_price: float,
         limit_price: float | None = None,
         client_order_id: str | None = None,
+        side_effect_type: str | None = None,
     ) -> str | None:
         """
         Place a server-side stop-loss order on Coinbase.
@@ -522,6 +525,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         Note: Coinbase Advanced Trade API supports stop orders.
         This is a placeholder implementation - full Coinbase stop order
         support would require Advanced Trade API integration.
+        side_effect_type is accepted for interface compatibility but ignored (spot only).
         """
         logger.warning(
             "Coinbase stop-loss orders not fully implemented - "

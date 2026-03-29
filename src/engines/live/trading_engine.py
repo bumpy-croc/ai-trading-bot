@@ -41,7 +41,7 @@ from src.config.constants import (
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
-from src.data_providers.exchange_interface import OrderSide
+from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
 from src.data_providers.exchange_interface import (
     OrderStatus as ExchangeOrderStatus,
 )
@@ -384,8 +384,10 @@ class LiveTradingEngine:
                     provider, config, testnet
                 )
                 if self.exchange_interface:
+                    use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
                     self.account_synchronizer = AccountSynchronizer(
-                        self.exchange_interface, self.db_manager, self.trading_session_id
+                        self.exchange_interface, self.db_manager, self.trading_session_id,
+                        use_margin=use_margin,
                     )
                     # Initialize order tracker for monitoring order fills
                     self.order_tracker = OrderTracker(
@@ -1301,12 +1303,14 @@ class LiveTradingEngine:
             try:
                 from src.engines.live.reconciliation import PeriodicReconciler
 
+                use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
                 self._periodic_reconciler = PeriodicReconciler(
                     exchange_interface=self.exchange_interface,
                     position_tracker=self.live_position_tracker,
                     db_manager=self.db_manager,
                     session_id=self.trading_session_id,
                     on_critical=self._enter_close_only_mode,
+                    use_margin=use_margin,
                 )
                 self._periodic_reconciler.start()
                 logger.info("🔄 Periodic reconciler started")
@@ -2465,10 +2469,12 @@ class LiveTradingEngine:
                                 )
                             else:
                                 # Use quantity from position - LiveEntryResult.position.quantity
-                                self.exchange_interface.place_market_order(
+                                self.exchange_interface.place_order(
                                     symbol=symbol,
                                     side=close_side,
+                                    order_type=OrderType.MARKET,
                                     quantity=result.position.quantity,
+                                    side_effect_type=SideEffectType.AUTO_REPAY,
                                 )
                             logger.warning(
                                 "Emergency close placed for %s due to balance update failure",
@@ -2529,10 +2535,12 @@ class LiveTradingEngine:
                                 result.position.quantity,
                             )
                         else:
-                            self.exchange_interface.place_market_order(
+                            self.exchange_interface.place_order(
                                 symbol=symbol,
                                 side=close_side,
+                                order_type=OrderType.MARKET,
                                 quantity=result.position.quantity,
+                                side_effect_type=SideEffectType.AUTO_REPAY,
                             )
                             logger.info(
                                 "Emergency close order placed for orphaned position %s", symbol
@@ -2679,6 +2687,7 @@ class LiveTradingEngine:
                             side=sl_side,
                             quantity=quantity,
                             stop_price=stop_loss,
+                            side_effect_type=SideEffectType.AUTO_REPAY,
                         )
                         if sl_order_id:
                             break
@@ -3760,12 +3769,14 @@ class LiveTradingEngine:
                     Severity,
                 )
 
+                use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
                 reconciler = PositionReconciler(
                     exchange_interface=self.exchange_interface,
                     position_tracker=self.live_position_tracker,
                     db_manager=self.db_manager,
                     session_id=self.trading_session_id,
                     max_position_size=self.max_position_size,
+                    use_margin=use_margin,
                 )
 
                 if not positions_snapshot:

@@ -26,6 +26,7 @@ from src.config.constants import (
     DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
     DEFAULT_STOP_LOSS_PCT,
 )
+from src.data_providers.exchange_interface import SideEffectType
 from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
@@ -127,12 +128,14 @@ class PositionReconciler:
         db_manager: DatabaseManager,
         session_id: int,
         max_position_size: float = 0.1,
+        use_margin: bool = False,
     ) -> None:
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
         self.db_manager = db_manager
         self.session_id = session_id
         self.max_position_size = max_position_size
+        self._use_margin = use_margin
 
     def reconcile_startup(self, positions: dict[str, Any]) -> list[ReconciliationResult]:
         """Run full startup reconciliation.
@@ -525,6 +528,7 @@ class PositionReconciler:
                         side=sl_side,
                         quantity=fill_qty,
                         stop_price=position.stop_loss,
+                        side_effect_type=SideEffectType.AUTO_REPAY,
                     )
                     if sl_order_id:
                         position.stop_loss_order_id = sl_order_id
@@ -582,6 +586,7 @@ class PositionReconciler:
                             side=sell_side,
                             order_type=OrderType.MARKET,
                             quantity=fill_qty,
+                            side_effect_type=SideEffectType.AUTO_REPAY,
                         )
                         if sell_result is not None:
                             logger.critical(
@@ -827,6 +832,7 @@ class PositionReconciler:
                 side=sl_side,
                 quantity=qty,
                 stop_price=stop_loss,
+                side_effect_type=SideEffectType.AUTO_REPAY,
             )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
@@ -1096,6 +1102,7 @@ class PositionReconciler:
                         side=sl_side,
                         quantity=qty,
                         stop_price=sl_price,
+                        side_effect_type=SideEffectType.AUTO_REPAY,
                     )
                     if new_sl_id:
                         position.stop_loss_order_id = new_sl_id
@@ -1353,6 +1360,7 @@ class PositionReconciler:
                             side=sl_side,
                             quantity=qty,
                             stop_price=position.stop_loss,
+                            side_effect_type=SideEffectType.AUTO_REPAY,
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
@@ -1503,6 +1511,7 @@ class PositionReconciler:
                             side=sl_side,
                             quantity=qty,
                             stop_price=position.stop_loss,
+                            side_effect_type=SideEffectType.AUTO_REPAY,
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
@@ -1610,6 +1619,11 @@ class PositionReconciler:
         tracked position quantity. Uses 50% threshold to catch full external
         closes while tolerating partial exits.
         """
+        # In margin mode, use borrowed-amount check instead of spot balance.
+        if self._use_margin:
+            self._verify_margin_position_exists(position, result)
+            return
+
         # Skip short positions — shorts don't hold the base asset on spot,
         # so checking spot balance would falsely flag them as externally closed.
         side = getattr(position, "side", None)
@@ -1718,6 +1732,130 @@ class PositionReconciler:
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
 
+    def _verify_margin_position_exists(
+        self, position: Any, result: ReconciliationResult
+    ) -> None:
+        """Verify a margin position still exists by checking borrowed balance.
+
+        For short positions, checks if the base asset has borrowed > 0.
+        For long positions, checks if the base asset has netAsset > 0.
+        Detects externally closed or liquidated positions in margin mode.
+        """
+        symbol = position.symbol
+        base_asset = self._extract_base_asset(symbol)
+        side = getattr(position, "side", None)
+        is_short = side == PositionSide.SHORT or str(side).lower() == "short"
+
+        try:
+            # get_balance returns AccountBalance with total=netAsset in margin mode
+            balance = self.exchange.get_balance(base_asset)
+
+            # Scale tracked quantity by partial exit ratio
+            qty = getattr(position, "quantity", 0) or 0.0
+            current_size = getattr(position, "current_size", None)
+            original_size = getattr(position, "original_size", None)
+            if current_size is not None and original_size is not None and original_size > 0:
+                position_qty = qty * (current_size / original_size)
+            else:
+                position_qty = qty
+
+            if is_short:
+                # Short positions create debt — check raw borrowed amount.
+                # None means API error — skip check to avoid deleting real positions.
+                borrowed = None
+                if hasattr(self.exchange, "get_margin_borrowed"):
+                    borrowed = self.exchange.get_margin_borrowed(base_asset)
+
+                if borrowed is None:
+                    logger.warning(
+                        "Could not verify borrowed amount for %s — skipping "
+                        "margin position check (transient API error)",
+                        symbol,
+                    )
+                elif borrowed <= 0:
+                    logger.warning(
+                        "Margin short for %s externally closed (borrowed %s=0). "
+                        "Removing tracked position.",
+                        symbol,
+                        base_asset,
+                    )
+                    self._remove_phantom_position(position, result)
+                # Partial close: borrowed < 50% of tracked quantity
+                elif position_qty > 0 and borrowed < position_qty * 0.5:
+                    logger.warning(
+                        "Margin short for %s partially closed externally "
+                        "(borrowed=%.8f, tracked=%.8f). Removing position.",
+                        symbol,
+                        borrowed,
+                        position_qty,
+                    )
+                    self._remove_phantom_position(position, result)
+            else:
+                # Long positions hold the asset — check netAsset.
+                # None = API error — skip to avoid deleting real positions.
+                if balance is None:
+                    logger.warning(
+                        "Could not verify holdings for %s — skipping "
+                        "margin long check (transient API error)",
+                        symbol,
+                    )
+                else:
+                    held = balance.total
+
+                    if held <= 0:
+                        logger.warning(
+                            "Margin long for %s externally closed (held %s=0). "
+                            "Removing tracked position.",
+                            symbol,
+                            base_asset,
+                        )
+                        self._remove_phantom_position(position, result)
+                    elif position_qty > 0 and held < position_qty * 0.5:
+                        logger.warning(
+                            "Margin long for %s partially closed externally "
+                            "(held=%.8f, tracked=%.8f). Removing position.",
+                            symbol,
+                            held,
+                            position_qty,
+                        )
+                        self._remove_phantom_position(position, result)
+
+        except Exception as e:
+            logger.warning(
+                "Margin position check failed for %s: %s — position retained", symbol, e
+            )
+
+    def _remove_phantom_position(
+        self, position: Any, result: ReconciliationResult
+    ) -> None:
+        """Remove a phantom position from tracker and DB, cancel its exchange SL."""
+        # Cancel the server-side stop-loss before removing from tracker.
+        # Leaving an orphaned SL on the exchange is a fund-loss path —
+        # if it triggers with AUTO_REPAY, it opens a new naked position.
+        sl_order_id = getattr(position, "stop_loss_order_id", None)
+        if sl_order_id:
+            try:
+                self.exchange.cancel_order(sl_order_id, position.symbol)
+                logger.info(
+                    "Cancelled orphaned SL %s for removed position %s",
+                    sl_order_id, position.symbol,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to cancel SL %s for removed position %s: %s",
+                    sl_order_id, position.symbol, e,
+                )
+
+        self.position_tracker.remove_position(position.order_id)
+        db_pos_id = getattr(position, "db_position_id", None)
+        if db_pos_id:
+            try:
+                self.db_manager.close_position(db_pos_id)
+            except Exception as e:
+                logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+        result.status = "corrected"
+        result.severity = Severity.HIGH
+
     def _estimate_position_notional(self) -> float:
         """Estimate total notional value of open positions using entry prices.
 
@@ -1749,7 +1887,18 @@ class PositionReconciler:
         position notional values. In spot trading, buying BTC reduces USDT by
         the purchase amount, so raw DB balance minus position notional gives
         the expected USDT on exchange.
+
+        Skipped in margin mode — cross-margin USDT balance includes short sale
+        proceeds and doesn't reflect true equity without subtracting liabilities.
         """
+        if self._use_margin:
+            logger.info("Skipping startup balance reconciliation in margin mode")
+            return ReconciliationResult(
+                entity_type="balance",
+                entity_id=None,
+                status="skipped",
+            )
+
         result = ReconciliationResult(
             entity_type="balance",
             entity_id=None,
@@ -2021,6 +2170,7 @@ class PeriodicReconciler:
         session_id: int,
         interval: float = DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
         on_critical: Any = None,
+        use_margin: bool = False,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -2031,11 +2181,15 @@ class PeriodicReconciler:
             session_id: Current trading session ID.
             interval: Seconds between reconciliation cycles.
             on_critical: Callback invoked on CRITICAL severity (e.g., enter close-only mode).
+            use_margin: Whether margin trading mode is active. When True,
+                skip spot-specific checks (asset holdings) that don't apply
+                to cross-margin accounts.
         """
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
         self.db_manager = db_manager
         self.session_id = session_id
+        self._use_margin = use_margin
         self.interval = interval
         self.on_critical = on_critical
 
@@ -2151,78 +2305,165 @@ class PeriodicReconciler:
                 logger.warning("Failed to verify position %s: %s", order_key, e)
 
         # 1b. Verify asset holdings for each position — detect external closes.
+        # Skip in margin mode — spot balance checks don't apply to cross-margin
+        # where asset balances include borrowed amounts and don't reflect positions.
+        # SAFETY: External close detection uses _verify_margin_position_exists()
+        # which checks borrowed balance for shorts and asset holdings for longs.
+        # Additional protection: margin error codes (-3027, -3028, -3041, -3067)
+        # are treated as definitive rejects, so stale SLs that fire after
+        # external close are rejected by Binance, preventing naked positions.
         # NOTE: This per-position check compares held asset balance against the
         # individual position's quantity. For a single-symbol bot (at most 1
         # position per asset), this is correct. If multi-position-per-asset
         # support is added, the check must aggregate tracked quantities before
         # comparing against the exchange balance.
-        for order_key, position in list(positions_snapshot.items()):
-            # Skip short positions — shorts don't hold the base asset on spot
-            side = getattr(position, "side", None)
-            if side == PositionSide.SHORT or str(side).lower() == "short":
-                continue
-
-            # Use quantity (actual asset amount), not size (balance fraction).
-            # Scale by current_size/original_size to account for partial exits
-            # that reduce current_size but leave quantity unchanged.
-            qty = getattr(position, "quantity", None) or 0.0
-            if qty <= 0:
-                continue
-
-            current_size = getattr(position, "current_size", None)
-            original_size = getattr(position, "original_size", None)
-            if current_size is not None and original_size is not None and original_size > 0:
-                position_qty = qty * (current_size / original_size)
-            else:
-                position_qty = qty
-
-            try:
-                base_asset = PositionReconciler._extract_base_asset(position.symbol)
-                balance = self.exchange.get_balance(base_asset)
-                if balance is None:
-                    logger.warning(
-                        "get_balance returned None for %s — skipping asset "
-                        "check (transient API error)",
-                        base_asset,
+        if self._use_margin:
+            # Margin mode: check borrowed balance for shorts, netAsset for longs
+            for order_key, position in list(positions_snapshot.items()):
+                try:
+                    symbol = position.symbol
+                    base_asset = PositionReconciler._extract_base_asset(symbol)
+                    side = getattr(position, "side", None)
+                    is_short = (
+                        side == PositionSide.SHORT or str(side).lower() == "short"
                     )
+
+                    balance = self.exchange.get_balance(base_asset)
+                    position_gone = False
+
+                    # Scale tracked quantity by partial exit ratio
+                    qty = getattr(position, "quantity", None) or 0.0
+                    cur = getattr(position, "current_size", None)
+                    orig = getattr(position, "original_size", None)
+                    if cur is not None and orig is not None and orig > 0:
+                        pos_qty = qty * (cur / orig)
+                    else:
+                        pos_qty = qty
+
+                    if is_short:
+                        # Short detection: use raw borrowed amount.
+                        # None = API error — skip to avoid deleting real positions.
+                        borrowed = None
+                        if hasattr(self.exchange, "get_margin_borrowed"):
+                            borrowed = self.exchange.get_margin_borrowed(base_asset)
+                        if borrowed is None:
+                            pass  # Unknown — retain position
+                        elif borrowed <= 0:
+                            position_gone = True
+                        elif pos_qty > 0 and borrowed < pos_qty * 0.5:
+                            position_gone = True
+                    else:
+                        # Long detection: check held quantity.
+                        # None = API error — skip to avoid deleting real positions.
+                        if balance is None:
+                            pass  # Unknown — retain position
+                        elif balance.total <= 0:
+                            position_gone = True
+                        elif pos_qty > 0 and balance.total < pos_qty * 0.5:
+                            position_gone = True
+
+                    if position_gone:
+                        logger.warning(
+                            "Margin position %s appears externally closed — "
+                            "cancelling SL and removing from tracker",
+                            symbol,
+                        )
+                        # Cancel exchange SL to prevent orphaned order
+                        sl_id = getattr(position, "stop_loss_order_id", None)
+                        if sl_id:
+                            try:
+                                self.exchange.cancel_order(sl_id, symbol)
+                                logger.info("Cancelled orphaned SL %s for %s", sl_id, symbol)
+                            except Exception as e:
+                                logger.warning("Failed to cancel SL %s: %s", sl_id, e)
+                        self.position_tracker.remove_position(order_key)
+                        db_pos_id = getattr(position, "db_position_id", None)
+                        if db_pos_id is not None:
+                            try:
+                                self.db_manager.close_position(db_pos_id)
+                            except Exception as e:
+                                logger.warning(
+                                    "Failed to close DB position %s: %s", db_pos_id, e
+                                )
+                except Exception as e:
+                    logger.warning(
+                        "Margin position check failed for %s: %s",
+                        getattr(position, "symbol", "?"),
+                        e,
+                    )
+        else:
+            for order_key, position in list(positions_snapshot.items()):
+                # Skip short positions — shorts don't hold the base asset on spot
+                side = getattr(position, "side", None)
+                if side == PositionSide.SHORT or str(side).lower() == "short":
                     continue
-                held_qty = balance.total
 
-                if held_qty < position_qty * 0.5:
-                    severity = Severity.HIGH
-                    self.db_manager.log_audit_event(
-                        session_id=self.session_id,
-                        entity_type="position",
-                        entity_id=getattr(position, "db_position_id", None),
-                        field="status",
-                        old_value="OPEN",
-                        new_value="CLOSED_EXTERNALLY",
-                        reason=(
-                            f"Position asset not found on exchange — likely closed externally "
-                            f"(held={held_qty:.8f}, tracked={position_qty:.8f}, asset={base_asset})"
-                        ),
-                        severity=severity.value,
-                    )
+                # Use quantity (actual asset amount), not size (balance fraction).
+                # Scale by current_size/original_size to account for partial exits
+                # that reduce current_size but leave quantity unchanged.
+                qty = getattr(position, "quantity", None) or 0.0
+                if qty <= 0:
+                    continue
 
-                    # Remove ghost position from tracker and close in DB.
-                    # Thread safety: LivePositionTracker._positions_lock
-                    # serializes all mutations, no per-position lock needed.
-                    self.position_tracker.remove_position(order_key)
-                    db_pos_id = getattr(position, "db_position_id", None)
-                    if db_pos_id is not None:
-                        self.db_manager.close_position(db_pos_id)
-                    logger.warning(
-                        "Removed ghost position %s — externally closed "
-                        "(held=%.8f, tracked=%.8f)",
-                        order_key,
-                        held_qty,
-                        position_qty,
-                    )
+                current_size = getattr(position, "current_size", None)
+                original_size = getattr(position, "original_size", None)
+                if (
+                    current_size is not None
+                    and original_size is not None
+                    and original_size > 0
+                ):
+                    position_qty = qty * (current_size / original_size)
+                else:
+                    position_qty = qty
 
-                    if severity > max_severity:
-                        max_severity = severity
-            except Exception as e:
-                logger.warning("Asset holdings check failed for %s: %s", order_key, e)
+                try:
+                    base_asset = PositionReconciler._extract_base_asset(position.symbol)
+                    balance = self.exchange.get_balance(base_asset)
+                    if balance is None:
+                        logger.warning(
+                            "get_balance returned None for %s — skipping asset "
+                            "check (transient API error)",
+                            base_asset,
+                        )
+                        continue
+                    held_qty = balance.total
+
+                    if held_qty < position_qty * 0.5:
+                        severity = Severity.HIGH
+                        self.db_manager.log_audit_event(
+                            session_id=self.session_id,
+                            entity_type="position",
+                            entity_id=getattr(position, "db_position_id", None),
+                            field="status",
+                            old_value="OPEN",
+                            new_value="CLOSED_EXTERNALLY",
+                            reason=(
+                                f"Position asset not found on exchange — likely closed externally "
+                                f"(held={held_qty:.8f}, tracked={position_qty:.8f}, "
+                                f"asset={base_asset})"
+                            ),
+                            severity=severity.value,
+                        )
+
+                        # Remove ghost position from tracker and close in DB.
+                        # Thread safety: LivePositionTracker._positions_lock
+                        # serializes all mutations, no per-position lock needed.
+                        self.position_tracker.remove_position(order_key)
+                        db_pos_id = getattr(position, "db_position_id", None)
+                        if db_pos_id is not None:
+                            self.db_manager.close_position(db_pos_id)
+                        logger.warning(
+                            "Removed ghost position %s — externally closed "
+                            "(held=%.8f, tracked=%.8f)",
+                            order_key,
+                            held_qty,
+                            position_qty,
+                        )
+
+                        if severity > max_severity:
+                            max_severity = severity
+                except Exception as e:
+                    logger.warning("Asset holdings check failed for %s: %s", order_key, e)
 
         # 2. Verify stop-loss orders are still active on exchange
         for order_key, position in list(positions_snapshot.items()):
@@ -2332,6 +2573,7 @@ class PeriodicReconciler:
                                 side=sl_side,
                                 quantity=qty,
                                 stop_price=stop_price,
+                                side_effect_type=SideEffectType.AUTO_REPAY,
                             )
                             if new_sl_id:
                                 position.stop_loss_order_id = new_sl_id
@@ -2439,53 +2681,57 @@ class PeriodicReconciler:
             logger.warning("Orphaned order check failed: %s", e)
 
         # 4. Verify balance (accounting for position notional values)
-        try:
-            usdt_balance = self.exchange.get_balance("USDT")
-            if usdt_balance:
-                db_balance = self.db_manager.get_current_balance(self.session_id)
-                if db_balance > 0:
-                    # Subtract position notional to get expected USDT
-                    position_notional = 0.0
-                    for position in positions_snapshot.values():
-                        # Use quantity (actual asset amount), not size (balance fraction)
-                        qty = getattr(position, "quantity", None) or 0.0
-                        price = getattr(position, "entry_price", 0)
-                        if qty > 0 and price > 0:
-                            # Scale by current_size/original_size for partial exits
-                            current = getattr(position, "current_size", None)
-                            original = getattr(position, "original_size", None)
-                            if current is not None and original is not None and original > 0:
-                                qty = qty * (current / original)
-                            position_notional += qty * price
-                    expected_usdt = db_balance - position_notional
-                    # Use abs(expected_usdt) to avoid false CRITICAL when
-                    # expected_usdt is negative (e.g. position notional >
-                    # db_balance due to price appreciation)
-                    comparison_base = max(abs(expected_usdt), db_balance * 0.01)
-                    diff_pct = abs(usdt_balance.total - expected_usdt) / comparison_base
-                    if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
-                        max_severity = Severity.CRITICAL
-                        logger.critical(
-                            "Balance discrepancy: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
-                            "[db=$%.2f, position_notional=$%.2f]",
-                            expected_usdt,
-                            usdt_balance.total,
-                            diff_pct * 100,
-                            db_balance,
-                            position_notional,
-                        )
-                        # Correct DB balance to match actual total capital.
-                        # DB balance represents total capital (USDT + position
-                        # notional), not just free USDT on exchange.
-                        corrected_balance = usdt_balance.total + position_notional
-                        self.db_manager.update_balance(
-                            corrected_balance,
-                            "reconciliation_balance_correction",
-                            "system",
-                            self.session_id,
-                        )
-        except Exception as e:
-            logger.warning("Balance check failed: %s", e)
+        # Skip in margin mode — spot balance doesn't reflect margin account state.
+        if not self._use_margin:
+            try:
+                usdt_balance = self.exchange.get_balance("USDT")
+                if usdt_balance:
+                    db_balance = self.db_manager.get_current_balance(self.session_id)
+                    if db_balance > 0:
+                        # Subtract position notional to get expected USDT
+                        position_notional = 0.0
+                        for position in positions_snapshot.values():
+                            # Use quantity (actual asset amount), not size (balance fraction)
+                            qty = getattr(position, "quantity", None) or 0.0
+                            price = getattr(position, "entry_price", 0)
+                            if qty > 0 and price > 0:
+                                # Scale by current_size/original_size for partial exits
+                                current = getattr(position, "current_size", None)
+                                original = getattr(position, "original_size", None)
+                                if current is not None and original is not None and original > 0:
+                                    qty = qty * (current / original)
+                                position_notional += qty * price
+                        expected_usdt = db_balance - position_notional
+                        # Use abs(expected_usdt) to avoid false CRITICAL when
+                        # expected_usdt is negative (e.g. position notional >
+                        # db_balance due to price appreciation)
+                        comparison_base = max(abs(expected_usdt), db_balance * 0.01)
+                        diff_pct = abs(usdt_balance.total - expected_usdt) / comparison_base
+                        if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
+                            max_severity = Severity.CRITICAL
+                            logger.critical(
+                                "Balance discrepancy: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
+                                "[db=$%.2f, position_notional=$%.2f]",
+                                expected_usdt,
+                                usdt_balance.total,
+                                diff_pct * 100,
+                                db_balance,
+                                position_notional,
+                            )
+                            # Correct DB balance to match actual total capital.
+                            # DB balance represents total capital (USDT + position
+                            # notional), not just free USDT on exchange.
+                            corrected_balance = usdt_balance.total + position_notional
+                            self.db_manager.update_balance(
+                                corrected_balance,
+                                "reconciliation_balance_correction",
+                                "system",
+                                self.session_id,
+                            )
+            except Exception as e:
+                logger.warning("Balance check failed: %s", e)
+        else:
+            logger.debug("Skipping balance verification in margin mode")
 
         # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:
@@ -2547,6 +2793,7 @@ class PeriodicReconciler:
                 side=sl_side,
                 quantity=qty,
                 stop_price=stop_price,
+                side_effect_type=SideEffectType.AUTO_REPAY,
             )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id

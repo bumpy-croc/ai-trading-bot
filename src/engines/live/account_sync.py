@@ -50,6 +50,7 @@ class AccountSynchronizer:
         exchange: ExchangeInterface,
         db_manager: DatabaseManager,
         session_id: int | None = None,
+        use_margin: bool = False,
     ):
         """
         Initialize the account synchronizer.
@@ -58,10 +59,14 @@ class AccountSynchronizer:
             exchange: Exchange interface for API calls
             db_manager: Database manager for local data
             session_id: Current trading session ID
+            use_margin: Whether margin trading mode is active. When True,
+                balance/position sync is skipped since margin account balances
+                include borrowed amounts and don't reflect true equity.
         """
         self.exchange = exchange
         self.db_manager = db_manager
         self.session_id = session_id
+        self._use_margin = use_margin
         self.last_sync_time: datetime | None = None
 
     def sync_account_data(
@@ -108,11 +113,31 @@ class AccountSynchronizer:
                     timestamp=datetime.now(UTC),
                 )
 
-            # Sync balances
-            balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
-
-            # Sync positions
-            position_sync_result = self._sync_positions(exchange_data.get("positions", []))
+            # Skip balance and position sync in margin mode. USDT netAsset
+            # doesn't reflect true equity when shorts are open — sale proceeds
+            # inflate USDT while borrowed ETH liability is on a separate asset
+            # row. Syncing USDT alone would oversize the next trade.
+            # Proper margin equity requires account-level totalNetAssetOfBtc,
+            # which is a future enhancement. Internal tracking is authoritative.
+            # TODO: Implement margin equity sync using get_margin_account()
+            # totalNetAssetOfBtc field, and deduct borrow interest from PnL
+            # on position close. Current gap: interest accrual on shorts is
+            # not deducted from current_balance, causing minor overstatement
+            # (~0.01%/day on borrowed amount).
+            if not self._use_margin:
+                balance_sync_result = self._sync_balances(
+                    exchange_data.get("balances", [])
+                )
+                position_sync_result = self._sync_positions(
+                    exchange_data.get("positions", [])
+                )
+            else:
+                balance_sync_result = {"synced": False, "reason": "skipped in margin mode"}
+                position_sync_result = {"synced": False, "reason": "skipped in margin mode"}
+                logger.info(
+                    "Skipping balance/position sync in margin mode — "
+                    "USDT netAsset excludes cross-asset liabilities"
+                )
 
             # Sync orders
             order_sync_result = self._sync_orders(exchange_data.get("open_orders", []))
