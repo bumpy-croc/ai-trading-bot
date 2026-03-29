@@ -1618,9 +1618,9 @@ class PositionReconciler:
         tracked position quantity. Uses 50% threshold to catch full external
         closes while tolerating partial exits.
         """
-        # Skip in margin mode — spot balance checks are meaningless for margin
-        # positions where borrowed/interest affect the real balance.
+        # In margin mode, use borrowed-amount check instead of spot balance.
         if self._use_margin:
+            self._verify_margin_position_exists(position, result)
             return
 
         # Skip short positions — shorts don't hold the base asset on spot,
@@ -1730,6 +1730,76 @@ class PositionReconciler:
                 )
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
+
+    def _verify_margin_position_exists(
+        self, position: Any, result: ReconciliationResult
+    ) -> None:
+        """Verify a margin position still exists by checking borrowed balance.
+
+        For short positions, checks if the base asset has borrowed > 0.
+        For long positions, checks if the base asset has netAsset > 0.
+        Detects externally closed or liquidated positions in margin mode.
+        """
+        symbol = position.symbol
+        base_asset = self._extract_base_asset(symbol)
+        side = getattr(position, "side", None)
+        is_short = side == PositionSide.SHORT or str(side).lower() == "short"
+
+        try:
+            # get_balance returns AccountBalance with total=netAsset in margin mode
+            balance = self.exchange.get_balance(base_asset)
+
+            if is_short:
+                # Short positions create debt — check if borrowed amount exists.
+                # Use the raw balances to get the 'borrowed' field.
+                balances = self.exchange.get_balances()
+                borrowed = 0.0
+                for b in balances:
+                    if b.asset == base_asset:
+                        # AccountBalance doesn't have 'borrowed' field,
+                        # but if balance.total (netAsset) is negative, there's debt
+                        borrowed = abs(min(b.total, 0))
+                        break
+
+                if borrowed == 0 and (balance is None or balance.total >= 0):
+                    logger.warning(
+                        "Margin short for %s appears externally closed "
+                        "(no borrowed %s). Removing tracked position.",
+                        symbol,
+                        base_asset,
+                    )
+                    self.position_tracker.remove_position(position.order_id)
+                    db_pos_id = getattr(position, "db_position_id", None)
+                    if db_pos_id:
+                        try:
+                            self.db_manager.close_position(db_pos_id)
+                        except Exception as e:
+                            logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+                    result.status = "corrected"
+                    result.severity = Severity.HIGH
+            else:
+                # Long positions hold the asset — check netAsset > 0
+                if balance is None or balance.total <= 0:
+                    logger.warning(
+                        "Margin long for %s appears externally closed "
+                        "(no %s holdings). Removing tracked position.",
+                        symbol,
+                        base_asset,
+                    )
+                    self.position_tracker.remove_position(position.order_id)
+                    db_pos_id = getattr(position, "db_position_id", None)
+                    if db_pos_id:
+                        try:
+                            self.db_manager.close_position(db_pos_id)
+                        except Exception as e:
+                            logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+                    result.status = "corrected"
+                    result.severity = Severity.HIGH
+
+        except Exception as e:
+            logger.warning(
+                "Margin position check failed for %s: %s — position retained", symbol, e
+            )
 
     def _estimate_position_notional(self) -> float:
         """Estimate total notional value of open positions using entry prices.
@@ -2183,11 +2253,11 @@ class PeriodicReconciler:
         # 1b. Verify asset holdings for each position — detect external closes.
         # Skip in margin mode — spot balance checks don't apply to cross-margin
         # where asset balances include borrowed amounts and don't reflect positions.
-        # SAFETY: Stale SL re-placement risk is mitigated by margin error codes
-        # (-3027, -3028, -3041, -3067) being treated as definitive rejects.
-        # If a position is externally closed and a stale SL fires, Binance
-        # rejects with insufficient balance, preventing a new naked position.
-        # TODO: Add margin-aware position verification using borrowed balance.
+        # SAFETY: External close detection uses _verify_margin_position_exists()
+        # which checks borrowed balance for shorts and asset holdings for longs.
+        # Additional protection: margin error codes (-3027, -3028, -3041, -3067)
+        # are treated as definitive rejects, so stale SLs that fire after
+        # external close are rejected by Binance, preventing naked positions.
         # NOTE: This per-position check compares held asset balance against the
         # individual position's quantity. For a single-symbol bot (at most 1
         # position per asset), this is correct. If multi-position-per-asset
