@@ -65,6 +65,28 @@ T = TypeVar("T")
 # Rate limit error codes from Binance
 RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too many orders
 
+# Definitive reject codes — exchange explicitly refused the order.
+# BinanceOrderException and BinanceAPIException both carry these.
+# Treating them as ambiguous (return None) creates phantom positions.
+DEFINITIVE_REJECT_CODES = {
+    -1013,  # LOT_SIZE / MIN_NOTIONAL filter failure
+    -1021,  # TIMESTAMP out of recv window
+    -1100,  # Illegal characters in parameter
+    -1101,  # Too many parameters
+    -1102,  # Mandatory parameter missing
+    -1106,  # Parameter not required
+    -1111,  # Precision over maximum for asset
+    -1116,  # Order type not supported
+    -2010,  # NEW_ORDER_REJECTED (insufficient balance, etc.)
+    -2013,  # Order does not exist
+    -2015,  # Invalid API key / permissions
+    # Margin-specific rejects
+    -3027,  # Margin account not allowed to trade
+    -3028,  # Margin account not allowed to borrow
+    -3041,  # Balance not sufficient for margin order
+    -3067,  # Cross margin account doesn't exist
+}
+
 # Stop-loss limit price slippage to ensure fills
 # For sells: limit below stop price, for buys: limit above stop price
 STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005  # 0.5% slippage
@@ -636,6 +658,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     continue
                 net_asset = float(asset_data.get("netAsset", "0"))
                 free = float(asset_data.get("free", "0"))
+                borrowed = float(asset_data.get("borrowed", "0"))
                 if free > 0 and net_asset > 0:
                     # Estimate USD value (rough — just flag if non-trivial)
                     try:
@@ -652,9 +675,18 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                             f"to sell existing inventory instead of borrowing. "
                             f"Transfer {asset_name} out of Cross Margin before trading."
                         )
-                        if self._is_live:
+                        # If borrowed > 0, this is likely a tracked position
+                        # recovering after restart — warn, don't block recovery.
+                        if borrowed > 0:
+                            logger.warning(
+                                "%s (borrowed=%.8f — may be a recovering position)",
+                                msg,
+                                borrowed,
+                            )
+                        elif self._is_live:
                             raise RuntimeError(msg)
-                        logger.warning(msg)
+                        else:
+                            logger.warning(msg)
         except RuntimeError:
             raise
         except Exception as e:
@@ -1245,28 +1277,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 )
                 return None
 
-            # Definitive rejections: the exchange explicitly rejected the order,
+            # Definitive rejections: the exchange explicitly refused the order,
             # so it was NOT placed. Raise ValueError so the caller can distinguish
             # this from ambiguous network/timeout errors (which return None).
-            definitive_codes = {
-                -1013,  # LOT_SIZE / MIN_NOTIONAL filter failure
-                -1021,  # TIMESTAMP out of recv window
-                -1100,  # Illegal characters in parameter
-                -1101,  # Too many parameters
-                -1102,  # Mandatory parameter missing
-                -1106,  # Parameter not required
-                -1111,  # Precision over maximum for asset
-                -1116,  # Order type not supported
-                -2010,  # NEW_ORDER_REJECTED (insufficient balance, etc.)
-                -2013,  # Order does not exist
-                -2015,  # Invalid API key / permissions
-                # Margin-specific rejects (must not create phantom positions)
-                -3027,  # Margin account not allowed to trade
-                -3028,  # Margin account not allowed to borrow
-                -3041,  # Balance not sufficient for margin order
-                -3067,  # Cross margin account doesn't exist
-            }
-            if error_code in definitive_codes:
+            if error_code in DEFINITIVE_REJECT_CODES:
                 logger.error(
                     "Order definitively rejected by Binance (code=%s): %s",
                     error_code,
@@ -1281,12 +1295,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Binance order error (ambiguous, code={error_code}): {e}")
             return None
         except BinanceAPIException as e:
-            # Margin API errors surface as BinanceAPIException (not BinanceOrderException).
+            # REST API errors surface as BinanceAPIException (not BinanceOrderException).
             # Apply same definitive-reject logic to prevent phantom positions.
             error_code = getattr(e, "code", 0)
             error_msg = getattr(e, "message", str(e))
-            margin_reject_codes = {-3027, -3028, -3041, -3067}
-            if error_code in margin_reject_codes:
+            if error_code in DEFINITIVE_REJECT_CODES:
                 logger.error(
                     "Margin order definitively rejected (code=%s): %s",
                     error_code,
