@@ -113,20 +113,25 @@ class AccountSynchronizer:
                     timestamp=datetime.now(UTC),
                 )
 
-            # Balance sync works for both spot and margin — get_balances()
-            # returns netAsset (equity after debt) in margin mode.
-            balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
-
-            # Position sync uses spot-specific logic (asset holdings as positions)
-            # which is incompatible with cross-margin accounting. Skip in margin mode.
+            # Skip balance and position sync in margin mode. USDT netAsset
+            # doesn't reflect true equity when shorts are open — sale proceeds
+            # inflate USDT while borrowed ETH liability is on a separate asset
+            # row. Syncing USDT alone would oversize the next trade.
+            # Proper margin equity requires account-level totalNetAssetOfBtc,
+            # which is a future enhancement. Internal tracking is authoritative.
             if not self._use_margin:
+                balance_sync_result = self._sync_balances(
+                    exchange_data.get("balances", [])
+                )
                 position_sync_result = self._sync_positions(
                     exchange_data.get("positions", [])
                 )
             else:
+                balance_sync_result = {"synced": False, "reason": "skipped in margin mode"}
                 position_sync_result = {"synced": False, "reason": "skipped in margin mode"}
                 logger.info(
-                    "Skipping position sync in margin mode — using internal tracking"
+                    "Skipping balance/position sync in margin mode — "
+                    "USDT netAsset excludes cross-asset liabilities"
                 )
 
             # Sync orders
