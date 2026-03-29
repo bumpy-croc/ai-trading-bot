@@ -26,6 +26,7 @@ from src.config.constants import (
     DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
     DEFAULT_STOP_LOSS_PCT,
 )
+from src.data_providers.exchange_interface import SideEffectType
 from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
@@ -527,7 +528,7 @@ class PositionReconciler:
                         side=sl_side,
                         quantity=fill_qty,
                         stop_price=position.stop_loss,
-                        side_effect_type="AUTO_REPAY",
+                        side_effect_type=SideEffectType.AUTO_REPAY,
                     )
                     if sl_order_id:
                         position.stop_loss_order_id = sl_order_id
@@ -585,7 +586,7 @@ class PositionReconciler:
                             side=sell_side,
                             order_type=OrderType.MARKET,
                             quantity=fill_qty,
-                            side_effect_type="AUTO_REPAY",
+                            side_effect_type=SideEffectType.AUTO_REPAY,
                         )
                         if sell_result is not None:
                             logger.critical(
@@ -831,7 +832,7 @@ class PositionReconciler:
                 side=sl_side,
                 quantity=qty,
                 stop_price=stop_loss,
-                side_effect_type="AUTO_REPAY",
+                side_effect_type=SideEffectType.AUTO_REPAY,
             )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
@@ -1101,7 +1102,7 @@ class PositionReconciler:
                         side=sl_side,
                         quantity=qty,
                         stop_price=sl_price,
-                        side_effect_type="AUTO_REPAY",
+                        side_effect_type=SideEffectType.AUTO_REPAY,
                     )
                     if new_sl_id:
                         position.stop_loss_order_id = new_sl_id
@@ -1359,7 +1360,7 @@ class PositionReconciler:
                             side=sl_side,
                             quantity=qty,
                             stop_price=position.stop_loss,
-                            side_effect_type="AUTO_REPAY",
+                            side_effect_type=SideEffectType.AUTO_REPAY,
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
@@ -1510,7 +1511,7 @@ class PositionReconciler:
                             side=sl_side,
                             quantity=qty,
                             stop_price=position.stop_loss,
-                            side_effect_type="AUTO_REPAY",
+                            side_effect_type=SideEffectType.AUTO_REPAY,
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
@@ -2191,7 +2192,6 @@ class PeriodicReconciler:
         self._use_margin = use_margin
         self.interval = interval
         self.on_critical = on_critical
-        self._use_margin = use_margin
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -2573,7 +2573,7 @@ class PeriodicReconciler:
                                 side=sl_side,
                                 quantity=qty,
                                 stop_price=stop_price,
-                                side_effect_type="AUTO_REPAY",
+                                side_effect_type=SideEffectType.AUTO_REPAY,
                             )
                             if new_sl_id:
                                 position.stop_loss_order_id = new_sl_id
@@ -2793,7 +2793,7 @@ class PeriodicReconciler:
                 side=sl_side,
                 quantity=qty,
                 stop_price=stop_price,
-                side_effect_type="AUTO_REPAY",
+                side_effect_type=SideEffectType.AUTO_REPAY,
             )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id

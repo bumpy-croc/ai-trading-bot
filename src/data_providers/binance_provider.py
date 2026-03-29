@@ -35,6 +35,7 @@ from .exchange_interface import (
     OrderStatus,
     OrderType,
     Position,
+    SideEffectType,
     Trade,
 )
 
@@ -192,6 +193,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
     Inherits from both DataProvider and ExchangeInterface to provide complete
     Binance functionality in a single class.
     """
+
+    @property
+    def is_margin_mode(self) -> bool:
+        """Whether provider is operating in cross-margin mode."""
+        return self._use_margin
 
     TIMEFRAME_MAPPING = {
         "1m": Client.KLINE_INTERVAL_1MINUTE if BINANCE_AVAILABLE else "1m",
@@ -750,16 +756,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # Lazy symbol validation on first margin order per side
             symbol = params.get("symbol", "")
             order_side = params.get("side", "")
-            cache_key = f"{symbol}:{order_side}" if order_side else symbol
+            # Always use symbol:side key for consistent cache lookup
+            cache_key = f"{symbol}:{order_side or 'ANY'}"
             if symbol and cache_key not in self._margin_symbol_verified:
                 self._verify_margin_symbol(symbol, side=order_side or None)
                 self._margin_symbol_verified.add(cache_key)
 
             params["isIsolated"] = "FALSE"
-            # Inject sideEffectType if provided (pop to avoid double-passing)
-            side_effect = params.pop("sideEffectType", None)
-            if side_effect:
-                params["sideEffectType"] = side_effect
+            # sideEffectType is already in params if caller set it
             return self._client.create_margin_order(**params)
         # Remove margin-specific params for spot
         params.pop("sideEffectType", None)
@@ -1498,16 +1502,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return False
 
         try:
-            if symbol:
-                orders = self._call_get_open_orders(symbol=symbol)
-                for order in orders:
-                    order_id = order.order_id if hasattr(order, "order_id") else str(order.get("orderId", ""))
-                    self._call_cancel_order(symbol=symbol, orderId=order_id)
-            else:
-                # Cancel all orders for all symbols
-                open_orders = self.get_open_orders()
-                for order in open_orders:
-                    self.cancel_order(order.order_id, order.symbol)
+            open_orders = self.get_open_orders(symbol=symbol)
+            for order in open_orders:
+                self.cancel_order(order.order_id, order.symbol)
 
             logger.info("All orders cancelled successfully")
             return True

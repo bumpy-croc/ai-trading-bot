@@ -37,6 +37,13 @@ class OrderStatus(Enum):
     EXPIRED = "EXPIRED"
 
 
+class SideEffectType:
+    """Margin order intent constants for cross-margin trading."""
+
+    MARGIN_BUY = "MARGIN_BUY"  # Auto-borrow to sell (short entry)
+    AUTO_REPAY = "AUTO_REPAY"  # Auto-repay on close (exits, stop-losses)
+
+
 @dataclass
 class AccountBalance:
     """Represents account balance information"""
@@ -110,6 +117,11 @@ class ExchangeInterface(ABC):
     allowing the trading bot to work with Binance, Coinbase, or any other
     exchange by implementing this interface.
     """
+
+    @property
+    def is_margin_mode(self) -> bool:
+        """Whether this exchange is operating in margin mode. Override in subclasses."""
+        return False
 
     def __init__(self, api_key: str, api_secret: str, testnet: bool = False):
         """

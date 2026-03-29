@@ -20,7 +20,12 @@ from src.config.constants import (
     DEFAULT_FEE_RATE,
     DEFAULT_SLIPPAGE_RATE,
 )
-from src.data_providers.exchange_interface import OrderSide, OrderStatus, OrderType
+from src.data_providers.exchange_interface import (
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    SideEffectType,
+)
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 
@@ -673,13 +678,18 @@ class LiveExecutionEngine:
             #   instead of borrowing, breaking short position semantics.
             entry_side_effect = None
             if side == PositionSide.SHORT:
-                entry_side_effect = "MARGIN_BUY"
+                entry_side_effect = SideEffectType.MARGIN_BUY
                 # Guard: verify no significant free base asset that MARGIN_BUY
                 # would sell instead of borrowing. Prevents false shorts.
                 # Fail-closed: reject short on any lookup error.
-                use_margin = getattr(self.exchange_interface, "_use_margin", False) is True
+                use_margin = getattr(self.exchange_interface, "is_margin_mode", False) is True
                 if use_margin:
-                    base_asset = symbol.replace("USDT", "").replace("BUSD", "")
+                    # Extract base asset from trading pair
+                    base_asset = symbol
+                    for quote in ("USDT", "BUSD", "USD"):
+                        if symbol.endswith(quote) and len(symbol) > len(quote):
+                            base_asset = symbol[: -len(quote)]
+                            break
                     try:
                         balance = self.exchange_interface.get_balance(base_asset)
                     except Exception as e:
@@ -850,7 +860,7 @@ class LiveExecutionEngine:
                 order_type=OrderType.MARKET,
                 quantity=quantity,
                 client_order_id=client_order_id,
-                side_effect_type="AUTO_REPAY",
+                side_effect_type=SideEffectType.AUTO_REPAY,
             )
             # Extract order_id string for backward compat
             close_order_id = None
