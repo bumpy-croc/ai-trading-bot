@@ -1749,54 +1749,80 @@ class PositionReconciler:
             # get_balance returns AccountBalance with total=netAsset in margin mode
             balance = self.exchange.get_balance(base_asset)
 
+            # Scale tracked quantity by partial exit ratio
+            qty = getattr(position, "quantity", 0) or 0.0
+            current_size = getattr(position, "current_size", None)
+            original_size = getattr(position, "original_size", None)
+            if current_size is not None and original_size is not None and original_size > 0:
+                position_qty = qty * (current_size / original_size)
+            else:
+                position_qty = qty
+
             if is_short:
                 # Short positions create debt — check raw borrowed amount.
-                # get_margin_borrowed returns the actual borrowed quantity,
-                # not netAsset which can be >= 0 even with outstanding debt.
                 borrowed = 0.0
                 if hasattr(self.exchange, "get_margin_borrowed"):
                     borrowed = self.exchange.get_margin_borrowed(base_asset)
 
+                # Full close: no borrowed debt remaining
                 if borrowed <= 0:
                     logger.warning(
-                        "Margin short for %s appears externally closed "
-                        "(borrowed %s = %.8f). Removing tracked position.",
+                        "Margin short for %s externally closed (borrowed %s=0). "
+                        "Removing tracked position.",
                         symbol,
                         base_asset,
-                        borrowed,
                     )
-                    self.position_tracker.remove_position(position.order_id)
-                    db_pos_id = getattr(position, "db_position_id", None)
-                    if db_pos_id:
-                        try:
-                            self.db_manager.close_position(db_pos_id)
-                        except Exception as e:
-                            logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
-                    result.status = "corrected"
-                    result.severity = Severity.HIGH
-            else:
-                # Long positions hold the asset — check netAsset > 0
-                if balance is None or balance.total <= 0:
+                    self._remove_phantom_position(position, result)
+                # Partial close: borrowed < 50% of tracked quantity
+                elif position_qty > 0 and borrowed < position_qty * 0.5:
                     logger.warning(
-                        "Margin long for %s appears externally closed "
-                        "(no %s holdings). Removing tracked position.",
+                        "Margin short for %s partially closed externally "
+                        "(borrowed=%.8f, tracked=%.8f). Removing position.",
+                        symbol,
+                        borrowed,
+                        position_qty,
+                    )
+                    self._remove_phantom_position(position, result)
+            else:
+                # Long positions hold the asset — check netAsset
+                held = balance.total if balance else 0.0
+
+                if held <= 0:
+                    logger.warning(
+                        "Margin long for %s externally closed (held %s=0). "
+                        "Removing tracked position.",
                         symbol,
                         base_asset,
                     )
-                    self.position_tracker.remove_position(position.order_id)
-                    db_pos_id = getattr(position, "db_position_id", None)
-                    if db_pos_id:
-                        try:
-                            self.db_manager.close_position(db_pos_id)
-                        except Exception as e:
-                            logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
-                    result.status = "corrected"
-                    result.severity = Severity.HIGH
+                    self._remove_phantom_position(position, result)
+                elif position_qty > 0 and held < position_qty * 0.5:
+                    logger.warning(
+                        "Margin long for %s partially closed externally "
+                        "(held=%.8f, tracked=%.8f). Removing position.",
+                        symbol,
+                        held,
+                        position_qty,
+                    )
+                    self._remove_phantom_position(position, result)
 
         except Exception as e:
             logger.warning(
                 "Margin position check failed for %s: %s — position retained", symbol, e
             )
+
+    def _remove_phantom_position(
+        self, position: Any, result: ReconciliationResult
+    ) -> None:
+        """Remove a phantom position from tracker and DB."""
+        self.position_tracker.remove_position(position.order_id)
+        db_pos_id = getattr(position, "db_position_id", None)
+        if db_pos_id:
+            try:
+                self.db_manager.close_position(db_pos_id)
+            except Exception as e:
+                logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+        result.status = "corrected"
+        result.severity = Severity.HIGH
 
     def _estimate_position_notional(self) -> float:
         """Estimate total notional value of open positions using entry prices.
@@ -2274,17 +2300,30 @@ class PeriodicReconciler:
                     balance = self.exchange.get_balance(base_asset)
                     position_gone = False
 
+                    # Scale tracked quantity by partial exit ratio
+                    qty = getattr(position, "quantity", None) or 0.0
+                    cur = getattr(position, "current_size", None)
+                    orig = getattr(position, "original_size", None)
+                    if cur is not None and orig is not None and orig > 0:
+                        pos_qty = qty * (cur / orig)
+                    else:
+                        pos_qty = qty
+
                     if is_short:
-                        # Short gone if no borrowed debt. Use raw borrowed amount,
-                        # not netAsset (which can be >= 0 even with outstanding debt).
+                        # Short detection: use raw borrowed amount
                         borrowed = 0.0
                         if hasattr(self.exchange, "get_margin_borrowed"):
                             borrowed = self.exchange.get_margin_borrowed(base_asset)
                         if borrowed <= 0:
                             position_gone = True
+                        elif pos_qty > 0 and borrowed < pos_qty * 0.5:
+                            position_gone = True
                     else:
-                        # Long gone if no positive netAsset
-                        if balance is None or balance.total <= 0:
+                        # Long detection: check held quantity
+                        held = balance.total if balance else 0.0
+                        if held <= 0:
+                            position_gone = True
+                        elif pos_qty > 0 and held < pos_qty * 0.5:
                             position_gone = True
 
                     if position_gone:
