@@ -1827,7 +1827,24 @@ class PositionReconciler:
     def _remove_phantom_position(
         self, position: Any, result: ReconciliationResult
     ) -> None:
-        """Remove a phantom position from tracker and DB."""
+        """Remove a phantom position from tracker and DB, cancel its exchange SL."""
+        # Cancel the server-side stop-loss before removing from tracker.
+        # Leaving an orphaned SL on the exchange is a fund-loss path —
+        # if it triggers with AUTO_REPAY, it opens a new naked position.
+        sl_order_id = getattr(position, "stop_loss_order_id", None)
+        if sl_order_id:
+            try:
+                self.exchange.cancel_order(sl_order_id, position.symbol)
+                logger.info(
+                    "Cancelled orphaned SL %s for removed position %s",
+                    sl_order_id, position.symbol,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to cancel SL %s for removed position %s: %s",
+                    sl_order_id, position.symbol, e,
+                )
+
         self.position_tracker.remove_position(position.order_id)
         db_pos_id = getattr(position, "db_position_id", None)
         if db_pos_id:
@@ -2348,9 +2365,17 @@ class PeriodicReconciler:
                     if position_gone:
                         logger.warning(
                             "Margin position %s appears externally closed — "
-                            "removing from tracker",
+                            "cancelling SL and removing from tracker",
                             symbol,
                         )
+                        # Cancel exchange SL to prevent orphaned order
+                        sl_id = getattr(position, "stop_loss_order_id", None)
+                        if sl_id:
+                            try:
+                                self.exchange.cancel_order(sl_id, symbol)
+                                logger.info("Cancelled orphaned SL %s for %s", sl_id, symbol)
+                            except Exception as e:
+                                logger.warning("Failed to cancel SL %s: %s", sl_id, e)
                         self.position_tracker.remove_position(order_key)
                         db_pos_id = getattr(position, "db_position_id", None)
                         if db_pos_id is not None:
