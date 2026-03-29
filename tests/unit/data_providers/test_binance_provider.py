@@ -740,6 +740,18 @@ class TestMarginFailFast:
         provider = BinanceProvider()
         assert provider._client is not None  # offline stub
 
+    @patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", False)
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_live_no_sdk_fails_fast(self, mock_config):
+        """Live+margin raises RuntimeError when SDK is not installed."""
+        mock_config.return_value = _make_config_mock({
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "live",
+        })
+
+        with pytest.raises(RuntimeError, match="Binance library not available"):
+            BinanceProvider()
+
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 class TestMarginStartupChecks:
@@ -1206,3 +1218,56 @@ class TestMarginSideEffectIntegration:
 
         call_kwargs = mock_client.create_order.call_args.kwargs
         assert "sideEffectType" not in call_kwargs
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestMarginErrorCodes:
+    """Verify margin-specific Binance error codes are treated as definitive rejects."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_insufficient_balance_raises(self, mock_config, mock_client_class):
+        """Error -3041 (insufficient margin balance) raises ValueError, not None."""
+        from binance.exceptions import BinanceAPIException
+        from src.data_providers.exchange_interface import OrderType
+
+        mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_margin_account.return_value = {
+            "tradeEnabled": True, "borrowEnabled": True,
+            "marginLevel": "2.5", "userAssets": [],
+        }
+        mock_client.get_margin_symbol.return_value = {
+            "isMarginTrade": True, "isBuyAllowed": True, "isSellAllowed": True,
+        }
+        mock_client.get_exchange_info.return_value = {
+            "symbols": [{
+                "symbol": "ETHUSDT", "baseAsset": "ETH", "quoteAsset": "USDT",
+                "status": "TRADING", "filters": [
+                    {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                    {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
+                    {"filterType": "MIN_NOTIONAL", "minNotional": "10"},
+                ],
+            }],
+        }
+
+        # Simulate Binance margin error -3041
+        error = BinanceAPIException(
+            Mock(status_code=400, headers={}),
+            400,
+            '{"code":-3041,"msg":"Balance is not enough"}',
+        )
+        error.code = -3041
+        error.message = "Balance is not enough"
+        mock_client.create_margin_order.side_effect = error
+
+        provider = BinanceProvider()
+        with pytest.raises(ValueError, match="Order rejected by exchange.*-3041"):
+            provider.place_order(
+                symbol="ETHUSDT",
+                side=OrderSide.SELL,
+                order_type=OrderType.MARKET,
+                quantity=0.05,
+                side_effect_type="MARGIN_BUY",
+            )

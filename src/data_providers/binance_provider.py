@@ -289,6 +289,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         logger.debug(f"_initialize_client called - BINANCE_AVAILABLE: {BINANCE_AVAILABLE}")
 
         if not BINANCE_AVAILABLE:
+            if self._use_margin and self._is_live:
+                raise RuntimeError(
+                    "FATAL: Binance library not available but live margin mode requested. "
+                    "Cannot fall back to offline stub — placing dummy margin orders "
+                    "risks fund loss. Install python-binance or set BINANCE_ACCOUNT_TYPE=spot."
+                )
             logger.warning("Binance library not available - using mock client")
             self._client = self._create_offline_client()
             return
@@ -1201,6 +1207,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 -2010,  # NEW_ORDER_REJECTED (insufficient balance, etc.)
                 -2013,  # Order does not exist
                 -2015,  # Invalid API key / permissions
+                # Margin-specific rejects (must not create phantom positions)
+                -3027,  # Margin account not allowed to trade
+                -3028,  # Margin account not allowed to borrow
+                -3041,  # Balance not sufficient for margin order
+                -3067,  # Cross margin account doesn't exist
             }
             if error_code in definitive_codes:
                 logger.error(
@@ -1215,6 +1226,23 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # Ambiguous error (unknown code, network-adjacent): return None so the
             # caller treats it as "order may or may not have been placed".
             logger.error(f"Binance order error (ambiguous, code={error_code}): {e}")
+            return None
+        except BinanceAPIException as e:
+            # Margin API errors surface as BinanceAPIException (not BinanceOrderException).
+            # Apply same definitive-reject logic to prevent phantom positions.
+            error_code = getattr(e, "code", 0)
+            error_msg = getattr(e, "message", str(e))
+            margin_reject_codes = {-3027, -3028, -3041, -3067}
+            if error_code in margin_reject_codes:
+                logger.error(
+                    "Margin order definitively rejected (code=%s): %s",
+                    error_code,
+                    error_msg,
+                )
+                raise ValueError(
+                    f"Order rejected by exchange (code={error_code}): {error_msg}"
+                ) from e
+            logger.error(f"Binance API error placing order (code={error_code}): {e}")
             return None
         except Exception as e:
             logger.error(f"Failed to place order: {e}")
