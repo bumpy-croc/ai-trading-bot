@@ -113,18 +113,20 @@ class AccountSynchronizer:
                     timestamp=datetime.now(UTC),
                 )
 
-            # Sync balances and positions — skip in margin mode where spot
-            # balances include borrowed amounts and don't reflect true state.
+            # Balance sync works for both spot and margin — get_balances()
+            # returns netAsset (equity after debt) in margin mode.
+            balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
+
+            # Position sync uses spot-specific logic (asset holdings as positions)
+            # which is incompatible with cross-margin accounting. Skip in margin mode.
             if not self._use_margin:
-                balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
                 position_sync_result = self._sync_positions(
                     exchange_data.get("positions", [])
                 )
             else:
-                balance_sync_result = {"synced": False, "reason": "skipped in margin mode"}
                 position_sync_result = {"synced": False, "reason": "skipped in margin mode"}
                 logger.info(
-                    "Skipping balance/position sync in margin mode — using internal tracking"
+                    "Skipping position sync in margin mode — using internal tracking"
                 )
 
             # Sync orders
