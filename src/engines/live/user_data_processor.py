@@ -89,6 +89,12 @@ class UserDataProcessor(threading.Thread):
         # Wait for run() thread to finish its current event before draining
         if self.is_alive():
             self.join(timeout=5)
+        if self.is_alive():
+            logger.critical(
+                "UserDataProcessor thread did not exit within timeout — "
+                "skipping drain to avoid concurrent event processing"
+            )
+            return
 
         # Drain remaining events to prevent missed fills during WS->REST handoff
         drained = 0

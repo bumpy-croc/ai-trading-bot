@@ -107,12 +107,23 @@ class OrderTracker:
 
         self._pending_orders: dict[str, TrackedOrder] = {}
         self._lock = threading.Lock()
+        self._order_locks: dict[str, threading.Lock] = {}
         self._running = False
         self._stop_event = threading.Event()  # For clean, interruptible shutdown
         self._thread: threading.Thread | None = None
         # Circuit breaker to handle exchange API failures gracefully
         # Prevents resource exhaustion from repeated failing API calls
         self._circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+
+    def _get_order_lock(self, order_id: str) -> threading.Lock:
+        """Return the per-order lock, creating one if needed.
+
+        Must be called without ``self._lock`` held (it acquires it internally).
+        """
+        with self._lock:
+            if order_id not in self._order_locks:
+                self._order_locks[order_id] = threading.Lock()
+            return self._order_locks[order_id]
 
     def track_order(self, order_id: str, symbol: str) -> None:
         """
@@ -141,6 +152,7 @@ class OrderTracker:
         with self._lock:
             if order_id in self._pending_orders:
                 del self._pending_orders[order_id]
+                self._order_locks.pop(order_id, None)
                 logger.debug("Stopped tracking order %s", order_id)
 
     def get_tracked_count(self) -> int:
@@ -198,26 +210,78 @@ class OrderTracker:
             orders_to_check = list(self._pending_orders.items())
 
         for order_id, tracked in orders_to_check:
-            try:
-                # Use circuit breaker to prevent resource exhaustion during exchange outages
-                # If circuit is OPEN (too many failures), skip API call and log warning
-                order = self._circuit_breaker.call(
-                    self.exchange.get_order, order_id, tracked.symbol
-                )
-                if not order:
-                    # None return counts as an API error — get_order_by_client_id()
-                    # swallows exceptions and returns None, so the except block below
-                    # is never reached for client order ID failures.
+            # Per-order lock prevents concurrent WS processing of the same order
+            order_lock = self._get_order_lock(order_id)
+            with order_lock:
+                try:
+                    # Use circuit breaker to prevent resource exhaustion during exchange outages
+                    # If circuit is OPEN (too many failures), skip API call and log warning
+                    order = self._circuit_breaker.call(
+                        self.exchange.get_order, order_id, tracked.symbol
+                    )
+                    if not order:
+                        # None return counts as an API error — get_order_by_client_id()
+                        # swallows exceptions and returns None, so the except block below
+                        # is never reached for client order ID failures.
+                        tracked.api_error_count += 1
+                        if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
+                            logger.critical(
+                                "CRITICAL: Order %s on %s returned None for %d consecutive "
+                                "polls. Force-removing to prevent infinite polling. "
+                                "MANUAL RECONCILIATION REQUIRED.",
+                                order_id,
+                                tracked.symbol,
+                                tracked.api_error_count,
+                            )
+                            if self.on_cancel:
+                                try:
+                                    self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
+                                except Exception as cb_err:
+                                    logger.error(
+                                        "Cancel callback failed for force-removed order %s: %s",
+                                        order_id,
+                                        cb_err,
+                                        exc_info=True,
+                                    )
+                            self.stop_tracking(order_id)
+                        elif tracked.callback_failure_count > 0:
+                            logger.critical(
+                                "CRITICAL: Order %s on %s no longer returned by exchange after "
+                                "%d failed callback attempts. Force-removing to prevent permanent "
+                                "tracking. MANUAL RECONCILIATION REQUIRED.",
+                                order_id,
+                                tracked.symbol,
+                                tracked.callback_failure_count,
+                            )
+                            self.stop_tracking(order_id)
+                        else:
+                            logger.warning(
+                                "Could not fetch order %s (attempt %d/%d) - may have expired",
+                                order_id,
+                                tracked.api_error_count,
+                                MAX_API_ERROR_RETRIES,
+                            )
+                        continue
+
+                    # Reset API error counter on any successful response
+                    tracked.api_error_count = 0
+                    self._process_order_status(order_id, tracked, order)
+
+                except Exception as e:
                     tracked.api_error_count += 1
                     if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
                         logger.critical(
-                            "CRITICAL: Order %s on %s returned None for %d consecutive "
-                            "polls. Force-removing to prevent infinite polling. "
+                            "CRITICAL: Order %s on %s failed %d consecutive API calls: %s. "
+                            "Force-removing to prevent infinite error loop. "
                             "MANUAL RECONCILIATION REQUIRED.",
                             order_id,
                             tracked.symbol,
                             tracked.api_error_count,
+                            e,
+                            exc_info=True,
                         )
+                        # Call cancel callback BEFORE stop_tracking so the callback
+                        # can still access order metadata if needed
                         if self.on_cancel:
                             try:
                                 self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
@@ -229,63 +293,14 @@ class OrderTracker:
                                     exc_info=True,
                                 )
                         self.stop_tracking(order_id)
-                    elif tracked.callback_failure_count > 0:
-                        logger.critical(
-                            "CRITICAL: Order %s on %s no longer returned by exchange after "
-                            "%d failed callback attempts. Force-removing to prevent permanent "
-                            "tracking. MANUAL RECONCILIATION REQUIRED.",
-                            order_id,
-                            tracked.symbol,
-                            tracked.callback_failure_count,
-                        )
-                        self.stop_tracking(order_id)
                     else:
                         logger.warning(
-                            "Could not fetch order %s (attempt %d/%d) - may have expired",
+                            "Failed to check order %s (attempt %d/%d): %s",
                             order_id,
                             tracked.api_error_count,
                             MAX_API_ERROR_RETRIES,
+                            e,
                         )
-                    continue
-
-                # Reset API error counter on any successful response
-                tracked.api_error_count = 0
-                self._process_order_status(order_id, tracked, order)
-
-            except Exception as e:
-                tracked.api_error_count += 1
-                if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
-                    logger.critical(
-                        "CRITICAL: Order %s on %s failed %d consecutive API calls: %s. "
-                        "Force-removing to prevent infinite error loop. "
-                        "MANUAL RECONCILIATION REQUIRED.",
-                        order_id,
-                        tracked.symbol,
-                        tracked.api_error_count,
-                        e,
-                        exc_info=True,
-                    )
-                    # Call cancel callback BEFORE stop_tracking so the callback
-                    # can still access order metadata if needed
-                    if self.on_cancel:
-                        try:
-                            self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
-                        except Exception as cb_err:
-                            logger.error(
-                                "Cancel callback failed for force-removed order %s: %s",
-                                order_id,
-                                cb_err,
-                                exc_info=True,
-                            )
-                    self.stop_tracking(order_id)
-                else:
-                    logger.warning(
-                        "Failed to check order %s (attempt %d/%d): %s",
-                        order_id,
-                        tracked.api_error_count,
-                        MAX_API_ERROR_RETRIES,
-                        e,
-                    )
 
     def _process_order_status(self, order_id: str, tracked: TrackedOrder, order: Order) -> None:
         """
@@ -567,39 +582,43 @@ class OrderTracker:
         if self._dedup.is_duplicate(order_id, exec_type, exec_id):
             return
 
-        with self._lock:
-            tracked = self._pending_orders.get(order_id)
-        if tracked is None:
-            return
+        # Per-order lock serialises WS and REST processing of the same order,
+        # preventing double fills when both paths race on the same update.
+        order_lock = self._get_order_lock(order_id)
+        with order_lock:
+            with self._lock:
+                tracked = self._pending_orders.get(order_id)
+            if tracked is None:
+                return
 
-        cum_filled = float(event.get("z", 0))
-        cum_quote = float(event.get("Z", 0))
-        avg_price = cum_quote / cum_filled if cum_filled > 0 else 0.0
+            cum_filled = float(event.get("z", 0))
+            cum_quote = float(event.get("Z", 0))
+            avg_price = cum_quote / cum_filled if cum_filled > 0 else 0.0
 
-        status = self._map_ws_status(str(event.get("X", "")))
-        if status is None:
-            return
+            status = self._map_ws_status(str(event.get("X", "")))
+            if status is None:
+                return
 
-        order = Order(
-            order_id=order_id,
-            symbol=str(event.get("s", tracked.symbol)),
-            side=OrderSide(str(event.get("S", "BUY"))),
-            order_type=self._map_ws_order_type(str(event.get("o", "MARKET"))),
-            quantity=float(event.get("q", 0)),
-            price=float(event.get("p", 0)) or None,
-            status=status,
-            filled_quantity=cum_filled,
-            average_price=avg_price,
-            commission=float(event.get("n", 0)),
-            commission_asset=str(event.get("N", "")),
-            create_time=datetime.fromtimestamp(event.get("O", 0) / 1000, tz=UTC),
-            update_time=datetime.fromtimestamp(event.get("E", 0) / 1000, tz=UTC),
-            stop_price=float(event.get("P", 0)) or None,
-            time_in_force=str(event.get("f", "GTC")),
-            client_order_id=str(event.get("c", "")),
-        )
+            order = Order(
+                order_id=order_id,
+                symbol=str(event.get("s", tracked.symbol)),
+                side=OrderSide(str(event.get("S", "BUY"))),
+                order_type=self._map_ws_order_type(str(event.get("o", "MARKET"))),
+                quantity=float(event.get("q", 0)),
+                price=float(event.get("p", 0)) or None,
+                status=status,
+                filled_quantity=cum_filled,
+                average_price=avg_price,
+                commission=float(event.get("n", 0)),
+                commission_asset=str(event.get("N", "")),
+                create_time=datetime.fromtimestamp(event.get("O", 0) / 1000, tz=UTC),
+                update_time=datetime.fromtimestamp(event.get("E", 0) / 1000, tz=UTC),
+                stop_price=float(event.get("P", 0)) or None,
+                time_in_force=str(event.get("f", "GTC")),
+                client_order_id=str(event.get("c", "")),
+            )
 
-        self._process_order_status(order_id, tracked, order)
+            self._process_order_status(order_id, tracked, order)
 
     @staticmethod
     def _map_ws_status(ws_status: str) -> OrderStatus | None:

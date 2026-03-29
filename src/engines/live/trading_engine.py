@@ -1404,6 +1404,11 @@ class LiveTradingEngine:
                     self._user_data_processor.start()
                     if self.order_tracker:
                         self.order_tracker.disable_polling()
+                    # Catch-up: reconcile to detect any events missed during handoff
+                    if self.order_tracker:
+                        self.order_tracker.poll_once()
+                    if self._periodic_reconciler:
+                        self._periodic_reconciler.reconcile_once()
                     logger.info("User data WebSocket stream active — order polling disabled")
             except Exception as e:
                 logger.warning("Failed to start user data WebSocket stream: %s", e)
@@ -1445,6 +1450,11 @@ class LiveTradingEngine:
         if not self.enable_live_trading or not self.exchange_interface:
             return
         exchange = self.exchange_interface
+        # Check for RESYNCING state (set by error callback) — needs recovery
+        if getattr(exchange, "_user_ws_state", None) == WebSocketState.RESYNCING:
+            logger.warning("User data stream in RESYNCING state — triggering recovery")
+            self._handle_user_stream_disconnect()
+            return
         if getattr(exchange, "_user_ws_state", None) != WebSocketState.PRIMARY:
             return
         if not self.order_tracker or self.order_tracker.get_tracked_count() == 0:
@@ -1489,25 +1499,36 @@ class LiveTradingEngine:
 
     def _handle_user_stream_disconnect(self) -> None:
         """Handle user data stream failure. Resync orders and attempt reconnect."""
+        from src.engines.live.user_data_processor import UserDataProcessor
+
         if not self.enable_live_trading or not self.exchange_interface:
             return
-        # Resync order and position state from REST
+        # 1. Stop and drain the UserDataProcessor (process remaining queued events)
+        if self._user_data_processor:
+            self._user_data_processor.stop()
+            self._user_data_processor = None
+        # 2. Enable REST polling as fallback
+        if self.order_tracker:
+            self.order_tracker.enable_polling()
+        # 3. Resync order and position state from REST
         if self.order_tracker:
             self.order_tracker.poll_once()
         if self._periodic_reconciler:
             self._periodic_reconciler.reconcile_once()
-        # Attempt user stream reconnect
+        # 4. Attempt user stream reconnect
         if (
             hasattr(self.exchange_interface, "reconnect_user")
             and self.exchange_interface.reconnect_user()
         ):
+            self._user_data_processor = UserDataProcessor(
+                order_tracker=self.order_tracker,
+            )
+            self._user_data_processor.start()
             if self.order_tracker:
                 self.order_tracker.disable_polling()
             logger.info("User data WebSocket reconnected")
         else:
             self.exchange_interface._user_ws_state = WebSocketState.REST_DEGRADED
-            if self.order_tracker:
-                self.order_tracker.enable_polling()
             logger.warning("User stream reconnect failed — order polling resumed")
 
     def stop(self) -> None:
