@@ -221,17 +221,20 @@ def test_reconciler_accepts_use_margin_param():
 
 
 @pytest.mark.fast
-def test_reconciler_skips_spot_checks_in_margin_mode():
-    """PeriodicReconciler should skip asset holdings check in margin mode."""
+def test_reconciler_uses_margin_check_in_margin_mode():
+    """PeriodicReconciler uses margin position check (not spot balance check) in margin mode."""
     from src.engines.live.reconciliation import PeriodicReconciler
 
     mock_exchange = MagicMock()
-    mock_exchange.get_order.return_value = None  # No orders found
+    mock_exchange.get_order.return_value = None
     mock_exchange.get_open_orders.return_value = []
+    # Long position still exists (positive netAsset)
+    mock_balance = MagicMock()
+    mock_balance.total = 0.001
+    mock_exchange.get_balance.return_value = mock_balance
     mock_tracker = MagicMock()
     mock_db = MagicMock()
 
-    # Create a position that would trigger asset holdings check
     mock_position = MagicMock()
     mock_position.symbol = "BTCUSDT"
     mock_position.stop_loss = 48000.0
@@ -254,11 +257,12 @@ def test_reconciler_skips_spot_checks_in_margin_mode():
         use_margin=True,
     )
 
-    # Run a reconciliation cycle
     reconciler._reconcile_cycle()
 
-    # get_balance should NOT be called — spot-specific asset check is skipped
-    mock_exchange.get_balance.assert_not_called()
+    # get_balance IS called now (margin position check uses it)
+    mock_exchange.get_balance.assert_called()
+    # Position still exists — should NOT be removed
+    mock_tracker.remove_position.assert_not_called()
 
 
 @pytest.mark.fast
