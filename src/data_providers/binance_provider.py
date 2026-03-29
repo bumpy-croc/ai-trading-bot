@@ -623,6 +623,38 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 "Margin account verified: tradeEnabled=%s, borrowEnabled=%s, marginLevel=%s",
                 trade_enabled, borrow_enabled, margin_level,
             )
+
+            # Verify no non-USDT base assets with significant holdings.
+            # The bot assumes USDT-only collateral — holding base assets (ETH, BTC)
+            # causes MARGIN_BUY to sell existing inventory instead of borrowing,
+            # which breaks short position detection in reconciliation.
+            dust_threshold = 1.0  # $1 worth considered dust
+            quote_assets = {"USDT", "BUSD", "USD", "USDC"}
+            for asset_data in margin_info.get("userAssets", []):
+                asset_name = asset_data.get("asset", "")
+                if asset_name in quote_assets:
+                    continue
+                net_asset = float(asset_data.get("netAsset", "0"))
+                free = float(asset_data.get("free", "0"))
+                if free > 0 and net_asset > 0:
+                    # Estimate USD value (rough — just flag if non-trivial)
+                    try:
+                        ticker = self._client.get_symbol_ticker(symbol=f"{asset_name}USDT")
+                        price = float(ticker.get("price", 0))
+                        value_usd = free * price
+                    except Exception:
+                        value_usd = free  # Conservative: treat as $1 per unit
+                    if value_usd > dust_threshold:
+                        msg = (
+                            f"Margin wallet holds {free:.8f} {asset_name} "
+                            f"(~${value_usd:.2f}). The bot assumes USDT-only "
+                            f"collateral — non-USDT base assets cause MARGIN_BUY "
+                            f"to sell existing inventory instead of borrowing. "
+                            f"Transfer {asset_name} out of Cross Margin before trading."
+                        )
+                        if self._is_live:
+                            raise RuntimeError(msg)
+                        logger.warning(msg)
         except RuntimeError:
             raise
         except Exception as e:
