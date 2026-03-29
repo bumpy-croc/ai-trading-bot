@@ -330,14 +330,20 @@ def test_startup_reconciler_defaults_margin_false():
 
 
 @pytest.mark.fast
-def test_startup_reconciler_skips_verify_asset_holdings_in_margin_mode():
-    """_verify_asset_holdings should be a no-op in margin mode."""
+def test_startup_reconciler_uses_margin_check_in_margin_mode():
+    """_verify_asset_holdings delegates to _verify_margin_position_exists in margin mode."""
     from src.engines.live.reconciliation import (
         PositionReconciler,
         ReconciliationResult,
     )
 
     exchange = MagicMock()
+    # Long position with asset holdings present — should not be removed
+    balance_obj = MagicMock()
+    balance_obj.asset = "BTC"
+    balance_obj.total = 1.0
+    exchange.get_balance.return_value = balance_obj
+
     reconciler = PositionReconciler(
         exchange_interface=exchange,
         position_tracker=MagicMock(),
@@ -361,7 +367,10 @@ def test_startup_reconciler_skips_verify_asset_holdings_in_margin_mode():
     )
 
     reconciler._verify_asset_holdings(position, result)
-    exchange.get_balance.assert_not_called()
+    # In margin mode, it calls get_balance for margin position check (not skipped)
+    exchange.get_balance.assert_called_once_with("BTC")
+    # Position still exists — result should not be "corrected"
+    assert result.status == "ok"
 
 
 # ---------------------------------------------------------------------------
