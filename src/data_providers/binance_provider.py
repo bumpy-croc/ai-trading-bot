@@ -675,17 +675,16 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                             f"to sell existing inventory instead of borrowing. "
                             f"Transfer {asset_name} out of Cross Margin before trading."
                         )
-                        # If borrowed > free, most of this holding is a tracked
-                        # position (short) recovering after restart. Warn, don't
-                        # block. If free >> borrowed, it's likely manual deposits
-                        # alongside dust borrow — block to prevent MARGIN_BUY
-                        # selling inventory instead of borrowing.
-                        if borrowed > 0 and borrowed >= free:
+                        # If borrowed > 0, a tracked short may be recovering.
+                        # Warn but allow startup so reconciliation can verify.
+                        # Only hard-block when borrowed=0 AND significant free
+                        # inventory exists — that's untracked manual deposits.
+                        if borrowed > 0:
                             logger.warning(
-                                "%s (borrowed=%.8f >= free=%.8f — recovering position)",
+                                "%s (borrowed=%.8f — may be a recovering short, "
+                                "reconciliation will verify)",
                                 msg,
                                 borrowed,
-                                free,
                             )
                         elif self._is_live:
                             raise RuntimeError(msg)
