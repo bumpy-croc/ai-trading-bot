@@ -92,7 +92,7 @@ def test_execution_engine_short_blocked_by_free_base_asset():
     """Short entry rejected when margin wallet holds significant free base asset."""
     engine = _make_live_execution_engine()
     engine._normalize_quantity = MagicMock(return_value=0.001)
-    engine.exchange_interface._use_margin = True
+    engine.exchange_interface.is_margin_mode = True
 
     # Wallet holds 0.05 ETH (~$100 at $2000)
     mock_balance = MagicMock()
@@ -150,8 +150,8 @@ def test_trading_engine_stop_loss_auto_repay():
     from src.engines.live.trading_engine import LiveTradingEngine
 
     source = inspect.getsource(LiveTradingEngine._execute_entry)
-    assert 'side_effect_type="AUTO_REPAY"' in source, (
-        "trading_engine._execute_entry must pass side_effect_type='AUTO_REPAY' "
+    assert "side_effect_type=SideEffectType.AUTO_REPAY" in source, (
+        "trading_engine._execute_entry must pass side_effect_type=SideEffectType.AUTO_REPAY "
         "to place_stop_loss_order"
     )
 
