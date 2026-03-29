@@ -32,6 +32,9 @@ def _make_live_execution_engine(*, exchange: MagicMock | None = None):
         commission=0.0,
         status="FILLED",
     )
+    # Default: no base asset in wallet (clean for shorts)
+    mock_exchange.get_balance.return_value = None
+    mock_exchange._use_margin = False
 
     engine = LiveExecutionEngine(
         enable_live_trading=True,
@@ -82,6 +85,31 @@ def test_execution_engine_entry_short_margin_buy():
     engine.exchange_interface.place_order.assert_called_once()
     call_kwargs = engine.exchange_interface.place_order.call_args.kwargs
     assert call_kwargs.get("side_effect_type") == "MARGIN_BUY"
+
+
+@pytest.mark.fast
+def test_execution_engine_short_blocked_by_free_base_asset():
+    """Short entry rejected when margin wallet holds significant free base asset."""
+    engine = _make_live_execution_engine()
+    engine._normalize_quantity = MagicMock(return_value=0.001)
+    engine.exchange_interface._use_margin = True
+
+    # Wallet holds 0.05 ETH (~$100 at $2000)
+    mock_balance = MagicMock()
+    mock_balance.free = 0.05
+    engine.exchange_interface.get_balance.return_value = mock_balance
+    engine.exchange_interface.get_current_price.return_value = 2000.0
+
+    result = engine._execute_live_order(
+        symbol="ETHUSDT",
+        side=PositionSide.SHORT,
+        price=2000.0,
+        value=50.0,
+    )
+
+    # Should be rejected — returns (None, None)
+    assert result == (None, None)
+    engine.exchange_interface.place_order.assert_not_called()
 
 
 @pytest.mark.fast

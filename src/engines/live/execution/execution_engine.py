@@ -669,9 +669,34 @@ class LiveExecutionEngine:
             # - Long entry (BUY): None — use existing USDT, no borrow needed
             # - Short entry (SELL): "MARGIN_BUY" — auto-borrow base asset to sell.
             #   NOTE: MARGIN_BUY only borrows when free base inventory is insufficient.
-            #   If the wallet holds the base asset, Binance sells existing inventory.
-            #   This bot only holds USDT in the margin wallet, so shorts always borrow.
-            entry_side_effect = "MARGIN_BUY" if side == PositionSide.SHORT else None
+            #   If the wallet holds the base asset, Binance sells existing inventory
+            #   instead of borrowing, breaking short position semantics.
+            entry_side_effect = None
+            if side == PositionSide.SHORT:
+                entry_side_effect = "MARGIN_BUY"
+                # Guard: verify no significant free base asset that MARGIN_BUY
+                # would sell instead of borrowing. Prevents false shorts.
+                use_margin = getattr(self.exchange_interface, "_use_margin", False)
+                if use_margin:
+                    base_asset = symbol.replace("USDT", "").replace("BUSD", "")
+                    balance = self.exchange_interface.get_balance(base_asset)
+                    if balance and balance.free > 0:
+                        # Estimate value — reject if > $1
+                        try:
+                            price = self.exchange_interface.get_current_price(symbol)
+                            free_value = balance.free * price
+                        except Exception:
+                            free_value = balance.free  # Conservative
+                        if free_value > 1.0:
+                            logger.error(
+                                "Cannot open short for %s — margin wallet holds "
+                                "%.8f %s (~$%.2f free). MARGIN_BUY would sell "
+                                "existing inventory instead of borrowing. "
+                                "Transfer %s out of Cross Margin first.",
+                                symbol, balance.free, base_asset, free_value,
+                                base_asset,
+                            )
+                            return None, None
 
             try:
                 order_result = self.exchange_interface.place_order(
