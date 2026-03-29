@@ -667,7 +667,10 @@ class LiveExecutionEngine:
 
             # Determine margin side_effect_type based on position side:
             # - Long entry (BUY): None — use existing USDT, no borrow needed
-            # - Short entry (SELL): "MARGIN_BUY" — borrow asset to sell
+            # - Short entry (SELL): "MARGIN_BUY" — auto-borrow base asset to sell.
+            #   NOTE: MARGIN_BUY only borrows when free base inventory is insufficient.
+            #   If the wallet holds the base asset, Binance sells existing inventory.
+            #   This bot only holds USDT in the margin wallet, so shorts always borrow.
             entry_side_effect = "MARGIN_BUY" if side == PositionSide.SHORT else None
 
             try:

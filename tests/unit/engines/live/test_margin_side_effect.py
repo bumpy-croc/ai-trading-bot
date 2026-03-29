@@ -134,18 +134,19 @@ def test_trading_engine_stop_loss_auto_repay():
 
 
 @pytest.mark.fast
-def test_account_sync_skips_in_margin_mode():
-    """AccountSynchronizer should skip balance/position sync when use_margin=True."""
+def test_account_sync_skips_position_sync_in_margin_mode():
+    """AccountSynchronizer should skip position sync (not balance sync) in margin mode."""
     from src.engines.live.account_sync import AccountSynchronizer
 
     mock_exchange = MagicMock()
     mock_exchange.sync_account_data.return_value = {
         "sync_successful": True,
-        "balances": [{"asset": "USDT", "free": "1000"}],
+        "balances": [],
         "positions": [],
         "open_orders": [],
     }
     mock_db = MagicMock()
+    mock_db.get_current_balance.return_value = 100.0
 
     syncer = AccountSynchronizer(
         exchange=mock_exchange,
@@ -157,10 +158,11 @@ def test_account_sync_skips_in_margin_mode():
     result = syncer.sync_account_data(force=True)
 
     assert result.success is True
-    assert result.data["balance_sync"]["synced"] is False
-    assert "margin" in result.data["balance_sync"]["reason"]
+    # Position sync skipped in margin mode
     assert result.data["position_sync"]["synced"] is False
     assert "margin" in result.data["position_sync"]["reason"]
+    # Balance sync still runs (uses netAsset in margin mode)
+    assert "balance_sync" in result.data
 
 
 @pytest.mark.fast
