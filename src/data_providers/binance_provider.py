@@ -706,23 +706,23 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         try:
             info = self._client.get_margin_symbol(symbol=symbol)
             if not info.get("isMarginTrade", False):
-                raise RuntimeError(f"Symbol {symbol} does not support margin trading")
+                raise ValueError(f"Symbol {symbol} does not support margin trading")
             # Only check the side being submitted, not both
             if side == "BUY" and not info.get("isBuyAllowed", False):
-                raise RuntimeError(f"Symbol {symbol}: buy not allowed for margin")
+                raise ValueError(f"Symbol {symbol}: buy not allowed for margin")
             if side == "SELL" and not info.get("isSellAllowed", False):
-                raise RuntimeError(f"Symbol {symbol}: sell not allowed for margin")
+                raise ValueError(f"Symbol {symbol}: sell not allowed for margin")
             # If no side specified, check both (startup validation)
             if side is None:
                 if not info.get("isBuyAllowed", False):
-                    raise RuntimeError(f"Symbol {symbol}: buy not allowed for margin")
+                    raise ValueError(f"Symbol {symbol}: buy not allowed for margin")
                 if not info.get("isSellAllowed", False):
-                    raise RuntimeError(f"Symbol {symbol}: sell not allowed for margin")
+                    raise ValueError(f"Symbol {symbol}: sell not allowed for margin")
             logger.info("Margin symbol %s verified: margin trading enabled", symbol)
-        except RuntimeError:
+        except ValueError:
             raise
         except Exception as e:
-            raise RuntimeError(f"Failed to verify margin symbol {symbol}: {e}") from e
+            raise ValueError(f"Failed to verify margin symbol {symbol}: {e}") from e
 
     def _call_get_account(self) -> dict:
         """Fetch account data, normalizing margin response to spot format."""

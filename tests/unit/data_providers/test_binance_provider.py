@@ -1188,7 +1188,7 @@ class TestMarginSymbolValidation:
 
         provider = BinanceProvider()
 
-        with pytest.raises(RuntimeError, match="does not support margin trading"):
+        with pytest.raises(ValueError, match="does not support margin trading"):
             provider._call_create_order(symbol="BADUSDT", side="BUY", type="MARKET", quantity=0.1)
 
 
