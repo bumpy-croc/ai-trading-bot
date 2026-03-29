@@ -2183,6 +2183,11 @@ class PeriodicReconciler:
         # 1b. Verify asset holdings for each position — detect external closes.
         # Skip in margin mode — spot balance checks don't apply to cross-margin
         # where asset balances include borrowed amounts and don't reflect positions.
+        # SAFETY: Stale SL re-placement risk is mitigated by margin error codes
+        # (-3027, -3028, -3041, -3067) being treated as definitive rejects.
+        # If a position is externally closed and a stale SL fires, Binance
+        # rejects with insufficient balance, preventing a new naked position.
+        # TODO: Add margin-aware position verification using borrowed balance.
         # NOTE: This per-position check compares held asset balance against the
         # individual position's quantity. For a single-symbol bot (at most 1
         # position per asset), this is correct. If multi-position-per-asset
