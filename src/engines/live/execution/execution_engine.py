@@ -20,7 +20,12 @@ from src.config.constants import (
     DEFAULT_FEE_RATE,
     DEFAULT_SLIPPAGE_RATE,
 )
-from src.data_providers.exchange_interface import OrderSide, OrderStatus, OrderType
+from src.data_providers.exchange_interface import (
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    SideEffectType,
+)
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 
@@ -665,6 +670,57 @@ class LiveExecutionEngine:
                     # Proceeding would risk a phantom position on restart.
                     return None, None
 
+            # Determine margin side_effect_type based on position side:
+            # - Long entry (BUY): None — use existing USDT, no borrow needed
+            # - Short entry (SELL): "MARGIN_BUY" — auto-borrow base asset to sell.
+            #   NOTE: MARGIN_BUY only borrows when free base inventory is insufficient.
+            #   If the wallet holds the base asset, Binance sells existing inventory
+            #   instead of borrowing, breaking short position semantics.
+            entry_side_effect = None
+            if side == PositionSide.SHORT:
+                entry_side_effect = SideEffectType.MARGIN_BUY
+                # Guard: verify no significant free base asset that MARGIN_BUY
+                # would sell instead of borrowing. Prevents false shorts.
+                # Fail-closed: reject short on any lookup error.
+                use_margin = getattr(self.exchange_interface, "is_margin_mode", False) is True
+                if use_margin:
+                    # Extract base asset from trading pair
+                    base_asset = symbol
+                    for quote in ("USDT", "BUSD", "USD"):
+                        if symbol.endswith(quote) and len(symbol) > len(quote):
+                            base_asset = symbol[: -len(quote)]
+                            break
+                    try:
+                        balance = self.exchange_interface.get_balance(base_asset)
+                    except Exception as e:
+                        logger.error(
+                            "Cannot open short for %s — failed to check %s balance: %s. "
+                            "Rejecting to prevent false short.",
+                            symbol, base_asset, e,
+                        )
+                        return None, None
+                    if balance is None:
+                        # API returned None — fail closed
+                        logger.error(
+                            "Cannot open short for %s — get_balance(%s) returned None. "
+                            "Rejecting to prevent false short.",
+                            symbol, base_asset,
+                        )
+                        return None, None
+                    if balance.free > 0:
+                        # Use the price arg already validated by caller
+                        free_value = balance.free * price if price > 0 else balance.free
+                        if free_value > 1.0:  # $1 dust threshold
+                            logger.error(
+                                "Cannot open short for %s — margin wallet holds "
+                                "%.8f %s (~$%.2f free). MARGIN_BUY would sell "
+                                "existing inventory instead of borrowing. "
+                                "Transfer %s out of Cross Margin first.",
+                                symbol, balance.free, base_asset, free_value,
+                                base_asset,
+                            )
+                            return None, None
+
             try:
                 order_result = self.exchange_interface.place_order(
                     symbol=symbol,
@@ -672,6 +728,7 @@ class LiveExecutionEngine:
                     order_type=OrderType.MARKET,
                     quantity=quantity,
                     client_order_id=client_order_id,
+                    side_effect_type=entry_side_effect,
                 )
             except ValueError as e:
                 # Definitively rejected by exchange (invalid params, insufficient
@@ -803,6 +860,7 @@ class LiveExecutionEngine:
                 order_type=OrderType.MARKET,
                 quantity=quantity,
                 client_order_id=client_order_id,
+                side_effect_type=SideEffectType.AUTO_REPAY,
             )
             # Extract order_id string for backward compat
             close_order_id = None
