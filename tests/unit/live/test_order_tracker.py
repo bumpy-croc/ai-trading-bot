@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from src.data_providers.exchange_interface import OrderStatus
-from src.engines.live.order_tracker import OrderTracker
+from src.engines.live.order_tracker import MAX_API_ERROR_RETRIES, OrderTracker
+
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
@@ -358,3 +360,131 @@ def test_zero_average_price_skips_fill_callback(order_tracker, mock_exchange):
     # Should NOT call fill callback with zero price
     order_tracker.on_fill.assert_not_called()
     assert order_tracker.get_tracked_count() == 1
+
+
+class TestApiErrorHandling:
+    """Tests for persistent API error handling in order tracking."""
+
+    def test_api_error_increments_counter(self, order_tracker, mock_exchange):
+        """Test that API errors increment the api_error_count on the tracked order."""
+        # Arrange
+        mock_exchange.get_order.side_effect = Exception("Binance -1100: Illegal characters")
+        order_tracker.track_order("atb_19d360981ab_3a4b0d5a", "BTCUSDT")
+
+        # Act
+        order_tracker._check_orders()
+
+        # Assert - order still tracked, counter incremented
+        assert order_tracker.get_tracked_count() == 1
+        with order_tracker._lock:
+            tracked = order_tracker._pending_orders["atb_19d360981ab_3a4b0d5a"]
+            assert tracked.api_error_count == 1
+
+    def test_api_error_counter_resets_on_success(self, order_tracker, mock_exchange):
+        """Test that a successful API response resets the api_error_count to zero."""
+        # Arrange - first call errors, second succeeds
+        mock_order = MagicMock()
+        mock_order.status = OrderStatus.FILLED
+        mock_order.filled_quantity = 1.0
+        mock_order.average_price = 50000.0
+        mock_exchange.get_order.side_effect = [
+            Exception("Transient error"),
+            mock_order,
+        ]
+        order_tracker.track_order("order123", "BTCUSDT")
+
+        # Act - first poll: error
+        order_tracker._check_orders()
+        with order_tracker._lock:
+            assert order_tracker._pending_orders["order123"].api_error_count == 1
+
+        # Act - second poll: success
+        order_tracker._check_orders()
+
+        # Assert - order filled and removed, counter was reset before processing
+        assert order_tracker.get_tracked_count() == 0
+        order_tracker.on_fill.assert_called_once()
+
+    def test_persistent_api_errors_force_remove_order(self, order_tracker, mock_exchange):
+        """Test that MAX_API_ERROR_RETRIES consecutive errors force-removes the order."""
+        # Arrange
+        mock_exchange.get_order.side_effect = Exception("Binance -1100: Illegal characters")
+        order_tracker.track_order("atb_bad_id", "BTCUSDT")
+
+        # Act - poll MAX_API_ERROR_RETRIES times
+        for _ in range(MAX_API_ERROR_RETRIES):
+            order_tracker._check_orders()
+
+        # Assert - order force-removed after max retries
+        assert order_tracker.get_tracked_count() == 0
+
+    def test_persistent_api_errors_trigger_cancel_callback(self, order_tracker, mock_exchange):
+        """Test that force-removal after API errors calls the cancel callback."""
+        # Arrange
+        mock_exchange.get_order.side_effect = Exception("Binance -1100: Illegal characters")
+        order_tracker.track_order("atb_bad_id", "BTCUSDT")
+
+        # Act - exhaust retries
+        for _ in range(MAX_API_ERROR_RETRIES):
+            order_tracker._check_orders()
+
+        # Assert - cancel callback invoked with last_filled_qty=0.0
+        order_tracker.on_cancel.assert_called_once_with("atb_bad_id", "BTCUSDT", 0.0)
+
+    def test_persistent_api_errors_with_partial_fill_passes_filled_qty(
+        self, order_tracker, mock_exchange
+    ):
+        """Test that force-removal passes cumulative filled_qty from prior partial fills."""
+        # Arrange - first poll: partial fill, then persistent errors
+        partial_order = MagicMock()
+        partial_order.status = OrderStatus.PARTIALLY_FILLED
+        partial_order.filled_quantity = 0.3
+        partial_order.average_price = 50000.0
+
+        responses: list = [partial_order]
+        responses.extend([Exception("API error")] * MAX_API_ERROR_RETRIES)
+        mock_exchange.get_order.side_effect = responses
+
+        order_tracker.track_order("order456", "BTCUSDT")
+
+        # Act - first poll succeeds with partial fill
+        order_tracker._check_orders()
+        assert order_tracker.get_tracked_count() == 1
+
+        # Act - exhaust API error retries
+        for _ in range(MAX_API_ERROR_RETRIES):
+            order_tracker._check_orders()
+
+        # Assert - cancel callback receives the partial fill qty
+        order_tracker.on_cancel.assert_called_once_with("order456", "BTCUSDT", 0.3)
+        assert order_tracker.get_tracked_count() == 0
+
+    def test_api_errors_below_threshold_keep_tracking(self, order_tracker, mock_exchange):
+        """Test that fewer than MAX_API_ERROR_RETRIES errors keep the order tracked."""
+        # Arrange
+        mock_exchange.get_order.side_effect = Exception("Transient error")
+        order_tracker.track_order("order789", "BTCUSDT")
+
+        # Act - poll one fewer than threshold
+        for _ in range(MAX_API_ERROR_RETRIES - 1):
+            order_tracker._check_orders()
+
+        # Assert - order still tracked
+        assert order_tracker.get_tracked_count() == 1
+        order_tracker.on_cancel.assert_not_called()
+
+    def test_cancel_callback_failure_during_force_remove_does_not_crash(
+        self, order_tracker, mock_exchange
+    ):
+        """Test that a failing cancel callback during force-removal is handled gracefully."""
+        # Arrange
+        mock_exchange.get_order.side_effect = Exception("API error")
+        order_tracker.on_cancel.side_effect = RuntimeError("Callback bug")
+        order_tracker.track_order("order_cb_fail", "BTCUSDT")
+
+        # Act - exhaust retries (should not raise)
+        for _ in range(MAX_API_ERROR_RETRIES):
+            order_tracker._check_orders()
+
+        # Assert - order still force-removed despite callback failure
+        assert order_tracker.get_tracked_count() == 0

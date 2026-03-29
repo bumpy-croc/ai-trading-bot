@@ -838,17 +838,31 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return []
 
     def get_order(self, order_id: str, symbol: str) -> Order | None:
-        """Get specific order by ID"""
+        """Get specific order by ID.
+
+        Automatically detects whether order_id is a numeric exchange order ID
+        or an alphanumeric client order ID (e.g. 'atb_19d360981ab_3a4b0d5a')
+        and routes to the appropriate Binance API parameter. Binance's orderId
+        parameter only accepts numeric strings matching '^[0-9]{1,20}$'.
+        """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for order")
             return None
+
+        # Non-numeric IDs are client order IDs — delegate to existing method
+        if not order_id.isdigit():
+            logger.debug(
+                "Order ID %s is non-numeric, routing to get_order_by_client_id",
+                order_id,
+            )
+            return self.get_order_by_client_id(order_id, symbol)
 
         try:
             order_data = self._client.get_order(symbol=symbol, orderId=order_id)
             return self._parse_order_data(order_data)
 
         except Exception as e:
-            logger.error(f"Failed to get order {order_id}: {e}")
+            logger.error("Failed to get order %s: %s", order_id, e)
             return None
 
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:
