@@ -630,16 +630,30 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 raise RuntimeError(f"Failed to verify margin account capabilities: {e}") from e
             logger.warning("Could not verify margin account (non-live mode): %s", e)
 
-    def _verify_margin_symbol(self, symbol: str):
-        """Verify symbol supports margin trading. Called lazily on first order."""
+    def _verify_margin_symbol(self, symbol: str, side: str | None = None):
+        """Verify symbol supports margin trading. Called lazily on first order.
+
+        Args:
+            symbol: Trading pair to verify.
+            side: Order side (BUY/SELL). If provided, only validates the
+                  submitted side so exits/SLs aren't blocked when the
+                  exchange disables only one direction.
+        """
         try:
             info = self._client.get_margin_symbol(symbol=symbol)
             if not info.get("isMarginTrade", False):
                 raise RuntimeError(f"Symbol {symbol} does not support margin trading")
-            if not info.get("isBuyAllowed", False):
+            # Only check the side being submitted, not both
+            if side == "BUY" and not info.get("isBuyAllowed", False):
                 raise RuntimeError(f"Symbol {symbol}: buy not allowed for margin")
-            if not info.get("isSellAllowed", False):
+            if side == "SELL" and not info.get("isSellAllowed", False):
                 raise RuntimeError(f"Symbol {symbol}: sell not allowed for margin")
+            # If no side specified, check both (startup validation)
+            if side is None:
+                if not info.get("isBuyAllowed", False):
+                    raise RuntimeError(f"Symbol {symbol}: buy not allowed for margin")
+                if not info.get("isSellAllowed", False):
+                    raise RuntimeError(f"Symbol {symbol}: sell not allowed for margin")
             logger.info("Margin symbol %s verified: margin trading enabled", symbol)
         except RuntimeError:
             raise
@@ -669,11 +683,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
     def _call_create_order(self, **params) -> dict:
         """Place order via margin or spot API."""
         if self._use_margin:
-            # Lazy symbol validation on first margin order
+            # Lazy symbol validation on first margin order per side
             symbol = params.get("symbol", "")
-            if symbol and symbol not in self._margin_symbol_verified:
-                self._verify_margin_symbol(symbol)
-                self._margin_symbol_verified.add(symbol)
+            order_side = params.get("side", "")
+            cache_key = f"{symbol}:{order_side}" if order_side else symbol
+            if symbol and cache_key not in self._margin_symbol_verified:
+                self._verify_margin_symbol(symbol, side=order_side or None)
+                self._margin_symbol_verified.add(cache_key)
 
             params["isIsolated"] = "FALSE"
             # Inject sideEffectType if provided (pop to avoid double-passing)

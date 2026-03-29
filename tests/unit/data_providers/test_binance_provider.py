@@ -1068,13 +1068,21 @@ class TestMarginSymbolValidation:
         # Reset call count after __init__ verification
         mock_client.get_margin_symbol.reset_mock()
 
-        # First order triggers validation
+        # First BUY order triggers validation
         provider._call_create_order(symbol="BTCUSDT", side="BUY", type="MARKET", quantity=0.1)
         assert mock_client.get_margin_symbol.call_count == 1
 
-        # Second order with same symbol skips validation
-        provider._call_create_order(symbol="BTCUSDT", side="SELL", type="MARKET", quantity=0.1)
+        # Second BUY order with same symbol+side skips validation (cached)
+        provider._call_create_order(symbol="BTCUSDT", side="BUY", type="MARKET", quantity=0.1)
         assert mock_client.get_margin_symbol.call_count == 1  # Still 1
+
+        # SELL order for same symbol triggers new validation (different side)
+        provider._call_create_order(symbol="BTCUSDT", side="SELL", type="MARKET", quantity=0.1)
+        assert mock_client.get_margin_symbol.call_count == 2
+
+        # Second SELL skips (cached)
+        provider._call_create_order(symbol="BTCUSDT", side="SELL", type="MARKET", quantity=0.1)
+        assert mock_client.get_margin_symbol.call_count == 2  # Still 2
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
