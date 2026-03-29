@@ -676,18 +676,31 @@ class LiveExecutionEngine:
                 entry_side_effect = "MARGIN_BUY"
                 # Guard: verify no significant free base asset that MARGIN_BUY
                 # would sell instead of borrowing. Prevents false shorts.
+                # Fail-closed: reject short on any lookup error.
                 use_margin = getattr(self.exchange_interface, "_use_margin", False)
                 if use_margin:
                     base_asset = symbol.replace("USDT", "").replace("BUSD", "")
-                    balance = self.exchange_interface.get_balance(base_asset)
-                    if balance and balance.free > 0:
-                        # Estimate value — reject if > $1
-                        try:
-                            price = self.exchange_interface.get_current_price(symbol)
-                            free_value = balance.free * price
-                        except Exception:
-                            free_value = balance.free  # Conservative
-                        if free_value > 1.0:
+                    try:
+                        balance = self.exchange_interface.get_balance(base_asset)
+                    except Exception as e:
+                        logger.error(
+                            "Cannot open short for %s — failed to check %s balance: %s. "
+                            "Rejecting to prevent false short.",
+                            symbol, base_asset, e,
+                        )
+                        return None, None
+                    if balance is None:
+                        # API returned None — fail closed
+                        logger.error(
+                            "Cannot open short for %s — get_balance(%s) returned None. "
+                            "Rejecting to prevent false short.",
+                            symbol, base_asset,
+                        )
+                        return None, None
+                    if balance.free > 0:
+                        # Use the price arg already validated by caller
+                        free_value = balance.free * price if price > 0 else balance.free
+                        if free_value > 1.0:  # $1 dust threshold
                             logger.error(
                                 "Cannot open short for %s — margin wallet holds "
                                 "%.8f %s (~$%.2f free). MARGIN_BUY would sell "
