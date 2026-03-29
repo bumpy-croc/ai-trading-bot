@@ -41,7 +41,7 @@ from src.config.constants import (
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
-from src.data_providers.exchange_interface import OrderSide
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.data_providers.exchange_interface import (
     OrderStatus as ExchangeOrderStatus,
 )
@@ -2469,10 +2469,12 @@ class LiveTradingEngine:
                                 )
                             else:
                                 # Use quantity from position - LiveEntryResult.position.quantity
-                                self.exchange_interface.place_market_order(
+                                self.exchange_interface.place_order(
                                     symbol=symbol,
                                     side=close_side,
+                                    order_type=OrderType.MARKET,
                                     quantity=result.position.quantity,
+                                    side_effect_type="AUTO_REPAY",
                                 )
                             logger.warning(
                                 "Emergency close placed for %s due to balance update failure",
@@ -2533,10 +2535,12 @@ class LiveTradingEngine:
                                 result.position.quantity,
                             )
                         else:
-                            self.exchange_interface.place_market_order(
+                            self.exchange_interface.place_order(
                                 symbol=symbol,
                                 side=close_side,
+                                order_type=OrderType.MARKET,
                                 quantity=result.position.quantity,
+                                side_effect_type="AUTO_REPAY",
                             )
                             logger.info(
                                 "Emergency close order placed for orphaned position %s", symbol
