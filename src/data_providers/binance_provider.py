@@ -668,28 +668,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     except Exception:
                         value_usd = free  # Conservative: treat as $1 per unit
                     if value_usd > dust_threshold:
-                        msg = (
-                            f"Margin wallet holds {free:.8f} {asset_name} "
-                            f"(~${value_usd:.2f}). The bot assumes USDT-only "
-                            f"collateral — non-USDT base assets cause MARGIN_BUY "
-                            f"to sell existing inventory instead of borrowing. "
-                            f"Transfer {asset_name} out of Cross Margin before trading."
-                        )
-                        # If borrowed > 0, a tracked short may be recovering.
-                        # Warn but allow startup so reconciliation can verify.
-                        # Only hard-block when borrowed=0 AND significant free
-                        # inventory exists — that's untracked manual deposits.
+                        # Warn but don't block — this could be a recovering
+                        # long (free > 0, borrowed == 0) or a recovering short
+                        # (borrowed > 0). Provider init runs before startup
+                        # reconciliation, so blocking here prevents position
+                        # recovery. Reconciliation will verify shortly after.
                         if borrowed > 0:
                             logger.warning(
-                                "%s (borrowed=%.8f — may be a recovering short, "
-                                "reconciliation will verify)",
-                                msg,
-                                borrowed,
+                                "Margin wallet holds %s %s (~$%.2f, borrowed=%.8f) "
+                                "— may be a recovering short, reconciliation will verify",
+                                free, asset_name, value_usd, borrowed,
                             )
-                        elif self._is_live:
-                            raise RuntimeError(msg)
                         else:
-                            logger.warning(msg)
+                            logger.warning(
+                                "Margin wallet holds %s %s (~$%.2f, borrowed=0) "
+                                "— may be a recovering long or manual deposit. "
+                                "If manual, transfer out before next short entry "
+                                "(MARGIN_BUY sells existing inventory before borrowing)",
+                                free, asset_name, value_usd,
+                            )
         except RuntimeError:
             raise
         except Exception as e:

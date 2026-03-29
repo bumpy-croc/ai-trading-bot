@@ -717,8 +717,8 @@ class TestMarginBaseAssetGuard:
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
-    def test_rejects_non_usdt_holdings_in_live_mode(self, mock_config, mock_client_class):
-        """Live margin mode raises if wallet holds significant non-USDT assets."""
+    def test_warns_non_usdt_holdings_in_live_mode(self, mock_config, mock_client_class):
+        """Live margin mode warns (not raises) for non-USDT assets — could be a recovering long."""
         mock_config.return_value = _make_config_mock({
             "BINANCE_ACCOUNT_TYPE": "margin",
             "TRADING_MODE": "live",
@@ -734,11 +734,13 @@ class TestMarginBaseAssetGuard:
                 {"asset": "ETH", "free": "0.05", "locked": "0", "netAsset": "0.05"},
             ],
         }
-        # Price lookup for ETH value estimation
         mock_client.get_symbol_ticker.return_value = {"price": "2000"}
 
-        with pytest.raises(RuntimeError, match="holds.*ETH.*Transfer.*out"):
-            BinanceProvider()
+        # Should warn but NOT raise — could be a recovering long position.
+        # Provider init runs before startup reconciliation, so blocking
+        # prevents position recovery.
+        provider = BinanceProvider()
+        assert provider._use_margin is True
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
