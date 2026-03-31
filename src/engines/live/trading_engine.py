@@ -1526,6 +1526,12 @@ class LiveTradingEngine:
             ):
                 self._user_data_processor = new_processor
                 self._user_data_processor.start()
+                # Post-reconnect catch-up: reconcile events from the handoff gap
+                # before disabling polling, so nothing is lost
+                if self.order_tracker:
+                    self.order_tracker.poll_once()
+                if self._periodic_reconciler:
+                    self._periodic_reconciler.reconcile_once()
                 if self.order_tracker:
                     self.order_tracker.disable_polling()
                 logger.info("User data WebSocket reconnected")

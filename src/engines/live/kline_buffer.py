@@ -90,7 +90,7 @@ class KlineBuffer:
                 # event_ts > tail_ts — new candle
                 # Detect gap: if more than one interval was skipped, flag for resync
                 gap_ms = int((event_ts - tail_ts).total_seconds() * 1000)
-                if self._interval_ms and gap_ms > self._interval_ms * 2:
+                if self._interval_ms and gap_ms >= self._interval_ms * 2:
                     logger.warning(
                         "KlineBuffer gap detected for %s %s: expected %dms, got %dms — flagging resync",
                         self._symbol, self._timeframe, self._interval_ms, gap_ms,

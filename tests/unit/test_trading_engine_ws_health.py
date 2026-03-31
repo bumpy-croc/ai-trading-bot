@@ -188,8 +188,9 @@ class TestHandleUserStreamDisconnect:
 
         mock_engine._handle_user_stream_disconnect()
 
-        mock_tracker.poll_once.assert_called_once()
-        mock_reconciler.reconcile_once.assert_called_once()
+        # poll_once called twice: pre-reconnect catch-up + post-reconnect catch-up
+        assert mock_tracker.poll_once.call_count == 2
+        assert mock_reconciler.reconcile_once.call_count == 2
         mock_exchange.reconnect_user.assert_called_once()
         mock_tracker.disable_polling.assert_called_once()
 
