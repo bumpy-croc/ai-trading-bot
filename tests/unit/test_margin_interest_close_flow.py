@@ -74,8 +74,8 @@ class TestMarginInterestDeduction:
         exchange = Mock()
         exchange.is_margin_mode = True
         exchange.get_margin_interest_history.return_value = [
-            {"interest": "1.50"},
-            {"interest": "0.75"},
+            {"interest": "0.010"},
+            {"interest": "0.005"},
         ]
 
         engine = _make_engine(exchange_interface=exchange)
@@ -99,10 +99,11 @@ class TestMarginInterestDeduction:
             skip_live_close=True,
         )
 
-        # Interest cost = 1.50 + 0.75 = 2.25
+        # Interest in base asset = 0.010 + 0.005 = 0.015
+        # Interest in USDT = 0.015 * 90.0 (exit_price) = 1.35
         # Gross PnL for short: (100 - 90) / 100 * 0.25 * 1000 = 25.0
-        # Net PnL = 25.0 - 2.25 = 22.75
-        expected_balance = initial_balance + 25.0 - 2.25
+        # Net PnL = 25.0 - 1.35 = 23.65
+        expected_balance = initial_balance + 25.0 - 1.35
         assert engine.current_balance == pytest.approx(expected_balance, abs=0.01)
 
         # Verify performance_tracker.record_trade is called (interest tracked separately)
@@ -193,7 +194,7 @@ class TestMarginInterestLogTrade:
         exchange = Mock()
         exchange.is_margin_mode = True
         exchange.get_margin_interest_history.return_value = [
-            {"interest": "3.00"},
+            {"interest": "0.030"},
         ]
 
         engine = _make_engine(exchange_interface=exchange)
@@ -214,10 +215,11 @@ class TestMarginInterestLogTrade:
         )
 
         # Check that log_trade was called with margin_interest_cost
+        # Interest = 0.030 base asset * 90.0 exit_price = 2.70 USDT
         logged_trade = engine.db_manager._trades
         assert len(logged_trade) == 1
         trade_data = list(logged_trade.values())[0]
-        assert trade_data.get("margin_interest_cost") == pytest.approx(3.0)
+        assert trade_data.get("margin_interest_cost") == pytest.approx(2.70, abs=0.01)
 
     def test_zero_interest_cost_for_non_margin(self):
         """Verify margin_interest_cost=0.0 is passed for non-margin trades."""

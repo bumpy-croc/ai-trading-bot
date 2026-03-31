@@ -91,7 +91,7 @@ class MarginInterestTracker:
         return total
 
     _MAX_PAGES = 10  # Safety limit to prevent runaway pagination
-    _PAGE_SIZE = 500  # Binance returns max 500 records per call
+    _PAGE_SIZE = 100  # Must match size param passed to Binance API
 
     def _fetch_all_records(
         self, asset: str, start_time_ms: int

@@ -243,19 +243,21 @@ class TestRealizePnlOnCloseInterestDeduction:
             "src.engines.live.reconciliation.MarginInterestTracker"
         ) as MockMIT:
             instance = MockMIT.return_value
-            instance.get_position_interest_cost.return_value = 5.0
+            instance.get_position_interest_cost.return_value = 0.002
 
             with caplog.at_level(logging.INFO):
                 reconciler._realize_pnl_on_close(pos, exit_price=1900.0, reason="test")
 
-            # PnL = (2000 - 1900) * 0.1 = 10.0, minus 5.0 interest = 5.0
+            # PnL = (2000 - 1900) * 0.1 = 10.0
+            # Interest = 0.002 base * 1900.0 exit = 3.80 USDT
+            # Net PnL = 10.0 - 3.80 = 6.20
             mock_db.update_balance.assert_called_once()
             call_args = mock_db.update_balance.call_args
             new_balance = call_args[0][0]
-            assert new_balance == pytest.approx(1000.0 + 5.0)
+            assert new_balance == pytest.approx(1000.0 + 6.20)
 
             assert any(
-                "Deducted margin interest $5.00" in msg
+                "Deducted margin interest $3.80" in msg
                 for msg in caplog.messages
             )
 

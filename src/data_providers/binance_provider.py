@@ -953,7 +953,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         if not self._use_margin or not BINANCE_AVAILABLE or not self._client:
             return []
         try:
-            params: dict[str, Any] = {"asset": asset}
+            params: dict[str, Any] = {"asset": asset, "size": 100}
             if start_time is not None:
                 params["startTime"] = start_time
             if end_time is not None:

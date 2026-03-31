@@ -105,7 +105,7 @@ class TestGetMarginInterestHistory:
         )
 
         margin_provider._client.get_margin_interest_history.assert_called_once_with(
-            asset="ETH", startTime=1000, endTime=2000
+            asset="ETH", size=100, startTime=1000, endTime=2000
         )
 
     def test_filters_none_params(self, margin_provider):
@@ -115,7 +115,7 @@ class TestGetMarginInterestHistory:
         margin_provider.get_margin_interest_history(asset="BTC")
 
         margin_provider._client.get_margin_interest_history.assert_called_once_with(
-            asset="BTC"
+            asset="BTC", size=100
         )
 
     def test_filters_only_end_time_none(self, margin_provider):
@@ -125,7 +125,7 @@ class TestGetMarginInterestHistory:
         margin_provider.get_margin_interest_history(asset="BTC", start_time=5000)
 
         margin_provider._client.get_margin_interest_history.assert_called_once_with(
-            asset="BTC", startTime=5000
+            asset="BTC", size=100, startTime=5000
         )
 
 

@@ -3298,14 +3298,19 @@ class LiveTradingEngine:
                             "Could not extract base asset from %s — margin interest may not be queried correctly",
                             position.symbol,
                         )
-                    interest_cost = tracker.get_position_interest_cost(
+                    interest_base = tracker.get_position_interest_cost(
                         base_asset, position.entry_time
                     )
+                    # Convert from base asset units to USDT using exit price
+                    interest_cost = interest_base * float(exit_result.exit_price)
                     if interest_cost > 0:
                         realized_pnl -= interest_cost
                         logger.info(
-                            "Deducted margin interest $%.2f from PnL for %s",
+                            "Deducted margin interest $%.4f (%.8f %s @ %.2f) from PnL for %s",
                             interest_cost,
+                            interest_base,
+                            base_asset,
+                            float(exit_result.exit_price),
                             position.symbol,
                         )
                 except Exception as e:
