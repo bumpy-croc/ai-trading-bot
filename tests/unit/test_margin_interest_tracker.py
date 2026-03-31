@@ -82,6 +82,22 @@ class TestGetPositionInterestCost:
 
         assert math.isclose(result, 0.003, rel_tol=1e-9)
 
+    def test_skips_negative_and_zero_interest_values(
+        self, tracker: MarginInterestTracker, mock_exchange: MagicMock
+    ) -> None:
+        """Skip records with negative or zero interest values."""
+        mock_exchange.get_margin_interest_history.return_value = [
+            {"interest": "0.001", "asset": "BTC"},
+            {"interest": "-0.005", "asset": "BTC"},
+            {"interest": "0", "asset": "BTC"},
+            {"interest": "0.002", "asset": "BTC"},
+        ]
+        entry_time = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        result = tracker.get_position_interest_cost("BTC", entry_time)
+
+        assert math.isclose(result, 0.003, rel_tol=1e-9)
+
     def test_converts_entry_time_to_milliseconds(
         self, tracker: MarginInterestTracker, mock_exchange: MagicMock
     ) -> None:

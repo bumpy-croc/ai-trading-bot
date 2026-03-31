@@ -2018,6 +2018,30 @@ class PositionReconciler:
         else:
             pnl = (exit_price - entry_price) * qty
 
+        # Deduct margin interest for short positions closed during reconciliation
+        if self._use_margin and side_is_short:
+            try:
+                interest_tracker = MarginInterestTracker(self.exchange)
+                base_asset = PositionReconciler._extract_base_asset(position.symbol)
+                entry_time = getattr(position, "entry_time", None)
+                if entry_time is not None:
+                    interest_cost = interest_tracker.get_position_interest_cost(
+                        base_asset, entry_time
+                    )
+                    if interest_cost > 0:
+                        pnl -= interest_cost
+                        logger.info(
+                            "Deducted margin interest $%.2f from reconciliation PnL for %s",
+                            interest_cost,
+                            position.symbol,
+                        )
+            except Exception as e:
+                logger.warning(
+                    "Failed to query margin interest during reconciliation close for %s: %s",
+                    getattr(position, "symbol", "?"),
+                    e,
+                )
+
         try:
             current_balance = self.db_manager.get_current_balance(self.session_id)
             if current_balance is None or current_balance < 0:
