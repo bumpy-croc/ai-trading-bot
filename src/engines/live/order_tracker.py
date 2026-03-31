@@ -643,8 +643,19 @@ class OrderTracker:
             )
 
             self._process_order_status(order_id, tracked, order)
-            # Mark as seen only after successful processing
-            self._dedup.mark_seen(order_id, exec_type, exec_id)
+            # Only mark as seen if the order was fully handled (untracked or
+            # terminal). If still tracked with same fill qty, a retryable failure
+            # occurred and the event should be retried on next delivery/poll.
+            with self._lock:
+                still_tracked = order_id in self._pending_orders
+                if still_tracked:
+                    current = self._pending_orders[order_id]
+                    # Fill/partial fill advanced state — safe to mark seen
+                    state_changed = current.last_filled_qty != tracked.last_filled_qty
+                else:
+                    state_changed = True  # Order removed — fully handled
+            if not still_tracked or state_changed:
+                self._dedup.mark_seen(order_id, exec_type, exec_id)
 
     @staticmethod
     def _map_ws_status(ws_status: str) -> OrderStatus | None:
