@@ -204,6 +204,11 @@ except Exception as e:
 - Emergency close must confirm the sell was accepted before removing the position from tracker and DB.
 - Don't reuse inactive session IDs on clean restart. Create new sessions; recover balance from the most recent inactive one.
 - Preserve paper positions across restarts instead of force-closing on shutdown.
+- Serialize concurrent reconciliation when switching between redundant data paths (e.g. stream ↔ polling).
+- Dead constants are misleading. If a constant describes intended behavior, import and use it.
+- On terminal events (cancel/reject/expired), reconcile missed state deltas BEFORE firing the terminal callback.
+- Don't mark a connection as healthy until the first successful event confirms it. Reset the flag on each reconnect.
+- When handing off between redundant paths: stop old producer → drain in-flight work → enable replacement → catch-up → disable old path.
 
 ---
 
@@ -224,6 +229,12 @@ except Exception as e:
 - Use `dict.pop(key, None)` for cache eviction, not `dict.get()` then delete.
 - Redirect unused subprocess streams to DEVNULL to prevent pipe deadlocks.
 - Use `pool_timeout` to prevent indefinite blocking on DB pool exhaustion.
+- After snapshotting a collection for iteration, re-check membership under lock before mutating — items may have been removed concurrently.
+- Snapshot mutable values before calling a mutation, then compare. The "before" reference may alias the mutated object.
+- Lazy singleton init (check-then-create) requires a lock even for initially-`None` fields.
+- If a worker thread doesn't stop after join timeout, stay degraded — don't proceed while it may still be mutating state.
+- Gate producer→consumer queues with a lock-protected `_closed` flag. Set the flag and do a final drain atomically to prevent late items slipping in after the drain.
+- On reconnect, pass a fresh callback — stale callbacks may reference stopped consumers.
 
 ---
 
@@ -246,6 +257,19 @@ except Exception as e:
 - Use exponential backoff for retries (3 attempts max).
 - Validate response types and status codes before processing.
 - Use `ConnectionError` (not broad `Exception`) when mocking network failures in tests.
+- `dict.get(key, default)` returns `None` when the key exists with JSON `null`. Use `or`: `float(d.get("n") or 0)`.
+- Map all known external statuses explicitly. Unknown values → no-op with warning, never terminal.
+- Add a grace period before health-checking new connections to avoid false-positive failures.
+
+---
+
+## Event & Data Processing
+
+- Separate dedup check from dedup marking. Only mark events as seen after successful processing.
+- Only bump freshness timers when data was actually mutated, not for stale or replayed events.
+- Detect gaps in sequential data (e.g. timestamp jumps) and trigger resync instead of silently appending.
+- Guard data replacement against empty or stale responses — keep existing data and retry later.
+- Only trust a source's freshness signal when the source is confirmed healthy, not just connected.
 
 ---
 
