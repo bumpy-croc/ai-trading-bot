@@ -642,6 +642,7 @@ class OrderTracker:
                 client_order_id=str(event.get("c", "")),
             )
 
+            old_filled_qty = tracked.last_filled_qty
             self._process_order_status(order_id, tracked, order)
             # Only mark as seen if the order was fully handled (untracked or
             # terminal). If still tracked with same fill qty, a retryable failure
@@ -650,8 +651,8 @@ class OrderTracker:
                 still_tracked = order_id in self._pending_orders
                 if still_tracked:
                     current = self._pending_orders[order_id]
-                    # Fill/partial fill advanced state — safe to mark seen
-                    state_changed = current.last_filled_qty != tracked.last_filled_qty
+                    # Compare against snapshot — tracked is the same object as current
+                    state_changed = current.last_filled_qty != old_filled_qty
                 else:
                     state_changed = True  # Order removed — fully handled
             if not still_tracked or state_changed:
