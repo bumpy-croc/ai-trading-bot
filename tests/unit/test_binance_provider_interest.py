@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.fast
+
 
 @pytest.fixture
 def margin_provider():
@@ -50,8 +52,6 @@ class TestGetMarginInterestHistory:
         result = margin_provider.get_margin_interest_history(asset="BTC")
 
         assert result == expected
-        assert len(result) == 1
-        assert result[0]["asset"] == "BTC"
 
     def test_returns_empty_list_when_not_margin_mode(self, spot_provider):
         """Should return empty list when not in margin mode."""

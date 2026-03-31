@@ -853,7 +853,7 @@ class DatabaseManager:
                 mae_price=mae_price,
                 mfe_time=mfe_time,
                 mae_time=mae_time,
-                margin_interest_cost=margin_interest_cost or 0.0,
+                margin_interest_cost=margin_interest_cost if margin_interest_cost is not None else 0.0,
             )
 
             session.add(trade)

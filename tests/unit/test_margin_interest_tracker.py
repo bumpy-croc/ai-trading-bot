@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.fast
+
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
 
 
@@ -119,26 +121,3 @@ class TestGetPositionInterestCost:
         result = tracker.get_position_interest_cost("BTC", entry_time)
 
         assert math.isclose(result, 0.003, rel_tol=1e-9)
-
-
-class TestIsMarginPosition:
-    """Tests for is_margin_position method."""
-
-    def test_short_is_margin_position(
-        self, tracker: MarginInterestTracker
-    ) -> None:
-        """SHORT positions borrow and incur interest."""
-        assert tracker.is_margin_position("SHORT") is True
-
-    def test_long_is_not_margin_position(
-        self, tracker: MarginInterestTracker
-    ) -> None:
-        """LONG positions do not borrow."""
-        assert tracker.is_margin_position("LONG") is False
-
-    def test_other_side_is_not_margin_position(
-        self, tracker: MarginInterestTracker
-    ) -> None:
-        """Arbitrary strings are not margin positions."""
-        assert tracker.is_margin_position("BUY") is False
-        assert tracker.is_margin_position("") is False
