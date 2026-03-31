@@ -515,6 +515,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             def get_margin_trades(self, *args, **kwargs):
                 return []
 
+            def get_margin_interest_history(self, *args, **kwargs):
+                return []
+
             def get_margin_symbol(self, *args, **kwargs):
                 return {"isMarginTrade": True, "isBuyAllowed": True, "isSellAllowed": True}
 
@@ -933,6 +936,34 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         except Exception as e:
             logger.warning("Failed to get borrowed amount for %s: %s", asset, e)
             return None  # Unknown — caller must not assume position is closed
+
+    def get_margin_interest_history(
+        self,
+        asset: str,
+        start_time: int | None = None,
+        end_time: int | None = None,
+    ) -> list[dict]:
+        """Get margin interest accrual history for an asset.
+
+        Queries Binance /sapi/v1/margin/interestHistory endpoint.
+        Returns list of dicts with keys: txId, interestAccuredTime, asset,
+        interest, interestRate, principal, type.
+        Returns empty list on error or if not in margin mode.
+        """
+        if not self._use_margin or not BINANCE_AVAILABLE or not self._client:
+            return []
+        try:
+            params: dict[str, Any] = {"asset": asset}
+            if start_time is not None:
+                params["startTime"] = start_time
+            if end_time is not None:
+                params["endTime"] = end_time
+            return self._client.get_margin_interest_history(**params)
+        except Exception as e:
+            logger.warning(
+                "Failed to get margin interest history for %s: %s", asset, e
+            )
+            return []
 
     def get_balance(self, asset: str) -> AccountBalance | None:
         """Get balance for a specific asset"""
