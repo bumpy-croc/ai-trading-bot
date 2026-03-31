@@ -546,13 +546,31 @@ class OrderTracker:
             OrderStatus.REJECTED,
             OrderStatus.EXPIRED,
         ):
+            # Reconcile fill delta: if terminal status carries more fill qty than
+            # we've seen (e.g. partial fill event was missed), process the delta
+            # before handling the cancel to avoid under-counting fills.
+            actual_filled = order.filled_quantity if order.filled_quantity else 0.0
+            if actual_filled > tracked.last_filled_qty:
+                fill_delta = actual_filled - tracked.last_filled_qty
+                logger.warning(
+                    "Order %s: reconciling missed fill delta %.8f before %s",
+                    order_id, fill_delta, status.value,
+                )
+                if self.on_partial_fill:
+                    try:
+                        self.on_partial_fill(order_id, tracked.symbol, fill_delta, avg_price)
+                    except Exception as e:
+                        logger.error("Fill reconciliation callback failed for %s: %s", order_id, e)
+                with self._lock:
+                    if order_id in self._pending_orders:
+                        self._pending_orders[order_id].last_filled_qty = actual_filled
+
             logger.warning("Order %s: %s %s", status.value, order_id, tracked.symbol)
             # Call callback outside any lock to prevent deadlock.
-            # Pass last_filled_qty so the caller can compute a proportional fee refund
-            # when the order was partially filled before cancellation.
+            # Pass actual filled qty so the caller uses the reconciled value.
             if self.on_cancel:
                 try:
-                    self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
+                    self.on_cancel(order_id, tracked.symbol, actual_filled)
                 except Exception as e:
                     # Escalate to CRITICAL: the position may still exist in the
                     # tracker with no exchange order backing it. The order won't

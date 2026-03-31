@@ -255,6 +255,7 @@ class TestWsProperties:
     def test_ws_healthy_true_when_primary_and_fresh(self, provider):
         """ws_healthy returns True when kline PRIMARY and recent kline event."""
         provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._kline_event_received = True
         provider._last_kline_event_time = datetime.now(UTC)
         assert provider.ws_healthy is True
 
@@ -262,6 +263,7 @@ class TestWsProperties:
     def test_ws_healthy_false_when_stale(self, provider):
         """ws_healthy returns False when kline event is stale."""
         provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._kline_event_received = True
         provider._last_kline_event_time = datetime.now(UTC) - timedelta(seconds=130)
         assert provider.ws_healthy is False
 
@@ -276,6 +278,7 @@ class TestWsProperties:
     def test_ws_healthy_true_even_when_user_stream_resyncing(self, provider):
         """ws_healthy returns True when kline is PRIMARY even if user stream is RESYNCING."""
         provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._kline_event_received = True
         provider._user_ws_state = WebSocketState.RESYNCING
         provider._last_kline_event_time = datetime.now(UTC)
         assert provider.ws_healthy is True

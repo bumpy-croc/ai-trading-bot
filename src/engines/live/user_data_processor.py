@@ -89,7 +89,8 @@ class UserDataProcessor(threading.Thread):
         Returns:
             True if the thread stopped cleanly, False if it timed out.
         """
-        self._closed = True  # Reject new events immediately
+        # Signal the run() loop to exit (keep accepting enqueues until drain completes
+        # so in-flight callbacks from the socket aren't dropped)
         self._running = False
         self._stop_event.set()
         # Put sentinel to unblock the queue.get() call in run()
@@ -102,6 +103,7 @@ class UserDataProcessor(threading.Thread):
                 "UserDataProcessor thread did not exit within timeout — "
                 "skipping drain to avoid concurrent event processing"
             )
+            self._closed = True
             return False
 
         # Drain remaining events to prevent missed fills during WS->REST handoff
@@ -122,6 +124,9 @@ class UserDataProcessor(threading.Thread):
                         )
             except queue.Empty:
                 break
+
+        # Now reject any further enqueues
+        self._closed = True
 
         if drained > 0:
             logger.info("Drained %d execution events during shutdown", drained)

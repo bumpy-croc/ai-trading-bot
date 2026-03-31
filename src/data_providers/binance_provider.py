@@ -289,6 +289,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         self._active_timeframe: str | None = None
         self._last_kline_event_time = datetime.now(UTC)
         self._last_user_event_time = datetime.now(UTC)
+        self._kline_event_received = False  # True after first kline WS event
+        self._user_event_received = False  # True after first user WS event
 
     @staticmethod
     def _validate_credentials(
@@ -1750,6 +1752,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     self._on_kline_disconnect()
                     return
                 self._last_kline_event_time = datetime.now(UTC)
+                self._kline_event_received = True
                 on_kline(msg)
 
             self._kline_socket_key = self._twm.start_kline_socket(
@@ -1782,6 +1785,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     self._on_user_disconnect()
                     return
                 self._last_user_event_time = datetime.now(UTC)
+                self._user_event_received = True
                 on_user_event(msg)
 
             if self._use_margin:
@@ -1808,6 +1812,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.error("Failed to stop user socket: %s", e)
             self._user_socket_key = None
             self._user_ws_state = WebSocketState.DISCONNECTED
+            self._user_event_received = False
 
     def stop_streams(self) -> None:
         """Stop all WebSocket streams. Recreates TWM on reconnect."""
@@ -1818,6 +1823,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._user_socket_key = None
             self._kline_ws_state = WebSocketState.DISCONNECTED
             self._user_ws_state = WebSocketState.DISCONNECTED
+            self._kline_event_received = False
+            self._user_event_received = False
 
     @property
     def ws_state(self) -> WebSocketState:
@@ -1838,9 +1845,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     @property
     def ws_healthy(self) -> bool:
-        """Kline stream must be alive. User-data idleness is normal."""
+        """Kline stream must be alive and have received at least one event."""
         if self._kline_ws_state != WebSocketState.PRIMARY:
             return False
+        if not self._kline_event_received:
+            return False  # Not yet confirmed — don't prefer WS cache
         kline_age = (datetime.now(UTC) - self._last_kline_event_time).total_seconds()
         return kline_age < DEFAULT_WS_KLINE_STALENESS_THRESHOLD
 
