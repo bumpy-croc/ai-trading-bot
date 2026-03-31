@@ -1755,6 +1755,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 self._kline_event_received = True
                 on_kline(msg)
 
+            self._kline_event_received = False  # Reset until first event confirms
             self._kline_socket_key = self._twm.start_kline_socket(
                 callback=_kline_callback, symbol=symbol, interval=timeframe
             )

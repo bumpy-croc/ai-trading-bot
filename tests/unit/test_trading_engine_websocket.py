@@ -132,11 +132,14 @@ class TestIsDataFreshWithWebSocket:
 
     @pytest.mark.fast
     def test_uses_buffer_freshness_when_ws_active(self, mock_engine):
-        """Bypasses candle-timestamp check when WS kline cache is active."""
+        """Bypasses candle-timestamp check when WS kline cache is active and healthy."""
         mock_buffer = MagicMock()
         mock_buffer.is_fresh = True
         mock_engine._kline_buffer = mock_buffer
         mock_engine._ws_kline_active = True
+        mock_ws_provider = MagicMock()
+        mock_ws_provider.ws_healthy = True
+        mock_engine._ws_kline_provider = mock_ws_provider
 
         # Create df with old timestamp that would fail normal freshness check
         old_df = _make_df(5)

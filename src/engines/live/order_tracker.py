@@ -610,9 +610,9 @@ class OrderTracker:
             if tracked is None:
                 return
 
-            # Dedup after confirming order is tracked — events arriving before
-            # track_order() should not be permanently marked as seen.
-            if self._dedup.is_duplicate(order_id, exec_type, exec_id):
+            # Check dedup without marking — only mark after successful processing
+            # so transient callback failures can be retried on next event/poll.
+            if self._dedup.is_seen(order_id, exec_type, exec_id):
                 return
 
             cum_filled = float(event.get("z", 0))
@@ -643,6 +643,8 @@ class OrderTracker:
             )
 
             self._process_order_status(order_id, tracked, order)
+            # Mark as seen only after successful processing
+            self._dedup.mark_seen(order_id, exec_type, exec_id)
 
     @staticmethod
     def _map_ws_status(ws_status: str) -> OrderStatus | None:

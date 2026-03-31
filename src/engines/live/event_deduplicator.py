@@ -25,7 +25,7 @@ class EventDeduplicator:
         self._seen: OrderedDict[tuple[str, str, str], datetime] = OrderedDict()
 
     def is_duplicate(self, order_id: str, exec_type: str, exec_id: str) -> bool:
-        """Check if event was already processed. Returns True if duplicate.
+        """Check if event was already processed and mark it as seen.
 
         Key is (orderId, executionType, executionId) -- Binance fields (i, x, I).
         Uses I (execution ID) not t (trade ID) because t is -1 for non-trade
@@ -48,3 +48,21 @@ class EventDeduplicator:
             while len(self._seen) > self._max_size:
                 self._seen.popitem(last=False)
             return False
+
+    def is_seen(self, order_id: str, exec_type: str, exec_id: str) -> bool:
+        """Check if event was already processed WITHOUT marking it.
+
+        Use this when you want to defer marking until after successful processing.
+        Call mark_seen() after the event is successfully handled.
+        """
+        key = (order_id, exec_type, exec_id)
+        with self._lock:
+            return key in self._seen
+
+    def mark_seen(self, order_id: str, exec_type: str, exec_id: str) -> None:
+        """Mark an event as processed after successful handling."""
+        key = (order_id, exec_type, exec_id)
+        with self._lock:
+            self._seen[key] = datetime.now(UTC)
+            while len(self._seen) > self._max_size:
+                self._seen.popitem(last=False)

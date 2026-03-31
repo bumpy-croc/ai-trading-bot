@@ -3719,8 +3719,13 @@ class LiveTradingEngine:
         if df is None or df.empty:
             return False
 
-        # Bypass candle-timestamp check when WS cache maintains freshness
-        if self._ws_kline_active and self._kline_buffer:
+        # Bypass candle-timestamp check only when WS stream is confirmed healthy
+        if (
+            self._ws_kline_active
+            and self._kline_buffer
+            and self._ws_kline_provider
+            and getattr(self._ws_kline_provider, "ws_healthy", False)
+        ):
             return self._kline_buffer.is_fresh
 
         latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now(UTC)
