@@ -1799,6 +1799,16 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error("Failed to start user data stream: %s", e)
             return False
 
+    def stop_user_stream(self) -> None:
+        """Stop only the user data WebSocket stream."""
+        if self._user_socket_key and self._twm:
+            try:
+                self._twm.stop_socket(self._user_socket_key)
+            except Exception as e:
+                logger.error("Failed to stop user socket: %s", e)
+            self._user_socket_key = None
+            self._user_ws_state = WebSocketState.DISCONNECTED
+
     def stop_streams(self) -> None:
         """Stop all WebSocket streams. Recreates TWM on reconnect."""
         if self._twm:

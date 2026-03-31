@@ -80,11 +80,14 @@ class UserDataProcessor(threading.Thread):
         except Exception as e:
             logger.error("Error processing user data event: %s", e, exc_info=True)
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
         """Stop the processor and drain remaining execution events.
 
         Processes all remaining queued executionReport events before returning.
         This is critical for the WS-to-REST handoff to prevent missed fills.
+
+        Returns:
+            True if the thread stopped cleanly, False if it timed out.
         """
         self._closed = True  # Reject new events immediately
         self._running = False
@@ -99,7 +102,7 @@ class UserDataProcessor(threading.Thread):
                 "UserDataProcessor thread did not exit within timeout — "
                 "skipping drain to avoid concurrent event processing"
             )
-            return
+            return False
 
         # Drain remaining events to prevent missed fills during WS->REST handoff
         drained = 0
@@ -122,6 +125,7 @@ class UserDataProcessor(threading.Thread):
 
         if drained > 0:
             logger.info("Drained %d execution events during shutdown", drained)
+        return True
 
     @property
     def queue_size(self) -> int:

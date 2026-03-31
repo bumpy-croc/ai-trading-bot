@@ -1503,19 +1503,31 @@ class LiveTradingEngine:
 
         if not self.enable_live_trading or not self.exchange_interface:
             return
-        # 1. Stop and drain the UserDataProcessor (process remaining queued events)
+        # 1. Stop the old user socket FIRST to prevent new events arriving
+        if hasattr(self.exchange_interface, "stop_user_stream"):
+            self.exchange_interface.stop_user_stream()
+        # 2. Now drain the UserDataProcessor (no new events can arrive)
+        processor_clean = True
         if self._user_data_processor:
-            self._user_data_processor.stop()
+            processor_clean = self._user_data_processor.stop()
             self._user_data_processor = None
-        # 2. Enable REST polling as fallback
+        # 3. Enable REST polling as fallback
         if self.order_tracker:
             self.order_tracker.enable_polling()
-        # 3. Resync order and position state from REST
+        # 4. Resync order and position state from REST
         if self.order_tracker:
             self.order_tracker.poll_once()
         if self._periodic_reconciler:
             self._periodic_reconciler.reconcile_once()
-        # 4. Attempt user stream reconnect with fresh callback
+        # 5. If processor didn't stop cleanly, stay degraded — don't reconnect
+        #    while the old thread may still be mutating order state
+        if not processor_clean:
+            self.exchange_interface.mark_user_degraded()
+            logger.critical(
+                "UserDataProcessor did not stop cleanly — staying in REST_DEGRADED"
+            )
+            return
+        # 6. Attempt user stream reconnect with fresh callback
         reconnected = False
         if hasattr(self.exchange_interface, "reconnect_user"):
             new_processor = UserDataProcessor(

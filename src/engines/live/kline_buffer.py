@@ -141,6 +141,16 @@ class KlineBuffer:
         new_df = provider.get_live_data(symbol, timeframe, limit=500)
 
         with self._lock:
+            # Only overwrite if REST data is newer than current buffer,
+            # to avoid rolling back WS updates that arrived during the fetch
+            if not self._df.empty and not new_df.empty:
+                if new_df.index[-1] < self._df.index[-1]:
+                    logger.info(
+                        "Skipping REST resync — buffer tail %s is newer than REST tail %s",
+                        self._df.index[-1], new_df.index[-1],
+                    )
+                    self._needs_resync = False
+                    return
             self._df = new_df
             self._last_update = datetime.now(UTC)
             self._needs_resync = False
