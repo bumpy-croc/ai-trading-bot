@@ -30,6 +30,7 @@ class UserDataProcessor(threading.Thread):
         self._queue: queue.Queue = queue.Queue()
         self._running = False
         self._closed = False  # Gate to reject events after stop()
+        self._close_lock = threading.Lock()  # Synchronises enqueue vs drain
         self._stop_event = threading.Event()
 
     def enqueue(self, event: dict) -> None:
@@ -38,9 +39,10 @@ class UserDataProcessor(threading.Thread):
         Called from the WebSocket callback thread. Must be non-blocking.
         Rejects events after stop() to prevent post-drain accumulation.
         """
-        if self._closed:
-            return
-        self._queue.put(event)
+        with self._close_lock:
+            if self._closed:
+                return
+            self._queue.put(event)
 
     def run(self) -> None:
         """Process events from the queue until stopped."""
@@ -125,8 +127,23 @@ class UserDataProcessor(threading.Thread):
             except queue.Empty:
                 break
 
-        # Now reject any further enqueues
-        self._closed = True
+        # Atomically reject further enqueues and do final drain under lock
+        with self._close_lock:
+            self._closed = True
+            # Final drain under lock — catches any enqueue that raced before _closed
+            while True:
+                try:
+                    event = self._queue.get_nowait()
+                    if event is None:
+                        continue
+                    if event.get("e") == "executionReport":
+                        try:
+                            self._order_tracker.process_execution_event(event)
+                            drained += 1
+                        except Exception as e:
+                            logger.error("Error in final drain: %s", e, exc_info=True)
+                except queue.Empty:
+                    break
 
         if drained > 0:
             logger.info("Drained %d execution events during shutdown", drained)

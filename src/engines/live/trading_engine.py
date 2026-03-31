@@ -1429,6 +1429,9 @@ class LiveTradingEngine:
         """Monitor WebSocket streams and trigger reconnection on failure."""
         from src.config.constants import DEFAULT_WS_HEALTH_CHECK_INTERVAL
 
+        # Grace period: skip the first check to let streams deliver initial events
+        self.stop_event.wait(DEFAULT_WS_HEALTH_CHECK_INTERVAL)
+
         while self.is_running and not self.stop_event.is_set():
             try:
                 self._check_kline_health()

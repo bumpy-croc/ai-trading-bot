@@ -139,6 +139,9 @@ class KlineBuffer:
             timeframe: Candle timeframe.
         """
         new_df = provider.get_live_data(symbol, timeframe, limit=500)
+        if new_df is None or new_df.empty:
+            logger.warning("REST resync returned empty data — keeping existing buffer")
+            return  # _needs_resync stays True for retry
 
         with self._lock:
             # Only overwrite if REST data is newer than current buffer,
