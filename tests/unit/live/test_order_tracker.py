@@ -163,6 +163,7 @@ def test_cancelled_order_triggers_callback(order_tracker, mock_exchange):
     # Mock order status
     mock_order = MagicMock()
     mock_order.status = OrderStatus.CANCELLED
+    mock_order.filled_quantity = 0.0
     mock_exchange.get_order.return_value = mock_order
 
     # Track order and check it
@@ -180,6 +181,7 @@ def test_rejected_order_triggers_cancel_callback(order_tracker, mock_exchange):
     """Test that a rejected order triggers the on_cancel callback with filled_qty."""
     mock_order = MagicMock()
     mock_order.status = OrderStatus.REJECTED
+    mock_order.filled_quantity = 0.0
     mock_exchange.get_order.return_value = mock_order
 
     order_tracker.track_order("order123", "BTCUSDT")
@@ -193,6 +195,7 @@ def test_expired_order_triggers_cancel_callback(order_tracker, mock_exchange):
     """Test that an expired order triggers the on_cancel callback with filled_qty."""
     mock_order = MagicMock()
     mock_order.status = OrderStatus.EXPIRED
+    mock_order.filled_quantity = 0.0
     mock_exchange.get_order.return_value = mock_order
 
     order_tracker.track_order("order123", "BTCUSDT")
@@ -212,6 +215,7 @@ def test_cancel_callback_passes_partial_filled_qty(order_tracker, mock_exchange)
 
     cancelled_order = MagicMock()
     cancelled_order.status = OrderStatus.CANCELLED
+    cancelled_order.filled_quantity = 0.5
 
     # First poll: partially filled; second poll: cancelled
     mock_exchange.get_order.side_effect = [partial_order, cancelled_order]
