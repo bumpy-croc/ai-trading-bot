@@ -147,9 +147,9 @@ class KlineBuffer:
             # Only overwrite if REST data is newer than current buffer,
             # to avoid rolling back WS updates that arrived during the fetch
             if not self._df.empty and not new_df.empty:
-                if new_df.index[-1] <= self._df.index[-1]:
+                if new_df.index[-1] < self._df.index[-1]:
                     logger.info(
-                        "REST resync skipped — buffer tail %s is >= REST tail %s, "
+                        "REST resync skipped — buffer tail %s is newer than REST tail %s, "
                         "needs_resync remains set for retry",
                         self._df.index[-1], new_df.index[-1],
                     )
