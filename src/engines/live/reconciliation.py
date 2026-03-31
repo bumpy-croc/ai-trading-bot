@@ -27,6 +27,7 @@ from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
 )
 from src.data_providers.exchange_interface import SideEffectType
+from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
@@ -2398,6 +2399,38 @@ class PeriodicReconciler:
                 except Exception as e:
                     logger.warning(
                         "Margin position check failed for %s: %s",
+                        getattr(position, "symbol", "?"),
+                        e,
+                    )
+
+            # Log accumulated margin interest for open short positions
+            # (informational only — no corrections or balance changes)
+            interest_tracker = MarginInterestTracker(self.exchange)
+            for _key, position in list(positions_snapshot.items()):
+                try:
+                    side = getattr(position, "side", None)
+                    is_short = (
+                        side == PositionSide.SHORT or str(side).lower() == "short"
+                    )
+                    if not is_short:
+                        continue
+                    entry_time = getattr(position, "entry_time", None)
+                    if entry_time is None:
+                        continue
+                    base_asset = PositionReconciler._extract_base_asset(
+                        position.symbol
+                    )
+                    interest = interest_tracker.get_position_interest_cost(
+                        base_asset, entry_time
+                    )
+                    logger.info(
+                        "Margin interest accrued for %s: $%.4f",
+                        position.symbol,
+                        interest,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to query margin interest for %s: %s",
                         getattr(position, "symbol", "?"),
                         e,
                     )
