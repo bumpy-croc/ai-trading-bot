@@ -1515,19 +1515,22 @@ class LiveTradingEngine:
             self.order_tracker.poll_once()
         if self._periodic_reconciler:
             self._periodic_reconciler.reconcile_once()
-        # 4. Attempt user stream reconnect
-        if (
-            hasattr(self.exchange_interface, "reconnect_user")
-            and self.exchange_interface.reconnect_user()
-        ):
-            self._user_data_processor = UserDataProcessor(
+        # 4. Attempt user stream reconnect with fresh callback
+        reconnected = False
+        if hasattr(self.exchange_interface, "reconnect_user"):
+            new_processor = UserDataProcessor(
                 order_tracker=self.order_tracker,
             )
-            self._user_data_processor.start()
-            if self.order_tracker:
-                self.order_tracker.disable_polling()
-            logger.info("User data WebSocket reconnected")
-        else:
+            if self.exchange_interface.reconnect_user(
+                on_user_event=new_processor.enqueue,
+            ):
+                self._user_data_processor = new_processor
+                self._user_data_processor.start()
+                if self.order_tracker:
+                    self.order_tracker.disable_polling()
+                logger.info("User data WebSocket reconnected")
+                reconnected = True
+        if not reconnected:
             self.exchange_interface.mark_user_degraded()
             logger.warning("User stream reconnect failed — order polling resumed")
 
@@ -2029,6 +2032,13 @@ class LiveTradingEngine:
             ):
                 logger.info("WebSocket resyncing — skipping data fetch")
                 return None
+
+            # If kline buffer detected a gap, trigger REST resync
+            if self._kline_buffer and self._kline_buffer.needs_resync:
+                logger.info("KlineBuffer gap detected — resyncing from REST")
+                self._kline_buffer.resync_from_rest(
+                    self.data_provider, self._active_symbol or symbol, self.timeframe or timeframe,
+                )
 
             # Use WS cache if available and healthy
             if (

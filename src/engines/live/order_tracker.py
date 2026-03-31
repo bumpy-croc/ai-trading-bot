@@ -213,6 +213,10 @@ class OrderTracker:
             # Per-order lock prevents concurrent WS processing of the same order
             order_lock = self._get_order_lock(order_id)
             with order_lock:
+                # Re-check under lock — order may have been removed by WS terminal event
+                with self._lock:
+                    if order_id not in self._pending_orders:
+                        continue
                 try:
                     # Use circuit breaker to prevent resource exhaustion during exchange outages
                     # If circuit is OPEN (too many failures), skip API call and log warning
@@ -579,9 +583,6 @@ class OrderTracker:
         exec_type = str(event.get("x", ""))
         exec_id = str(event.get("I", ""))
 
-        if self._dedup.is_duplicate(order_id, exec_type, exec_id):
-            return
-
         # Per-order lock serialises WS and REST processing of the same order,
         # preventing double fills when both paths race on the same update.
         order_lock = self._get_order_lock(order_id)
@@ -589,6 +590,11 @@ class OrderTracker:
             with self._lock:
                 tracked = self._pending_orders.get(order_id)
             if tracked is None:
+                return
+
+            # Dedup after confirming order is tracked — events arriving before
+            # track_order() should not be permanently marked as seen.
+            if self._dedup.is_duplicate(order_id, exec_type, exec_id):
                 return
 
             cum_filled = float(event.get("z", 0))

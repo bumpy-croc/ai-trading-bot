@@ -14,6 +14,14 @@ from src.config.constants import DEFAULT_WS_KLINE_STALENESS_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
+# Map timeframe strings to expected candle intervals in milliseconds
+_TIMEFRAME_MS: dict[str, int] = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+    "30m": 1_800_000, "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
+    "6h": 21_600_000, "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
+    "3d": 259_200_000, "1w": 604_800_000,
+}
+
 
 class KlineBuffer:
     """Rolling window of OHLCV candles seeded from REST and maintained by WebSocket events.
@@ -34,6 +42,8 @@ class KlineBuffer:
         self._symbol = symbol
         self._timeframe = timeframe
         self._lock = threading.Lock()
+        self._interval_ms = _TIMEFRAME_MS.get(timeframe, 0)
+        self._needs_resync = False  # Set when gap detected
 
         # Seed from REST
         self._df: pd.DataFrame = provider.get_live_data(symbol, timeframe, limit=500)
@@ -77,7 +87,17 @@ class KlineBuffer:
                 # Update current candle (open or closed — same OHLCV write)
                 self._update_current_candle(kline)
             else:
-                # event_ts > tail_ts — new candle, roll window
+                # event_ts > tail_ts — new candle
+                # Detect gap: if more than one interval was skipped, flag for resync
+                gap_ms = int((event_ts - tail_ts).total_seconds() * 1000)
+                if self._interval_ms and gap_ms > self._interval_ms * 2:
+                    logger.warning(
+                        "KlineBuffer gap detected for %s %s: expected %dms, got %dms — flagging resync",
+                        self._symbol, self._timeframe, self._interval_ms, gap_ms,
+                    )
+                    self._needs_resync = True
+                    return  # Don't append gapped data
+
                 new_row = self._parse_kline(kline)
                 self._df = pd.concat([self._df.iloc[1:], new_row])
 
@@ -97,10 +117,18 @@ class KlineBuffer:
         """Check whether the buffer has been updated recently.
 
         Returns:
-            True if the last update was within the freshness timeout.
+            True if the last update was within the freshness timeout
+            and no gap resync is pending.
         """
+        if self._needs_resync:
+            return False
         elapsed = (datetime.now(UTC) - self._last_update).total_seconds()
         return elapsed < DEFAULT_WS_KLINE_STALENESS_THRESHOLD
+
+    @property
+    def needs_resync(self) -> bool:
+        """True when a candle gap was detected and REST resync is needed."""
+        return self._needs_resync
 
     def resync_from_rest(self, provider, symbol: str, timeframe: str) -> None:
         """Replace the entire buffer with fresh REST data after reconnection.
@@ -115,6 +143,7 @@ class KlineBuffer:
         with self._lock:
             self._df = new_df
             self._last_update = datetime.now(UTC)
+            self._needs_resync = False
 
         logger.info(
             "KlineBuffer resynced for %s %s with %d candles",

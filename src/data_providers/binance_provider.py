@@ -1882,23 +1882,27 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 time.sleep(backoff)
         return False
 
-    def reconnect_user(self) -> bool:
+    def reconnect_user(self, on_user_event: Callable[[dict], None] | None = None) -> bool:
         """Reconnect user data stream with exponential backoff.
 
         Retries up to DEFAULT_WS_RECONNECT_MAX_RETRIES times before giving up.
 
+        Args:
+            on_user_event: Fresh callback for the new stream. If None, reuses
+                the previously stored callback (for backward compatibility).
+
         Returns:
             True if reconnect succeeded, False otherwise.
         """
+        callback = on_user_event or self._on_user_event_cb
+        if not callback:
+            return False
         for attempt in range(1, DEFAULT_WS_RECONNECT_MAX_RETRIES + 1):
             try:
                 if self._user_socket_key and self._twm:
                     self._twm.stop_socket(self._user_socket_key)
-                if self._on_user_event_cb:
-                    if self.start_user_stream(self._on_user_event_cb):
-                        return True
-                else:
-                    return False
+                if self.start_user_stream(callback):
+                    return True
             except Exception as e:
                 logger.error(
                     "User stream reconnect attempt %d/%d failed: %s",

@@ -29,13 +29,17 @@ class UserDataProcessor(threading.Thread):
         self._order_tracker = order_tracker
         self._queue: queue.Queue = queue.Queue()
         self._running = False
+        self._closed = False  # Gate to reject events after stop()
         self._stop_event = threading.Event()
 
     def enqueue(self, event: dict) -> None:
         """Enqueue a raw WebSocket user data event for processing.
 
         Called from the WebSocket callback thread. Must be non-blocking.
+        Rejects events after stop() to prevent post-drain accumulation.
         """
+        if self._closed:
+            return
         self._queue.put(event)
 
     def run(self) -> None:
@@ -82,6 +86,7 @@ class UserDataProcessor(threading.Thread):
         Processes all remaining queued executionReport events before returning.
         This is critical for the WS-to-REST handoff to prevent missed fills.
         """
+        self._closed = True  # Reject new events immediately
         self._running = False
         self._stop_event.set()
         # Put sentinel to unblock the queue.get() call in run()
