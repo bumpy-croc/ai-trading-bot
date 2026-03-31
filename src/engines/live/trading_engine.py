@@ -3286,26 +3286,33 @@ class LiveTradingEngine:
                 getattr(self.exchange_interface, "is_margin_mode", False)
                 and position.side == PositionSide.SHORT
             ):
-                from src.engines.live.reconciliation import PositionReconciler
+                try:
+                    from src.engines.live.reconciliation import PositionReconciler
 
-                tracker = MarginInterestTracker(self.exchange_interface)
-                base_asset = PositionReconciler._extract_base_asset(
-                    position.symbol
-                )
-                if base_asset == position.symbol:
-                    logger.warning(
-                        "Could not extract base asset from %s — margin interest may not be queried correctly",
-                        position.symbol,
+                    tracker = MarginInterestTracker(self.exchange_interface)
+                    base_asset = PositionReconciler._extract_base_asset(
+                        position.symbol
                     )
-                interest_cost = tracker.get_position_interest_cost(
-                    base_asset, position.entry_time
-                )
-                if interest_cost > 0:
-                    realized_pnl -= interest_cost
-                    logger.info(
-                        "Deducted margin interest $%.2f from PnL for %s",
-                        interest_cost,
+                    if base_asset == position.symbol:
+                        logger.warning(
+                            "Could not extract base asset from %s — margin interest may not be queried correctly",
+                            position.symbol,
+                        )
+                    interest_cost = tracker.get_position_interest_cost(
+                        base_asset, position.entry_time
+                    )
+                    if interest_cost > 0:
+                        realized_pnl -= interest_cost
+                        logger.info(
+                            "Deducted margin interest $%.2f from PnL for %s",
+                            interest_cost,
+                            position.symbol,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to query margin interest for %s — proceeding without deduction: %s",
                         position.symbol,
+                        e,
                     )
 
             # Atomic balance update with full audit trail for realized P&L
@@ -3346,7 +3353,7 @@ class LiveTradingEngine:
 
             entry_fee = float(position.metadata.get("entry_fee", 0.0))
             entry_slippage_cost = float(position.metadata.get("entry_slippage_cost", 0.0))
-            total_fee = entry_fee + exit_fee + interest_cost
+            total_fee = entry_fee + exit_fee
             total_slippage = entry_slippage_cost + exit_slippage_cost
 
             # Store GROSS P&L in Trade.pnl for parity with backtest engine

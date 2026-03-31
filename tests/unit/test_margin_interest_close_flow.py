@@ -105,11 +105,11 @@ class TestMarginInterestDeduction:
         expected_balance = initial_balance + 25.0 - 2.25
         assert engine.current_balance == pytest.approx(expected_balance, abs=0.01)
 
-        # Verify performance_tracker.record_trade includes interest in fee
+        # Verify performance_tracker.record_trade is called (interest tracked separately)
         assert engine.performance_tracker.record_trade.call_count == 1
         call_kwargs = engine.performance_tracker.record_trade.call_args[1]
-        # With fee_rate=0.0, entry_fee=0 and exit_fee=0, so fee should equal interest_cost
-        assert call_kwargs["fee"] == pytest.approx(2.25, abs=0.01)
+        # Interest is NOT included in fee — it's tracked via margin_interest_cost column
+        assert call_kwargs["fee"] == pytest.approx(0.0, abs=0.01)
 
     def test_no_interest_deduction_for_long_in_margin_mode(self):
         """Long positions should NOT have interest deducted even in margin mode."""
