@@ -76,6 +76,13 @@ class MarginInterestTracker:
                 )
                 continue
 
+            if value <= 0:
+                logger.warning(
+                    "Skipping non-positive interest value: %s",
+                    record["interest"],
+                )
+                continue
+
             total += value
 
         logger.debug(
