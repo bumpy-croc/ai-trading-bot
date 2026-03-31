@@ -199,6 +199,7 @@ class MockDatabaseManager:
             "mae_price": kwargs.get("mae_price"),
             "mfe_time": kwargs.get("mfe_time"),
             "mae_time": kwargs.get("mae_time"),
+            "margin_interest_cost": kwargs.get("margin_interest_cost"),
         }
 
         return trade_id

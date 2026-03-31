@@ -54,6 +54,7 @@ from src.engines.live.data.market_data_handler import MarketDataHandler
 from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
+from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
@@ -3279,6 +3280,31 @@ class LiveTradingEngine:
 
             realized_pnl = exit_result.realized_pnl - exit_result.exit_fee
 
+            # Deduct margin interest for short positions in margin mode
+            interest_cost = 0.0
+            if (
+                getattr(self.exchange_interface, "is_margin_mode", False)
+                and position.side == PositionSide.SHORT
+            ):
+                tracker = MarginInterestTracker(self.exchange_interface)
+                # Extract base asset: strip quote currency from symbol
+                symbol = position.symbol
+                base_asset = symbol
+                for quote in ("USDT", "BUSD", "USD"):
+                    if symbol.endswith(quote) and len(symbol) > len(quote):
+                        base_asset = symbol[: -len(quote)]
+                        break
+                interest_cost = tracker.get_position_interest_cost(
+                    base_asset, position.entry_time
+                )
+                if interest_cost > 0:
+                    realized_pnl -= interest_cost
+                    logger.info(
+                        "Deducted margin interest $%.2f from PnL for %s",
+                        interest_cost,
+                        position.symbol,
+                    )
+
             # Atomic balance update with full audit trail for realized P&L
             if self.trading_session_id is not None:
                 try:
@@ -3371,6 +3397,7 @@ class LiveTradingEngine:
                     mae_price=(metrics.mae_price if metrics else None),
                     mfe_time=(metrics.mfe_time if metrics else None),
                     mae_time=(metrics.mae_time if metrics else None),
+                    margin_interest_cost=interest_cost,
                 )
 
             if (

@@ -770,6 +770,7 @@ class DatabaseManager:
         mae_price: float | None = None,
         mfe_time: datetime | None = None,
         mae_time: datetime | None = None,
+        margin_interest_cost: float | None = None,
     ) -> int:
         """Logs a completed trade to the database.
 
@@ -852,6 +853,7 @@ class DatabaseManager:
                 mae_price=mae_price,
                 mfe_time=mfe_time,
                 mae_time=mae_time,
+                margin_interest_cost=margin_interest_cost or 0.0,
             )
 
             session.add(trade)
