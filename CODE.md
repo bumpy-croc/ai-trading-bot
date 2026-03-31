@@ -204,6 +204,8 @@ except Exception as e:
 - Emergency close must confirm the sell was accepted before removing the position from tracker and DB.
 - Don't reuse inactive session IDs on clean restart. Create new sessions; recover balance from the most recent inactive one.
 - Preserve paper positions across restarts instead of force-closing on shutdown.
+- When switching between data sources (WS→REST or REST→WS), serialize concurrent reconciliation cycles with a mutex to prevent overlapping corrections.
+- Constants defined for configuration must actually be imported and used. Dead constants that describe intended behavior without implementation are misleading.
 
 ---
 
@@ -224,6 +226,9 @@ except Exception as e:
 - Use `dict.pop(key, None)` for cache eviction, not `dict.get()` then delete.
 - Redirect unused subprocess streams to DEVNULL to prevent pipe deadlocks.
 - Use `pool_timeout` to prevent indefinite blocking on DB pool exhaustion.
+- When snapshotting a collection for iteration, re-check membership under lock before mutating — the item may have been removed by another thread between snapshot and processing.
+- When comparing object state before/after a mutation, snapshot the value first — the "before" reference may point to the same mutable object as "after".
+- Lazy singleton init (check-then-create) requires a lock even if the field is set to `None` initially. Two concurrent callers can both pass the `is None` check.
 
 ---
 
@@ -246,6 +251,43 @@ except Exception as e:
 - Use exponential backoff for retries (3 attempts max).
 - Validate response types and status codes before processing.
 - Use `ConnectionError` (not broad `Exception`) when mocking network failures in tests.
+- When `dict.get(key, default)` is used on exchange API responses, remember that a key with JSON `null` returns `None`, not the default. Use `value or default` pattern: `float(event.get("n") or 0)`.
+
+---
+
+## WebSocket & Streaming Patterns
+
+### Stream Lifecycle
+- Don't mark a stream as healthy/confirmed until the first real event arrives. Use a `_event_received` flag reset on each reconnect.
+- Add a startup grace period before health checks to avoid false-positive disconnects on slow connections.
+- When reconnecting, pass a fresh callback to the new stream — don't reuse the old one, as it may reference a stopped/dead processor.
+- Reset all stream confirmation flags (`_event_received`, freshness timers) when starting or stopping streams.
+
+### State Transitions & Handoff
+- Use public methods (`mark_degraded()`) for state transitions instead of reaching into private fields from other classes.
+- On WS→REST failover: stop the old socket FIRST, then drain the processor, then enable polling. This prevents events arriving after the drain.
+- On REST→WS cutover: do a catch-up poll AFTER the new stream is live but BEFORE disabling REST polling, to cover events during the handoff gap.
+- If the processor thread doesn't stop cleanly after join timeout, stay in degraded mode — don't reconnect while the old thread may still be mutating state.
+
+### Event Processing & Deduplication
+- Separate dedup check from dedup marking (`is_seen()` vs `mark_seen()`). Only mark events as seen after successful processing, so transient callback failures can retry.
+- When comparing pre/post mutation state on the same object reference, snapshot the value BEFORE calling the mutation method.
+- Map all known exchange statuses explicitly. Treat truly unknown statuses as ignored (return `None` with warning), not as terminal — premature untracking of live orders is worse than a missed unknown event.
+- Non-terminal exchange statuses (e.g. `PENDING_CANCEL`) must map to non-terminal internal states to prevent premature order untracking.
+
+### Data Buffers
+- Detect candle gaps in rolling buffers (timestamp jump > expected interval) and flag for REST resync instead of silently appending.
+- Guard REST resync against empty responses — keep existing buffer data and retry.
+- Guard REST resync against stale data — reject snapshots with an older tail than the current buffer.
+- Only use buffer freshness for data quality checks when the stream is confirmed healthy, not just active.
+- When the buffer freshness timer is updated, only bump it when data was actually mutated (not for stale/replayed events).
+
+### Shutdown & Drain
+- Gate enqueue with a lock-protected `_closed` flag to prevent TOCTOU races between the final drain and late-arriving callbacks.
+- Do the final locked drain AFTER setting `_closed` to catch any events that slipped in during the unlocked drain.
+
+### Cancel/Terminal Event Handling
+- On cancel/reject/expired with fill quantity greater than the last known fill, reconcile the fill delta BEFORE calling the cancel callback. Missed partial fills must be accounted for.
 
 ---
 
