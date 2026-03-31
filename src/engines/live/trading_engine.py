@@ -3294,6 +3294,11 @@ class LiveTradingEngine:
                     if symbol.endswith(quote) and len(symbol) > len(quote):
                         base_asset = symbol[: -len(quote)]
                         break
+                if base_asset == position.symbol:
+                    logger.warning(
+                        "Could not extract base asset from %s — margin interest may not be queried correctly",
+                        position.symbol,
+                    )
                 interest_cost = tracker.get_position_interest_cost(
                     base_asset, position.entry_time
                 )
@@ -3343,7 +3348,7 @@ class LiveTradingEngine:
 
             entry_fee = float(position.metadata.get("entry_fee", 0.0))
             entry_slippage_cost = float(position.metadata.get("entry_slippage_cost", 0.0))
-            total_fee = entry_fee + exit_fee
+            total_fee = entry_fee + exit_fee + interest_cost
             total_slippage = entry_slippage_cost + exit_slippage_cost
 
             # Store GROSS P&L in Trade.pnl for parity with backtest engine
