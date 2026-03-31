@@ -169,7 +169,7 @@ class TestUnknownStatus:
     def test_unknown_ws_status_skips_processing(self, tracker):
         """Test that an unknown WS status returns None and skips processing."""
         tracker.track_order("12345", "BTCUSDT")
-        event = _make_ws_event(status="PENDING_CANCEL")
+        event = _make_ws_event(status="TOTALLY_UNKNOWN_STATUS")
 
         tracker.process_execution_event(event)
 
@@ -177,6 +177,18 @@ class TestUnknownStatus:
         tracker.on_cancel.assert_not_called()
         tracker.on_partial_fill.assert_not_called()
         # Order should still be tracked
+        assert tracker.get_tracked_count() == 1
+
+    def test_pending_cancel_keeps_order_tracked(self, tracker):
+        """Test that PENDING_CANCEL is non-terminal and keeps order tracked."""
+        tracker.track_order("12345", "BTCUSDT")
+        event = _make_ws_event(status="PENDING_CANCEL")
+
+        tracker.process_execution_event(event)
+
+        tracker.on_fill.assert_not_called()
+        tracker.on_cancel.assert_not_called()
+        # Order should still be tracked — PENDING_CANCEL is non-terminal
         assert tracker.get_tracked_count() == 1
 
 
@@ -201,8 +213,18 @@ class TestMapWsStatus:
 
     def test_unknown_status_returns_none(self):
         """Test that unknown status returns None."""
-        result = OrderTracker._map_ws_status("PENDING_CANCEL")
+        result = OrderTracker._map_ws_status("TOTALLY_UNKNOWN_STATUS")
         assert result is None
+
+    def test_pending_cancel_maps_to_pending(self):
+        """Test that PENDING_CANCEL maps to PENDING (non-terminal)."""
+        result = OrderTracker._map_ws_status("PENDING_CANCEL")
+        assert result == OrderStatus.PENDING
+
+    def test_expired_in_match_maps_to_expired(self):
+        """Test that EXPIRED_IN_MATCH maps to EXPIRED."""
+        result = OrderTracker._map_ws_status("EXPIRED_IN_MATCH")
+        assert result == OrderStatus.EXPIRED
 
 
 class TestMapWsOrderType:
