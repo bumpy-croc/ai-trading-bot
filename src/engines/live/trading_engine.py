@@ -3286,14 +3286,12 @@ class LiveTradingEngine:
                 getattr(self.exchange_interface, "is_margin_mode", False)
                 and position.side == PositionSide.SHORT
             ):
+                from src.engines.live.reconciliation import PositionReconciler
+
                 tracker = MarginInterestTracker(self.exchange_interface)
-                # Extract base asset: strip quote currency from symbol
-                symbol = position.symbol
-                base_asset = symbol
-                for quote in ("USDT", "BUSD", "USD"):
-                    if symbol.endswith(quote) and len(symbol) > len(quote):
-                        base_asset = symbol[: -len(quote)]
-                        break
+                base_asset = PositionReconciler._extract_base_asset(
+                    position.symbol
+                )
                 if base_asset == position.symbol:
                     logger.warning(
                         "Could not extract base asset from %s — margin interest may not be queried correctly",

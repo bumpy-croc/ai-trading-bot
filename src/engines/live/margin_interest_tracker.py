@@ -50,6 +50,14 @@ class MarginInterestTracker:
         if not records:
             return 0.0
 
+        # Binance returns max 500 records per call; warn if truncated
+        if len(records) >= 500:
+            logger.warning(
+                "Interest history for %s returned %d records (may be truncated)",
+                asset,
+                len(records),
+            )
+
         total = 0.0
         for record in records:
             try:
@@ -70,14 +78,10 @@ class MarginInterestTracker:
 
             total += value
 
-        logger.info(
+        logger.debug(
             "Total margin interest for %s since %s: %.8f",
             asset,
             entry_time.isoformat(),
             total,
         )
         return total
-
-    def is_margin_position(self, side: str) -> bool:
-        """Return True if the position side borrows (only SHORT borrows)."""
-        return side == "SHORT"

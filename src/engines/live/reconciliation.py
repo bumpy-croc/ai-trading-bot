@@ -2423,11 +2423,12 @@ class PeriodicReconciler:
                     interest = interest_tracker.get_position_interest_cost(
                         base_asset, entry_time
                     )
-                    logger.info(
-                        "Margin interest accrued for %s: $%.4f",
-                        position.symbol,
-                        interest,
-                    )
+                    if interest > 0:
+                        logger.info(
+                            "Margin interest accrued for %s: $%.4f",
+                            position.symbol,
+                            interest,
+                        )
                 except Exception as e:
                     logger.warning(
                         "Failed to query margin interest for %s: %s",

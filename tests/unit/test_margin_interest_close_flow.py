@@ -5,6 +5,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+pytestmark = pytest.mark.fast
+
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 from src.strategies.components import (
     FixedFractionSizer,
