@@ -620,6 +620,8 @@ class OrderTracker:
             avg_price = cum_quote / cum_filled if cum_filled > 0 else 0.0
 
             status = self._map_ws_status(str(event.get("X", "")))
+            if status is None:
+                return
 
             order = Order(
                 order_id=order_id,
@@ -643,15 +645,14 @@ class OrderTracker:
             self._process_order_status(order_id, tracked, order)
 
     @staticmethod
-    def _map_ws_status(ws_status: str) -> OrderStatus:
+    def _map_ws_status(ws_status: str) -> OrderStatus | None:
         """Map a Binance WebSocket order status to our OrderStatus enum.
 
         Args:
             ws_status: Binance WS status string (e.g. "FILLED", "CANCELED").
 
         Returns:
-            Mapped OrderStatus. Unknown statuses are treated as EXPIRED
-            to ensure terminal states are never silently ignored.
+            Mapped OrderStatus, or None for unknown statuses (ignored with warning).
         """
         mapping = {
             "NEW": OrderStatus.PENDING,
@@ -661,12 +662,11 @@ class OrderTracker:
             "REJECTED": OrderStatus.REJECTED,
             "EXPIRED": OrderStatus.EXPIRED,
             "EXPIRED_IN_MATCH": OrderStatus.EXPIRED,  # STP / self-trade prevention
-            "PENDING_CANCEL": OrderStatus.CANCELLED,
+            "PENDING_CANCEL": OrderStatus.PENDING,  # Non-terminal — keep tracking
         }
         status = mapping.get(ws_status)
         if status is None:
-            logger.warning("Unknown WS order status: %s — treating as EXPIRED", ws_status)
-            return OrderStatus.EXPIRED
+            logger.warning("Unknown WS order status: %s — ignoring event", ws_status)
         return status
 
     @staticmethod

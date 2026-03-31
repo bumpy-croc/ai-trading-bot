@@ -146,11 +146,11 @@ class KlineBuffer:
             if not self._df.empty and not new_df.empty:
                 if new_df.index[-1] <= self._df.index[-1]:
                     logger.info(
-                        "Skipping REST resync — buffer tail %s is >= REST tail %s",
+                        "REST resync skipped — buffer tail %s is >= REST tail %s, "
+                        "needs_resync remains set for retry",
                         self._df.index[-1], new_df.index[-1],
                     )
-                    self._needs_resync = False
-                    return
+                    return  # Keep _needs_resync=True for next attempt
             self._df = new_df
             self._last_update = datetime.now(UTC)
             self._needs_resync = False
