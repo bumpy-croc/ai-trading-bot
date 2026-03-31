@@ -12,6 +12,7 @@ providing a single interface for all Binance operations including:
 import logging
 import math
 import re
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -22,7 +23,11 @@ from typing import Any, TypeVar
 import pandas as pd
 
 from src.config import get_config
-from src.config.constants import DEFAULT_DATA_FETCH_TIMEOUT, DEFAULT_WS_KLINE_STALENESS_THRESHOLD
+from src.config.constants import (
+    DEFAULT_DATA_FETCH_TIMEOUT,
+    DEFAULT_WS_KLINE_STALENESS_THRESHOLD,
+    DEFAULT_WS_RECONNECT_MAX_RETRIES,
+)
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.trading.symbols.factory import SymbolFactory
@@ -273,6 +278,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         # WebSocket stream state (initialized regardless of credentials)
         self._twm: ThreadedWebsocketManager | None = None
+        self._twm_lock = threading.Lock()  # Guards _ensure_twm() check-then-set
         self._kline_ws_state = WebSocketState.DISCONNECTED
         self._user_ws_state = WebSocketState.DISCONNECTED
         self._kline_socket_key: str | None = None
@@ -1703,19 +1709,20 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     def _ensure_twm(self) -> None:
         """Lazily create the ThreadedWebsocketManager from existing config."""
-        if self._twm is not None:
-            return
-        twm_kwargs: dict[str, Any] = {
-            "api_key": self.api_key,
-            "api_secret": self.api_secret,
-        }
-        if self.testnet:
-            twm_kwargs["testnet"] = True
-        api_endpoint = get_binance_api_endpoint()
-        if api_endpoint == "binanceus":
-            twm_kwargs["tld"] = "us"
-        self._twm = ThreadedWebsocketManager(**twm_kwargs)
-        self._twm.start()
+        with self._twm_lock:
+            if self._twm is not None:
+                return
+            twm_kwargs: dict[str, Any] = {
+                "api_key": self.api_key,
+                "api_secret": self.api_secret,
+            }
+            if self.testnet:
+                twm_kwargs["testnet"] = True
+            api_endpoint = get_binance_api_endpoint()
+            if api_endpoint == "binanceus":
+                twm_kwargs["tld"] = "us"
+            self._twm = ThreadedWebsocketManager(**twm_kwargs)
+            self._twm.start()
 
     def start_kline_stream(
         self, symbol: str, timeframe: str, on_kline: Callable[[dict], None]
@@ -1827,6 +1834,16 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         kline_age = (datetime.now(UTC) - self._last_kline_event_time).total_seconds()
         return kline_age < DEFAULT_WS_KLINE_STALENESS_THRESHOLD
 
+    def mark_kline_degraded(self) -> None:
+        """Transition kline stream to REST_DEGRADED state (thread-safe)."""
+        self._kline_ws_state = WebSocketState.REST_DEGRADED
+        logger.warning("Kline stream marked REST_DEGRADED")
+
+    def mark_user_degraded(self) -> None:
+        """Transition user stream to REST_DEGRADED state (thread-safe)."""
+        self._user_ws_state = WebSocketState.REST_DEGRADED
+        logger.warning("User stream marked REST_DEGRADED")
+
     def _on_kline_disconnect(self) -> None:
         """Handle kline WebSocket disconnection. Sets kline state; engine handles resync."""
         self._kline_ws_state = WebSocketState.RESYNCING
@@ -1838,37 +1855,60 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         logger.warning("User data WebSocket disconnected — entering RESYNCING state")
 
     def reconnect_kline(self) -> bool:
-        """Reconnect kline stream only. Called by engine on kline staleness.
+        """Reconnect kline stream with exponential backoff.
+
+        Retries up to DEFAULT_WS_RECONNECT_MAX_RETRIES times before giving up.
 
         Returns:
             True if reconnect succeeded, False otherwise.
         """
-        try:
-            if self._kline_socket_key and self._twm:
-                self._twm.stop_socket(self._kline_socket_key)
-                self._kline_socket_key = None
-            return self.start_kline_stream(
-                self._active_symbol, self._active_timeframe, self._on_kline_cb
-            )
-        except Exception as e:
-            logger.error("Kline reconnect failed: %s", e)
-            return False
+        for attempt in range(1, DEFAULT_WS_RECONNECT_MAX_RETRIES + 1):
+            try:
+                if self._kline_socket_key and self._twm:
+                    self._twm.stop_socket(self._kline_socket_key)
+                    self._kline_socket_key = None
+                if self.start_kline_stream(
+                    self._active_symbol, self._active_timeframe, self._on_kline_cb
+                ):
+                    return True
+            except Exception as e:
+                logger.error(
+                    "Kline reconnect attempt %d/%d failed: %s",
+                    attempt, DEFAULT_WS_RECONNECT_MAX_RETRIES, e,
+                )
+            if attempt < DEFAULT_WS_RECONNECT_MAX_RETRIES:
+                backoff = 2 ** (attempt - 1)
+                logger.info("Retrying kline reconnect in %ds...", backoff)
+                time.sleep(backoff)
+        return False
 
     def reconnect_user(self) -> bool:
-        """Reconnect user data stream only. Called by engine on user-stream failure.
+        """Reconnect user data stream with exponential backoff.
+
+        Retries up to DEFAULT_WS_RECONNECT_MAX_RETRIES times before giving up.
 
         Returns:
             True if reconnect succeeded, False otherwise.
         """
-        try:
-            if self._user_socket_key and self._twm:
-                self._twm.stop_socket(self._user_socket_key)
-            if self._on_user_event_cb:
-                return self.start_user_stream(self._on_user_event_cb)
-            return False
-        except Exception as e:
-            logger.error("User stream reconnect failed: %s", e)
-            return False
+        for attempt in range(1, DEFAULT_WS_RECONNECT_MAX_RETRIES + 1):
+            try:
+                if self._user_socket_key and self._twm:
+                    self._twm.stop_socket(self._user_socket_key)
+                if self._on_user_event_cb:
+                    if self.start_user_stream(self._on_user_event_cb):
+                        return True
+                else:
+                    return False
+            except Exception as e:
+                logger.error(
+                    "User stream reconnect attempt %d/%d failed: %s",
+                    attempt, DEFAULT_WS_RECONNECT_MAX_RETRIES, e,
+                )
+            if attempt < DEFAULT_WS_RECONNECT_MAX_RETRIES:
+                backoff = 2 ** (attempt - 1)
+                logger.info("Retrying user stream reconnect in %ds...", backoff)
+                time.sleep(backoff)
+        return False
 
 
 # Aliases for backward compatibility

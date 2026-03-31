@@ -164,7 +164,7 @@ class TestHandleKlineDisconnect:
 
         mock_engine._handle_kline_disconnect()
 
-        assert mock_provider._kline_ws_state == WebSocketState.REST_DEGRADED
+        mock_provider.mark_kline_degraded.assert_called_once()
         assert mock_engine._ws_kline_active is False
 
 
@@ -210,5 +210,5 @@ class TestHandleUserStreamDisconnect:
 
         mock_engine._handle_user_stream_disconnect()
 
-        assert mock_exchange._user_ws_state == WebSocketState.REST_DEGRADED
+        mock_exchange.mark_user_degraded.assert_called_once()
         mock_tracker.enable_polling.assert_called_once()

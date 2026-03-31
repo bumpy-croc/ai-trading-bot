@@ -1493,7 +1493,7 @@ class LiveTradingEngine:
             self._ws_kline_active = True
             logger.info("Kline WebSocket reconnected")
         else:
-            self._ws_kline_provider._kline_ws_state = WebSocketState.REST_DEGRADED
+            self._ws_kline_provider.mark_kline_degraded()
             self._ws_kline_active = False
             logger.warning("Kline reconnect failed — REST polling resumed")
 
@@ -1528,7 +1528,7 @@ class LiveTradingEngine:
                 self.order_tracker.disable_polling()
             logger.info("User data WebSocket reconnected")
         else:
-            self.exchange_interface._user_ws_state = WebSocketState.REST_DEGRADED
+            self.exchange_interface.mark_user_degraded()
             logger.warning("User stream reconnect failed — order polling resumed")
 
     def stop(self) -> None:

@@ -62,17 +62,16 @@ class KlineBuffer:
             return
 
         with self._lock:
-            self._last_update = datetime.now(UTC)
-
             if self._df.empty:
                 self._df = self._parse_kline(kline)
+                self._last_update = datetime.now(UTC)
                 return
 
             event_ts = pd.Timestamp(kline["t"], unit="ms")
             tail_ts = self._df.index[-1]
 
             if event_ts < tail_ts:
-                return
+                return  # Stale event — don't bump freshness timer
 
             if event_ts == tail_ts:
                 # Update current candle (open or closed — same OHLCV write)
@@ -81,6 +80,8 @@ class KlineBuffer:
                 # event_ts > tail_ts — new candle, roll window
                 new_row = self._parse_kline(kline)
                 self._df = pd.concat([self._df.iloc[1:], new_row])
+
+            self._last_update = datetime.now(UTC)
 
     def get_dataframe(self) -> pd.DataFrame:
         """Return a thread-safe copy of the current OHLCV DataFrame.
