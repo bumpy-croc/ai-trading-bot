@@ -14,7 +14,7 @@ class _ExchangeWithInterestHistory(Protocol):
     """Protocol for exchanges that support margin interest history queries."""
 
     def get_margin_interest_history(
-        self, *, asset: str, start_time: int
+        self, asset: str, start_time: int, end_time: int | None = None
     ) -> list[dict[str, Any]]: ...
 
 
@@ -36,27 +36,24 @@ class MarginInterestTracker:
         Sums interest from all exchange records since the position was opened.
         Returns 0.0 on error or when no records exist.
         """
+        if entry_time.tzinfo is None:
+            logger.warning(
+                "entry_time for %s is naive (no timezone) — assuming UTC",
+                asset,
+            )
+
         try:
             start_time_ms = int(entry_time.timestamp() * 1000)
-            records = self._exchange.get_margin_interest_history(
-                asset=asset, start_time=start_time_ms
-            )
-        except Exception:
+            records = self._fetch_all_records(asset, start_time_ms)
+        except Exception as e:
             logger.warning(
-                "Failed to fetch margin interest history for %s", asset
+                "Failed to fetch margin interest history for %s: %s",
+                asset, e, exc_info=True,
             )
             return 0.0
 
         if not records:
             return 0.0
-
-        # Binance returns max 500 records per call; warn if truncated
-        if len(records) >= 500:
-            logger.warning(
-                "Interest history for %s returned %d records (may be truncated)",
-                asset,
-                len(records),
-            )
 
         total = 0.0
         for record in records:
@@ -92,3 +89,43 @@ class MarginInterestTracker:
             total,
         )
         return total
+
+    _MAX_PAGES = 10  # Safety limit to prevent runaway pagination
+    _PAGE_SIZE = 500  # Binance returns max 500 records per call
+
+    def _fetch_all_records(
+        self, asset: str, start_time_ms: int
+    ) -> list[dict[str, Any]]:
+        """Fetch all interest records, paginating if Binance returns a full page."""
+        all_records: list[dict[str, Any]] = []
+        current_start = start_time_ms
+
+        for page in range(self._MAX_PAGES):
+            records = self._exchange.get_margin_interest_history(
+                asset=asset, start_time=current_start
+            )
+            if not records:
+                break
+
+            all_records.extend(records)
+
+            if len(records) < self._PAGE_SIZE:
+                break
+
+            # Use last record's timestamp + 1ms as next page start
+            last_time = records[-1].get("interestAccuredTime")
+            if last_time is None:
+                logger.warning(
+                    "Cannot paginate interest history for %s — missing timestamp",
+                    asset,
+                )
+                break
+            current_start = int(last_time) + 1
+
+            if page > 0:
+                logger.info(
+                    "Paginating interest history for %s (page %d, %d records so far)",
+                    asset, page + 1, len(all_records),
+                )
+
+        return all_records
