@@ -332,6 +332,8 @@ DEFAULT_WS_KLINE_STALENESS_THRESHOLD = 120  # Seconds before kline stream consid
 DEFAULT_WS_USER_STALENESS_THRESHOLD = 120  # Seconds before user stream considered stale (only when orders tracked)
 DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
 DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
+DEFAULT_STARTUP_BAN_MAX_WAIT = 600  # Max seconds to wait for an IP ban to lift during startup
+DEFAULT_STARTUP_BAN_MAX_RETRIES = 3  # Max retry attempts for ban-related startup failures
 
 # TFT (Temporal Fusion Transformer) Model Defaults
 DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
