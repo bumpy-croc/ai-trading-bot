@@ -224,3 +224,46 @@ class TestInitializeClientBanRetry:
         mock_sleep.assert_not_called()
         # Should fall back to offline stub in paper/spot mode
         assert provider._client is not None
+
+    @patch("src.data_providers.binance_provider.get_binance_api_endpoint", return_value="binance")
+    @patch("src.data_providers.binance_provider.is_us_location", return_value=False)
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_margin_verify_ban_retries_instead_of_crashing(
+        self, mock_config, mock_client_class, _mock_us, _mock_endpoint
+    ):
+        """Rate-limit error during _verify_margin_account retries instead of raising RuntimeError."""
+        mock_config_obj = Mock()
+        mock_config_obj.get.side_effect = lambda key, default=None: {
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "live",
+        }.get(key, default)
+        mock_config_obj.get_required.side_effect = lambda key: FAKE_KEY if "KEY" in key else FAKE_SECRET
+        mock_config.return_value = mock_config_obj
+
+        ban_exc = _make_ban_exception(-1003, 1_775_000_010_000)
+
+        # First client: server time OK, but margin account call triggers ban
+        mock_client_banned = Mock()
+        mock_client_banned.get_server_time.return_value = {"serverTime": 1234}
+        mock_client_banned.get_margin_account.side_effect = ban_exc
+
+        # Second client: everything succeeds
+        mock_client_ok = Mock()
+        mock_client_ok.get_server_time.return_value = {"serverTime": 1234}
+        mock_client_ok.get_margin_account.return_value = {
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "userAssets": [{"asset": "USDT", "free": "100", "locked": "0", "netAsset": "100"}],
+        }
+
+        mock_client_class.side_effect = [mock_client_banned, mock_client_ok]
+
+        with patch("time.sleep") as mock_sleep, patch(
+            "src.data_providers.binance_provider._parse_ban_expiry", return_value=5.0
+        ):
+            provider = BinanceProvider(FAKE_KEY, FAKE_SECRET)
+
+        # Should have retried (slept once) and succeeded
+        mock_sleep.assert_called_once_with(10.0)  # 5s ban + 5s buffer
+        assert provider._client == mock_client_ok

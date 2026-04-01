@@ -789,6 +789,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         except RuntimeError:
             raise
         except Exception as e:
+            # Re-raise rate-limit errors directly so the startup retry loop
+            # in _initialize_client can detect and retry them.
+            if getattr(e, "code", None) in RATE_LIMIT_ERROR_CODES:
+                raise
             if self._is_live:
                 raise RuntimeError(f"Failed to verify margin account capabilities: {e}") from e
             logger.warning("Could not verify margin account (non-live mode): %s", e)
