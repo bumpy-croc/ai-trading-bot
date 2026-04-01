@@ -2195,6 +2195,7 @@ class PeriodicReconciler:
 
         self._running = False
         self._thread: threading.Thread | None = None
+        self._cycle_lock = threading.Lock()  # Serialises reconcile_once() vs _run_loop()
         # Per-position mutation locks to serialize reconciler + OrderTracker + exit
         self._position_mutation_locks: dict[str, threading.Lock] = {}
         self._locks_lock = threading.Lock()  # Protects _position_mutation_locks dict
@@ -2230,11 +2231,20 @@ class PeriodicReconciler:
                 self._position_mutation_locks[position_key] = threading.Lock()
             return self._position_mutation_locks[position_key]
 
+    def reconcile_once(self) -> None:
+        """Execute a single reconciliation cycle. Used during WS resync."""
+        with self._cycle_lock:
+            try:
+                self._reconcile_cycle()
+            except Exception as e:
+                logger.error("On-demand reconciliation failed: %s", e, exc_info=True)
+
     def _run_loop(self) -> None:
         """Main reconciliation loop running in daemon thread."""
         while self._running:
             try:
-                self._reconcile_cycle()
+                with self._cycle_lock:
+                    self._reconcile_cycle()
             except Exception as e:
                 logger.error("Reconciliation cycle failed: %s", e, exc_info=True)
 

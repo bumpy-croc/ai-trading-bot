@@ -13,7 +13,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from src.config.constants import DEFAULT_ORDER_POLL_INTERVAL, DEFAULT_ORDER_TRACKER_TIMEOUT
-from src.data_providers.exchange_interface import ExchangeInterface, Order, OrderStatus
+from src.data_providers.exchange_interface import (
+    ExchangeInterface,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+)
+from src.engines.live.event_deduplicator import EventDeduplicator
 from src.infrastructure.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
@@ -75,6 +82,7 @@ class OrderTracker:
         on_fill: Callable[[str, str, float, float], None] | None = None,
         on_partial_fill: Callable[[str, str, float, float], None] | None = None,
         on_cancel: Callable[[str, str, float], None] | None = None,
+        event_deduplicator: EventDeduplicator | None = None,
     ):
         """
         Initialize the order tracker.
@@ -86,21 +94,36 @@ class OrderTracker:
             on_partial_fill: Callback(order_id, symbol, new_filled_qty, avg_price) for partial fills
             on_cancel: Callback(order_id, symbol, filled_qty) for cancelled/rejected orders.
                 filled_qty is the cumulative quantity filled before cancellation (0.0 if unfilled).
+            event_deduplicator: Optional deduplicator for WebSocket events. A default
+                instance is created if not provided.
         """
         self.exchange = exchange
         self.poll_interval = poll_interval
         self.on_fill = on_fill
         self.on_partial_fill = on_partial_fill
         self.on_cancel = on_cancel
+        self._dedup = event_deduplicator or EventDeduplicator()
+        self._polling_enabled = True  # Controls whether _poll_loop runs checks
 
         self._pending_orders: dict[str, TrackedOrder] = {}
         self._lock = threading.Lock()
+        self._order_locks: dict[str, threading.Lock] = {}
         self._running = False
         self._stop_event = threading.Event()  # For clean, interruptible shutdown
         self._thread: threading.Thread | None = None
         # Circuit breaker to handle exchange API failures gracefully
         # Prevents resource exhaustion from repeated failing API calls
         self._circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+
+    def _get_order_lock(self, order_id: str) -> threading.Lock:
+        """Return the per-order lock, creating one if needed.
+
+        Must be called without ``self._lock`` held (it acquires it internally).
+        """
+        with self._lock:
+            if order_id not in self._order_locks:
+                self._order_locks[order_id] = threading.Lock()
+            return self._order_locks[order_id]
 
     def track_order(self, order_id: str, symbol: str) -> None:
         """
@@ -129,6 +152,7 @@ class OrderTracker:
         with self._lock:
             if order_id in self._pending_orders:
                 del self._pending_orders[order_id]
+                self._order_locks.pop(order_id, None)
                 logger.debug("Stopped tracking order %s", order_id)
 
     def get_tracked_count(self) -> int:
@@ -171,7 +195,8 @@ class OrderTracker:
         """Main polling loop - runs in background thread."""
         while self._running:
             try:
-                self._check_orders()
+                if self._polling_enabled:
+                    self._check_orders()
             except Exception as e:
                 logger.error("Order tracking error: %s", e)
             # Use Event.wait() instead of time.sleep() for interruptible sleep
@@ -185,26 +210,82 @@ class OrderTracker:
             orders_to_check = list(self._pending_orders.items())
 
         for order_id, tracked in orders_to_check:
-            try:
-                # Use circuit breaker to prevent resource exhaustion during exchange outages
-                # If circuit is OPEN (too many failures), skip API call and log warning
-                order = self._circuit_breaker.call(
-                    self.exchange.get_order, order_id, tracked.symbol
-                )
-                if not order:
-                    # None return counts as an API error — get_order_by_client_id()
-                    # swallows exceptions and returns None, so the except block below
-                    # is never reached for client order ID failures.
+            # Per-order lock prevents concurrent WS processing of the same order
+            order_lock = self._get_order_lock(order_id)
+            with order_lock:
+                # Re-check under lock — order may have been removed by WS terminal event
+                with self._lock:
+                    if order_id not in self._pending_orders:
+                        continue
+                try:
+                    # Use circuit breaker to prevent resource exhaustion during exchange outages
+                    # If circuit is OPEN (too many failures), skip API call and log warning
+                    order = self._circuit_breaker.call(
+                        self.exchange.get_order, order_id, tracked.symbol
+                    )
+                    if not order:
+                        # None return counts as an API error — get_order_by_client_id()
+                        # swallows exceptions and returns None, so the except block below
+                        # is never reached for client order ID failures.
+                        tracked.api_error_count += 1
+                        if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
+                            logger.critical(
+                                "CRITICAL: Order %s on %s returned None for %d consecutive "
+                                "polls. Force-removing to prevent infinite polling. "
+                                "MANUAL RECONCILIATION REQUIRED.",
+                                order_id,
+                                tracked.symbol,
+                                tracked.api_error_count,
+                            )
+                            if self.on_cancel:
+                                try:
+                                    self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
+                                except Exception as cb_err:
+                                    logger.error(
+                                        "Cancel callback failed for force-removed order %s: %s",
+                                        order_id,
+                                        cb_err,
+                                        exc_info=True,
+                                    )
+                            self.stop_tracking(order_id)
+                        elif tracked.callback_failure_count > 0:
+                            logger.critical(
+                                "CRITICAL: Order %s on %s no longer returned by exchange after "
+                                "%d failed callback attempts. Force-removing to prevent permanent "
+                                "tracking. MANUAL RECONCILIATION REQUIRED.",
+                                order_id,
+                                tracked.symbol,
+                                tracked.callback_failure_count,
+                            )
+                            self.stop_tracking(order_id)
+                        else:
+                            logger.warning(
+                                "Could not fetch order %s (attempt %d/%d) - may have expired",
+                                order_id,
+                                tracked.api_error_count,
+                                MAX_API_ERROR_RETRIES,
+                            )
+                        continue
+
+                    # Reset API error counter on any successful response
+                    tracked.api_error_count = 0
+                    self._process_order_status(order_id, tracked, order)
+
+                except Exception as e:
                     tracked.api_error_count += 1
                     if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
                         logger.critical(
-                            "CRITICAL: Order %s on %s returned None for %d consecutive "
-                            "polls. Force-removing to prevent infinite polling. "
+                            "CRITICAL: Order %s on %s failed %d consecutive API calls: %s. "
+                            "Force-removing to prevent infinite error loop. "
                             "MANUAL RECONCILIATION REQUIRED.",
                             order_id,
                             tracked.symbol,
                             tracked.api_error_count,
+                            e,
+                            exc_info=True,
                         )
+                        # Call cancel callback BEFORE stop_tracking so the callback
+                        # can still access order metadata if needed
                         if self.on_cancel:
                             try:
                                 self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
@@ -216,63 +297,14 @@ class OrderTracker:
                                     exc_info=True,
                                 )
                         self.stop_tracking(order_id)
-                    elif tracked.callback_failure_count > 0:
-                        logger.critical(
-                            "CRITICAL: Order %s on %s no longer returned by exchange after "
-                            "%d failed callback attempts. Force-removing to prevent permanent "
-                            "tracking. MANUAL RECONCILIATION REQUIRED.",
-                            order_id,
-                            tracked.symbol,
-                            tracked.callback_failure_count,
-                        )
-                        self.stop_tracking(order_id)
                     else:
                         logger.warning(
-                            "Could not fetch order %s (attempt %d/%d) - may have expired",
+                            "Failed to check order %s (attempt %d/%d): %s",
                             order_id,
                             tracked.api_error_count,
                             MAX_API_ERROR_RETRIES,
+                            e,
                         )
-                    continue
-
-                # Reset API error counter on any successful response
-                tracked.api_error_count = 0
-                self._process_order_status(order_id, tracked, order)
-
-            except Exception as e:
-                tracked.api_error_count += 1
-                if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
-                    logger.critical(
-                        "CRITICAL: Order %s on %s failed %d consecutive API calls: %s. "
-                        "Force-removing to prevent infinite error loop. "
-                        "MANUAL RECONCILIATION REQUIRED.",
-                        order_id,
-                        tracked.symbol,
-                        tracked.api_error_count,
-                        e,
-                        exc_info=True,
-                    )
-                    # Call cancel callback BEFORE stop_tracking so the callback
-                    # can still access order metadata if needed
-                    if self.on_cancel:
-                        try:
-                            self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
-                        except Exception as cb_err:
-                            logger.error(
-                                "Cancel callback failed for force-removed order %s: %s",
-                                order_id,
-                                cb_err,
-                                exc_info=True,
-                            )
-                    self.stop_tracking(order_id)
-                else:
-                    logger.warning(
-                        "Failed to check order %s (attempt %d/%d): %s",
-                        order_id,
-                        tracked.api_error_count,
-                        MAX_API_ERROR_RETRIES,
-                        e,
-                    )
 
     def _process_order_status(self, order_id: str, tracked: TrackedOrder, order: Order) -> None:
         """
@@ -514,13 +546,31 @@ class OrderTracker:
             OrderStatus.REJECTED,
             OrderStatus.EXPIRED,
         ):
+            # Reconcile fill delta: if terminal status carries more fill qty than
+            # we've seen (e.g. partial fill event was missed), process the delta
+            # before handling the cancel to avoid under-counting fills.
+            actual_filled = order.filled_quantity if order.filled_quantity else 0.0
+            if actual_filled > tracked.last_filled_qty:
+                fill_delta = actual_filled - tracked.last_filled_qty
+                logger.warning(
+                    "Order %s: reconciling missed fill delta %.8f before %s",
+                    order_id, fill_delta, status.value,
+                )
+                if self.on_partial_fill:
+                    try:
+                        self.on_partial_fill(order_id, tracked.symbol, fill_delta, avg_price)
+                    except Exception as e:
+                        logger.error("Fill reconciliation callback failed for %s: %s", order_id, e)
+                with self._lock:
+                    if order_id in self._pending_orders:
+                        self._pending_orders[order_id].last_filled_qty = actual_filled
+
             logger.warning("Order %s: %s %s", status.value, order_id, tracked.symbol)
             # Call callback outside any lock to prevent deadlock.
-            # Pass last_filled_qty so the caller can compute a proportional fee refund
-            # when the order was partially filled before cancellation.
+            # Pass actual filled qty so the caller uses the reconciled value.
             if self.on_cancel:
                 try:
-                    self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
+                    self.on_cancel(order_id, tracked.symbol, actual_filled)
                 except Exception as e:
                     # Escalate to CRITICAL: the position may still exist in the
                     # tracker with no exchange order backing it. The order won't
@@ -537,3 +587,132 @@ class OrderTracker:
             # Stop tracking even if callback fails - cancelled orders won't
             # re-appear on exchange so keeping them tracked is a memory leak.
             self.stop_tracking(order_id)
+
+    def process_execution_event(self, event: dict) -> None:
+        """Process a WebSocket executionReport event.
+
+        Extracts order data from Binance WS fields, deduplicates, and delegates
+        to the existing _process_order_status() for lifecycle handling.
+
+        Args:
+            event: Raw Binance executionReport payload with single-letter keys.
+        """
+        order_id = str(event.get("i", ""))
+        exec_type = str(event.get("x", ""))
+        exec_id = str(event.get("I", ""))
+
+        # Per-order lock serialises WS and REST processing of the same order,
+        # preventing double fills when both paths race on the same update.
+        order_lock = self._get_order_lock(order_id)
+        with order_lock:
+            with self._lock:
+                tracked = self._pending_orders.get(order_id)
+            if tracked is None:
+                return
+
+            # Check dedup without marking — only mark after successful processing
+            # so transient callback failures can be retried on next event/poll.
+            if self._dedup.is_seen(order_id, exec_type, exec_id):
+                return
+
+            cum_filled = float(event.get("z", 0))
+            cum_quote = float(event.get("Z", 0))
+            avg_price = cum_quote / cum_filled if cum_filled > 0 else 0.0
+
+            status = self._map_ws_status(str(event.get("X", "")))
+            if status is None:
+                return
+
+            order = Order(
+                order_id=order_id,
+                symbol=str(event.get("s", tracked.symbol)),
+                side=OrderSide(str(event.get("S", "BUY"))),
+                order_type=self._map_ws_order_type(str(event.get("o", "MARKET"))),
+                quantity=float(event.get("q", 0)),
+                price=float(event.get("p", 0)) or None,
+                status=status,
+                filled_quantity=cum_filled,
+                average_price=avg_price,
+                commission=float(event.get("n") or 0),
+                commission_asset=str(event.get("N") or ""),
+                create_time=datetime.fromtimestamp(event.get("O", 0) / 1000, tz=UTC),
+                update_time=datetime.fromtimestamp(event.get("E", 0) / 1000, tz=UTC),
+                stop_price=float(event.get("P", 0)) or None,
+                time_in_force=str(event.get("f", "GTC")),
+                client_order_id=str(event.get("c", "")),
+            )
+
+            old_filled_qty = tracked.last_filled_qty
+            self._process_order_status(order_id, tracked, order)
+            # Only mark as seen if the order was fully handled (untracked or
+            # terminal). If still tracked with same fill qty, a retryable failure
+            # occurred and the event should be retried on next delivery/poll.
+            with self._lock:
+                still_tracked = order_id in self._pending_orders
+                if still_tracked:
+                    current = self._pending_orders[order_id]
+                    # Compare against snapshot — tracked is the same object as current
+                    state_changed = current.last_filled_qty != old_filled_qty
+                else:
+                    state_changed = True  # Order removed — fully handled
+            if not still_tracked or state_changed:
+                self._dedup.mark_seen(order_id, exec_type, exec_id)
+
+    @staticmethod
+    def _map_ws_status(ws_status: str) -> OrderStatus | None:
+        """Map a Binance WebSocket order status to our OrderStatus enum.
+
+        Args:
+            ws_status: Binance WS status string (e.g. "FILLED", "CANCELED").
+
+        Returns:
+            Mapped OrderStatus, or None for unknown statuses (ignored with warning).
+        """
+        mapping = {
+            "NEW": OrderStatus.PENDING,
+            "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
+            "FILLED": OrderStatus.FILLED,
+            "CANCELED": OrderStatus.CANCELLED,  # Binance 1 L, our enum 2 Ls
+            "REJECTED": OrderStatus.REJECTED,
+            "EXPIRED": OrderStatus.EXPIRED,
+            "EXPIRED_IN_MATCH": OrderStatus.EXPIRED,  # STP / self-trade prevention
+            "PENDING_CANCEL": OrderStatus.PENDING,  # Non-terminal — keep tracking
+        }
+        status = mapping.get(ws_status)
+        if status is None:
+            logger.warning("Unknown WS order status: %s — ignoring event", ws_status)
+        return status
+
+    @staticmethod
+    def _map_ws_order_type(ws_type: str) -> OrderType:
+        """Map a Binance WebSocket order type to our OrderType enum.
+
+        Args:
+            ws_type: Binance WS order type string (e.g. "MARKET", "STOP_LOSS_LIMIT").
+
+        Returns:
+            Mapped OrderType, defaulting to MARKET for unknown types.
+        """
+        mapping = {
+            "MARKET": OrderType.MARKET,
+            "LIMIT": OrderType.LIMIT,
+            "STOP_LOSS": OrderType.STOP_LOSS,
+            "STOP_LOSS_LIMIT": OrderType.STOP_LOSS,
+            "TAKE_PROFIT": OrderType.TAKE_PROFIT,
+            "TAKE_PROFIT_LIMIT": OrderType.TAKE_PROFIT,
+        }
+        return mapping.get(ws_type, OrderType.MARKET)
+
+    def poll_once(self) -> None:
+        """Execute a single poll cycle. Used during WS to REST transitions."""
+        self._check_orders()
+
+    def disable_polling(self) -> None:
+        """Disable REST polling. Used when WebSocket is active."""
+        self._polling_enabled = False
+        logger.info("Order polling disabled — WebSocket active")
+
+    def enable_polling(self) -> None:
+        """Enable REST polling. Used when WebSocket fails."""
+        self._polling_enabled = True
+        logger.info("Order polling enabled — REST fallback active")
