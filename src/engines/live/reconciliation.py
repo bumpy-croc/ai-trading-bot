@@ -2444,15 +2444,28 @@ class PeriodicReconciler:
                     base_asset = PositionReconciler._extract_base_asset(
                         position.symbol
                     )
-                    interest = interest_tracker.get_position_interest_cost(
+                    interest_base = interest_tracker.get_position_interest_cost(
                         base_asset, entry_time
                     )
-                    if interest > 0:
-                        logger.info(
-                            "Margin interest accrued for %s: $%.4f",
-                            position.symbol,
-                            interest,
-                        )
+                    if interest_base > 0:
+                        # Get current price for USDT conversion
+                        current_price = getattr(position, "current_price", None)
+                        if current_price and float(current_price) > 0:
+                            interest_usdt = interest_base * float(current_price)
+                            logger.info(
+                                "Margin interest accrued for %s: $%.4f (%.8f %s)",
+                                position.symbol,
+                                interest_usdt,
+                                interest_base,
+                                base_asset,
+                            )
+                        else:
+                            logger.info(
+                                "Margin interest accrued for %s: %.8f %s (no price for USDT conversion)",
+                                position.symbol,
+                                interest_base,
+                                base_asset,
+                            )
                 except Exception as e:
                     logger.warning(
                         "Failed to query margin interest for %s: %s",

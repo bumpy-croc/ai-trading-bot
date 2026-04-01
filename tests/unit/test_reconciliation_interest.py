@@ -127,7 +127,7 @@ class TestReconciliationInterestLogging:
             )
             assert any(
                 "Margin interest accrued for ETHUSDT" in msg
-                and "$0.0523" in msg
+                and "0.05230000 ETH" in msg
                 for msg in caplog.messages
             )
 
