@@ -35,8 +35,8 @@ class TestGetMarginInterestHistory:
     """Tests for get_margin_interest_history method."""
 
     def test_returns_data_in_margin_mode(self, margin_provider):
-        """Should return interest history when in margin mode."""
-        expected = [
+        """Should unwrap rows from Binance envelope and return interest records."""
+        expected_rows = [
             {
                 "txId": 1,
                 "interestAccuredTime": 1672531200000,
@@ -47,11 +47,14 @@ class TestGetMarginInterestHistory:
                 "type": "ON_BORROW",
             }
         ]
-        margin_provider._client.get_margin_interest_history.return_value = expected
+        # Binance API returns {rows: [...], total: N} envelope
+        margin_provider._client.get_margin_interest_history.return_value = {
+            "rows": expected_rows, "total": 1
+        }
 
         result = margin_provider.get_margin_interest_history(asset="BTC")
 
-        assert result == expected
+        assert result == expected_rows
 
     def test_returns_empty_list_when_not_margin_mode(self, spot_provider):
         """Should return empty list when not in margin mode."""
@@ -98,34 +101,34 @@ class TestGetMarginInterestHistory:
 
     def test_passes_correct_params_all_specified(self, margin_provider):
         """Should pass asset, startTime, endTime to client when all provided."""
-        margin_provider._client.get_margin_interest_history.return_value = []
+        margin_provider._client.get_margin_interest_history.return_value = {"rows": [], "total": 0}
 
         margin_provider.get_margin_interest_history(
             asset="ETH", start_time=1000, end_time=2000
         )
 
         margin_provider._client.get_margin_interest_history.assert_called_once_with(
-            asset="ETH", size=100, startTime=1000, endTime=2000
+            asset="ETH", size=100, current=1, startTime=1000, endTime=2000
         )
 
     def test_filters_none_params(self, margin_provider):
         """Should not pass startTime/endTime when they are None."""
-        margin_provider._client.get_margin_interest_history.return_value = []
+        margin_provider._client.get_margin_interest_history.return_value = {"rows": [], "total": 0}
 
         margin_provider.get_margin_interest_history(asset="BTC")
 
         margin_provider._client.get_margin_interest_history.assert_called_once_with(
-            asset="BTC", size=100
+            asset="BTC", size=100, current=1
         )
 
     def test_filters_only_end_time_none(self, margin_provider):
         """Should pass startTime but not endTime when only end_time is None."""
-        margin_provider._client.get_margin_interest_history.return_value = []
+        margin_provider._client.get_margin_interest_history.return_value = {"rows": [], "total": 0}
 
         margin_provider.get_margin_interest_history(asset="BTC", start_time=5000)
 
         margin_provider._client.get_margin_interest_history.assert_called_once_with(
-            asset="BTC", size=100, startTime=5000
+            asset="BTC", size=100, current=1, startTime=5000
         )
 
 

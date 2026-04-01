@@ -14,7 +14,8 @@ class _ExchangeWithInterestHistory(Protocol):
     """Protocol for exchanges that support margin interest history queries."""
 
     def get_margin_interest_history(
-        self, asset: str, start_time: int, end_time: int | None = None
+        self, asset: str, start_time: int, end_time: int | None = None,
+        page: int = 1,
     ) -> list[dict[str, Any]]: ...
 
 
@@ -97,13 +98,12 @@ class MarginInterestTracker:
     def _fetch_all_records(
         self, asset: str, start_time_ms: int
     ) -> list[dict[str, Any]]:
-        """Fetch all interest records, paginating if Binance returns a full page."""
+        """Fetch all interest records using page-number pagination."""
         all_records: list[dict[str, Any]] = []
-        current_start = start_time_ms
 
-        for page in range(self._MAX_PAGES):
+        for page_num in range(1, self._MAX_PAGES + 1):
             records = self._exchange.get_margin_interest_history(
-                asset=asset, start_time=current_start
+                asset=asset, start_time=start_time_ms, page=page_num
             )
             if not records:
                 break
@@ -113,23 +113,13 @@ class MarginInterestTracker:
             if len(records) < self._PAGE_SIZE:
                 break
 
-            # Use last record's timestamp + 1ms as next page start
-            last_time = records[-1].get("interestAccuredTime")
-            if last_time is None:
-                logger.warning(
-                    "Cannot paginate interest history for %s — missing timestamp",
-                    asset,
-                )
-                break
-            current_start = int(last_time) + 1
-
-            if page > 0:
+            if page_num > 1:
                 logger.info(
                     "Paginating interest history for %s (page %d, %d records so far)",
-                    asset, page + 1, len(all_records),
+                    asset, page_num, len(all_records),
                 )
         else:
-            # Loop exhausted MAX_PAGES without breaking — results may be truncated
+            # Loop exhausted MAX_PAGES without breaking
             logger.warning(
                 "Interest history for %s hit %d-page limit (%d records) — "
                 "total may be understated for very long-held positions",

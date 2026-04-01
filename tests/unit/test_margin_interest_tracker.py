@@ -109,7 +109,7 @@ class TestGetPositionInterestCost:
         tracker.get_position_interest_cost("BTC", entry_time)
 
         mock_exchange.get_margin_interest_history.assert_called_once_with(
-            asset="BTC", start_time=1736935200000
+            asset="BTC", start_time=1736935200000, page=1
         )
 
     def test_returns_zero_when_exchange_returns_none(
