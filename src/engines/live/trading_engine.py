@@ -4243,6 +4243,37 @@ class LiveTradingEngine:
                     gross_pnl = pnl_pct_sized * basis_balance
                     realized_pnl = gross_pnl - exit_fee  # Net P&L for balance update
 
+                    # Deduct margin interest for short positions closed offline
+                    offline_interest_cost = 0.0
+                    if (
+                        getattr(self.exchange_interface, "is_margin_mode", False)
+                        and position.side == PositionSide.SHORT
+                    ):
+                        try:
+                            from src.engines.live.reconciliation import PositionReconciler
+
+                            tracker = MarginInterestTracker(self.exchange_interface)
+                            base_asset = PositionReconciler._extract_base_asset(
+                                position.symbol
+                            )
+                            interest_base = tracker.get_position_interest_cost(
+                                base_asset, position.entry_time
+                            )
+                            offline_interest_cost = interest_base * exit_price
+                            if offline_interest_cost > 0:
+                                realized_pnl -= offline_interest_cost
+                                logger.info(
+                                    "Deducted margin interest $%.4f from offline SL PnL for %s",
+                                    offline_interest_cost,
+                                    position.symbol,
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to query margin interest for offline SL %s: %s",
+                                position.symbol,
+                                e,
+                            )
+
                     # Atomic balance update for offline stop-loss reconciliation
                     if self.trading_session_id is not None:
                         try:

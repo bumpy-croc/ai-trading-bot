@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -38,9 +38,10 @@ class MarginInterestTracker:
         """
         if entry_time.tzinfo is None:
             logger.warning(
-                "entry_time for %s is naive (no timezone) — assuming UTC",
+                "entry_time for %s is naive (no timezone) — normalizing to UTC",
                 asset,
             )
+            entry_time = entry_time.replace(tzinfo=UTC)
 
         try:
             start_time_ms = int(entry_time.timestamp() * 1000)
@@ -127,5 +128,12 @@ class MarginInterestTracker:
                     "Paginating interest history for %s (page %d, %d records so far)",
                     asset, page + 1, len(all_records),
                 )
+        else:
+            # Loop exhausted MAX_PAGES without breaking — results may be truncated
+            logger.warning(
+                "Interest history for %s hit %d-page limit (%d records) — "
+                "total may be understated for very long-held positions",
+                asset, self._MAX_PAGES, len(all_records),
+            )
 
         return all_records
