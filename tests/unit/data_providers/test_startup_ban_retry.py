@@ -82,11 +82,12 @@ class TestHandleStartupBan:
         assert result is None
 
     def test_returns_none_when_ban_exceeds_max_wait(self):
-        """Returns None when ban wait exceeds max_wait threshold."""
+        """Returns None when ban wait + buffer exceeds max_wait threshold."""
         exc = _make_ban_exception(-1003, 1_775_001_000_000)
 
+        # 596s + 5s buffer = 601s > 600s max_wait
         with patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=700.0
+            "src.data_providers.binance_provider._parse_ban_expiry", return_value=596.0
         ):
             result = BinanceProvider._handle_startup_ban(
                 exc, attempt=0, max_retries=3, max_wait=600

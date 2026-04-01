@@ -25,6 +25,8 @@ import pandas as pd
 from src.config import get_config
 from src.config.constants import (
     DEFAULT_DATA_FETCH_TIMEOUT,
+    DEFAULT_STARTUP_BAN_MAX_RETRIES,
+    DEFAULT_STARTUP_BAN_MAX_WAIT,
     DEFAULT_WS_KLINE_STALENESS_THRESHOLD,
     DEFAULT_WS_RECONNECT_MAX_RETRIES,
 )
@@ -369,11 +371,6 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             f"Geo-detection result: {'US location' if is_us else 'Non-US location'} - using {api_endpoint} API"
         )
 
-        from src.config.constants import (
-            DEFAULT_STARTUP_BAN_MAX_RETRIES,
-            DEFAULT_STARTUP_BAN_MAX_WAIT,
-        )
-
         last_error = None
         for attempt in range(DEFAULT_STARTUP_BAN_MAX_RETRIES + 1):
             try:
@@ -407,17 +404,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         if self.api_key and self.api_secret:
             logger.debug(f"Creating authenticated {api_endpoint} client...")
             if api_endpoint == "binanceus":
-                self._client = Client(
+                client = Client(
                     self.api_key, self.api_secret, testnet=self.testnet, tld="us"
                 )
             else:
-                self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
+                client = Client(self.api_key, self.api_secret, testnet=self.testnet)
         else:
             logger.debug(f"Creating public {api_endpoint} client...")
             if api_endpoint == "binanceus":
-                self._client = Client(tld="us")
+                client = Client(tld="us")
             else:
-                self._client = Client()
+                client = Client()
 
         logger.info(
             f"{api_endpoint.title()} client initialized successfully "
@@ -426,9 +423,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         )
 
         logger.debug("Testing client with server time request...")
-        test_response = self._client.get_server_time()
+        test_response = client.get_server_time()
         logger.debug(f"Server time test successful: {test_response}")
 
+        # Only promote to self._client after all verification passes
+        self._client = client
         if self._use_margin:
             self._verify_margin_account()
 
@@ -455,15 +454,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # No parseable expiry — use a short default
             ban_wait = 30.0
 
-        if ban_wait > max_wait:
+        # Add small buffer so we don't land exactly on the expiry edge
+        total_wait = ban_wait + 5.0
+
+        if total_wait > max_wait:
             logger.error(
-                f"IP ban expires in {ban_wait:.0f}s which exceeds startup max wait "
+                f"IP ban wait ({total_wait:.0f}s) exceeds startup max wait "
                 f"of {max_wait}s. Not retrying."
             )
             return None
 
-        # Add small buffer so we don't land exactly on the expiry edge
-        return ban_wait + 5.0
+        return total_wait
 
     def _handle_init_failure(self, error: Exception | None, api_endpoint: str):
         """Handle final init failure after all retries exhausted."""
@@ -473,19 +474,24 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         error_type = type(error).__name__
         error_msg = str(error)
 
+        if self._use_margin and self._is_live:
+            logger.error(
+                f"{api_endpoint.title()} Client initialization failed with {error_type}: {error_msg}. "
+                f"Credentials available: {bool(self.api_key and self.api_secret)}, "
+                f"Testnet mode: {self.testnet}."
+            )
+            raise RuntimeError(
+                f"FATAL: Cannot initialize Binance client in live margin mode. "
+                f"Refusing to fall back to offline stub — placing dummy margin orders "
+                f"risks fund loss. Error: {error_type}: {error_msg}"
+            ) from error
+
         logger.error(
             f"{api_endpoint.title()} Client initialization failed with {error_type}: {error_msg}. "
             f"Credentials available: {bool(self.api_key and self.api_secret)}, "
             f"Testnet mode: {self.testnet}. "
             f"Falling back to offline stub."
         )
-
-        if self._use_margin and self._is_live:
-            raise RuntimeError(
-                f"FATAL: Cannot initialize Binance client in live margin mode. "
-                f"Refusing to fall back to offline stub — placing dummy margin orders "
-                f"risks fund loss. Error: {error_type}: {error_msg}"
-            ) from error
 
         if "recursion" in error_msg.lower() or "maximum recursion" in error_msg.lower():
             logger.error(
