@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 # Credentials must be >= 20 chars to pass validation
 FAKE_KEY = "A" * 64
