@@ -2913,7 +2913,7 @@ class DatabaseManager:
                 recent_trades = sorted(trades, key=lambda t: t.exit_time, reverse=True)
 
                 for trade in recent_trades:
-                    pnl = float(trade.pnl)
+                    pnl = _trade_net_pnl(trade)
                     if pnl > 0:
                         if consecutive_losses == 0:  # Still in winning streak
                             consecutive_wins += 1
@@ -2928,7 +2928,7 @@ class DatabaseManager:
 
                 # Calculate Sharpe ratio (simplified)
                 if len(trades) > 1:
-                    pnls = [float(t.pnl) for t in trades]
+                    pnls = [_trade_net_pnl(t) for t in trades]
                     import numpy as np
 
                     returns_std = np.std(pnls)

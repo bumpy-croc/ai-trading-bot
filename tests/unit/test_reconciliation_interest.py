@@ -257,7 +257,7 @@ class TestRealizePnlOnCloseInterestDeduction:
             assert new_balance == pytest.approx(1000.0 + 6.20)
 
             assert any(
-                "Deducted margin interest $3.80" in msg
+                "Margin interest $3.80" in msg
                 for msg in caplog.messages
             )
 
