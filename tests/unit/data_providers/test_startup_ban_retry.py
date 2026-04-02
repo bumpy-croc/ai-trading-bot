@@ -267,3 +267,38 @@ class TestInitializeClientBanRetry:
         # Should have retried (slept once) and succeeded
         mock_sleep.assert_called_once_with(10.0)  # 5s ban + 5s buffer
         assert provider._client == mock_client_ok
+
+    @patch("src.data_providers.binance_provider.get_binance_api_endpoint", return_value="binance")
+    @patch("src.data_providers.binance_provider.is_us_location", return_value=False)
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_cumulative_deadline_rejects_second_retry(
+        self, mock_config, mock_client_class, _mock_us, _mock_endpoint
+    ):
+        """Total wait across retries must not exceed DEFAULT_STARTUP_BAN_MAX_WAIT."""
+        mock_config_obj = Mock()
+        mock_config_obj.get.side_effect = lambda key, default=None: {
+            "BINANCE_ACCOUNT_TYPE": "margin",
+            "TRADING_MODE": "live",
+        }.get(key, default)
+        mock_config_obj.get_required.side_effect = lambda key: FAKE_KEY if "KEY" in key else FAKE_SECRET
+        mock_config.return_value = mock_config_obj
+
+        ban_exc = _make_ban_exception(-1003, 1_775_000_010_000)
+        mock_client_class.side_effect = ban_exc  # Always fails
+
+        # Simulate time advancing: first retry at t=0, second at t=590
+        # With DEFAULT_STARTUP_BAN_MAX_WAIT=600, the second retry should be
+        # rejected because remaining_budget < total_wait
+        monotonic_values = iter([0, 0, 590, 590])
+
+        with (
+            patch("time.sleep"),
+            patch("time.monotonic", side_effect=monotonic_values),
+            patch(
+                "src.data_providers.binance_provider._parse_ban_expiry",
+                return_value=300.0,
+            ),
+            pytest.raises(RuntimeError, match="FATAL"),
+        ):
+            BinanceProvider(FAKE_KEY, FAKE_SECRET)

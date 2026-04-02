@@ -50,10 +50,17 @@ from .exchange_interface import (
 logger = logging.getLogger(__name__)
 
 try:
+    import nest_asyncio
+
+    nest_asyncio.apply()  # Allow nested run_until_complete for TWM event loop
+
     from binance import ThreadedWebsocketManager
     from binance.client import Client
     from binance.enums import SIDE_BUY, SIDE_SELL
     from binance.exceptions import BinanceAPIException, BinanceOrderException
+
+    # Ensure ws.protocol.State is accessible (not auto-loaded in websockets 13+)
+    import websockets.protocol  # noqa: F401
 
     BINANCE_AVAILABLE = True
 except ImportError:
