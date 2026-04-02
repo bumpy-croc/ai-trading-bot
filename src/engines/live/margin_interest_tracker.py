@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+_RETRY_DELAY_SECONDS = 1.0
 
 
 class _ExchangeWithInterestHistory(Protocol):
@@ -30,12 +33,17 @@ class MarginInterestTracker:
         self._exchange = exchange
 
     def get_position_interest_cost(
-        self, asset: str, entry_time: datetime
+        self, asset: str, entry_time: datetime, retries: int = 1
     ) -> float:
         """Return total margin interest cost for an asset since entry_time.
 
         Sums interest from all exchange records since the position was opened.
         Returns 0.0 on error or when no records exist.
+
+        Args:
+            asset: Base asset symbol (e.g. "BTC").
+            entry_time: Position open time.
+            retries: Number of retry attempts on API failure (default 1).
         """
         if entry_time.tzinfo is None:
             logger.warning(
@@ -44,13 +52,28 @@ class MarginInterestTracker:
             )
             entry_time = entry_time.replace(tzinfo=UTC)
 
-        try:
-            start_time_ms = int(entry_time.timestamp() * 1000)
-            records = self._fetch_all_records(asset, start_time_ms)
-        except Exception as e:
+        start_time_ms = int(entry_time.timestamp() * 1000)
+        records: list[dict[str, Any]] = []
+        last_error: Exception | None = None
+
+        for attempt in range(1 + retries):
+            try:
+                records = self._fetch_all_records(asset, start_time_ms)
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    logger.info(
+                        "Retrying margin interest fetch for %s (attempt %d/%d): %s",
+                        asset, attempt + 1, 1 + retries, e,
+                    )
+                    time.sleep(_RETRY_DELAY_SECONDS)
+
+        if last_error is not None:
             logger.warning(
-                "Failed to fetch margin interest history for %s: %s",
-                asset, e, exc_info=True,
+                "Failed to fetch margin interest history for %s after %d attempts: %s",
+                asset, 1 + retries, last_error, exc_info=True,
             )
             return 0.0
 
@@ -59,6 +82,11 @@ class MarginInterestTracker:
 
         total = 0.0
         for record in records:
+            if not isinstance(record, dict):
+                logger.warning(
+                    "Skipping non-dict interest record: %s", type(record).__name__
+                )
+                continue
             try:
                 value = float(record["interest"])
             except (ValueError, KeyError, TypeError):

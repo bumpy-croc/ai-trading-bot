@@ -2433,8 +2433,15 @@ class PeriodicReconciler:
                     )
 
             # Log accumulated margin interest for open short positions
-            # (informational only — no corrections or balance changes)
+            # (informational only — no corrections or balance changes).
+            # Uses a per-position cache (5-minute TTL) to avoid hitting the
+            # SAPI endpoint every reconciliation cycle (default 60s).
+            now = time.time()
             interest_tracker = MarginInterestTracker(self.exchange)
+            interest_cache_ttl = 300  # seconds
+            if not hasattr(self, "_interest_cache"):
+                self._interest_cache: dict[str, tuple[float, float]] = {}
+
             for _key, position in list(positions_snapshot.items()):
                 try:
                     side = getattr(position, "side", None)
@@ -2446,14 +2453,21 @@ class PeriodicReconciler:
                     entry_time = getattr(position, "entry_time", None)
                     if entry_time is None:
                         continue
+
                     base_asset = PositionReconciler._extract_base_asset(
                         position.symbol
                     )
-                    interest_base = interest_tracker.get_position_interest_cost(
-                        base_asset, entry_time
-                    )
+                    cache_key = f"{position.symbol}_{_key}"
+                    cached = self._interest_cache.get(cache_key)
+                    if cached and (now - cached[1]) < interest_cache_ttl:
+                        interest_base = cached[0]
+                    else:
+                        interest_base = interest_tracker.get_position_interest_cost(
+                            base_asset, entry_time
+                        )
+                        self._interest_cache[cache_key] = (interest_base, now)
+
                     if interest_base > 0:
-                        # Get current price for USDT conversion
                         current_price = getattr(position, "current_price", None)
                         if current_price and float(current_price) > 0:
                             interest_usdt = interest_base * float(current_price)

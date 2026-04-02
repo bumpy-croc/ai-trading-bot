@@ -3381,8 +3381,12 @@ class LiveTradingEngine:
                 exit_reason=reason,
             )
 
+            # Include margin interest in performance tracker fees so
+            # reported PnL, win rate, and net metrics account for financing.
             self.performance_tracker.record_trade(
-                trade=trade, fee=total_fee, slippage=total_slippage
+                trade=trade,
+                fee=total_fee + interest_cost,
+                slippage=total_slippage,
             )
 
             self.completed_trades.append(trade)
@@ -4317,11 +4321,30 @@ class LiveTradingEngine:
                         exit_reason="stop_loss_offline",
                     )
                     self.performance_tracker.record_trade(
-                        trade=trade, fee=exit_fee, slippage=exit_slippage_cost
+                        trade=trade,
+                        fee=exit_fee + offline_interest_cost,
+                        slippage=exit_slippage_cost,
                     )
                     self.completed_trades.append(trade)
                     if self.log_trades:
                         self._log_trade(trade)
+
+                    # Persist trade to DB with margin interest cost
+                    if self.trading_session_id is not None:
+                        self.db_manager.log_trade(
+                            symbol=position.symbol,
+                            side=position.side.value,
+                            entry_price=position.entry_price,
+                            exit_price=exit_price,
+                            size=fraction,
+                            pnl=gross_pnl,
+                            strategy_name=self._strategy_name(),
+                            exit_reason="stop_loss_offline",
+                            entry_time=position.entry_time,
+                            exit_time=datetime.now(UTC),
+                            session_id=self.trading_session_id,
+                            margin_interest_cost=offline_interest_cost,
+                        )
 
                 # Stop tracking the SL order to prevent memory leak
                 if position.stop_loss_order_id and self.order_tracker:

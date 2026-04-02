@@ -137,3 +137,49 @@ class TestGetPositionInterestCost:
         result = tracker.get_position_interest_cost("BTC", entry_time)
 
         assert math.isclose(result, 0.003, rel_tol=1e-9)
+
+    def test_skips_non_dict_records(
+        self, tracker: MarginInterestTracker, mock_exchange: MagicMock
+    ) -> None:
+        """Non-dict elements (None, strings, lists) are skipped without crashing."""
+        mock_exchange.get_margin_interest_history.return_value = [
+            {"interest": "0.001", "asset": "BTC"},
+            None,
+            "bad_string",
+            [1, 2, 3],
+            {"interest": "0.002", "asset": "BTC"},
+        ]
+        entry_time = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        result = tracker.get_position_interest_cost("BTC", entry_time)
+
+        assert math.isclose(result, 0.003, rel_tol=1e-9)
+
+    def test_retries_on_api_failure(
+        self, mock_exchange: MagicMock
+    ) -> None:
+        """Retry once on API failure before returning results."""
+        mock_exchange.get_margin_interest_history.side_effect = [
+            Exception("Transient error"),
+            [{"interest": "0.005", "asset": "BTC"}],
+        ]
+        tracker = MarginInterestTracker(exchange=mock_exchange)
+        entry_time = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        result = tracker.get_position_interest_cost("BTC", entry_time, retries=1)
+
+        assert math.isclose(result, 0.005, rel_tol=1e-9)
+        assert mock_exchange.get_margin_interest_history.call_count == 2
+
+    def test_returns_zero_after_exhausted_retries(
+        self, mock_exchange: MagicMock
+    ) -> None:
+        """Return 0.0 after all retry attempts fail."""
+        mock_exchange.get_margin_interest_history.side_effect = Exception("Persistent error")
+        tracker = MarginInterestTracker(exchange=mock_exchange)
+        entry_time = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        result = tracker.get_position_interest_cost("BTC", entry_time, retries=1)
+
+        assert result == 0.0
+        assert mock_exchange.get_margin_interest_history.call_count == 2
