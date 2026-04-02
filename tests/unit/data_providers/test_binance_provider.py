@@ -255,6 +255,7 @@ class TestRateLimitRetryDecorator:
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
 class TestPlaceStopLossOrder:
     """Tests for the place_stop_loss_order method."""
 
@@ -496,6 +497,7 @@ class TestPlaceStopLossOrder:
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
 class TestGetOrderIdRouting:
     """Tests for get_order() routing between orderId and origClientOrderId."""
 

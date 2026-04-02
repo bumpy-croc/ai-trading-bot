@@ -136,6 +136,7 @@ class TestHandleStartupBan:
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
 class TestInitializeClientBanRetry:
     """Integration tests for the full _initialize_client retry loop."""
 

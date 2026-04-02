@@ -414,7 +414,8 @@ def _make_binance_provider(*, use_margin: bool = False):
     """Create a BinanceProvider with mocked client and optional margin mode."""
     from unittest.mock import patch
 
-    with patch("src.data_providers.binance_provider.get_config") as mock_config:
+    with patch("src.data_providers.binance_provider.get_config") as mock_config, \
+         patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True):
         mock_config_obj = MagicMock()
         mock_config_obj.get.return_value = None
         mock_config_obj.get_required.return_value = "fake_key"
