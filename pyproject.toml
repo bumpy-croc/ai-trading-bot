@@ -22,7 +22,7 @@ description = "AI Trading Bot CLI and tools"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "python-binance>=1.0.19",
+    "python-binance>=1.0.36",
     "pandas>=2.1.4",
     "python-dotenv>=1.0.0",
     "numpy>=1.26.2",
