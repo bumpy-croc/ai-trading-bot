@@ -1793,7 +1793,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 twm_kwargs["tld"] = "us"
             # Dedicated loop avoids "event loop is already running" when the
             # main thread already owns a loop (e.g. Railway health endpoint).
-            twm_kwargs["_loop"] = asyncio.new_event_loop()
+            twm_kwargs["loop"] = asyncio.new_event_loop()
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
             self._twm.start()
 
