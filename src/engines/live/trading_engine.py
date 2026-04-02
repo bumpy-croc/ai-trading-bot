@@ -1384,6 +1384,8 @@ class LiveTradingEngine:
                     self._ws_kline_active = True
                     self._ws_kline_provider = kline_provider
                     logger.info("Kline WebSocket stream active — REST data polling disabled")
+                    # Allow TWM event loop thread to stabilise before adding a second socket
+                    time.sleep(1)
             except Exception as e:
                 logger.warning("Failed to start kline WebSocket stream: %s", e)
 
