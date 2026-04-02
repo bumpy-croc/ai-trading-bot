@@ -1,5 +1,5 @@
 # Use locally - includes heavy libraries for training models
-python-binance==1.0.19
+python-binance==1.0.36
 pandas==2.2.0
 python-dotenv==1.0.0
 numpy==1.26.4

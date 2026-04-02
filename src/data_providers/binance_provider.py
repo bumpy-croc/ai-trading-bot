@@ -10,6 +10,7 @@ providing a single interface for all Binance operations including:
 """
 
 import logging
+import asyncio
 import math
 import re
 import threading
@@ -54,6 +55,10 @@ try:
     from binance.client import Client
     from binance.enums import SIDE_BUY, SIDE_SELL
     from binance.exceptions import BinanceAPIException, BinanceOrderException
+
+    # Ensure websockets.protocol is loaded so python-binance 1.0.36 can access
+    # ws.protocol.State (not auto-loaded in websockets 13.x+)
+    import websockets.protocol  # noqa: F401
 
     BINANCE_AVAILABLE = True
 except ImportError:
@@ -1786,6 +1791,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             api_endpoint = get_binance_api_endpoint()
             if api_endpoint == "binanceus":
                 twm_kwargs["tld"] = "us"
+            # Dedicated loop avoids "event loop is already running" when the
+            # main thread already owns a loop (e.g. Railway health endpoint).
+            twm_kwargs["_loop"] = asyncio.new_event_loop()
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
             self._twm.start()
 
