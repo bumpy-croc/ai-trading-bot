@@ -122,7 +122,7 @@ class TestHandleStartupBan:
         assert result == 65.0
 
     def test_handles_zero_remaining_ban_time(self):
-        """When ban already expired (0s remaining), use default wait."""
+        """When ban already expired (0s remaining), retry with minimal buffer."""
         exc = _make_ban_exception(-1003, 1_775_000_000_000)
 
         with patch(
@@ -132,7 +132,7 @@ class TestHandleStartupBan:
                 exc, attempt=0, max_retries=3, max_wait=600
             )
 
-        assert result == 35.0  # 30s default + 5s buffer
+        assert result == 6.0  # 1s minimal + 5s buffer
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")

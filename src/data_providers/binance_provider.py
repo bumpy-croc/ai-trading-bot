@@ -372,6 +372,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         )
 
         last_error = None
+        deadline = time.monotonic() + DEFAULT_STARTUP_BAN_MAX_WAIT
         for attempt in range(DEFAULT_STARTUP_BAN_MAX_RETRIES + 1):
             try:
                 self._attempt_client_init(api_endpoint)
@@ -380,8 +381,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 raise  # Margin verification failures propagate immediately
             except Exception as e:
                 last_error = e
+                remaining_budget = deadline - time.monotonic()
                 ban_wait = self._handle_startup_ban(
-                    e, attempt, DEFAULT_STARTUP_BAN_MAX_RETRIES, DEFAULT_STARTUP_BAN_MAX_WAIT
+                    e, attempt, DEFAULT_STARTUP_BAN_MAX_RETRIES, remaining_budget
                 )
                 if ban_wait is None:
                     break  # Non-ban error or exceeded limits — stop retrying
@@ -456,9 +458,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return None
 
         ban_wait = _parse_ban_expiry(str(error))
-        if ban_wait is None or ban_wait <= 0:
+        if ban_wait is None:
             # No parseable expiry — use a short default
             ban_wait = 30.0
+        elif ban_wait <= 0:
+            # Ban already expired — retry with minimal buffer
+            ban_wait = 1.0
 
         # Add small buffer so we don't land exactly on the expiry edge
         total_wait = ban_wait + 5.0
