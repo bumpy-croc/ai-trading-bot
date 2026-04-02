@@ -149,6 +149,7 @@ class Trade(Base):
     pnl = Column(Numeric(18, 8), nullable=False)  # Dollar P&L
     pnl_percent = Column(Numeric(18, 8), nullable=False)  # Percentage P&L
     commission = Column(Numeric(18, 8), default=0.0)
+    margin_interest_cost = Column(Numeric(18, 8), default=0.0)  # Margin borrow interest deducted
 
     # Risk management
     stop_loss = Column(Numeric(18, 8))

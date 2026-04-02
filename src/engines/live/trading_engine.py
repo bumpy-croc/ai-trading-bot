@@ -54,6 +54,7 @@ from src.engines.live.data.market_data_handler import MarketDataHandler
 from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
+from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
@@ -3279,6 +3280,46 @@ class LiveTradingEngine:
 
             realized_pnl = exit_result.realized_pnl - exit_result.exit_fee
 
+            # Deduct margin interest for short positions in margin mode
+            interest_cost = 0.0
+            if (
+                getattr(self.exchange_interface, "is_margin_mode", False)
+                and position.side == PositionSide.SHORT
+            ):
+                try:
+                    from src.engines.live.reconciliation import PositionReconciler
+
+                    tracker = MarginInterestTracker(self.exchange_interface)
+                    base_asset = PositionReconciler._extract_base_asset(
+                        position.symbol
+                    )
+                    if base_asset == position.symbol:
+                        logger.warning(
+                            "Could not extract base asset from %s — margin interest may not be queried correctly",
+                            position.symbol,
+                        )
+                    interest_base = tracker.get_position_interest_cost(
+                        base_asset, position.entry_time
+                    )
+                    # Convert from base asset units to USDT using exit price
+                    interest_cost = interest_base * float(exit_result.exit_price)
+                    if interest_cost > 0:
+                        realized_pnl -= interest_cost
+                        logger.info(
+                            "Deducted margin interest $%.4f (%.8f %s @ %.2f) from PnL for %s",
+                            interest_cost,
+                            interest_base,
+                            base_asset,
+                            float(exit_result.exit_price),
+                            position.symbol,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to query margin interest for %s — proceeding without deduction: %s",
+                        position.symbol,
+                        e,
+                    )
+
             # Atomic balance update with full audit trail for realized P&L
             if self.trading_session_id is not None:
                 try:
@@ -3340,8 +3381,12 @@ class LiveTradingEngine:
                 exit_reason=reason,
             )
 
+            # Include margin interest in performance tracker fees so
+            # reported PnL, win rate, and net metrics account for financing.
             self.performance_tracker.record_trade(
-                trade=trade, fee=total_fee, slippage=total_slippage
+                trade=trade,
+                fee=total_fee + interest_cost,
+                slippage=total_slippage,
             )
 
             self.completed_trades.append(trade)
@@ -3371,6 +3416,7 @@ class LiveTradingEngine:
                     mae_price=(metrics.mae_price if metrics else None),
                     mfe_time=(metrics.mfe_time if metrics else None),
                     mae_time=(metrics.mae_time if metrics else None),
+                    margin_interest_cost=interest_cost,
                 )
 
             if (
@@ -4201,6 +4247,37 @@ class LiveTradingEngine:
                     gross_pnl = pnl_pct_sized * basis_balance
                     realized_pnl = gross_pnl - exit_fee  # Net P&L for balance update
 
+                    # Deduct margin interest for short positions closed offline
+                    offline_interest_cost = 0.0
+                    if (
+                        getattr(self.exchange_interface, "is_margin_mode", False)
+                        and position.side == PositionSide.SHORT
+                    ):
+                        try:
+                            from src.engines.live.reconciliation import PositionReconciler
+
+                            tracker = MarginInterestTracker(self.exchange_interface)
+                            base_asset = PositionReconciler._extract_base_asset(
+                                position.symbol
+                            )
+                            interest_base = tracker.get_position_interest_cost(
+                                base_asset, position.entry_time
+                            )
+                            offline_interest_cost = interest_base * exit_price
+                            if offline_interest_cost > 0:
+                                realized_pnl -= offline_interest_cost
+                                logger.info(
+                                    "Deducted margin interest $%.4f from offline SL PnL for %s",
+                                    offline_interest_cost,
+                                    position.symbol,
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to query margin interest for offline SL %s: %s",
+                                position.symbol,
+                                e,
+                            )
+
                     # Atomic balance update for offline stop-loss reconciliation
                     if self.trading_session_id is not None:
                         try:
@@ -4244,11 +4321,30 @@ class LiveTradingEngine:
                         exit_reason="stop_loss_offline",
                     )
                     self.performance_tracker.record_trade(
-                        trade=trade, fee=exit_fee, slippage=exit_slippage_cost
+                        trade=trade,
+                        fee=exit_fee + offline_interest_cost,
+                        slippage=exit_slippage_cost,
                     )
                     self.completed_trades.append(trade)
                     if self.log_trades:
                         self._log_trade(trade)
+
+                    # Persist trade to DB with margin interest cost
+                    if self.trading_session_id is not None:
+                        self.db_manager.log_trade(
+                            symbol=position.symbol,
+                            side=position.side.value,
+                            entry_price=position.entry_price,
+                            exit_price=exit_price,
+                            size=fraction,
+                            pnl=gross_pnl,
+                            strategy_name=self._strategy_name(),
+                            exit_reason="stop_loss_offline",
+                            entry_time=position.entry_time,
+                            exit_time=datetime.now(UTC),
+                            session_id=self.trading_session_id,
+                            margin_interest_cost=offline_interest_cost,
+                        )
 
                 # Stop tracking the SL order to prevent memory leak
                 if position.stop_loss_order_id and self.order_tracker:

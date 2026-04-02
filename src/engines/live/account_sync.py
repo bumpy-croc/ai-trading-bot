@@ -119,11 +119,11 @@ class AccountSynchronizer:
             # row. Syncing USDT alone would oversize the next trade.
             # Proper margin equity requires account-level totalNetAssetOfBtc,
             # which is a future enhancement. Internal tracking is authoritative.
-            # TODO: Implement margin equity sync using get_margin_account()
-            # totalNetAssetOfBtc field, and deduct borrow interest from PnL
-            # on position close. Current gap: interest accrual on shorts is
-            # not deducted from current_balance, causing minor overstatement
-            # (~0.01%/day on borrowed amount).
+            # Margin interest tracking is implemented in MarginInterestTracker
+            # (src/engines/live/margin_interest_tracker.py). Interest is deducted
+            # from realized PnL on position close and logged during reconciliation.
+            # Balance/position sync remains skipped in margin mode because USDT
+            # netAsset doesn't reflect true equity when shorts are open.
             if not self._use_margin:
                 balance_sync_result = self._sync_balances(
                     exchange_data.get("balances", [])
