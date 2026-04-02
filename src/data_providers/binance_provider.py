@@ -10,7 +10,6 @@ providing a single interface for all Binance operations including:
 """
 
 import logging
-import asyncio
 import math
 import re
 import threading
@@ -51,13 +50,16 @@ from .exchange_interface import (
 logger = logging.getLogger(__name__)
 
 try:
+    import nest_asyncio
+
+    nest_asyncio.apply()  # Allow nested run_until_complete for TWM event loop
+
     from binance import ThreadedWebsocketManager
     from binance.client import Client
     from binance.enums import SIDE_BUY, SIDE_SELL
     from binance.exceptions import BinanceAPIException, BinanceOrderException
 
-    # Ensure websockets.protocol is loaded so python-binance 1.0.36 can access
-    # ws.protocol.State (not auto-loaded in websockets 13.x+)
+    # Ensure ws.protocol.State is accessible (not auto-loaded in websockets 13+)
     import websockets.protocol  # noqa: F401
 
     BINANCE_AVAILABLE = True
@@ -355,7 +357,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     def _initialize_client(self):
         """Initialize Binance client with geo-aware API selection and error handling"""
-        logger.debug(f"_initialize_client called - BINANCE_AVAILABLE: {BINANCE_AVAILABLE}")
+        logger.debug("_initialize_client called - BINANCE_AVAILABLE: %s", BINANCE_AVAILABLE)
 
         if not BINANCE_AVAILABLE:
             if self._use_margin and self._is_live:
@@ -377,6 +379,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         )
 
         last_error = None
+        deadline = time.monotonic() + DEFAULT_STARTUP_BAN_MAX_WAIT
         for attempt in range(DEFAULT_STARTUP_BAN_MAX_RETRIES + 1):
             try:
                 self._attempt_client_init(api_endpoint)
@@ -385,14 +388,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 raise  # Margin verification failures propagate immediately
             except Exception as e:
                 last_error = e
+                remaining_budget = deadline - time.monotonic()
                 ban_wait = self._handle_startup_ban(
-                    e, attempt, DEFAULT_STARTUP_BAN_MAX_RETRIES, DEFAULT_STARTUP_BAN_MAX_WAIT
+                    e, attempt, DEFAULT_STARTUP_BAN_MAX_RETRIES, remaining_budget
                 )
                 if ban_wait is None:
                     break  # Non-ban error or exceeded limits — stop retrying
                 logger.warning(
-                    f"Startup attempt {attempt + 1}/{DEFAULT_STARTUP_BAN_MAX_RETRIES + 1}: "
-                    f"IP banned, waiting {ban_wait:.0f}s for ban to lift..."
+                    "Startup attempt %d/%d: IP banned, waiting %.0fs for ban to lift...",
+                    attempt + 1,
+                    DEFAULT_STARTUP_BAN_MAX_RETRIES + 1,
+                    ban_wait,
                 )
                 time.sleep(ban_wait)
 
@@ -402,12 +408,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
     def _attempt_client_init(self, api_endpoint: str):
         """Single attempt to create and verify the Binance client."""
         logger.debug(
-            f"Attempting to create {api_endpoint} client - "
-            f"has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}"
+            "Attempting to create %s client - has_credentials: %s, testnet: %s",
+            api_endpoint,
+            bool(self.api_key and self.api_secret),
+            self.testnet,
         )
 
         if self.api_key and self.api_secret:
-            logger.debug(f"Creating authenticated {api_endpoint} client...")
+            logger.debug("Creating authenticated %s client...", api_endpoint)
             if api_endpoint == "binanceus":
                 client = Client(
                     self.api_key, self.api_secret, testnet=self.testnet, tld="us"
@@ -415,21 +423,23 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             else:
                 client = Client(self.api_key, self.api_secret, testnet=self.testnet)
         else:
-            logger.debug(f"Creating public {api_endpoint} client...")
+            logger.debug("Creating public %s client...", api_endpoint)
             if api_endpoint == "binanceus":
                 client = Client(tld="us")
             else:
                 client = Client()
 
+        auth_mode = "with credentials" if self.api_key and self.api_secret else "public mode"
         logger.info(
-            f"{api_endpoint.title()} client initialized successfully "
-            f"({'with credentials' if self.api_key and self.api_secret else 'public mode'}, "
-            f"testnet: {self.testnet})"
+            "%s client initialized successfully (%s, testnet: %s)",
+            api_endpoint.title(),
+            auth_mode,
+            self.testnet,
         )
 
         logger.debug("Testing client with server time request...")
         test_response = client.get_server_time()
-        logger.debug(f"Server time test successful: {test_response}")
+        logger.debug("Server time test successful: %s", test_response)
 
         # Only promote to self._client after all verification passes
         self._client = client
@@ -455,17 +465,21 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return None
 
         ban_wait = _parse_ban_expiry(str(error))
-        if ban_wait is None or ban_wait <= 0:
+        if ban_wait is None:
             # No parseable expiry — use a short default
             ban_wait = 30.0
+        elif ban_wait <= 0:
+            # Ban already expired — retry with minimal buffer
+            ban_wait = 1.0
 
         # Add small buffer so we don't land exactly on the expiry edge
         total_wait = ban_wait + 5.0
 
         if total_wait > max_wait:
             logger.error(
-                f"IP ban wait ({total_wait:.0f}s) exceeds startup max wait "
-                f"of {max_wait}s. Not retrying."
+                "IP ban wait (%.0fs) exceeds startup max wait of %ss. Not retrying.",
+                total_wait,
+                max_wait,
             )
             return None
 
@@ -481,9 +495,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         if self._use_margin and self._is_live:
             logger.error(
-                f"{api_endpoint.title()} Client initialization failed with {error_type}: {error_msg}. "
-                f"Credentials available: {bool(self.api_key and self.api_secret)}, "
-                f"Testnet mode: {self.testnet}."
+                "%s Client initialization failed with %s: %s. "
+                "Credentials available: %s, Testnet mode: %s.",
+                api_endpoint.title(),
+                error_type,
+                error_msg,
+                bool(self.api_key and self.api_secret),
+                self.testnet,
+                exc_info=True,
             )
             raise RuntimeError(
                 f"FATAL: Cannot initialize Binance client in live margin mode. "
@@ -492,10 +511,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             ) from error
 
         logger.error(
-            f"{api_endpoint.title()} Client initialization failed with {error_type}: {error_msg}. "
-            f"Credentials available: {bool(self.api_key and self.api_secret)}, "
-            f"Testnet mode: {self.testnet}. "
-            f"Falling back to offline stub."
+            "%s Client initialization failed with %s: %s. "
+            "Credentials available: %s, Testnet mode: %s. Falling back to offline stub.",
+            api_endpoint.title(),
+            error_type,
+            error_msg,
+            bool(self.api_key and self.api_secret),
+            self.testnet,
+            exc_info=True,
         )
 
         if "recursion" in error_msg.lower() or "maximum recursion" in error_msg.lower():
@@ -1791,9 +1814,6 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             api_endpoint = get_binance_api_endpoint()
             if api_endpoint == "binanceus":
                 twm_kwargs["tld"] = "us"
-            # Dedicated loop avoids "event loop is already running" when the
-            # main thread already owns a loop (e.g. Railway health endpoint).
-            twm_kwargs["loop"] = asyncio.new_event_loop()
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
             self._twm.start()
 
