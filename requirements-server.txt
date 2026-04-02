@@ -1,7 +1,8 @@
 # Server requirements - lighter build without heavy libraries for training models
 # Production dependencies with pinned versions for stability
-# Cache bust: pyarrow + statsmodels added 2026-02-28
-python-binance==1.0.19
+# Cache bust: nest_asyncio added 2026-04-02
+python-binance==1.0.36
+nest_asyncio==1.6.0
 pandas==2.1.4
 python-dotenv==1.0.0
 numpy==1.26.2
