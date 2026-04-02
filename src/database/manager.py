@@ -700,7 +700,10 @@ class DatabaseManager:
                 trading_session.win_rate = (
                     (len(winning_trades) / len(trades) * 100) if trades else 0
                 )
-                trading_session.total_pnl = sum(t.pnl for t in trades)
+                trading_session.total_pnl = sum(
+                    t.pnl - (float(getattr(t, "margin_interest_cost", 0)) if isinstance(getattr(t, "margin_interest_cost", None), (int, float)) else 0.0)
+                    for t in trades
+                )
 
                 # Calculate max drawdown from account history
                 account_history = (
@@ -1745,22 +1748,32 @@ class DatabaseManager:
                     "max_drawdown": 0.0,
                 }
 
-            # Calculate metrics with division by zero protection
-            winning_trades = [t for t in trades if t.pnl > 0]
-            losing_trades = [t for t in trades if t.pnl < 0]
+            # Calculate metrics with division by zero protection.
+            # Net PnL subtracts margin interest cost (stored per-trade).
+            def _net_pnl(t: Trade) -> float:
+                raw = getattr(t, "margin_interest_cost", None)
+                interest = float(raw) if isinstance(raw, (int, float)) else 0.0
+                return t.pnl - interest
 
-            total_pnl = sum(t.pnl for t in trades)
+            winning_trades = [t for t in trades if _net_pnl(t) > 0]
+            losing_trades = [t for t in trades if _net_pnl(t) < 0]
+
+            total_pnl = sum(_net_pnl(t) for t in trades)
             win_rate = (len(winning_trades) / len(trades) * 100) if trades else 0
 
             avg_win = (
-                (sum(t.pnl for t in winning_trades) / len(winning_trades)) if winning_trades else 0
+                (sum(_net_pnl(t) for t in winning_trades) / len(winning_trades))
+                if winning_trades
+                else 0
             )
             avg_loss = (
-                (sum(t.pnl for t in losing_trades) / len(losing_trades)) if losing_trades else 0
+                (sum(_net_pnl(t) for t in losing_trades) / len(losing_trades))
+                if losing_trades
+                else 0
             )
 
-            gross_profit = sum(t.pnl for t in winning_trades)
-            gross_loss = abs(sum(t.pnl for t in losing_trades))
+            gross_profit = sum(_net_pnl(t) for t in winning_trades)
+            gross_loss = abs(sum(_net_pnl(t) for t in losing_trades))
             if gross_loss > 0:
                 profit_factor = min(gross_profit / gross_loss, MAX_PROFIT_FACTOR)
             else:
@@ -2051,8 +2064,11 @@ class DatabaseManager:
             # Get all trades for this session
             trades = session.query(Trade).filter(Trade.session_id == session_id).all()
 
-            # Calculate current balance from initial balance + total PnL
-            total_pnl = sum(trade.pnl for trade in trades)
+            # Calculate current balance from initial balance + net PnL
+            total_pnl = sum(
+                trade.pnl - (float(getattr(trade, "margin_interest_cost", 0)) if isinstance(getattr(trade, "margin_interest_cost", None), (int, float)) else 0.0)
+                for trade in trades
+            )
             current_balance = trading_session.initial_balance + total_pnl
 
             # Update the balance tracking and warn if persistence fails
@@ -2855,15 +2871,20 @@ class DatabaseManager:
                         "total_pnl": 0.0,
                     }
 
-                # Calculate basic metrics
+                # Calculate basic metrics (net of margin interest)
+                def _net(t: Trade) -> float:
+                    raw = getattr(t, "margin_interest_cost", None)
+                    interest = float(raw) if isinstance(raw, (int, float)) else 0.0
+                    return float(t.pnl) - float(interest)
+
                 total_trades = len(trades)
-                winning_trades = [t for t in trades if float(t.pnl) > 0]
-                losing_trades = [t for t in trades if float(t.pnl) < 0]
+                winning_trades = [t for t in trades if _net(t) > 0]
+                losing_trades = [t for t in trades if _net(t) < 0]
 
                 win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0.0
 
-                gross_profit = sum(float(t.pnl) for t in winning_trades)
-                gross_loss = abs(sum(float(t.pnl) for t in losing_trades))
+                gross_profit = sum(_net(t) for t in winning_trades)
+                gross_loss = abs(sum(_net(t) for t in losing_trades))
 
                 # Calculate profit factor consistently with get_performance_metrics
                 if gross_loss > 0:
@@ -2872,7 +2893,7 @@ class DatabaseManager:
                     profit_factor = MAX_PROFIT_FACTOR if gross_profit > 0 else 1.0
 
                 # Calculate expectancy
-                total_pnl = sum(float(t.pnl) for t in trades)
+                total_pnl = sum(_net(t) for t in trades)
                 expectancy = total_pnl / total_trades if total_trades > 0 else 0.0
 
                 # Calculate average trade duration

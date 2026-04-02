@@ -89,15 +89,14 @@ class TestGetMarginInterestHistory:
 
             assert result == []
 
-    def test_returns_empty_list_on_api_error(self, margin_provider):
-        """Should return empty list and log warning on API error."""
+    def test_propagates_api_error(self, margin_provider):
+        """Should propagate API errors so callers can retry."""
         margin_provider._client.get_margin_interest_history.side_effect = Exception(
             "API timeout"
         )
 
-        result = margin_provider.get_margin_interest_history(asset="BTC")
-
-        assert result == []
+        with pytest.raises(Exception, match="API timeout"):
+            margin_provider.get_margin_interest_history(asset="BTC")
 
     def test_passes_correct_params_all_specified(self, margin_provider):
         """Should pass asset, startTime, endTime to client when all provided."""
