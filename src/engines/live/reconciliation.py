@@ -2018,7 +2018,11 @@ class PositionReconciler:
         else:
             pnl = (exit_price - entry_price) * qty
 
-        # Deduct margin interest for short positions closed during reconciliation
+        # Query margin interest for short positions closed during reconciliation.
+        # Keep pnl as GROSS — subtract interest only for the balance update so
+        # the accounting model stays consistent: trade.pnl = gross, and
+        # _trade_net_pnl() computes net from the margin_interest_cost column.
+        interest_cost = 0.0
         if self._use_margin and side_is_short:
             try:
                 interest_tracker = MarginInterestTracker(self.exchange)
@@ -2031,9 +2035,8 @@ class PositionReconciler:
                     # Convert from base asset units to USDT using exit price
                     interest_cost = interest_base * exit_price
                     if interest_cost > 0:
-                        pnl -= interest_cost
                         logger.info(
-                            "Deducted margin interest $%.4f (%.8f %s @ %.2f) from reconciliation PnL for %s",
+                            "Margin interest $%.4f (%.8f %s @ %.2f) for reconciliation close of %s",
                             interest_cost,
                             interest_base,
                             base_asset,
@@ -2056,7 +2059,8 @@ class PositionReconciler:
                 )
                 return
 
-            new_balance = current_balance + pnl
+            # Balance uses net PnL (gross minus interest)
+            new_balance = current_balance + pnl - interest_cost
             self.db_manager.update_balance(
                 new_balance,
                 f"reconciliation_close: {reason}",
@@ -2229,6 +2233,8 @@ class PeriodicReconciler:
         # Per-position mutation locks to serialize reconciler + OrderTracker + exit
         self._position_mutation_locks: dict[str, threading.Lock] = {}
         self._locks_lock = threading.Lock()  # Protects _position_mutation_locks dict
+        # Cache for margin interest queries (5-min TTL per position)
+        self._interest_cache: dict[str, tuple[float, float]] = {}
 
     def start(self) -> None:
         """Start the periodic reconciliation daemon thread."""
@@ -2439,8 +2445,6 @@ class PeriodicReconciler:
             now = time.time()
             interest_tracker = MarginInterestTracker(self.exchange)
             interest_cache_ttl = 300  # seconds
-            if not hasattr(self, "_interest_cache"):
-                self._interest_cache: dict[str, tuple[float, float]] = {}
 
             for _key, position in list(positions_snapshot.items()):
                 try:
@@ -2469,7 +2473,7 @@ class PeriodicReconciler:
 
                     if interest_base > 0:
                         current_price = getattr(position, "current_price", None)
-                        if current_price and float(current_price) > 0:
+                        if current_price is not None and float(current_price) > 0:
                             interest_usdt = interest_base * float(current_price)
                             logger.info(
                                 "Margin interest accrued for %s: $%.4f (%.8f %s)",
@@ -2491,6 +2495,14 @@ class PeriodicReconciler:
                         getattr(position, "symbol", "?"),
                         e,
                     )
+
+            # Evict stale cache entries for positions no longer tracked
+            active_keys = {
+                f"{pos.symbol}_{k}" for k, pos in positions_snapshot.items()
+            }
+            stale = [k for k in self._interest_cache if k not in active_keys]
+            for k in stale:
+                del self._interest_cache[k]
         else:
             for order_key, position in list(positions_snapshot.items()):
                 # Skip short positions — shorts don't hold the base asset on spot
