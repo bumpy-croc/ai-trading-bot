@@ -137,27 +137,41 @@ def calculate_moving_averages(df: pd.DataFrame, periods: list[int]) -> pd.DataFr
     return df
 
 
-def calculate_rsi(data: pd.DataFrame | pd.Series, period: int = 14) -> pd.Series:
+def calculate_rsi(
+    data: pd.DataFrame | pd.Series,
+    period: int = 14,
+    smoothing_method: str = "wilder",
+) -> pd.Series:
     """
-    Calculate Relative Strength Index using simple rolling mean.
+    Calculate Relative Strength Index using Wilder's smoothing (industry standard).
 
-    TODO: Unify RSI implementations - this uses simple rolling mean while
-    src/ml/training_pipeline/features.py uses Wilder's smoothing (EMA-style).
-    Different algorithms produce different RSI values, risking train/inference mismatch.
-    Consolidate to single implementation with smoothing_method parameter.
+    Wilder's smoothing uses an EMA-style recursive formula where each new average
+    is weighted: ``(prev_avg * (period - 1) + current_value) / period``. This is
+    the canonical RSI algorithm used by TradingView, MetaTrader, and most charting
+    platforms. It is also used in the ML training pipeline, ensuring train/inference
+    parity.
 
     Args:
         data: DataFrame with 'close' column or Series of closing prices
         period: RSI period (must be positive, default: 14)
+        smoothing_method: Averaging method for gain/loss. "wilder" (default) uses
+            Wilder's smoothing (EMA-style). "sma" uses simple rolling mean.
 
     Returns:
         Series of RSI values ranging from 0 to 100
 
     Raises:
-        ValueError: If period is not positive or required columns are missing
+        ValueError: If period is not positive, required columns are missing,
+            or smoothing_method is invalid
     """
     if period <= 0:
         raise ValueError(f"RSI period must be positive, got {period}")
+
+    valid_methods = ("wilder", "sma")
+    if smoothing_method not in valid_methods:
+        raise ValueError(
+            f"smoothing_method must be one of {valid_methods}, got '{smoothing_method}'"
+        )
 
     if isinstance(data, pd.DataFrame):
         if "close" not in data.columns:
@@ -167,12 +181,36 @@ def calculate_rsi(data: pd.DataFrame | pd.Series, period: int = 14) -> pd.Series
         close = pd.Series(data)
 
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    gains = delta.where(delta > 0, 0.0)
+    losses = -delta.where(delta < 0, 0.0)
+
+    if smoothing_method == "sma":
+        avg_gain = gains.rolling(window=period).mean()
+        avg_loss = losses.rolling(window=period).mean()
+    else:
+        # Wilder's smoothing: seed with SMA, then apply recursive EMA-style formula
+        avg_gain = pd.Series(np.nan, index=close.index, dtype=np.float64)
+        avg_loss = pd.Series(np.nan, index=close.index, dtype=np.float64)
+
+        # Seed values: simple mean of the first `period` deltas (index `period`
+        # because diff() produces NaN at index 0, so gains[1:period+1] has
+        # exactly `period` values).
+        if len(close) > period:
+            avg_gain.iloc[period] = gains.iloc[1 : period + 1].mean()
+            avg_loss.iloc[period] = losses.iloc[1 : period + 1].mean()
+
+            # Recursive Wilder's smoothing for remaining values
+            for i in range(period + 1, len(close)):
+                avg_gain.iloc[i] = (
+                    avg_gain.iloc[i - 1] * (period - 1) + gains.iloc[i]
+                ) / period
+                avg_loss.iloc[i] = (
+                    avg_loss.iloc[i - 1] * (period - 1) + losses.iloc[i]
+                ) / period
 
     # Prevent division by zero by adding epsilon to loss
     # When loss is 0, RS approaches infinity and RSI approaches 100
-    rs = gain / (loss + EPSILON)
+    rs = avg_gain / (avg_loss + EPSILON)
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
