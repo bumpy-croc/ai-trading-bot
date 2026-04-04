@@ -2568,3 +2568,289 @@ class TestEmergencySellVerification:
         mock_db.close_position.assert_not_called()
         # Result should be unresolved with CRITICAL severity
         assert any(r.status == "unresolved" and r.severity == Severity.CRITICAL for r in results)
+
+
+# ---------- Fee Accounting Tests ----------
+
+
+class TestReconciliationFeeAccounting:
+    """Tests for trading fee deductions in reconciliation recovery paths."""
+
+    def test_entry_recovery_deducts_commission_from_balance(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Recovered entry order deducts commission via atomic_balance_update."""
+        from contextlib import contextmanager
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        # Set up a filled entry order with commission
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED,
+            average_price=50000.0,
+            filled_quantity=0.001,
+            commission=0.50,
+            order_id="ex_123",
+        )
+        order_data = {
+            "id": 10,
+            "client_order_id": "atb_BTCUSDT_long_9999_feee",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "order_type": "ENTRY",
+            "quantity": 0.001,
+            "status": "SUBMITTED",
+            "created_at": datetime.now(UTC),
+        }
+
+        # Mock atomic_balance_update as a context manager
+        balance_updates = []
+
+        @contextmanager
+        def mock_atomic_balance_update(**kwargs):
+            balance_updates.append(kwargs)
+            yield {"old_balance": 1000.0, "new_balance": 1000.0 + kwargs["balance_change"]}
+
+        mock_db.atomic_balance_update = mock_atomic_balance_update
+
+        # Allow position tracker lock access
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {}
+
+        # Mock SL placement so the entry recovery completes
+        mock_exchange.place_stop_loss_order.return_value = MagicMock(
+            order_id="sl_123", status="NEW"
+        )
+
+        reconciler._reconcile_filled_entry(
+            order_data, exchange_order, "BTCUSDT", "LONG", 50000.0, 0.001
+        )
+
+        # Verify entry fee was deducted
+        assert len(balance_updates) == 1
+        assert balance_updates[0]["balance_change"] == pytest.approx(-0.50)
+        assert "recovered_entry_fee" in balance_updates[0]["reason"]
+        assert balance_updates[0]["updated_by"] == "reconciler"
+
+    def test_entry_recovery_skips_zero_commission(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Zero commission does not trigger a balance update."""
+        from contextlib import contextmanager
+
+        exchange_order = MockExchangeOrder(
+            order_id="ex_zero",
+            average_price=50000.0,
+            filled_quantity=0.001,
+            commission=0.0,
+        )
+        order_data = {
+            "id": 11,
+            "client_order_id": "atb_BTCUSDT_long_0000_zero",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "order_type": "ENTRY",
+            "quantity": 0.001,
+            "status": "SUBMITTED",
+            "created_at": datetime.now(UTC),
+        }
+
+        balance_updates = []
+
+        @contextmanager
+        def mock_atomic_balance_update(**kwargs):
+            balance_updates.append(kwargs)
+            yield {"old_balance": 1000.0, "new_balance": 1000.0}
+
+        mock_db.atomic_balance_update = mock_atomic_balance_update
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {}
+        mock_exchange.place_stop_loss_order.return_value = MagicMock(
+            order_id="sl_z", status="NEW"
+        )
+
+        reconciler._reconcile_filled_entry(
+            order_data, exchange_order, "BTCUSDT", "LONG", 50000.0, 0.001
+        )
+
+        # No balance update for zero commission
+        assert len(balance_updates) == 0
+
+    def test_entry_recovery_handles_commission_deduction_failure(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Failed commission deduction logs warning but does not abort recovery."""
+        from contextlib import contextmanager
+
+        exchange_order = MockExchangeOrder(
+            order_id="ex_fail",
+            average_price=50000.0,
+            filled_quantity=0.001,
+            commission=0.50,
+        )
+        order_data = {
+            "id": 12,
+            "client_order_id": "atb_BTCUSDT_long_fail_feee",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "order_type": "ENTRY",
+            "quantity": 0.001,
+            "status": "SUBMITTED",
+            "created_at": datetime.now(UTC),
+        }
+
+        @contextmanager
+        def mock_atomic_balance_update(**kwargs):
+            raise ValueError("DB error during fee deduction")
+            yield  # noqa: unreachable — satisfies generator requirement
+
+        mock_db.atomic_balance_update = mock_atomic_balance_update
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {}
+        mock_exchange.place_stop_loss_order.return_value = MagicMock(
+            order_id="sl_f", status="NEW"
+        )
+
+        # Should not raise — fee failure is non-fatal
+        reconciler._reconcile_filled_entry(
+            order_data, exchange_order, "BTCUSDT", "LONG", 50000.0, 0.001
+        )
+
+        # Position was still tracked despite fee failure
+        mock_position_tracker.track_recovered_position.assert_called_once()
+
+    def test_realize_pnl_deducts_exit_fee(self, reconciler, mock_db):
+        """Exit fee is subtracted from balance in _realize_pnl_on_close."""
+        position = MockPosition(
+            entry_price=50000.0,
+            quantity=0.001,
+            current_size=0.1,
+            original_size=0.1,
+            side="long",
+        )
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler._realize_pnl_on_close(
+            position, exit_price=51000.0, reason="test_exit", exit_fee=0.75
+        )
+
+        # P&L = (51000 - 50000) * 0.001 = 1.0
+        # new_balance = 1000 + 1.0 - 0.0 (interest) - 0.75 (fee) = 1000.25
+        mock_db.update_balance.assert_called_once()
+        call_args = mock_db.update_balance.call_args
+        assert call_args[0][0] == pytest.approx(1000.25)
+
+    def test_realize_pnl_without_exit_fee(self, reconciler, mock_db):
+        """Without exit_fee, balance uses gross P&L minus interest only."""
+        position = MockPosition(
+            entry_price=50000.0,
+            quantity=0.001,
+            current_size=0.1,
+            original_size=0.1,
+            side="long",
+        )
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler._realize_pnl_on_close(
+            position, exit_price=51000.0, reason="test_no_fee"
+        )
+
+        # P&L = 1.0, no fee
+        # new_balance = 1000 + 1.0 = 1001.0
+        mock_db.update_balance.assert_called_once()
+        call_args = mock_db.update_balance.call_args
+        assert call_args[0][0] == pytest.approx(1001.0)
+
+    def test_realize_pnl_audit_includes_exit_fee(self, reconciler, mock_db):
+        """Audit event reason string includes exit_fee value."""
+        position = MockPosition(
+            entry_price=50000.0,
+            quantity=0.001,
+            current_size=0.1,
+            original_size=0.1,
+            side="long",
+        )
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler._realize_pnl_on_close(
+            position, exit_price=51000.0, reason="audit_test", exit_fee=0.50
+        )
+
+        # Verify audit event includes exit_fee in reason
+        mock_db.log_audit_event.assert_called_once()
+        audit_kwargs = mock_db.log_audit_event.call_args[1]
+        assert "exit_fee=0.5000" in audit_kwargs["reason"]
+
+    def test_realize_pnl_negative_exit_fee_treated_as_zero(self, reconciler, mock_db):
+        """Negative exit_fee is sanitized to zero."""
+        position = MockPosition(
+            entry_price=50000.0,
+            quantity=0.001,
+            current_size=0.1,
+            original_size=0.1,
+            side="long",
+        )
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler._realize_pnl_on_close(
+            position, exit_price=51000.0, reason="neg_fee", exit_fee=-1.0
+        )
+
+        # Negative fee treated as zero: balance = 1000 + 1.0 = 1001.0
+        call_args = mock_db.update_balance.call_args
+        assert call_args[0][0] == pytest.approx(1001.0)
+
+    def test_exit_order_recovery_passes_commission_to_pnl(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """_reconcile_filled_exit passes exit_fee to _realize_pnl_on_close."""
+        position = MockPosition(db_position_id=42)
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {"ord_42": position}
+
+        # Make remove_position a no-op
+        mock_position_tracker.remove_position = MagicMock()
+
+        order_data = {
+            "position_id": 42,
+            "client_order_id": "atb_exit_fee_test",
+        }
+
+        with patch.object(reconciler, "_realize_pnl_on_close") as mock_pnl:
+            reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.60)
+
+        mock_pnl.assert_called_once_with(position, 51000.0, "exit_order_recovery", exit_fee=0.60)
+
+    def test_stop_loss_recovery_passes_commission_to_pnl(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Stop-loss filled offline passes SL commission to _realize_pnl_on_close."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_777",
+            db_position_id=77,
+        )
+
+        sl_order = MockExchangeOrder(
+            order_id="sl_777",
+            status=ExOS.FILLED,
+            average_price=48900.0,
+            commission=0.35,
+        )
+        mock_exchange.get_order.return_value = sl_order
+        mock_position_tracker.remove_position = MagicMock()
+
+        with patch.object(reconciler, "_realize_pnl_on_close") as mock_pnl:
+            result = ReconciliationResult(
+                entity_type="position",
+                entity_id=77,
+                status="ok",
+                severity=Severity.LOW,
+            )
+            reconciler._verify_stop_loss(position, "sl_777", result)
+
+        mock_pnl.assert_called_once()
+        call_kwargs = mock_pnl.call_args
+        assert call_kwargs[1]["exit_fee"] == pytest.approx(0.35)
