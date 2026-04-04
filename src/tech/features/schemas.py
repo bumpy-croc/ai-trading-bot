@@ -220,6 +220,21 @@ TECHNICAL_FEATURES_SCHEMA = FeatureSchema(
             required=True,
             dependencies=["close"],
         ),
+        FeatureDefinition(
+            name="bb_width",
+            feature_type=FeatureType.DERIVED,
+            description="Bollinger Bands normalized bandwidth: (upper - lower) / middle",
+            min_value=0.0,
+            required=True,
+            dependencies=["bb_upper", "bb_lower", "bb_middle"],
+        ),
+        FeatureDefinition(
+            name="bb_position",
+            feature_type=FeatureType.DERIVED,
+            description="Price position within Bollinger Bands (0 = lower, 1 = upper)",
+            required=True,
+            dependencies=["close", "bb_upper", "bb_lower"],
+        ),
         # MACD
         FeatureDefinition(
             name="macd",

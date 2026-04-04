@@ -146,6 +146,20 @@ class TestTechnicalFeatureExtractor:
         if len(volatility_data) > 0:
             assert (volatility_data >= 0).all()
 
+        # Test Bollinger Bands derived features
+        assert "bb_width" in result.columns
+        assert "bb_position" in result.columns
+        bb_width_data = result["bb_width"].dropna()
+        if len(bb_width_data) > 0:
+            # Bandwidth must be non-negative
+            assert (bb_width_data >= 0).all(), "bb_width has negative values"
+            # No infinite values
+            assert np.isfinite(bb_width_data).all(), "bb_width has infinite values"
+        bb_position_data = result["bb_position"].dropna()
+        if len(bb_position_data) > 0:
+            # No infinite values
+            assert np.isfinite(bb_position_data).all(), "bb_position has infinite values"
+
         # Test trend features
         assert "trend_strength" in result.columns
         assert "trend_direction" in result.columns
@@ -153,6 +167,32 @@ class TestTechnicalFeatureExtractor:
         if len(trend_direction_data) > 0:
             # trend_direction can be -1 (down), 0 (neutral/crossover), or 1 (up)
             assert set(trend_direction_data.unique()).issubset({-1, 0, 1})
+
+    def test_bb_derived_features_zero_width(self, extractor):
+        """Test bb_position handles zero-width bands (constant price)."""
+        dates = pd.date_range("2023-01-01", periods=300, freq="1h")
+        # Constant price produces zero-width Bollinger Bands
+        constant_price = 30000.0
+        data = pd.DataFrame(
+            {
+                "open": [constant_price] * 300,
+                "high": [constant_price] * 300,
+                "low": [constant_price] * 300,
+                "close": [constant_price] * 300,
+                "volume": [100.0] * 300,
+            },
+            index=dates,
+        )
+        result = extractor.extract(data)
+
+        bb_position_data = result["bb_position"].dropna()
+        # Zero-width bands should produce 0.5 (neutral), not NaN or inf
+        assert np.isfinite(bb_position_data).all(), "bb_position not finite for flat price"
+        # All values should be 0.5 when bands are flat
+        assert (bb_position_data == 0.5).all(), "bb_position should be 0.5 for flat bands"
+
+        bb_width_data = result["bb_width"].dropna()
+        assert np.isfinite(bb_width_data).all(), "bb_width not finite for flat price"
 
     def test_invalid_input_handling(self, extractor):
         """Test handling of invalid input data."""
@@ -394,6 +434,8 @@ class TestFeatureSchemas:
             "ma_200",
             "bb_upper",
             "bb_lower",
+            "bb_width",
+            "bb_position",
             "macd",
             "returns",
             "volatility_20",
