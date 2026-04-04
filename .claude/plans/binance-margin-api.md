@@ -23,11 +23,13 @@ The bot is live on production trading ETHUSDT with $100, but the funds are in th
 
 ### 1. Add `_use_margin` flag and fail-fast to BinanceProvider.__init__
 
-Read `BINANCE_ACCOUNT_TYPE` from config (default `"margin"`). Read `TRADING_MODE` to determine live vs paper.
+Read `BINANCE_ACCOUNT_TYPE` from config (default `"spot"` — safe for dashboards, Binance.US, and read-only contexts; production sets `margin` explicitly via Railway env var). Read `TRADING_MODE` to determine live vs paper.
 
 ```python
-self._use_margin = config.get("BINANCE_ACCOUNT_TYPE", "margin").lower() == "margin"
-self._is_live = config.get("TRADING_MODE", "paper").lower() == "live"
+account_type = config.get("BINANCE_ACCOUNT_TYPE", "spot") or "spot"
+self._use_margin = account_type.lower() == "margin"
+trading_mode = config.get("TRADING_MODE", "paper") or "paper"
+self._is_live = trading_mode.lower() == "live"
 ```
 
 **Fail-fast rule:** If `_use_margin=True` AND `_is_live=True` AND client init fails → raise immediately. Do NOT fall back to offline stub. A fake client placing dummy margin orders is a fund-loss path.
