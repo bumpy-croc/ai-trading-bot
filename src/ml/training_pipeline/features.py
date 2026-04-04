@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
+from src.tech.indicators.core import calculate_rsi
+
 logger = logging.getLogger(__name__)
 
 # Sentiment quality assessment constants
@@ -22,9 +24,6 @@ QUALITY_THRESHOLD_MEDIUM = 0.4  # Threshold for hybrid sentiment recommendation
 SMA_WINDOWS = [7, 14, 30]  # Simple moving average window sizes (days)
 RSI_WINDOW = 14  # Relative Strength Index window size (days)
 RSI_MAX = 100  # Maximum RSI value for normalization
-
-# Division protection constants
-EPSILON_RSI_DIVISION = 1e-10  # Prevents division by zero in RSI calculation (avg_losses ~ 0)
 
 
 def normalize_timezone(ts1: pd.Timestamp, ts2: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -151,12 +150,10 @@ def merge_price_sentiment_data(
 
 def _calculate_rsi_fast(close_prices: np.ndarray, window: int = 14) -> np.ndarray:
     """
-    Calculate RSI using optimized numpy operations with Wilder's smoothing.
+    Calculate RSI by delegating to the canonical Wilder's smoothing implementation.
 
-    TODO: Unify RSI implementations - this uses Wilder's smoothing (EMA-style) while
-    src/tech/indicators/core.py uses simple rolling mean. Different algorithms produce
-    different RSI values, risking train/inference mismatch. Consolidate to single
-    implementation with smoothing_method parameter.
+    Wraps ``calculate_rsi`` from ``src.tech.indicators.core`` so that training
+    and inference use the exact same algorithm, preventing train/inference mismatch.
 
     Args:
         close_prices: 1D array of close prices
@@ -168,40 +165,17 @@ def _calculate_rsi_fast(close_prices: np.ndarray, window: int = 14) -> np.ndarra
     Raises:
         ValueError: If window is not positive
     """
-    # Validate window parameter before using as divisor
     if window <= 0:
         raise ValueError(f"RSI window must be positive, got {window}")
 
-    # Calculate price changes
-    deltas = np.diff(close_prices, prepend=close_prices[0])
-
-    # Separate gains and losses
-    gains = np.where(deltas > 0, deltas, 0.0)
-    losses = np.where(deltas < 0, -deltas, 0.0)
-
     # Check if we have enough data for RSI calculation
     if len(close_prices) <= window:
-        # Return all NaNs if insufficient data
         return np.full(len(close_prices), np.nan, dtype=np.float32)
 
-    # Calculate rolling averages using numpy (faster than pandas for this)
-    avg_gains = np.full(len(gains), np.nan, dtype=np.float32)
-    avg_losses = np.full(len(losses), np.nan, dtype=np.float32)
-
-    # Calculate initial averages
-    avg_gains[window] = np.mean(gains[1 : window + 1])
-    avg_losses[window] = np.mean(losses[1 : window + 1])
-
-    # Calculate subsequent averages using EMA-style smoothing
-    for i in range(window + 1, len(gains)):
-        avg_gains[i] = (avg_gains[i - 1] * (window - 1) + gains[i]) / window
-        avg_losses[i] = (avg_losses[i - 1] * (window - 1) + losses[i]) / window
-
-    # Calculate RS and RSI (only for valid indices)
-    rs = avg_gains / (avg_losses + EPSILON_RSI_DIVISION)
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-
-    return rsi.astype(np.float32)
+    # Delegate to canonical implementation (Wilder's smoothing)
+    series = pd.Series(close_prices)
+    rsi_series = calculate_rsi(series, period=window, smoothing_method="wilder")
+    return rsi_series.to_numpy(dtype=np.float32)
 
 
 def _add_price_features(

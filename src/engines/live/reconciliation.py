@@ -390,7 +390,8 @@ class PositionReconciler:
                 order_data, exchange_order, symbol, side, fill_price, fill_qty
             )
         elif order_type == "FULL_EXIT":
-            self._reconcile_filled_exit(order_data, fill_price)
+            exit_fee = float(getattr(exchange_order, "commission", 0.0) or 0.0)
+            self._reconcile_filled_exit(order_data, fill_price, exit_fee=exit_fee)
         elif order_type == "PARTIAL_EXIT":
             self._reconcile_filled_partial_exit(order_data, fill_price)
 
@@ -484,6 +485,31 @@ class PositionReconciler:
 
             # Track in memory
             self.position_tracker.track_recovered_position(position, db_id)
+
+            # Deduct entry commission from balance so fee is not silently lost
+            entry_fee = float(exchange_order.commission or 0.0)
+            if entry_fee > 0:
+                try:
+                    with self.db_manager.atomic_balance_update(
+                        balance_change=-entry_fee,
+                        reason=f"recovered_entry_fee:{client_order_id}",
+                        updated_by="reconciler",
+                        session_id=self.session_id,
+                    ):
+                        pass
+                    logger.info(
+                        "Deducted entry fee $%.4f for recovered position %s",
+                        entry_fee,
+                        client_order_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to deduct entry fee $%.4f for recovered "
+                        "position %s: %s",
+                        entry_fee,
+                        client_order_id,
+                        e,
+                    )
 
             # Apply a conservative default stop-loss so the recovered position
             # is never unprotected. The strategy may tighten this later.
@@ -650,7 +676,9 @@ class PositionReconciler:
             )
             raise
 
-    def _reconcile_filled_exit(self, order_data: dict, fill_price: float) -> None:
+    def _reconcile_filled_exit(
+        self, order_data: dict, fill_price: float, exit_fee: float = 0.0
+    ) -> None:
         """Close position if an exit order filled but position is still tracked."""
         position_id = order_data.get("position_id")
         client_order_id = order_data.get("client_order_id", "")
@@ -696,7 +724,9 @@ class PositionReconciler:
 
                 # Realize P&L so session balance stays correct
                 if matched_position is not None and fill_price > 0:
-                    self._realize_pnl_on_close(matched_position, fill_price, "exit_order_recovery")
+                    self._realize_pnl_on_close(
+                        matched_position, fill_price, "exit_order_recovery", exit_fee=exit_fee
+                    )
         except Exception as e:
             logger.warning(
                 "Failed to reconcile filled exit order %s: %s",
@@ -1595,7 +1625,10 @@ class PositionReconciler:
                         logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
                 # Realize P&L so session balance stays correct
-                self._realize_pnl_on_close(position, exit_price, "stop_loss_filled_offline")
+                sl_exit_fee = float(getattr(sl_order, "commission", 0.0) or 0.0)
+                self._realize_pnl_on_close(
+                    position, exit_price, "stop_loss_filled_offline", exit_fee=sl_exit_fee
+                )
 
         except Exception as e:
             logger.warning("Failed to verify stop-loss order %s: %s", sl_order_id, e)
@@ -1982,6 +2015,7 @@ class PositionReconciler:
         position: Any,
         exit_price: float | None,
         reason: str,
+        exit_fee: float = 0.0,
     ) -> None:
         """Update session balance with realized P&L after reconciliation close.
 
@@ -1993,6 +2027,7 @@ class PositionReconciler:
             position: Position object with entry_price, quantity, and side attrs.
             exit_price: Fill price at which the position was closed.
             reason: Human-readable reason for the audit trail.
+            exit_fee: Trading fee charged on the exit order.
         """
         if exit_price is None or exit_price <= 0:
             return
@@ -2059,14 +2094,26 @@ class PositionReconciler:
                 )
                 return
 
-            # Balance uses net PnL (gross minus interest)
-            new_balance = current_balance + pnl - interest_cost
+            # Sanitize exit_fee — treat non-finite or negative as zero
+            if not math.isfinite(exit_fee) or exit_fee < 0:
+                exit_fee = 0.0
+
+            # Balance uses net PnL (gross minus interest and exit fee)
+            new_balance = current_balance + pnl - interest_cost - exit_fee
             self.db_manager.update_balance(
                 new_balance,
                 f"reconciliation_close: {reason}",
                 "system",
                 self.session_id,
             )
+
+            if exit_fee > 0:
+                logger.info(
+                    "Exit fee $%.4f deducted from P&L for %s (%s)",
+                    exit_fee,
+                    position.symbol,
+                    reason,
+                )
 
             # Audit the P&L correction
             audit = AuditEvent(
@@ -2078,7 +2125,7 @@ class PositionReconciler:
                 reason=(
                     f"Reconciliation P&L: {pnl:+.2f} "
                     f"(entry={entry_price:.2f}, exit={exit_price:.2f}, "
-                    f"qty={qty:.8f}, {reason})"
+                    f"qty={qty:.8f}, exit_fee={exit_fee:.4f}, {reason})"
                 ),
                 severity=Severity.MEDIUM,
             )

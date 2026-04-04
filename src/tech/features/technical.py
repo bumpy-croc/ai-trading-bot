@@ -249,6 +249,17 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         # Calculate ATR as percentage of price - protected against zero close prices
         df["atr_pct"] = df["atr"] / (df["close"] + EPSILON)
 
+        # Bollinger Bands derived features
+        # bb_width: normalized bandwidth measures volatility expansion/contraction
+        df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / (df["bb_middle"] + EPSILON)
+        # bb_position: where price sits within the bands (0 = lower, 1 = upper)
+        bb_range = df["bb_upper"] - df["bb_lower"]
+        df["bb_position"] = np.where(
+            bb_range > EPSILON,
+            (df["close"] - df["bb_lower"]) / bb_range,
+            0.5,  # Neutral when bands have zero width (flat market)
+        )
+
         # Calculate trend measures (from MlAdaptive) - protected against zero MA values
         # ma_20 and ma_50 are guaranteed to exist (enforced in __init__)
         df["trend_strength"] = (df["close"] - df["ma_50"]) / (df["ma_50"] + EPSILON)
@@ -288,7 +299,15 @@ class TechnicalFeatureExtractor(FeatureExtractor):
 
     def get_derived_features(self) -> list[str]:
         """Get list of derived feature names."""
-        return ["returns", "volatility_20", "volatility_50", "trend_strength", "trend_direction"]
+        return [
+            "returns",
+            "volatility_20",
+            "volatility_50",
+            "bb_width",
+            "bb_position",
+            "trend_strength",
+            "trend_direction",
+        ]
 
     def validate_features(self, data: pd.DataFrame) -> dict[str, bool]:
         """

@@ -11,13 +11,14 @@ import math
 import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
 from src.performance import metrics as perf_metrics
 
 
+@runtime_checkable
 class TradeProtocol(Protocol):
     """Protocol for trade objects that can be recorded.
 
