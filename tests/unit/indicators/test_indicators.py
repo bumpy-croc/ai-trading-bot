@@ -85,12 +85,18 @@ class TestMovingAverages:
 
 class TestRSI:
     def test_rsi_calculation(self):
-        data = pd.Series([44, 44.34, 44.09, 44.15, 43.61, 44.33, 44.23, 44.57, 44.15, 43.42])
+        # Use enough data points (> period + 1) so Wilder's smoothing produces values
+        data = pd.Series(
+            [44, 44.34, 44.09, 44.15, 43.61, 44.33, 44.23, 44.57, 44.15, 43.42, 44.8, 45.1]
+        )
         rsi = calculate_rsi(data, period=10)
-        assert rsi.min() >= 0
-        assert rsi.max() <= 100
+        valid_rsi = rsi.dropna()
+        assert len(valid_rsi) > 0
+        assert valid_rsi.min() >= 0
+        assert valid_rsi.max() <= 100
         assert len(rsi) == len(data)
-        assert rsi.iloc[:9].isna().all()
+        # Wilder's smoothing: first valid value is at index `period` (0-based)
+        assert rsi.iloc[:10].isna().all()
 
     def test_rsi_extreme_values(self):
         increasing_data = pd.Series([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
@@ -115,6 +121,49 @@ class TestRSI:
         # Test DataFrame missing close column
         with pytest.raises(ValueError, match="must contain 'close' column"):
             calculate_rsi(pd.DataFrame({"high": [1, 2, 3]}), period=5)
+
+        # Test invalid smoothing method
+        with pytest.raises(ValueError, match="smoothing_method must be one of"):
+            calculate_rsi(data, period=3, smoothing_method="invalid")
+
+    def test_rsi_wilder_vs_sma_differ(self):
+        """Wilder's smoothing and SMA produce different RSI values."""
+        np.random.seed(42)
+        prices = pd.Series(np.cumsum(np.random.randn(50)) + 100)
+        rsi_wilder = calculate_rsi(prices, period=14, smoothing_method="wilder")
+        rsi_sma = calculate_rsi(prices, period=14, smoothing_method="sma")
+        # Both should be valid RSI
+        valid_wilder = rsi_wilder.dropna()
+        valid_sma = rsi_sma.dropna()
+        assert len(valid_wilder) > 0
+        assert len(valid_sma) > 0
+        # They should differ (different algorithms)
+        common_idx = valid_wilder.index.intersection(valid_sma.index)
+        assert not np.allclose(
+            rsi_wilder.loc[common_idx].values, rsi_sma.loc[common_idx].values
+        )
+
+    def test_rsi_training_inference_parity(self):
+        """Verify calculate_rsi and _calculate_rsi_fast produce identical values."""
+        from src.ml.training_pipeline.features import _calculate_rsi_fast
+
+        np.random.seed(123)
+        prices = np.cumsum(np.random.randn(100)) + 500
+
+        # Inference path (pandas Series)
+        rsi_inference = calculate_rsi(pd.Series(prices), period=14)
+        # Training path (numpy array)
+        rsi_training = _calculate_rsi_fast(prices, window=14)
+
+        # Both should produce identical values where valid
+        valid_mask = ~np.isnan(rsi_training)
+        assert valid_mask.sum() > 0
+        np.testing.assert_allclose(
+            rsi_inference.values[valid_mask],
+            rsi_training[valid_mask],
+            rtol=1e-5,
+            err_msg="Training and inference RSI values diverge - algorithm mismatch",
+        )
 
 
 class TestATR:
