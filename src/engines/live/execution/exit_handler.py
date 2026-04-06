@@ -262,10 +262,12 @@ class LiveExitHandler:
         Returns:
             LiveExitCheck with exit decision and reason.
         """
-        # Check strategy exit signal first (parity with backtest evaluation order)
+        # Check strategy exit signal first (parity with backtest evaluation order).
+        # Signal reversal (e.g. SELL while LONG) must be checked even when
+        # component_strategy is None — StrategyExitChecker handles that case.
         exit_signal = False
         signal_reason = ""
-        if runtime_decision is not None and component_strategy is not None:
+        if runtime_decision is not None:
             exit_signal, signal_reason = self._check_strategy_exit(
                 position, current_price, runtime_decision, component_strategy
             )
@@ -560,17 +562,19 @@ class LiveExitHandler:
         position: LivePosition,
         current_price: float,
         runtime_decision: Any,
-        component_strategy: ComponentStrategy,
+        component_strategy: ComponentStrategy | None,
     ) -> tuple[bool, str]:
         """Check if strategy signals an exit.
 
         Uses shared StrategyExitChecker for consistent logic across engines.
+        Works with or without a component strategy — signal reversal checks
+        only require a runtime_decision with a signal direction.
 
         Args:
             position: Position to check.
             current_price: Current market price.
             runtime_decision: Decision from strategy runtime.
-            component_strategy: Component strategy.
+            component_strategy: Component strategy (optional).
 
         Returns:
             Tuple of (should_exit, reason).
