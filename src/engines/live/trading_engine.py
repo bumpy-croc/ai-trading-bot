@@ -1140,28 +1140,6 @@ class LiveTradingEngine:
             logger.warning("Runtime decision failed in live engine at index %s: %s", index, exc)
             return None
 
-    def _component_process_decision(self, df: pd.DataFrame, index: int):
-        """Get a TradingDecision from a component-based strategy.
-
-        Called for non-runtime strategies so that signal direction is available
-        to exit checks (signal reversal detection) and entry checks.
-        """
-        strategy = getattr(self, "strategy", None)
-        if strategy is None:
-            return None
-        process = getattr(strategy, "process_candle", None)
-        if not callable(process):
-            return None
-        try:
-            decision = process(df, index, self.current_balance, None)
-            self._apply_policies_from_decision(decision)
-            return decision
-        except Exception as exc:
-            logger.warning(
-                "Component strategy decision failed at index %s: %s", index, exc
-            )
-            return None
-
     def _finalize_runtime(self) -> None:
         if self._is_runtime_strategy():
             try:
@@ -1790,13 +1768,6 @@ class LiveTradingEngine:
                     float(current_price),
                     current_time,
                 )
-                # For non-runtime component strategies, call process_candle()
-                # so the decision (including signal direction) is available to
-                # both exit and entry checks.
-                if runtime_decision is None and not safety_mode:
-                    runtime_decision = self._component_process_decision(
-                        df, current_index
-                    )
                 if steps % heartbeat_every == 0:
                     log_engine_event(
                         "heartbeat",
@@ -2398,11 +2369,16 @@ class LiveTradingEngine:
                 take_profit = entry_signal_result.take_profit
                 runtime_strength = entry_signal_result.signal_strength
                 runtime_confidence = entry_signal_result.signal_confidence
-        elif runtime_decision is not None and hasattr(runtime_decision, "signal"):
-            # Component-based strategy: decision already computed in main loop
-            # via _component_process_decision(). Use it for entry evaluation.
-            decision = runtime_decision
+        elif isinstance(self.strategy, ComponentStrategy):
+            # Component-based strategy: use process_candle() for decision
+            # Note: runtime_decision should already be populated if this is a component strategy
+            # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper
             try:
+                decision = self.strategy.process_candle(
+                    df, current_index, self.current_balance, None
+                )
+                self._apply_policies_from_decision(decision)
+
                 notional_size = float(decision.position_size or 0.0)
                 balance = float(self.current_balance or 0.0)
                 size_fraction = 0.0 if balance <= 0 else max(0.0, notional_size / balance)
@@ -2424,7 +2400,8 @@ class LiveTradingEngine:
                 logger.warning("Component strategy decision failed: %s", e)
                 entry_signal = False
         else:
-            # No decision available — strategy may not support process_candle()
+            # All strategies should be component-based
+            logger.error("Strategy %s is not a component-based strategy", self.strategy.name)
             entry_signal = False
 
         if entry_signal and not use_runtime:
