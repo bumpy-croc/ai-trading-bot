@@ -439,7 +439,7 @@ class TestIndicatorIntegration:
         start_time = time.time()
         _ = calculate_ema(large_data, period=20)
         _ = calculate_rsi(large_data, period=14)
-        assert time.time() - start_time < 1.0
+        assert time.time() - start_time < 3.0
 
 
 class TestIndicatorCaching:

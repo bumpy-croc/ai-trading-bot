@@ -410,6 +410,117 @@ class TestExitConditionOrdering:
         assert "Stop loss" in result.exit_reason
 
 
+class TestSignalReversalWithoutComponentStrategy:
+    """Signal reversal exits must work without a ComponentStrategy.
+
+    Strategies like HyperGrowth use the components.Strategy class which is
+    not a ComponentStrategy.  The exit handler must still detect signal
+    reversals (e.g. SELL while LONG) from runtime_decision alone.
+    """
+
+    def test_sell_signal_exits_long_without_component_strategy(self) -> None:
+        """SELL signal on a LONG position should trigger exit even when
+        component_strategy is None."""
+        from src.strategies.components import SignalDirection
+
+        position_tracker = LivePositionTracker()
+        exit_handler = LiveExitHandler(
+            execution_engine=MagicMock(),
+            position_tracker=position_tracker,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            entry_price=2100.0,
+            entry_time=datetime.now(UTC),
+            order_id="reversal-test-1",
+        )
+
+        runtime_decision = MagicMock()
+        runtime_decision.signal.direction = SignalDirection.SELL
+        runtime_decision.metadata = {}
+
+        result = exit_handler.check_exit_conditions(
+            position=position,
+            current_price=2050.0,
+            runtime_decision=runtime_decision,
+            component_strategy=None,
+        )
+
+        assert result.should_exit is True
+        assert "reversal" in result.exit_reason.lower()
+
+    def test_buy_signal_exits_short_without_component_strategy(self) -> None:
+        """BUY signal on a SHORT position should trigger exit."""
+        from src.strategies.components import SignalDirection
+
+        position_tracker = LivePositionTracker()
+        exit_handler = LiveExitHandler(
+            execution_engine=MagicMock(),
+            position_tracker=position_tracker,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.SHORT,
+            size=0.5,
+            entry_price=2100.0,
+            entry_time=datetime.now(UTC),
+            order_id="reversal-test-2",
+        )
+
+        runtime_decision = MagicMock()
+        runtime_decision.signal.direction = SignalDirection.BUY
+        runtime_decision.metadata = {}
+
+        result = exit_handler.check_exit_conditions(
+            position=position,
+            current_price=2150.0,
+            runtime_decision=runtime_decision,
+            component_strategy=None,
+        )
+
+        assert result.should_exit is True
+        assert "reversal" in result.exit_reason.lower()
+
+    def test_hold_signal_does_not_exit(self) -> None:
+        """HOLD signal should not trigger exit."""
+        from src.strategies.components import SignalDirection
+
+        position_tracker = LivePositionTracker()
+        exit_handler = LiveExitHandler(
+            execution_engine=MagicMock(),
+            position_tracker=position_tracker,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            entry_price=2100.0,
+            entry_time=datetime.now(UTC),
+            order_id="reversal-test-3",
+        )
+
+        runtime_decision = MagicMock()
+        runtime_decision.signal.direction = SignalDirection.HOLD
+        runtime_decision.metadata = {}
+
+        result = exit_handler.check_exit_conditions(
+            position=position,
+            current_price=2050.0,
+            runtime_decision=runtime_decision,
+            component_strategy=None,
+        )
+
+        assert result.should_exit is False
+
+
 class TestPositionTrackerThreadSafety:
     """Test thread safety of LivePositionTracker."""
 
