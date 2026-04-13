@@ -1,0 +1,58 @@
+#cloud-config
+# Cloud-init runs on first boot. Installs system deps and sets up the user.
+# Interactive steps (Claude auth, Telegram config, GitHub PAT) happen
+# post-boot via setup.sh - see the README.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - git
+  - curl
+  - unzip
+  - jq
+  - ca-certificates
+  - build-essential
+  - python3.11
+  - python3.11-venv
+  - python3-pip
+
+write_files:
+  # List of repos to clone, consumed by setup.sh.
+  - path: /home/ubuntu/repos.txt
+    owner: ubuntu:ubuntu
+    permissions: '0644'
+    content: |
+%{ for repo in repos_to_clone ~}
+      ${repo}
+%{ endfor ~}
+
+  # Marker so setup.sh can detect whether cloud-init finished.
+  - path: /home/ubuntu/.cloud-init-complete
+    owner: ubuntu:ubuntu
+    permissions: '0644'
+    content: "pending"
+
+runcmd:
+  # GitHub CLI apt repo.
+  - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+  - chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
+  # NodeSource for Node.js 20.
+  - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+
+  - apt-get update
+  - apt-get install -y gh nodejs
+
+  # Claude Code CLI (global install).
+  - npm install -g @anthropic-ai/claude-code
+
+  # Bun (needed for channel plugins).
+  - sudo -u ubuntu bash -c 'curl -fsSL https://bun.sh/install | bash'
+
+  # Mark cloud-init done so setup.sh can run.
+  - echo "done" > /home/ubuntu/.cloud-init-complete
+  - chown ubuntu:ubuntu /home/ubuntu/.cloud-init-complete
+
+final_message: "Cloud-init finished. SSH in and run ~/setup.sh to finish configuration."

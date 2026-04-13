@@ -1,0 +1,4 @@
+# Allow the ubuntu user to manage the claude-code service without a password.
+# Needed for the cron-based healthcheck to restart a crashed service.
+# Install to /etc/sudoers.d/claude-agent with mode 0440.
+ubuntu ALL=(root) NOPASSWD: /bin/systemctl restart claude-code, /bin/systemctl start claude-code, /bin/systemctl stop claude-code, /bin/systemctl status claude-code
