@@ -37,13 +37,42 @@ You need the following installed locally:
 
 ## Step 1: Configure AWS Credentials
 
-If you've never set up AWS CLI:
+AWS does not ship a managed policy for Lightsail, so you need to attach a
+small custom policy to your IAM user. The JSON is at
+`terraform/iam-policy.json`.
+
+### Option A: Console (easiest)
+
+1. Sign in to the AWS Console → **IAM** → **Users** → **Create user**
+2. Name it `claude-agent-deployer`, enable **programmatic access** only
+3. On the permissions step choose **Attach policies directly** →
+   **Create policy** → switch to the **JSON** tab → paste the contents of
+   `terraform/iam-policy.json` → name it `LightsailFullAccess` → create
+4. Back on the user creation screen, attach the new `LightsailFullAccess`
+   policy, then finish
+5. Open the new user → **Security credentials** → **Create access key**
+   → choose "Command Line Interface (CLI)" → copy the access key ID + secret
+
+### Option B: CLI (if you already have admin credentials)
 
 ```bash
-# Create an IAM user in the AWS Console with these managed policies:
-#   - AmazonLightsailFullAccess
-#
-# Then create an access key for that user and run:
+aws iam create-user --user-name claude-agent-deployer
+
+aws iam create-policy \
+  --policy-name LightsailFullAccess \
+  --policy-document file://deploy/claude-agent/terraform/iam-policy.json
+
+# Grab the PolicyArn from the previous output.
+aws iam attach-user-policy \
+  --user-name claude-agent-deployer \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/LightsailFullAccess
+
+aws iam create-access-key --user-name claude-agent-deployer
+```
+
+### Then configure the CLI
+
+```bash
 aws configure
 # AWS Access Key ID: AKIA...
 # AWS Secret Access Key: ...
@@ -53,6 +82,11 @@ aws configure
 # Verify:
 aws sts get-caller-identity
 ```
+
+> **Quick-and-dirty alternative:** if this is your personal AWS account and
+> you don't care about granularity, you can attach the AWS-managed
+> `AdministratorAccess` policy instead and skip creating a custom one. Not
+> recommended for production, fine for a hobby setup.
 
 ---
 
