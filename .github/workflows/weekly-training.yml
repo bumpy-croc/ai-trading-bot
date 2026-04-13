@@ -23,6 +23,7 @@ on:
 permissions:
   contents: read
   issues: write  # For creating issues on failure
+  actions: read  # For reading job status in failure-notification script
 
 env:
   AWS_REGION: us-east-1
@@ -64,6 +65,26 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
 
+    - name: Verify required secrets are present
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
+        SAGEMAKER_S3_BUCKET: ${{ secrets.SAGEMAKER_S3_BUCKET }}
+        SAGEMAKER_DOCKER_IMAGE: ${{ secrets.SAGEMAKER_DOCKER_IMAGE }}
+      run: |
+        missing=()
+        for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SAGEMAKER_ROLE_ARN SAGEMAKER_S3_BUCKET SAGEMAKER_DOCKER_IMAGE; do
+          if [ -z "${!var}" ]; then
+            missing+=("$var")
+          fi
+        done
+        if [ ${#missing[@]} -ne 0 ]; then
+          echo "::error title=Missing required secrets::The following GitHub Actions secrets are not set: ${missing[*]}. Configure them in repo Settings -> Secrets and variables -> Actions."
+          exit 1
+        fi
+        echo "All required secrets are present."
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -75,6 +96,20 @@ jobs:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
+
+    - name: Verify AWS credentials (preflight)
+      id: aws_preflight
+      run: |
+        set +e
+        OUTPUT=$(aws sts get-caller-identity 2>&1)
+        STATUS=$?
+        set -e
+        if [ $STATUS -ne 0 ]; then
+          echo "::error title=AWS credential preflight failed::aws sts get-caller-identity failed. The AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY GitHub secrets are likely invalid, expired, or revoked. Rotate them in IAM and update the repo secrets. Raw error: ${OUTPUT}"
+          echo "aws_preflight_failed=true" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        echo "AWS identity: $OUTPUT"
 
     - name: Train model on SageMaker
       env:
@@ -112,28 +147,67 @@ jobs:
           const date = new Date().toISOString().split('T')[0];
           const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
 
+          // Pull failed jobs to surface a likely root-cause category in the issue body.
+          let failedJobsSummary = '';
+          let suspectedCause = 'Unknown — inspect logs.';
+          try {
+            const jobs = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const failed = jobs.data.jobs.filter(j => j.conclusion === 'failure');
+            failedJobsSummary = failed.map(j => {
+              const failedStep = (j.steps || []).find(s => s.conclusion === 'failure');
+              return `- **${j.name}** — failed step: \`${failedStep ? failedStep.name : 'unknown'}\``;
+            }).join('\n') || '- (no failed jobs reported)';
+
+            const stepNames = failed.flatMap(j => (j.steps || []).filter(s => s.conclusion === 'failure').map(s => s.name.toLowerCase()));
+            if (stepNames.some(n => n.includes('verify aws credentials') || n.includes('configure aws credentials'))) {
+              suspectedCause = 'AWS credentials are invalid or expired. Rotate `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in repo Settings -> Secrets and variables -> Actions.';
+            } else if (stepNames.some(n => n.includes('verify required secrets'))) {
+              suspectedCause = 'One or more required GitHub Actions secrets are missing. See the failed step output for the exact list.';
+            } else if (stepNames.some(n => n.includes('train model on sagemaker'))) {
+              suspectedCause = 'SageMaker training job failed. Check SageMaker console for job status, IAM role permissions, S3 bucket access, and service quotas (e.g. `ml.g4dn.xlarge` spot capacity).';
+            } else if (stepNames.some(n => n.includes('install dependencies'))) {
+              suspectedCause = 'Dependency install failed. Likely a transient PyPI issue or a `pyproject.toml` regression. Re-run; if it persists, investigate.';
+            }
+          } catch (e) {
+            failedJobsSummary = `- (failed to enumerate jobs: ${e.message})`;
+          }
+
+          const body = [
+            '## Weekly Model Training Failed',
+            '',
+            'The automated weekly model training workflow has failed.',
+            '',
+            '**Run Details:**',
+            `- Date: ${date}`,
+            `- Workflow Run: ${runUrl}`,
+            `- Trigger: ${context.eventName === 'schedule' ? 'Scheduled (weekly)' : 'Manual'}`,
+            '',
+            '**Failed Jobs:**',
+            failedJobsSummary,
+            '',
+            '**Suspected Root Cause:**',
+            suspectedCause,
+            '',
+            '**Next Steps:**',
+            `1. Check the [workflow logs](${runUrl}) for full error details`,
+            '2. If credentials-related: rotate AWS access keys in IAM, then update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` repo secrets',
+            '3. If SageMaker-related: check the SageMaker console, IAM role trust policy, S3 bucket, and service quotas',
+            '4. Re-run the workflow manually via the Actions tab once the underlying issue is fixed',
+            '',
+            '---',
+            '*This issue was created automatically by the weekly training workflow.*',
+          ].join('\n');
+
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
             title: `[Automated] Weekly model training failed - ${date}`,
-            body: `## Weekly Model Training Failed
-
-            The automated weekly model training workflow has failed.
-
-            **Run Details:**
-            - Date: ${date}
-            - Workflow Run: ${runUrl}
-            - Trigger: ${context.eventName === 'schedule' ? 'Scheduled (weekly)' : 'Manual'}
-
-            **Next Steps:**
-            1. Check the [workflow logs](${runUrl}) for error details
-            2. Verify AWS credentials are valid
-            3. Check SageMaker quotas and limits
-            4. Re-run the workflow manually after fixing issues
-
-            ---
-            *This issue was created automatically by the weekly training workflow.*
-            `,
+            body,
             labels: ['automation', 'training', 'bug']
           });
 
