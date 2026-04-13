@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "aws_profile" {
   description = "AWS credentials profile to use"
   type        = string
-  default     = "default"
+  default     = "ai-trading-bot"
 }
 
 variable "instance_name" {
