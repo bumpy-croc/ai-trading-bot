@@ -2,7 +2,7 @@
 # terraform.tfvars is gitignored - never commit real values.
 
 aws_region        = "eu-west-1"
-aws_profile       = "default"
+aws_profile       = "ai-trading-bot"
 availability_zone = "eu-west-1a"
 instance_name     = "claude-code-agent"
 
