@@ -1,0 +1,22 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored - never commit real values.
+
+aws_region        = "eu-west-1"
+aws_profile       = "default"
+availability_zone = "eu-west-1a"
+instance_name     = "claude-code-agent"
+
+# $5/mo plan. Use "micro_3_0" ($10/mo, 2GB RAM) if you need more memory.
+bundle_id = "nano_3_0"
+
+# Paste the contents of your SSH public key here (e.g. ~/.ssh/claude-agent.pub).
+ssh_public_key = "ssh-ed25519 AAAA... your-comment"
+
+# Restrict SSH to your IP. Find yours with: curl -s https://checkip.amazonaws.com
+# Example: "203.0.113.42/32"
+ssh_ingress_cidr = "0.0.0.0/0"
+
+# Repos to clone on first boot. Add more as needed.
+repos_to_clone = [
+  "bumpy-croc/ai-trading-bot",
+]

@@ -1,0 +1,8 @@
+/home/ubuntu/claude-session.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
