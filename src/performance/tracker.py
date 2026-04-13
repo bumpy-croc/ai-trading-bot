@@ -216,6 +216,11 @@ class PerformanceTracker:
         # Thread safety lock for mutable state (reentrant to allow nested calls)
         self._lock = threading.RLock()
 
+        # Metrics cache: avoid recomputing get_metrics() on every call in
+        # high-frequency live trading. Invalidated by any state-mutating method.
+        self._cached_metrics: PerformanceMetrics | None = None
+        self._metrics_dirty = True
+
     def record_trade(
         self,
         trade: TradeProtocol,
@@ -317,6 +322,9 @@ class PerformanceTracker:
             if len(self._trades) > self._max_trade_history:
                 self._trades = self._trades[-self._max_trade_history :]
 
+            # Invalidate metrics cache after state mutation
+            self._metrics_dirty = True
+
     def update_balance(
         self,
         balance: float,
@@ -357,6 +365,9 @@ class PerformanceTracker:
             if len(self._balance_history) > self._max_trade_history:
                 self._balance_history = self._balance_history[-self._max_trade_history :]
 
+            # Invalidate metrics cache after state mutation
+            self._metrics_dirty = True
+
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics.
 
@@ -367,6 +378,12 @@ class PerformanceTracker:
             PerformanceMetrics with calculated values.
         """
         with self._lock:
+            # Return cached metrics if no state has changed since last computation.
+            # Significantly reduces CPU usage in high-frequency live trading where
+            # get_metrics() is called repeatedly between state mutations.
+            if not self._metrics_dirty and self._cached_metrics is not None:
+                return self._cached_metrics
+
             # Include zero-PnL trades in total count for consistency
             total_trades = self._winning_trades + self._losing_trades + self._zero_pnl_trades
 
@@ -460,7 +477,7 @@ class PerformanceTracker:
                 if len(returns) >= MIN_VAR_RETURNS:
                     var_95 = perf_metrics.value_at_risk(returns, confidence=0.95)
 
-            return PerformanceMetrics(
+            metrics = PerformanceMetrics(
                 # Trade statistics
                 total_trades=total_trades,
                 winning_trades=self._winning_trades,
@@ -496,6 +513,11 @@ class PerformanceTracker:
                 current_balance=self.current_balance,
                 peak_balance=self.peak_balance,
             )
+
+            # Store in cache; cleared by any state-mutating method
+            self._cached_metrics = metrics
+            self._metrics_dirty = False
+            return metrics
 
     def get_trade_history(self) -> list[dict]:
         """Get list of recorded trades.
@@ -609,6 +631,10 @@ class PerformanceTracker:
             self._max_win_streak = 0
             self._max_loss_streak = 0
             self._balance_history = [(datetime.now(UTC), self.initial_balance)]
+
+            # Invalidate metrics cache after state mutation
+            self._cached_metrics = None
+            self._metrics_dirty = True
 
 
 __all__ = [
