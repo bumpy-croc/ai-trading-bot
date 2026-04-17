@@ -717,6 +717,7 @@ def _make_trade(pnl: float, symbol: str = "BTCUSDT", side: str = "long") -> Mock
     return trade
 
 
+@pytest.mark.fast
 class TestPerformanceTrackerMetricsCache:
     """Tests for get_metrics() caching with dirty-flag invalidation."""
 
