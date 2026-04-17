@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,8 @@ _ALLOWED_BACKTEST = {
     "provider",
     "use_cache",
     "random_seed",
+    "start",
+    "end",
 }
 _ALLOWED_VARIANT = {"name", "overrides"}
 _ALLOWED_COMPARISON = {
@@ -109,6 +112,11 @@ def _parse_backtest(data: Any, *, source: str) -> BacktestSettings:
             f"{source}.initial_balance: must be positive, got {initial_balance}"
         )
 
+    start = _parse_datetime(data.get("start"), f"{source}.start")
+    end = _parse_datetime(data.get("end"), f"{source}.end")
+    if start is not None and end is not None and start >= end:
+        raise SuiteValidationError(f"{source}: start ({start}) must be earlier than end ({end})")
+
     return BacktestSettings(
         strategy=_require_str(data, "strategy", source),
         symbol=str(data.get("symbol", "BTCUSDT")),
@@ -118,7 +126,24 @@ def _parse_backtest(data: Any, *, source: str) -> BacktestSettings:
         provider=provider,
         use_cache=bool(data.get("use_cache", True)),
         random_seed=data.get("random_seed"),
+        start=start,
+        end=end,
     )
+
+
+def _parse_datetime(value: Any, source: str) -> datetime | None:
+    """Accept an ISO-8601 string or None. UTC assumed when no tz info."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if not isinstance(value, str):
+        raise SuiteValidationError(f"{source}: must be ISO-8601 string, got {type(value).__name__}")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SuiteValidationError(f"{source}: invalid ISO-8601 datetime {value!r}") from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _parse_variant(data: Any, *, source: str, required_name: bool) -> VariantSpec:

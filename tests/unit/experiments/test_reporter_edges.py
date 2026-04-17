@@ -183,3 +183,30 @@ def test_isnan_values_in_metric_gracefully_handled() -> None:
     var = _result(sharpe=1.5, trades=200)
     conf = _ranking_confidence(base, var, "sharpe_ratio")
     assert conf is None
+
+
+def test_calmar_opposite_infinities_classified_correctly() -> None:
+    """Baseline −∞ (zero-dd, losing), variant +∞ (zero-dd, winning) → PROMOTE."""
+    suite = _suite(
+        [VariantSpec(name="winner")],
+        metric="calmar",
+    )
+    baseline = _result(total_return=-5.0, annualized=-10.0, max_drawdown=0.0, trades=200)
+    variants = [_result(total_return=5.0, annualized=10.0, max_drawdown=0.0, trades=200)]
+    report = ExperimentReporter().render(_suite_result(suite, baseline, variants))
+
+    row = next(r for r in report.rows if r.name == "winner")
+    # variant = +inf, baseline = −inf → opposite signs → strictly better.
+    assert row.verdict == Verdict.PROMOTE
+    assert row.ranking_confidence == pytest.approx(1.0)
+
+
+def test_calmar_baseline_infinite_variant_finite_rejects_when_worse() -> None:
+    """Baseline +∞ (zero-dd, winning); variant finite → REJECT."""
+    suite = _suite([VariantSpec(name="finite_var")], metric="calmar")
+    baseline = _result(total_return=5.0, annualized=10.0, max_drawdown=0.0, trades=200)
+    variants = [_result(total_return=5.0, annualized=3.0, max_drawdown=5.0, trades=200)]
+    report = ExperimentReporter().render(_suite_result(suite, baseline, variants))
+
+    row = next(r for r in report.rows if r.name == "finite_var")
+    assert row.verdict == Verdict.REJECT

@@ -9,12 +9,15 @@ can be used as the baseline of the next experiment suite.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 from src.experiments.ledger import Ledger
 from src.experiments.reporter import ExperimentReporter, SuiteReport, Verdict
@@ -152,6 +155,16 @@ class PromotionManager:
                 "provider": suite_result.config.backtest.provider,
                 "use_cache": suite_result.config.backtest.use_cache,
                 "random_seed": suite_result.config.backtest.random_seed,
+                "start": (
+                    suite_result.config.backtest.start.isoformat()
+                    if suite_result.config.backtest.start is not None
+                    else None
+                ),
+                "end": (
+                    suite_result.config.backtest.end.isoformat()
+                    if suite_result.config.backtest.end is not None
+                    else None
+                ),
             },
             "baseline": {
                 "name": suite_result.config.baseline.name,
@@ -286,17 +299,34 @@ class PromotionManager:
                 "overrides": overrides,
             },
             "variants": [],
-            "comparison": suite_snapshot.get(
-                "comparison",
-                {
-                    "target_metric": "sharpe_ratio",
-                    "min_trades": 30,
-                    "significance_level": 0.05,
-                },
-            ),
+            "comparison": _comparison_from_snapshot(suite_snapshot),
         }
         patch_path.write_text(yaml.safe_dump(patch_doc, sort_keys=False))
         return patch_path
+
+
+def _comparison_from_snapshot(suite_snapshot: dict) -> dict:
+    """Return the snapshot's ``comparison`` block, with a logged fallback.
+
+    Suite snapshots written before the experimentation framework started
+    persisting the ``comparison`` block may be missing it. Falling back is
+    OK but must be loud — silently switching the promotion metric to
+    sharpe_ratio would misalign the patch YAML's ranking semantics.
+    """
+    comparison = suite_snapshot.get("comparison")
+    if isinstance(comparison, dict) and comparison:
+        return comparison
+    logger.warning(
+        "promotion: suite snapshot has no 'comparison' block; patch YAML "
+        "will default to sharpe_ratio / min_trades=30 / α=0.05. "
+        "If the parent suite used a different metric, edit the patch "
+        "YAML before reusing it as a baseline."
+    )
+    return {
+        "target_metric": "sharpe_ratio",
+        "min_trades": 30,
+        "significance_level": 0.05,
+    }
 
 
 def _find_variant_row(report_data: dict, variant_name: str) -> dict | None:

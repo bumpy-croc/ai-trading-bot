@@ -196,5 +196,29 @@ def test_namespace_mismatch_raises(runner: ExperimentRunner) -> None:
 def test_stop_loss_override_must_be_numeric(runner: ExperimentRunner) -> None:
     strategy = runner._load_strategy("ml_basic")
     cfg = _cfg("ml_basic", {"ml_basic.stop_loss_pct": "not a number"})
-    with pytest.raises(ValueError, match="numeric"):
+    with pytest.raises(ValueError, match="stop_loss_pct"):
         runner._apply_parameter_overrides(strategy, cfg)
+
+
+def test_min_confidence_floor_invariant_enforced_after_override(
+    runner: ExperimentRunner,
+) -> None:
+    """setattr bypasses __init__ — post-override validator must catch this."""
+    cfg = ExperimentConfig(
+        strategy_name="ml_basic",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        initial_balance=1000.0,
+        # ml_basic default min_confidence is 0.35 — set floor higher to trigger.
+        parameters=ParameterSet(
+            name="bad_floor",
+            values={"ml_basic.min_confidence_floor": 0.9},
+        ),
+        provider="mock",
+    )
+    strategy = runner._load_strategy("ml_basic")
+    runner._apply_parameter_overrides(strategy, cfg)
+    with pytest.raises(ValueError, match="min_confidence_floor"):
+        runner._validate_post_override_invariants(strategy)

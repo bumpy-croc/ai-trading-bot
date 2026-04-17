@@ -20,6 +20,7 @@ class Verdict(str, Enum):
     HOLD = "HOLD"
     REJECT = "REJECT"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+    ERRORED = "ERRORED"  # variant's backtest raised; no verdict possible
 
 
 # Each allowed target metric is "higher is better" for ranking purposes.
@@ -132,13 +133,16 @@ def _ranking_confidence(
     baseline_val = _metric(baseline, metric)
     variant_val = _metric(variant, metric)
 
-    # Infinite Calmar edge cases: variant=∞, baseline finite → full confidence.
-    if math.isinf(variant_val) and not math.isinf(baseline_val):
+    # Infinite Calmar edge cases.
+    if math.isinf(variant_val) or math.isinf(baseline_val):
+        if math.isinf(variant_val) and math.isinf(baseline_val):
+            # Both ±∞. If signs match → indistinguishable. Opposite signs →
+            # maximally distinguishable.
+            if (variant_val > 0) == (baseline_val > 0):
+                return 0.0
+            return 1.0
+        # Exactly one side is ±∞ — maximally distinguishable.
         return 1.0
-    if math.isinf(baseline_val) and not math.isinf(variant_val):
-        return 1.0
-    if math.isinf(variant_val) and math.isinf(baseline_val):
-        return 0.0  # both ∞ (or both −∞) → indistinguishable
     if not math.isfinite(variant_val) or not math.isfinite(baseline_val):
         return None
 
@@ -175,16 +179,28 @@ def _classify(
         return Verdict.INSUFFICIENT_DATA
     baseline_val = _metric(baseline, settings.target_metric)
     variant_val = _metric(variant, settings.target_metric)
-    # Infinities ranked higher than any finite value.
-    if math.isinf(variant_val) and math.isinf(baseline_val):
-        return Verdict.HOLD
-    if math.isinf(variant_val) and variant_val > 0:
-        # variant is +inf (e.g. perfect Calmar) and baseline is finite → strictly better
-        return (
-            Verdict.PROMOTE
-            if confidence is not None and confidence >= (1.0 - settings.significance_level)
-            else Verdict.HOLD
-        )
+    threshold = 1.0 - settings.significance_level
+    passes_confidence = confidence is not None and confidence >= threshold
+
+    # Handle ±inf explicitly for Calmar edge cases.
+    if math.isinf(variant_val) or math.isinf(baseline_val):
+        if math.isinf(variant_val) and math.isinf(baseline_val):
+            # Same-sign infinities are a tie; opposite-sign → strict winner.
+            if (variant_val > 0) == (baseline_val > 0):
+                return Verdict.HOLD
+            if variant_val > 0:
+                return Verdict.PROMOTE if passes_confidence else Verdict.HOLD
+            return Verdict.REJECT
+        # Exactly one side is infinite.
+        if math.isinf(variant_val):
+            if variant_val > 0:
+                return Verdict.PROMOTE if passes_confidence else Verdict.HOLD
+            return Verdict.REJECT
+        # baseline is infinite
+        if baseline_val > 0:
+            return Verdict.REJECT
+        return Verdict.PROMOTE if passes_confidence else Verdict.HOLD
+
     delta = variant_val - baseline_val
     if delta < 0:
         return Verdict.REJECT
@@ -192,7 +208,7 @@ def _classify(
         return Verdict.HOLD
     if confidence is None:
         return Verdict.HOLD
-    if confidence >= (1.0 - settings.significance_level):
+    if passes_confidence:
         return Verdict.PROMOTE
     return Verdict.HOLD
 
@@ -221,7 +237,28 @@ class ExperimentReporter:
             )
         ]
 
+        errors = getattr(suite_result, "errors", {}) or {}
+
         for spec, result in zip(suite_result.config.variants, suite_result.variants, strict=True):
+            if spec.name in errors:
+                # Variant's backtest raised — emit an ERRORED row so the user
+                # sees the failure in the report; ranking uses +/-inf = NaN.
+                rows.append(
+                    VariantReport(
+                        name=spec.name,
+                        total_return=0.0,
+                        annualized_return=0.0,
+                        sharpe_ratio=0.0,
+                        max_drawdown=0.0,
+                        win_rate=0.0,
+                        total_trades=0,
+                        final_balance=0.0,
+                        delta_vs_baseline=0.0,
+                        ranking_confidence=None,
+                        verdict=Verdict.ERRORED,
+                    )
+                )
+                continue
             delta = _metric(result, settings.target_metric) - _metric(
                 baseline, settings.target_metric
             )

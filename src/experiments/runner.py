@@ -142,8 +142,14 @@ class ExperimentRunner:
                 coerced_value = self._coerce_value(current, value)
                 setattr(target, attr, coerced_value)
                 applied = True
-            except Exception as exc:  # pragma: no cover - defensive logging
-                self.logger.debug("Failed to set %s on %s: %s", attr, target, exc)
+            except (TypeError, ValueError) as exc:
+                # Property setters with validation raise these. Propagate so
+                # invalid overrides fail the suite instead of silently
+                # leaving the component in a half-configured state.
+                raise ValueError(
+                    f"Failed to apply override {attr!r}={value!r} to "
+                    f"{type(target).__name__}: {exc}"
+                ) from exc
 
         # Risk-related attributes must always land in the strategy's risk
         # overrides mapping — the risk manager consults this at runtime, and
@@ -181,10 +187,37 @@ class ExperimentRunner:
         except Exception:
             return new_value
 
+    @staticmethod
+    def _validate_post_override_invariants(strategy: Strategy) -> None:
+        """Re-check component invariants after override setattrs ran.
+
+        ``setattr`` bypasses ``__init__`` so override combinations that
+        violate a component's construction invariants (e.g. position
+        sizer confidence floor exceeding gate) must be re-validated here.
+        """
+        position_sizer = getattr(strategy, "position_sizer", None)
+        if position_sizer is not None:
+            floor = getattr(position_sizer, "min_confidence_floor", None)
+            gate = getattr(position_sizer, "min_confidence", None)
+            if (
+                floor is not None
+                and gate is not None
+                and isinstance(floor, int | float)
+                and isinstance(gate, int | float)
+                and floor > gate
+            ):
+                raise ValueError(
+                    f"Invalid sizer state after overrides: "
+                    f"min_confidence_floor ({floor}) must be <= "
+                    f"min_confidence ({gate}); floor exceeding gate would "
+                    f"over-size low-confidence signals."
+                )
+
     def run(self, config: ExperimentConfig) -> ExperimentResult:
         strategy = self._load_strategy(config.strategy_name)
         # Apply any parameter overrides for strategy-level tuning
         self._apply_parameter_overrides(strategy, config)
+        self._validate_post_override_invariants(strategy)
         provider = self._load_provider(
             config.provider,
             config.use_cache,
