@@ -14,6 +14,8 @@ from src.experiments.promotion import (
     _components_touched,
 )
 
+pytestmark = pytest.mark.fast
+
 
 def _write_suite_snapshot(path: Path, *, variants: list[dict]) -> None:
     path.write_text(

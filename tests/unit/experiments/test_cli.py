@@ -8,6 +8,8 @@ import pytest
 
 from cli.commands.experiment import _safe_artifacts_dir
 
+pytestmark = pytest.mark.fast
+
 
 def test_safe_artifacts_dir_rejects_traversal(tmp_path: Path) -> None:
     root = tmp_path

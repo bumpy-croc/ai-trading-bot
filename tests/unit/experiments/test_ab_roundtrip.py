@@ -21,6 +21,8 @@ from src.experiments.suite import (
 )
 from src.experiments.suite_loader import load_suite
 
+pytestmark = pytest.mark.fast
+
 
 def _result_with_sharpe(cfg: ExperimentConfig, sharpe: float) -> ExperimentResult:
     return ExperimentResult(

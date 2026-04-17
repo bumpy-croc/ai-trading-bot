@@ -17,6 +17,8 @@ from src.experiments.suite import (
     VariantSpec,
 )
 
+pytestmark = pytest.mark.fast
+
 
 def _cfg() -> ExperimentConfig:
     now = datetime.now(UTC)

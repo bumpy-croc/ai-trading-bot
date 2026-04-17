@@ -9,6 +9,8 @@ import pytest
 from src.experiments.runner import ExperimentRunner
 from src.experiments.schemas import ExperimentConfig, ParameterSet
 
+pytestmark = pytest.mark.fast
+
 
 @pytest.fixture
 def runner() -> ExperimentRunner:

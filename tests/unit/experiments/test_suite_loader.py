@@ -8,6 +8,7 @@ import pytest
 
 from src.experiments.suite_loader import SuiteValidationError, load_suite, parse_suite
 
+pytestmark = pytest.mark.fast
 _MINIMAL_YAML = """
 id: demo_suite
 description: demo

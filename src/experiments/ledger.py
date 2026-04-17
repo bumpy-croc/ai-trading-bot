@@ -132,7 +132,12 @@ class Ledger:
                     continue
                 try:
                     data = json.loads(stripped)
-                    entries.append(LedgerEntry(**data))
+                    # Filter to known fields so a ledger written by a future
+                    # version (extra optional fields) remains readable by the
+                    # current reader. Missing required fields still raise and
+                    # the line is skipped by the except below.
+                    known = LedgerEntry.__dataclass_fields__
+                    entries.append(LedgerEntry(**{k: v for k, v in data.items() if k in known}))
                 except (json.JSONDecodeError, TypeError) as exc:
                     logger.warning(
                         "ledger: skipping malformed line %d in %s: %s",

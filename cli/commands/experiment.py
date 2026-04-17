@@ -122,6 +122,7 @@ def _handle_list(ns: argparse.Namespace) -> int:
     except Exception as exc:
         if getattr(ns, "debug", False):
             raise
+        logging.exception("Experiment list failed")
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -147,6 +148,7 @@ def _handle_show(ns: argparse.Namespace) -> int:
     except Exception as exc:
         if getattr(ns, "debug", False):
             raise
+        logging.exception("Experiment show failed for suite_id=%s", ns.suite_id)
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -166,6 +168,11 @@ def _handle_promote(ns: argparse.Namespace) -> int:
     except Exception as exc:
         if getattr(ns, "debug", False):
             raise
+        logging.exception(
+            "Experiment promote failed for suite_id=%s variant=%s",
+            ns.suite_id,
+            ns.variant,
+        )
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

@@ -17,6 +17,8 @@ from src.experiments.suite import (
     VariantSpec,
 )
 
+pytestmark = pytest.mark.fast
+
 
 def _fake_result(cfg: ExperimentConfig) -> ExperimentResult:
     return ExperimentResult(

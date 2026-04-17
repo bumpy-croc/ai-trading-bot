@@ -116,7 +116,18 @@ class PromotionManager:
         if entry is None:
             raise PromotionError(f"Suite {suite_id!r} not found in ledger")
 
-        artifacts_path = Path(entry.artifacts_path)
+        # Containment check: a corrupted or tampered ledger could contain an
+        # artifacts_path like ``/etc`` or ``../../sensitive``; reading JSON
+        # from arbitrary disk locations and feeding it to the promotion
+        # writer is a confused-deputy vector. Reject any path that escapes
+        # the ledger root.
+        artifacts_path = Path(entry.artifacts_path).resolve()
+        ledger_root = self.ledger.root.resolve()
+        if artifacts_path != ledger_root and ledger_root not in artifacts_path.parents:
+            raise PromotionError(
+                f"artifacts_path {artifacts_path} is outside ledger root {ledger_root}; "
+                "ledger entry may be tampered."
+            )
         report_path = artifacts_path / "report.json"
         if not report_path.exists():
             raise PromotionError(f"Report missing at {report_path}")

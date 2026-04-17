@@ -134,9 +134,17 @@ class RandomWalkProvider(DataProvider):
             shock = rng.normal(0, vol)
             prices.append(max(1.0, prices[-1] * (1.0 + shock)))
         prices_arr = np.array(prices)
-        highs = prices_arr * (1.0 + np.abs(rng.normal(0, vol / 2, size=len(prices_arr))))
-        lows = prices_arr * (1.0 - np.abs(rng.normal(0, vol / 2, size=len(prices_arr))))
         opens = np.r_[prices_arr[0], prices_arr[:-1]]
+        # OHLC invariant: ``high >= max(open, close)`` and ``low <= min(open, close)``.
+        # Deriving high/low from close alone can violate this on down-bars
+        # (open > close → generated high may be below open) and up-bars
+        # (open < close → generated low may be above open). Clamp against
+        # opens so the synthetic bars satisfy the invariant; any indicator
+        # using wicks / ATR / true-range gets correct inputs.
+        raw_highs = prices_arr * (1.0 + np.abs(rng.normal(0, vol / 2, size=len(prices_arr))))
+        raw_lows = prices_arr * (1.0 - np.abs(rng.normal(0, vol / 2, size=len(prices_arr))))
+        highs = np.maximum(raw_highs, opens)
+        lows = np.minimum(raw_lows, opens)
         volume = rng.uniform(1000.0, 10000.0, size=len(prices_arr))
         return pd.DataFrame(
             {

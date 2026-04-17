@@ -28,6 +28,7 @@ from src.experiments.suite import (
 )
 from src.experiments.suite_loader import SuiteValidationError, parse_suite
 
+pytestmark = pytest.mark.fast
 # ----------------------------------------------------------------------------
 # P1: Path-traversal hardening for promotion output paths
 # ----------------------------------------------------------------------------

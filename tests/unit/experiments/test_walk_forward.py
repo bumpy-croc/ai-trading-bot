@@ -14,6 +14,8 @@ from src.experiments.walk_forward import (
     robustness_label,
 )
 
+pytestmark = pytest.mark.fast
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

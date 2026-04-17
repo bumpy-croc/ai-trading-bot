@@ -6,8 +6,12 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.experiments.ledger import Ledger, LedgerEntry
 from src.experiments.reporter import SuiteReport
+
+pytestmark = pytest.mark.fast
 
 
 def _stub_suite_result() -> MagicMock:
