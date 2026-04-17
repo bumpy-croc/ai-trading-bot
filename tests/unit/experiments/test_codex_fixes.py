@@ -497,6 +497,46 @@ def test_ledger_artifacts_dir_accepts_single_char_slug(tmp_path: Path) -> None:
     assert str(path).startswith(str(tmp_path.resolve()))
 
 
+def test_fixture_provider_accepts_utc_aware_bounds(tmp_path: Path) -> None:
+    """FixtureProvider loaded a tz-naive feather; querying with UTC-aware
+    datetimes must not raise ``TypeError`` (pandas refuses to compare a
+    tz-naive index to a tz-aware bound)."""
+    import pandas as pd
+
+    from src.data_providers.offline import FixtureProvider
+
+    feather_path = tmp_path / "fixture.feather"
+    df = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=5, freq="1h"),  # naive
+            "open": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "high": [1.1, 2.1, 3.1, 4.1, 5.1],
+            "low": [0.9, 1.9, 2.9, 3.9, 4.9],
+            "close": [1.05, 2.05, 3.05, 4.05, 5.05],
+            "volume": [100.0] * 5,
+        }
+    )
+    df.to_feather(feather_path)
+
+    provider = FixtureProvider(feather_path)
+    start = datetime(2024, 1, 1, 0, tzinfo=UTC)
+    end = datetime(2024, 1, 1, 3, tzinfo=UTC)
+
+    out = provider.get_historical_data("BTCUSDT", "1h", start=start, end=end)
+    assert not out.empty
+    assert len(out) == 4
+
+
+def test_random_walk_provider_handles_utc_aware_bounds() -> None:
+    from src.data_providers.offline import RandomWalkProvider
+
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = datetime(2024, 1, 2, tzinfo=UTC)
+    provider = RandomWalkProvider(start, end, timeframe="1h", seed=42)
+    out = provider.get_historical_data("BTCUSDT", "1h", start=start, end=end)
+    assert not out.empty
+
+
 def test_timestamp_includes_microseconds_and_uuid_suffix() -> None:
     from src.experiments.promotion import _timestamp
 

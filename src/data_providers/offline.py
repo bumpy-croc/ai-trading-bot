@@ -29,6 +29,14 @@ _FREQ_MAP = {
 }
 
 
+def _to_utc_timestamp(value: datetime) -> pd.Timestamp:
+    """Return a tz-aware UTC ``pd.Timestamp`` regardless of input tz state."""
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
 class FixtureProvider(DataProvider):
     """Serve OHLCV data from a pre-captured feather file."""
 
@@ -43,6 +51,13 @@ class FixtureProvider(DataProvider):
         except (FileNotFoundError, OSError):
             return pd.DataFrame()
         df.set_index("timestamp", inplace=True)
+        # Normalize the index to UTC-aware so comparisons against UTC-aware
+        # datetimes from callers (experiments, live pipelines) don't raise
+        # ``TypeError: Invalid comparison between dtype=datetime64[ns] and
+        # Timestamp``. Fixture files may be stored tz-naive; treat them as
+        # UTC by convention.
+        if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is None:
+            df.index = df.index.tz_localize("UTC")
         return df
 
     def get_historical_data(
@@ -50,10 +65,9 @@ class FixtureProvider(DataProvider):
     ) -> pd.DataFrame:  # type: ignore[override]
         if self.df.empty:
             return self.df
-        end = end or pd.Timestamp.now()
-        return self.df.loc[
-            (self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))
-        ].copy()
+        end_ts = _to_utc_timestamp(end) if end is not None else pd.Timestamp.now(tz="UTC")
+        start_ts = _to_utc_timestamp(start)
+        return self.df.loc[(self.df.index >= start_ts) & (self.df.index <= end_ts)].copy()
 
     def get_live_data(
         self, symbol: str, timeframe: str, limit: int = 100
@@ -103,9 +117,11 @@ class RandomWalkProvider(DataProvider):
         vol: float,
     ) -> pd.DataFrame:
         rng = np.random.default_rng(self.seed)
+        # Generate a UTC-aware index so comparisons against UTC-aware caller
+        # bounds (experiments pipeline) don't raise TypeError.
         idx = pd.date_range(
-            start=pd.Timestamp(start),
-            end=pd.Timestamp(end),
+            start=_to_utc_timestamp(start),
+            end=_to_utc_timestamp(end),
             freq=self._freq(timeframe),
         )
         if len(idx) < 2:
@@ -136,10 +152,9 @@ class RandomWalkProvider(DataProvider):
     def get_historical_data(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> pd.DataFrame:  # type: ignore[override]
-        end = end or pd.Timestamp.now()
-        return self.df.loc[
-            (self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))
-        ].copy()
+        end_ts = _to_utc_timestamp(end) if end is not None else pd.Timestamp.now(tz="UTC")
+        start_ts = _to_utc_timestamp(start)
+        return self.df.loc[(self.df.index >= start_ts) & (self.df.index <= end_ts)].copy()
 
     def get_live_data(
         self, symbol: str, timeframe: str, limit: int = 100
