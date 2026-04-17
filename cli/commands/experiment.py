@@ -17,6 +17,17 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: accept only strictly-positive integers."""
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {value!r}") from exc
+    if coerced <= 0:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {coerced}")
+    return coerced
+
+
 def _safe_artifacts_dir(root: Path, suite_id: str, run_id: str) -> Path:
     """Resolve the artifact directory, rejecting traversal outside ``root``."""
     candidate = (root / suite_id / run_id).resolve()
@@ -42,7 +53,12 @@ def _handle_run(ns: argparse.Namespace) -> int:
         # Allow ad-hoc CLI overrides for backtest settings
         if ns.provider:
             suite.backtest.provider = ns.provider
-        if ns.days:
+        # `if ns.days:` silently dropped `--days 0` and accepted negatives —
+        # explicit None + positive-int guard covers both (argparse validator
+        # below also rejects non-positive values at parse time).
+        if ns.days is not None:
+            if ns.days <= 0:
+                raise ValueError(f"--days must be a positive integer, got {ns.days}")
             if suite.backtest.start is not None and suite.backtest.end is not None:
                 logging.getLogger(__name__).warning(
                     "--days=%d is ignored because the suite pins start=%s end=%s",
@@ -176,7 +192,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="Override the suite's provider.",
     )
-    run_p.add_argument("--days", type=int, default=None, help="Override the backtest window.")
+    run_p.add_argument(
+        "--days",
+        type=_positive_int,
+        default=None,
+        help="Override the backtest window (positive integer).",
+    )
     run_p.add_argument("--no-cache", action="store_true", help="Disable provider caching.")
     run_p.set_defaults(func=_handle_run)
 

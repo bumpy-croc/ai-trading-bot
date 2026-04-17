@@ -107,6 +107,31 @@ def _metric(result: ExperimentResult, metric: str) -> float:
     return float(value)
 
 
+def _metric_delta(variant_val: float, baseline_val: float) -> float:
+    """Return variant - baseline with explicit handling of ±inf.
+
+    Naive ``inf - inf`` is NaN; coercing NaN into a ±inf placeholder hides
+    the fact that the two runs are indistinguishable. The convention here:
+
+    * same-sign infinities (+∞/+∞ or −∞/−∞) → ``0.0`` (a tie for ranking)
+    * opposite-sign infinities                → signed ±∞
+    * exactly one side infinite               → that side's signed ±∞
+    * two finite values                       → ordinary subtraction
+    """
+    v_inf = math.isinf(variant_val)
+    b_inf = math.isinf(baseline_val)
+    if v_inf and b_inf:
+        if (variant_val > 0) == (baseline_val > 0):
+            return 0.0
+        return math.inf if variant_val > 0 else -math.inf
+    if v_inf:
+        return math.inf if variant_val > 0 else -math.inf
+    if b_inf:
+        # Variant - baseline: if baseline = +inf, delta = -inf; if baseline = -inf, delta = +inf.
+        return -math.inf if baseline_val > 0 else math.inf
+    return variant_val - baseline_val
+
+
 def _ranking_confidence(
     baseline: ExperimentResult,
     variant: ExperimentResult,
@@ -263,12 +288,10 @@ class ExperimentReporter:
                     )
                 )
                 continue
-            delta = _metric(result, settings.target_metric) - _metric(
-                baseline, settings.target_metric
+            delta = _metric_delta(
+                _metric(result, settings.target_metric),
+                _metric(baseline, settings.target_metric),
             )
-            # Guard against ±inf leaking into output (JSON serialization breaks).
-            if not math.isfinite(delta):
-                delta = math.copysign(float("inf"), delta) if delta != 0 else 0.0
             confidence = _ranking_confidence(baseline, result, settings.target_metric)
             verdict = _classify(baseline, result, settings, confidence)
             rows.append(

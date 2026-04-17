@@ -1,0 +1,289 @@
+"""Regression tests for codex-review findings.
+
+Covers path-traversal hardening, non-finite override rejection, CLI --days
+validation, same-sign Calmar delta, and version-record timestamp uniqueness.
+"""
+
+from __future__ import annotations
+
+import math
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from src.experiments.reporter import (
+    ExperimentReporter,
+    Verdict,
+    _metric_delta,
+    _ranking_confidence,
+)
+from src.experiments.schemas import ExperimentConfig, ExperimentResult
+from src.experiments.suite import (
+    BacktestSettings,
+    ComparisonSettings,
+    SuiteConfig,
+    SuiteResult,
+    VariantSpec,
+)
+from src.experiments.suite_loader import SuiteValidationError, parse_suite
+
+# ----------------------------------------------------------------------------
+# P1: Path-traversal hardening for promotion output paths
+# ----------------------------------------------------------------------------
+
+
+def test_suite_loader_rejects_path_traversal_in_id() -> None:
+    with pytest.raises(SuiteValidationError, match="slug"):
+        parse_suite(
+            {
+                "id": "../escape",
+                "backtest": {"strategy": "ml_basic"},
+                "baseline": {"name": "baseline", "overrides": {}},
+            }
+        )
+
+
+def test_suite_loader_rejects_slash_in_variant_name() -> None:
+    with pytest.raises(SuiteValidationError, match="slug"):
+        parse_suite(
+            {
+                "id": "ok",
+                "backtest": {"strategy": "ml_basic"},
+                "baseline": {"name": "baseline", "overrides": {}},
+                "variants": [{"name": "evil/../name", "overrides": {}}],
+            }
+        )
+
+
+def test_suite_loader_accepts_standard_slugs() -> None:
+    cfg = parse_suite(
+        {
+            "id": "signal_thresholds_v1",
+            "backtest": {"strategy": "ml_basic"},
+            "baseline": {"name": "baseline_v1.0", "overrides": {}},
+            "variants": [{"name": "variant-A_1", "overrides": {}}],
+        }
+    )
+    assert cfg.id == "signal_thresholds_v1"
+
+
+def test_safe_child_rejects_traversal(tmp_path: Path) -> None:
+    from src.experiments.promotion import _safe_child
+
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        _safe_child(tmp_path, "../outside.yaml")
+
+
+def test_safe_child_rejects_null_and_slash(tmp_path: Path) -> None:
+    from src.experiments.promotion import _safe_child
+
+    with pytest.raises(ValueError):
+        _safe_child(tmp_path, "nested/path.yaml")
+    with pytest.raises(ValueError):
+        _safe_child(tmp_path, "with\x00null.yaml")
+
+
+def test_safe_child_accepts_legal_segments(tmp_path: Path) -> None:
+    from src.experiments.promotion import _safe_child
+
+    p = _safe_child(tmp_path, "suite_v1", "file-1.0.json")
+    assert str(p).startswith(str(tmp_path.resolve()))
+
+
+# ----------------------------------------------------------------------------
+# P1: Non-finite override rejection at signal generator construction
+# ----------------------------------------------------------------------------
+
+
+def test_signal_generator_rejects_nan_threshold() -> None:
+    from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
+
+    with pytest.raises(ValueError, match="finite"):
+        MLBasicSignalGenerator(long_entry_threshold=float("nan"))
+
+
+def test_signal_generator_rejects_inf_multiplier() -> None:
+    from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
+
+    with pytest.raises(ValueError, match="finite"):
+        MLBasicSignalGenerator(confidence_multiplier=float("inf"))
+
+
+def test_signal_generator_rejects_non_positive_multiplier() -> None:
+    from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
+
+    with pytest.raises(ValueError, match="> 0"):
+        MLBasicSignalGenerator(confidence_multiplier=0.0)
+    with pytest.raises(ValueError, match="> 0"):
+        MLBasicSignalGenerator(confidence_multiplier=-5.0)
+
+
+def test_runner_catches_nan_override_via_setattr() -> None:
+    """`setattr` bypasses __init__; post-override validator must catch NaN."""
+    from src.experiments.runner import ExperimentRunner
+    from src.experiments.schemas import ParameterSet
+
+    runner = ExperimentRunner()
+    strategy = runner._load_strategy("ml_basic")
+    cfg = ExperimentConfig(
+        strategy_name="ml_basic",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        initial_balance=1000.0,
+        parameters=ParameterSet(
+            name="nan_knob",
+            values={"ml_basic.long_entry_threshold": float("nan")},
+        ),
+    )
+    # The override path coerces via _coerce_value and calls setattr directly —
+    # NaN passes through. The post-override validator must catch it.
+    runner._apply_parameter_overrides(strategy, cfg)
+    with pytest.raises(ValueError, match="finite"):
+        runner._validate_post_override_invariants(strategy)
+
+
+# ----------------------------------------------------------------------------
+# P2: CLI --days zero/negative validation
+# ----------------------------------------------------------------------------
+
+
+def test_positive_int_argparse_validator_rejects_zero() -> None:
+    import argparse
+
+    from cli.commands.experiment import _positive_int
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        _positive_int("0")
+
+
+def test_positive_int_argparse_validator_rejects_negative() -> None:
+    import argparse
+
+    from cli.commands.experiment import _positive_int
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        _positive_int("-5")
+
+
+def test_positive_int_argparse_validator_accepts_one() -> None:
+    from cli.commands.experiment import _positive_int
+
+    assert _positive_int("1") == 1
+
+
+# ----------------------------------------------------------------------------
+# P2: Same-sign Calmar infinities produce 0.0 delta (tie), not +∞
+# ----------------------------------------------------------------------------
+
+
+def test_metric_delta_same_sign_infinities_yields_zero() -> None:
+    assert _metric_delta(math.inf, math.inf) == 0.0
+    assert _metric_delta(-math.inf, -math.inf) == 0.0
+
+
+def test_metric_delta_opposite_sign_infinities_yields_signed_inf() -> None:
+    assert _metric_delta(math.inf, -math.inf) == math.inf
+    assert _metric_delta(-math.inf, math.inf) == -math.inf
+
+
+def test_metric_delta_one_side_infinite() -> None:
+    assert _metric_delta(math.inf, 3.0) == math.inf
+    assert _metric_delta(-math.inf, 3.0) == -math.inf
+    assert _metric_delta(3.0, math.inf) == -math.inf
+    assert _metric_delta(3.0, -math.inf) == math.inf
+
+
+def test_metric_delta_finite_is_plain_subtraction() -> None:
+    assert _metric_delta(5.0, 3.0) == pytest.approx(2.0)
+
+
+def _make_cfg() -> ExperimentConfig:
+    return ExperimentConfig(
+        strategy_name="ml_basic",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        initial_balance=1000.0,
+    )
+
+
+def _make_calmar_result(
+    *, total_return: float, annualized: float, max_drawdown: float
+) -> ExperimentResult:
+    cfg = _make_cfg()
+    return ExperimentResult(
+        config=cfg,
+        total_trades=200,
+        win_rate=55.0,
+        total_return=total_return,
+        annualized_return=annualized,
+        max_drawdown=max_drawdown,
+        sharpe_ratio=0.0,
+        final_balance=1000.0 + total_return,
+    )
+
+
+def test_reporter_same_sign_calmar_infinities_report_zero_delta() -> None:
+    """Pre-fix bug: inf - inf = NaN was coerced to +∞ in render()."""
+    suite = SuiteConfig(
+        id="calmar_tie",
+        description="",
+        backtest=BacktestSettings(strategy="ml_basic"),
+        baseline=VariantSpec(name="baseline"),
+        variants=[VariantSpec(name="tied_variant")],
+        comparison=ComparisonSettings(target_metric="calmar", min_trades=0),
+    )
+    # Both baseline and variant: zero drawdown + positive annualized → Calmar +∞
+    baseline = _make_calmar_result(total_return=10.0, annualized=15.0, max_drawdown=0.0)
+    variants = [
+        _make_calmar_result(total_return=20.0, annualized=25.0, max_drawdown=0.0),
+    ]
+    suite_result = SuiteResult(
+        suite_id=suite.id,
+        config=suite,
+        baseline=baseline,
+        variants=variants,
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+    report = ExperimentReporter().render(suite_result)
+    tied = next(r for r in report.rows if r.name == "tied_variant")
+    # Delta should be a tie (0.0), not +∞
+    assert tied.delta_vs_baseline == 0.0
+    # Confidence should be low (same-sign inf → 0.0 in ranking_confidence)
+    assert tied.ranking_confidence == 0.0
+    # Verdict: HOLD (tie, not a strict improvement)
+    assert tied.verdict == Verdict.HOLD
+
+
+def test_ranking_confidence_same_sign_inf_is_zero() -> None:
+    """Regression: ranking_confidence must treat same-sign inf as indistinguishable."""
+    cfg_base = _make_calmar_result(total_return=1.0, annualized=1.0, max_drawdown=0.0)
+    cfg_var = _make_calmar_result(total_return=5.0, annualized=5.0, max_drawdown=0.0)
+    # Both are +∞ on Calmar
+    assert _ranking_confidence(cfg_base, cfg_var, "calmar") == 0.0
+
+
+# ----------------------------------------------------------------------------
+# P3: Version-record timestamp uniqueness
+# ----------------------------------------------------------------------------
+
+
+def test_timestamp_is_unique_within_same_second() -> None:
+    from src.experiments.promotion import _timestamp
+
+    seen = {_timestamp() for _ in range(50)}
+    assert len(seen) == 50
+
+
+def test_timestamp_includes_microseconds_and_uuid_suffix() -> None:
+    from src.experiments.promotion import _timestamp
+
+    ts = _timestamp()
+    # Format: YYYYMMDDTHHMMSS_microsZ_8-char-uuid
+    assert ts.endswith(tuple("0123456789abcdef"))
+    assert "_" in ts and "Z_" in ts

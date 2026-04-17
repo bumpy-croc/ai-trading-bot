@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +19,29 @@ from pathlib import Path
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# Defense-in-depth: the suite loader already restricts suite/variant/strategy
+# names to this slug alphabet, but the promotion writer validates again before
+# building filesystem paths so a programmatic caller cannot bypass the loader.
+_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}$")
+
+
+def _safe_child(root: Path, *segments: str) -> Path:
+    """Return ``root / *segments`` after slug-validating each segment and
+    confirming the resolved path stays inside ``root``. Raises
+    :class:`ValueError` if either check fails.
+    """
+    root = root.resolve()
+    for segment in segments:
+        if not isinstance(segment, str) or not _SAFE_FILENAME_RE.match(segment):
+            raise ValueError(
+                f"unsafe path segment {segment!r}; must match " f"{_SAFE_FILENAME_RE.pattern}"
+            )
+    candidate = root.joinpath(*segments).resolve()
+    if root != candidate and root not in candidate.parents:
+        raise ValueError(f"resolved path {candidate} is outside {root}")
+    return candidate
+
 
 from src.experiments.ledger import Ledger
 from src.experiments.reporter import ExperimentReporter, SuiteReport, Verdict
@@ -203,7 +227,7 @@ class PromotionManager:
         metrics: dict,
         suite_id: str,
     ) -> Path:
-        record_dir = self.versions_root / strategy_name
+        record_dir = _safe_child(self.versions_root, strategy_name)
         record_dir.mkdir(parents=True, exist_ok=True)
         version_id = f"{strategy_name}-{variant_name}-{_timestamp()}"
         record = StrategyVersionRecord(
@@ -231,7 +255,7 @@ class PromotionManager:
             },
             is_active=False,
         )
-        path = record_dir / f"{version_id}.json"
+        path = _safe_child(record_dir, f"{version_id}.json")
         path.write_text(json.dumps(record.to_dict(), indent=2, default=str))
         return path
 
@@ -244,7 +268,7 @@ class PromotionManager:
         variant_row: dict,
         baseline_row: dict | None,
     ) -> Path:
-        record_dir = self.lineage_root / strategy_name
+        record_dir = _safe_child(self.lineage_root, strategy_name)
         record_dir.mkdir(parents=True, exist_ok=True)
         impact = _impact_from_sharpe_delta(
             variant_row.get("sharpe_ratio", 0.0)
@@ -270,7 +294,7 @@ class PromotionManager:
             created_at=datetime.now(UTC),
             created_by="experiment_suite",
         )
-        path = record_dir / f"{record.change_id}.json"
+        path = _safe_child(record_dir, f"{record.change_id}.json")
         path.write_text(json.dumps(record.to_dict(), indent=2))
         return path
 
@@ -284,7 +308,7 @@ class PromotionManager:
         suite_snapshot: dict,
     ) -> Path:
         self.promoted_root.mkdir(parents=True, exist_ok=True)
-        patch_path = self.promoted_root / f"{suite_id}_{variant_name}.yaml"
+        patch_path = _safe_child(self.promoted_root, f"{suite_id}_{variant_name}.yaml")
         patch_doc = {
             "id": f"{suite_id}_promoted_{variant_name}",
             "description": (
@@ -397,7 +421,10 @@ def _impact_from_sharpe_delta(delta_sharpe: float) -> ImpactLevel:
 
 
 def _timestamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    """Microsecond precision + uuid suffix — version records must never
+    collide within the same second when promotion is scripted."""
+    now = datetime.now(UTC)
+    return f"{now.strftime('%Y%m%dT%H%M%S_%f')}Z_{uuid.uuid4().hex[:8]}"
 
 
 __all__ = ["PromotionError", "PromotionManager", "PromotionOutcome"]

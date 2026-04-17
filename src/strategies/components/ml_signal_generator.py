@@ -23,6 +23,31 @@ from src.strategies.components.signal_generator import Signal, SignalDirection, 
 logger = logging.getLogger(__name__)
 
 
+def _require_finite(name: str, value: Any) -> float:
+    """Coerce ``value`` to ``float`` and reject NaN/Inf.
+
+    NaN comparisons are always False, so a NaN threshold would silently
+    disable an entry side; a NaN multiplier poisons downstream confidence
+    calculations. Rejecting at construction time makes tuning-override
+    mistakes fail loudly.
+    """
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be numeric, got {value!r}") from exc
+    if not math.isfinite(coerced):
+        raise ValueError(f"{name} must be finite, got {value!r}")
+    return coerced
+
+
+def _require_finite_positive(name: str, value: Any) -> float:
+    """Like :func:`_require_finite` but also requires ``value > 0``."""
+    coerced = _require_finite(name, value)
+    if coerced <= 0:
+        raise ValueError(f"{name} must be > 0, got {coerced}")
+    return coerced
+
+
 class MLSignalGenerator(SignalGenerator):
     """
     ML Signal Generator extracted from MlAdaptive strategy
@@ -87,43 +112,67 @@ class MLSignalGenerator(SignalGenerator):
         self.sequence_length = sequence_length
 
         # Instance-level thresholds (experiments override these without mutating
-        # class state shared across strategies).
-        self.long_entry_threshold = (
-            self.LONG_ENTRY_THRESHOLD if long_entry_threshold is None else long_entry_threshold
+        # class state shared across strategies). Every numeric knob is
+        # validated finite via ``_require_finite`` so a NaN/Inf override
+        # (trivial to land via YAML) cannot silently corrupt a trading
+        # decision — NaN comparisons are always False so a NaN threshold
+        # would disable entries, and a NaN multiplier would NaN-poison
+        # confidence scores.
+        self.long_entry_threshold = _require_finite(
+            "long_entry_threshold",
+            self.LONG_ENTRY_THRESHOLD if long_entry_threshold is None else long_entry_threshold,
         )
-        self.short_entry_threshold = (
-            self.SHORT_ENTRY_THRESHOLD if short_entry_threshold is None else short_entry_threshold
+        self.short_entry_threshold = _require_finite(
+            "short_entry_threshold",
+            self.SHORT_ENTRY_THRESHOLD if short_entry_threshold is None else short_entry_threshold,
         )
-        self.confidence_multiplier = (
-            self.CONFIDENCE_MULTIPLIER if confidence_multiplier is None else confidence_multiplier
+        self.confidence_multiplier = _require_finite_positive(
+            "confidence_multiplier",
+            self.CONFIDENCE_MULTIPLIER if confidence_multiplier is None else confidence_multiplier,
         )
-        self.short_threshold_trend_up = (
-            self.SHORT_THRESHOLD_TREND_UP
-            if short_threshold_trend_up is None
-            else short_threshold_trend_up
+        self.short_threshold_trend_up = _require_finite(
+            "short_threshold_trend_up",
+            (
+                self.SHORT_THRESHOLD_TREND_UP
+                if short_threshold_trend_up is None
+                else short_threshold_trend_up
+            ),
         )
-        self.short_threshold_trend_down = (
-            self.SHORT_THRESHOLD_TREND_DOWN
-            if short_threshold_trend_down is None
-            else short_threshold_trend_down
+        self.short_threshold_trend_down = _require_finite(
+            "short_threshold_trend_down",
+            (
+                self.SHORT_THRESHOLD_TREND_DOWN
+                if short_threshold_trend_down is None
+                else short_threshold_trend_down
+            ),
         )
-        self.short_threshold_range = (
-            self.SHORT_THRESHOLD_RANGE if short_threshold_range is None else short_threshold_range
+        self.short_threshold_range = _require_finite(
+            "short_threshold_range",
+            self.SHORT_THRESHOLD_RANGE if short_threshold_range is None else short_threshold_range,
         )
-        self.short_threshold_high_vol = (
-            self.SHORT_THRESHOLD_HIGH_VOL
-            if short_threshold_high_vol is None
-            else short_threshold_high_vol
+        self.short_threshold_high_vol = _require_finite(
+            "short_threshold_high_vol",
+            (
+                self.SHORT_THRESHOLD_HIGH_VOL
+                if short_threshold_high_vol is None
+                else short_threshold_high_vol
+            ),
         )
-        self.short_threshold_low_vol = (
-            self.SHORT_THRESHOLD_LOW_VOL
-            if short_threshold_low_vol is None
-            else short_threshold_low_vol
+        self.short_threshold_low_vol = _require_finite(
+            "short_threshold_low_vol",
+            (
+                self.SHORT_THRESHOLD_LOW_VOL
+                if short_threshold_low_vol is None
+                else short_threshold_low_vol
+            ),
         )
-        self.short_threshold_confidence_multiplier = (
-            self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
-            if short_threshold_confidence_multiplier is None
-            else short_threshold_confidence_multiplier
+        self.short_threshold_confidence_multiplier = _require_finite(
+            "short_threshold_confidence_multiplier",
+            (
+                self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
+                if short_threshold_confidence_multiplier is None
+                else short_threshold_confidence_multiplier
+            ),
         )
 
         # Model name configuration
@@ -515,15 +564,19 @@ class MLBasicSignalGenerator(SignalGenerator):
         self.sequence_length = sequence_length
 
         # Instance-level thresholds (experiments override these without mutating
-        # class state shared across strategies).
-        self.long_entry_threshold = (
-            self.LONG_ENTRY_THRESHOLD if long_entry_threshold is None else long_entry_threshold
+        # class state shared across strategies). Validate finite to block
+        # NaN/Inf overrides from corrupting signal decisions.
+        self.long_entry_threshold = _require_finite(
+            "long_entry_threshold",
+            self.LONG_ENTRY_THRESHOLD if long_entry_threshold is None else long_entry_threshold,
         )
-        self.short_entry_threshold = (
-            self.SHORT_ENTRY_THRESHOLD if short_entry_threshold is None else short_entry_threshold
+        self.short_entry_threshold = _require_finite(
+            "short_entry_threshold",
+            self.SHORT_ENTRY_THRESHOLD if short_entry_threshold is None else short_entry_threshold,
         )
-        self.confidence_multiplier = (
-            self.CONFIDENCE_MULTIPLIER if confidence_multiplier is None else confidence_multiplier
+        self.confidence_multiplier = _require_finite_positive(
+            "confidence_multiplier",
+            self.CONFIDENCE_MULTIPLIER if confidence_multiplier is None else confidence_multiplier,
         )
 
         # Registry model selection preferences

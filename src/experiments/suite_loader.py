@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+# Suite ids and variant names land in filesystem paths (artifacts, patch YAML,
+# version records). Constrain them to a safe slug alphabet so they cannot
+# contain ``/``, ``..``, null bytes, etc.
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}$")
 
 from src.experiments.suite import (
     BacktestSettings,
@@ -60,6 +66,11 @@ def parse_suite(raw: Any, *, source: str = "<input>") -> SuiteConfig:
     _require_keys(raw, {"id", "backtest", "baseline"}, source)
 
     suite_id = _require_str(raw, "id", source)
+    if not _SLUG_RE.match(suite_id):
+        raise SuiteValidationError(
+            f"{source}.id: must be a slug matching {_SLUG_RE.pattern!r} "
+            f"(letters, digits, underscore, dot, dash), got {suite_id!r}"
+        )
     description = raw.get("description", "") or ""
     if not isinstance(description, str):
         raise SuiteValidationError(f"{source}: description must be a string")
@@ -156,6 +167,11 @@ def _parse_variant(data: Any, *, source: str, required_name: bool) -> VariantSpe
         raise SuiteValidationError(f"{source}.name: required string")
     if name is not None and not isinstance(name, str):
         raise SuiteValidationError(f"{source}.name: must be a string")
+    if isinstance(name, str) and not _SLUG_RE.match(name):
+        raise SuiteValidationError(
+            f"{source}.name: must be a slug matching {_SLUG_RE.pattern!r} "
+            f"(letters, digits, underscore, dot, dash), got {name!r}"
+        )
 
     overrides = data.get("overrides") or {}
     if not isinstance(overrides, dict):

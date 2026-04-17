@@ -203,6 +203,25 @@ class ExperimentRunner:
         * ``VolatilityRiskManager``: ``base_risk`` ∈ [0.001, 0.1],
           ``atr_multiplier`` ∈ [0.5, 5.0], ``min_risk`` ≤ ``max_risk``.
         """
+        signal_generator = getattr(strategy, "signal_generator", None)
+        if signal_generator is not None:
+            # ``setattr`` on these fields bypasses the construction-time
+            # finite check in :func:`_require_finite`. Rechecking here
+            # keeps NaN/Inf overrides from silently corrupting signal
+            # decisions (NaN comparisons return False).
+            for attr in (
+                "long_entry_threshold",
+                "short_entry_threshold",
+                "short_threshold_trend_up",
+                "short_threshold_trend_down",
+                "short_threshold_range",
+                "short_threshold_high_vol",
+                "short_threshold_low_vol",
+                "short_threshold_confidence_multiplier",
+            ):
+                _require_finite_attr(signal_generator, attr)
+            _require_finite_attr(signal_generator, "confidence_multiplier", positive=True)
+
         position_sizer = getattr(strategy, "position_sizer", None)
         if position_sizer is not None:
             _check_numeric_bound(position_sizer, "base_fraction", 0.001, 0.5)
@@ -302,4 +321,28 @@ def _check_numeric_bound(
         raise ValueError(
             f"Invalid state after overrides: {type(target).__name__}.{attr} "
             f"({value}) must be in [{lower}, {upper}]."
+        )
+
+
+def _require_finite_attr(target: object, attr: str, *, positive: bool = False) -> None:
+    """Raise ValueError when ``target.attr`` is set to a non-finite number.
+
+    ``positive=True`` additionally requires the value to be > 0.
+    """
+    import math as _math  # local import to avoid polluting module-level name
+
+    if not hasattr(target, attr):
+        return
+    value = getattr(target, attr)
+    if not isinstance(value, int | float):
+        return
+    if not _math.isfinite(value):
+        raise ValueError(
+            f"Invalid state after overrides: {type(target).__name__}.{attr} "
+            f"must be finite, got {value!r}."
+        )
+    if positive and value <= 0:
+        raise ValueError(
+            f"Invalid state after overrides: {type(target).__name__}.{attr} "
+            f"must be > 0, got {value!r}."
         )
