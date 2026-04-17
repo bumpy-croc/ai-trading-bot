@@ -1,0 +1,35 @@
+id: position_sizing_v1
+description: Tune confidence-weighted sizing parameters on ml_basic.
+
+backtest:
+  strategy: ml_basic
+  symbol: BTCUSDT
+  timeframe: 1h
+  days: 90
+  initial_balance: 1000
+  provider: mock
+  random_seed: 42
+
+baseline:
+  name: current_defaults
+  overrides: {}
+
+variants:
+  - name: base_fraction_10pct
+    overrides:
+      ml_basic.base_fraction: 0.10
+  - name: base_fraction_25pct
+    overrides:
+      ml_basic.base_fraction: 0.25
+  - name: min_confidence_floor_0_5
+    overrides:
+      ml_basic.min_confidence_floor: 0.5
+  - name: confidence_gate_0_4
+    overrides:
+      ml_basic.min_confidence: 0.4
+
+comparison:
+  target_metric: sharpe_ratio
+  min_trades: 30
+  significance_level: 0.05
+  per_regime_breakdown: false

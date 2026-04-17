@@ -75,11 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
         data,
         db,
         dev,
+        experiment,
         live,
         live_health,
         migration,
         models,
-        optimizer,
         regime,
         strategies,
         test,
@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     live.register(subparsers)
     live_health.register(subparsers)
     backtest.register(subparsers)
-    optimizer.register(subparsers)
+    experiment.register(subparsers)
     walk_forward.register(subparsers)
 
     # Strategy and model management

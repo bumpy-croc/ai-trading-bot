@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Experimentation framework (`src/experiments/`) with declarative YAML suites,
+  `atb experiment run|list|show|promote` CLI, ranked reporter with statistical
+  verdicts, file-based ledger under `experiments/.history/`, and promotion
+  writer for `StrategyVersionRecord`/`ChangeRecord` plus patch YAML emission.
+- ML signal generators now expose `long_entry_threshold`, `short_entry_threshold`,
+  `confidence_multiplier`, and regime-specific thresholds as overridable instance
+  attributes (class constants remain as defaults).
+- `ConfidenceWeightedSizer` gained `min_confidence_floor` parameter.
+- `create_ml_basic_strategy`, `create_ml_adaptive_strategy`, and
+  `create_ml_sentiment_strategy` accept the new tuning knobs.
+
+### Removed
+- Deleted the unused first-attempt optimizer layer: `src/optimizer/analyzer.py`,
+  `validator.py`, `strategy_drift.py`, the `atb optimizer` CLI, the
+  `OptimizationCycle` DB model/table, `DatabaseManager.record_optimization_cycle`,
+  `fetch_optimization_cycles`, and the `/api/optimizer/cycles` dashboard route.
+  Alembic migration `0011_drop_optimization_cycles` drops the table.
+- Renamed `src/optimizer/` → `src/experiments/` now that the package reflects
+  its actual purpose. `atb walk-forward` continues to work via
+  `src/experiments/walk_forward.py`.
+
 ### Fixed
 - Add ban-aware retry to Binance client startup — parses `-1003` ban expiry and sleeps until lifted instead of crashing (#590)
 

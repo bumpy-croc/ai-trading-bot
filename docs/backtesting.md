@@ -206,9 +206,26 @@ print(results["total_return"], results["max_drawdown"])
 The returned dictionary includes cumulative metrics, yearly breakdowns, and a trade list. When sentiment or ML prediction columns
 are present they are captured in the trade audit entries to support detailed analysis.
 
-## Optimisation loop
+## Experimentation framework
 
-`atb optimizer` (`cli/commands/optimizer.py`) runs a baseline backtest, feeds the results into the
-`src/optimizer/analyzer.PerformanceAnalyzer`, and optionally evaluates a candidate configuration suggested by the analyzer. When
-`--persist` is supplied the cycle records an `OptimizationCycle` row via `DatabaseManager`, creating an auditable trail of proposed
-risk or strategy adjustments.
+Systematic strategy improvement runs through `src/experiments/`. Suite YAML
+files under `experiments/` declare a baseline plus one or more hand-picked
+variants; the runner backtests each, a reporter ranks them with statistical
+tests, and a promotion step records winners in the strategy lineage store.
+
+```bash
+# Run a suite and write artifacts under experiments/.history/<suite_id>/<run_id>/
+atb experiment run --config experiments/signal_thresholds.yaml
+
+# Browse history and reports
+atb experiment list
+atb experiment show signal_thresholds_v1
+
+# Promote a winning variant (emits patch YAML + lineage/version records)
+atb experiment promote signal_thresholds_v1 long_thr_0.03pct
+```
+
+Promotion is auditable and reversible: the framework never edits strategy
+defaults in source. The patch YAML under `experiments/promoted/` can serve as
+the baseline of the next suite. Walk-forward validation (`atb walk-forward`)
+remains available as a separate pipeline for robustness / overfitting checks.

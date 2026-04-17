@@ -1,0 +1,35 @@
+id: signal_thresholds_v1
+description: Sweep long and short entry thresholds on BTCUSDT 1h.
+
+backtest:
+  strategy: ml_basic
+  symbol: BTCUSDT
+  timeframe: 1h
+  days: 90
+  initial_balance: 1000
+  provider: mock
+  random_seed: 42
+
+baseline:
+  name: current_defaults
+  overrides: {}
+
+variants:
+  - name: long_thr_0.03pct
+    overrides:
+      ml_basic.long_entry_threshold: 0.0003
+  - name: long_thr_0.07pct
+    overrides:
+      ml_basic.long_entry_threshold: 0.0007
+  - name: short_thr_tight
+    overrides:
+      ml_basic.short_entry_threshold: -0.0003
+  - name: short_thr_loose
+    overrides:
+      ml_basic.short_entry_threshold: -0.0007
+
+comparison:
+  target_metric: sharpe_ratio
+  min_trades: 30
+  significance_level: 0.05
+  per_regime_breakdown: false

@@ -4,120 +4,18 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
-from src.data_providers.data_provider import DataProvider
+from src.data_providers.offline import FixtureProvider, RandomWalkProvider
 from src.engines.backtest.engine import Backtester
-from src.optimizer.schemas import ExperimentConfig, ExperimentResult
+from src.experiments.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import Strategy
 from src.strategies.hyper_growth import create_hyper_growth_strategy
+from src.strategies.ml_adaptive import create_ml_adaptive_strategy
 from src.strategies.ml_basic import create_ml_basic_strategy
-
-
-class _FixtureProvider(DataProvider):
-    """Lightweight provider that serves data from tests/data feather file if available."""
-
-    def __init__(self, path: Path):
-        super().__init__()
-        self.path = path
-        self.df = self._load()
-
-    def _load(self) -> pd.DataFrame:
-        if not self.path.exists():
-            return pd.DataFrame()
-        df = pd.read_feather(self.path)
-        df.set_index("timestamp", inplace=True)
-        return df
-
-    def get_historical_data(
-        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
-    ) -> pd.DataFrame:  # type: ignore[override]
-        if self.df.empty:
-            return self.df
-        end = end or pd.Timestamp.now()
-        df = self.df.loc[
-            (self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))
-        ].copy()
-        return df
-
-
-class _RandomWalkProvider(DataProvider):
-    """Generates synthetic OHLCV series using a random walk for offline experiments."""
-
-    def __init__(
-        self,
-        start: datetime,
-        end: datetime,
-        timeframe: str = "1h",
-        start_price: float = 30000.0,
-        vol: float = 0.01,
-        seed: int | None = None,
-    ):
-        super().__init__()
-        self.timeframe = timeframe
-        self.seed = seed
-        self.df = self._generate(start, end, timeframe, start_price, vol)
-
-    def _freq(self, timeframe: str) -> str:
-        mapping = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1d"}
-        return mapping.get(timeframe, "1h")
-
-    def _generate(
-        self, start: datetime, end: datetime, timeframe: str, start_price: float, vol: float
-    ) -> pd.DataFrame:
-        rng = np.random.default_rng(self.seed)
-        idx = pd.date_range(
-            start=pd.Timestamp(start), end=pd.Timestamp(end), freq=self._freq(timeframe)
-        )
-        if len(idx) < 2:
-            return pd.DataFrame(
-                index=idx, columns=["open", "high", "low", "close", "volume"]
-            ).fillna(0.0)
-        prices = [start_price]
-        for _ in range(1, len(idx)):
-            shock = rng.normal(0, vol)
-            prices.append(max(1.0, prices[-1] * (1.0 + shock)))
-        prices = np.array(prices)
-        highs = prices * (1.0 + np.abs(rng.normal(0, vol / 2, size=len(prices))))
-        lows = prices * (1.0 - np.abs(rng.normal(0, vol / 2, size=len(prices))))
-        opens = np.r_[prices[0], prices[:-1]]
-        volume = rng.uniform(1000.0, 10000.0, size=len(prices))
-        df = pd.DataFrame(
-            {
-                "open": opens,
-                "high": highs,
-                "low": lows,
-                "close": prices,
-                "volume": volume,
-            },
-            index=idx,
-        )
-        return df
-
-    def get_historical_data(
-        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
-    ) -> pd.DataFrame:  # type: ignore[override]
-        end = end or pd.Timestamp.now()
-        return self.df.loc[
-            (self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))
-        ].copy()
-
-    def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:  # type: ignore[override]
-        tail = self.df.tail(limit).copy()
-        return tail
-
-    def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:  # type: ignore[override]
-        return self.get_live_data(symbol, timeframe, limit=1)
-
-    def get_current_price(self, symbol: str) -> float:  # type: ignore[override]
-        if self.df.empty:
-            return 0.0
-        return float(self.df["close"].iloc[-1])
+from src.strategies.ml_sentiment import create_ml_sentiment_strategy
 
 
 class ExperimentRunner:
@@ -139,8 +37,7 @@ class ExperimentRunner:
     ):
         name = (name or "binance").lower()
         if name == "mock":
-            # Internal random-walk provider
-            return _RandomWalkProvider(
+            return RandomWalkProvider(
                 start or (datetime.now(UTC) - timedelta(days=30)),
                 end or datetime.now(UTC),
                 timeframe=timeframe,
@@ -148,7 +45,7 @@ class ExperimentRunner:
             )
         if name == "fixture":
             fixture_path = Path("tests/data/BTCUSDT_1h_2023-01-01_2024-12-31.feather")
-            return _FixtureProvider(fixture_path)
+            return FixtureProvider(fixture_path)
 
         if name == "coinbase":
             provider = CoinbaseProvider()
@@ -161,6 +58,8 @@ class ExperimentRunner:
     def _load_strategy(self, strategy_name: str) -> Strategy:
         strategies = {
             "ml_basic": create_ml_basic_strategy,
+            "ml_adaptive": create_ml_adaptive_strategy,
+            "ml_sentiment": create_ml_sentiment_strategy,
             "hyper_growth": create_hyper_growth_strategy,
         }
         builder = strategies.get(strategy_name)
@@ -190,45 +89,63 @@ class ExperimentRunner:
     def _apply_strategy_attribute(self, strategy: Strategy, attr: str, value: object) -> bool:
         """Apply overrides to the correct component on a component-based strategy."""
 
+        signal_generator = getattr(strategy, "signal_generator", None)
+        risk_manager = getattr(strategy, "risk_manager", None)
+        position_sizer = getattr(strategy, "position_sizer", None)
+
         component_targets: dict[str, list[Strategy | object | None]] = {
             # Risk manager attributes
-            "stop_loss_pct": [strategy, getattr(strategy, "risk_manager", None)],
-            "risk_per_trade": [getattr(strategy, "risk_manager", None)],
+            "stop_loss_pct": [strategy, risk_manager],
+            "risk_per_trade": [risk_manager],
+            "trailing_stop_pct": [strategy, risk_manager],
+            "atr_multiplier": [strategy, risk_manager],
             # Position sizer attributes
-            "base_fraction": [getattr(strategy, "position_sizer", None)],
-            "min_confidence": [getattr(strategy, "position_sizer", None)],
+            "base_fraction": [position_sizer],
+            "min_confidence": [position_sizer],
+            "min_confidence_floor": [position_sizer],
             # Signal generator attributes
-            "sequence_length": [getattr(strategy, "signal_generator", None)],
-            "model_path": [strategy, getattr(strategy, "signal_generator", None)],
-            "use_prediction_engine": [
-                strategy,
-                getattr(strategy, "signal_generator", None),
-            ],
-            "model_name": [strategy, getattr(strategy, "signal_generator", None)],
-            "model_type": [strategy, getattr(strategy, "signal_generator", None)],
-            "timeframe": [strategy, getattr(strategy, "signal_generator", None)],
+            "sequence_length": [signal_generator],
+            "model_path": [strategy, signal_generator],
+            "use_prediction_engine": [strategy, signal_generator],
+            "model_name": [strategy, signal_generator],
+            "model_type": [strategy, signal_generator],
+            "timeframe": [strategy, signal_generator],
+            "long_entry_threshold": [signal_generator],
+            "short_entry_threshold": [signal_generator],
+            "confidence_multiplier": [signal_generator],
+            "short_threshold_trend_up": [signal_generator],
+            "short_threshold_trend_down": [signal_generator],
+            "short_threshold_range": [signal_generator],
+            "short_threshold_high_vol": [signal_generator],
+            "short_threshold_low_vol": [signal_generator],
+            "short_threshold_confidence_multiplier": [signal_generator],
             # Strategy level attributes
             "take_profit_pct": [strategy],
         }
 
         targets = component_targets.get(attr, [strategy])
         applied = False
+        coerced_value: object = value
 
         for target in targets:
             if target is None or not hasattr(target, attr):
                 continue
             try:
                 current = getattr(target, attr)
-                coerced = self._coerce_value(current, value)
-                setattr(target, attr, coerced)
+                coerced_value = self._coerce_value(current, value)
+                setattr(target, attr, coerced_value)
                 applied = True
             except Exception as exc:  # pragma: no cover - defensive logging
                 self.logger.debug("Failed to set %s on %s: %s", attr, target, exc)
 
-        if applied and attr in {"stop_loss_pct", "take_profit_pct"}:
+        # Risk-related attributes must always land in the strategy's risk
+        # overrides mapping — the risk manager consults this at runtime, and
+        # some strategies (e.g. ml_basic) do not expose them as instance attrs.
+        if attr in {"stop_loss_pct", "take_profit_pct"}:
             overrides = getattr(strategy, "_risk_overrides", None) or {}
-            overrides[attr] = getattr(strategy, attr, value)
+            overrides[attr] = self._coerce_value(overrides.get(attr), value)
             strategy._risk_overrides = overrides
+            applied = True
 
         return applied
 

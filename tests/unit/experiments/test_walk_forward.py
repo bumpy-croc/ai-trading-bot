@@ -1,20 +1,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from src.optimizer.schemas import ExperimentConfig, ExperimentResult
-from src.optimizer.walk_forward import (
+from src.experiments.schemas import ExperimentConfig, ExperimentResult
+from src.experiments.walk_forward import (
     FoldResult,
     WalkForwardAnalyzer,
     WalkForwardConfig,
-    WalkForwardResult,
     compute_windows,
     robustness_label,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

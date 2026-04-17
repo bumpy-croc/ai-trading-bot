@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
-from src.optimizer.runner import ExperimentRunner
-from src.optimizer.schemas import ExperimentConfig, ParameterSet
+from src.experiments.runner import ExperimentRunner
+from src.experiments.schemas import ExperimentConfig, ParameterSet
 
 
 def test_runner_with_mock_provider_executes():

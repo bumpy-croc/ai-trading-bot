@@ -43,6 +43,13 @@ def create_ml_adaptive_strategy(
     name: str = "MlAdaptive",
     sequence_length: int = 120,
     model_name: str | None = None,
+    *,
+    long_entry_threshold: float | None = None,
+    short_entry_threshold: float | None = None,
+    confidence_multiplier: float | None = None,
+    base_fraction: float | None = None,
+    min_confidence: float | None = None,
+    min_confidence_floor: float | None = None,
 ) -> Strategy:
     """
     Create ML Adaptive strategy using component composition.
@@ -54,6 +61,13 @@ def create_ml_adaptive_strategy(
         name: Strategy name
         sequence_length: Number of candles for sequence prediction
         model_name: Model name for prediction engine
+        long_entry_threshold: Minimum predicted return for long entry.
+        short_entry_threshold: Maximum predicted return for short entry.
+        confidence_multiplier: Scales |predicted_return| → confidence.
+        base_fraction: Base fraction of balance for ConfidenceWeightedSizer.
+        min_confidence: Minimum signal confidence before any position is opened.
+        min_confidence_floor: Lower bound on the confidence factor once the
+            min_confidence gate has passed (0.0 disables).
 
     Returns:
         Configured Strategy instance
@@ -63,6 +77,9 @@ def create_ml_adaptive_strategy(
         name=f"{name}_signals",
         sequence_length=sequence_length,
         model_name=model_name,
+        long_entry_threshold=long_entry_threshold,
+        short_entry_threshold=short_entry_threshold,
+        confidence_multiplier=confidence_multiplier,
     )
 
     # Create regime-adaptive risk manager
@@ -72,8 +89,13 @@ def create_ml_adaptive_strategy(
 
     # Create position sizer with confidence weighting
     position_sizer = ConfidenceWeightedSizer(
-        base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
-        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
+        base_fraction=(
+            base_fraction if base_fraction is not None else DEFAULT_STRATEGY_BASE_FRACTION
+        ),
+        min_confidence=(
+            min_confidence if min_confidence is not None else DEFAULT_STRATEGY_MIN_CONFIDENCE
+        ),
+        min_confidence_floor=(min_confidence_floor if min_confidence_floor is not None else 0.0),
     )
 
     # Create regime detector

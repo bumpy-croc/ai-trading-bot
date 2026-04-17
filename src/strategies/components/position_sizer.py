@@ -247,13 +247,21 @@ class ConfidenceWeightedSizer(PositionSizer):
     with optional adjustments for signal strength and regime conditions.
     """
 
-    def __init__(self, base_fraction: float = 0.05, min_confidence: float = 0.3):
+    def __init__(
+        self,
+        base_fraction: float = 0.05,
+        min_confidence: float = 0.3,
+        min_confidence_floor: float = 0.0,
+    ):
         """
         Initialize confidence-weighted sizer
 
         Args:
             base_fraction: Base fraction of balance when confidence is 1.0
             min_confidence: Minimum confidence required for non-zero position
+            min_confidence_floor: Lower bound applied to the confidence factor
+                once a signal passes the ``min_confidence`` gate. 0.0 (default)
+                disables the floor.
         """
         super().__init__("confidence_weighted_sizer")
 
@@ -263,8 +271,14 @@ class ConfidenceWeightedSizer(PositionSizer):
         if not 0.0 <= min_confidence <= 1.0:
             raise ValueError(f"min_confidence must be between 0.0 and 1.0, got {min_confidence}")
 
+        if not 0.0 <= min_confidence_floor <= 1.0:
+            raise ValueError(
+                f"min_confidence_floor must be between 0.0 and 1.0, got {min_confidence_floor}"
+            )
+
         self.base_fraction = base_fraction
         self.min_confidence = min_confidence
+        self.min_confidence_floor = min_confidence_floor
 
     def calculate_size(
         self,
@@ -287,8 +301,8 @@ class ConfidenceWeightedSizer(PositionSizer):
         if signal.confidence < self.min_confidence:
             return 0.0
 
-        # Base size scaled by confidence
-        confidence_factor = signal.confidence
+        # Base size scaled by confidence (optionally floored)
+        confidence_factor = max(self.min_confidence_floor, signal.confidence)
         base_size = balance * self.base_fraction * confidence_factor
 
         # Apply signal strength adjustment
@@ -323,7 +337,13 @@ class ConfidenceWeightedSizer(PositionSizer):
     def get_parameters(self) -> dict[str, Any]:
         """Get confidence-weighted sizer parameters"""
         params = super().get_parameters()
-        params.update({"base_fraction": self.base_fraction, "min_confidence": self.min_confidence})
+        params.update(
+            {
+                "base_fraction": self.base_fraction,
+                "min_confidence": self.min_confidence,
+                "min_confidence_floor": self.min_confidence_floor,
+            }
+        )
         return params
 
 

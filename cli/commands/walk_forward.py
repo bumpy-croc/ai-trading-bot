@@ -5,7 +5,7 @@ import logging
 import sys
 
 from src.infrastructure.runtime.paths import get_project_root
-from src.optimizer.walk_forward import FoldResult, WalkForwardResult
+from src.experiments.walk_forward import FoldResult, WalkForwardResult
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -56,7 +56,7 @@ def _handle(ns: argparse.Namespace) -> int:
     try:
         from datetime import UTC, datetime
 
-        from src.optimizer.walk_forward import WalkForwardAnalyzer, WalkForwardConfig
+        from src.experiments.walk_forward import WalkForwardAnalyzer, WalkForwardConfig
 
         end = datetime.now(UTC)
 

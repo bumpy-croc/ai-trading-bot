@@ -27,7 +27,6 @@ from .models import (
     Base,
     DynamicPerformanceMetrics,
     EventType,
-    OptimizationCycle,
     Order,
     OrderStatus,
     OrderType,
@@ -529,73 +528,6 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error getting database info: {e}")
             return {"status": "error", "message": str(e)}
-
-    # --- Optimizer persistence ---
-    def record_optimization_cycle(
-        self,
-        strategy_name: str,
-        symbol: str,
-        timeframe: str,
-        baseline_metrics: dict[str, Any],
-        candidate_params: dict[str, Any] | None,
-        candidate_metrics: dict[str, Any] | None,
-        validator_report: dict[str, Any] | None,
-        decision: str,
-        session_id: int | None = None,
-    ) -> int:
-        """Insert a new optimization cycle row and return its id."""
-        with self.get_session() as session:
-            oc = OptimizationCycle(
-                strategy_name=strategy_name,
-                symbol=symbol,
-                timeframe=timeframe,
-                baseline_metrics=baseline_metrics,
-                candidate_params=candidate_params or {},
-                candidate_metrics=candidate_metrics or {},
-                validator_report=validator_report or {},
-                decision=decision,
-                session_id=session_id,
-            )
-            session.add(oc)
-            try:
-                session.commit()
-            except Exception as e:
-                session.rollback()
-                logger.error(
-                    f"Failed to record optimization cycle for {strategy_name}/{symbol}: {e}",
-                    exc_info=True,
-                )
-                raise
-            return int(oc.id)
-
-    def fetch_optimization_cycles(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-        """Fetch recent optimization cycles as plain dicts for API usage."""
-        with self.get_session() as session:
-            q = (
-                session.query(OptimizationCycle)
-                .order_by(OptimizationCycle.timestamp.desc())
-                .offset(max(0, int(offset)))
-                .limit(max(1, int(limit)))
-            )
-            rows = q.all()
-            out: list[dict[str, Any]] = []
-            for r in rows:
-                out.append(
-                    {
-                        "id": int(r.id),
-                        "timestamp": r.timestamp.isoformat() if r.timestamp else None,
-                        "strategy_name": r.strategy_name,
-                        "symbol": r.symbol,
-                        "timeframe": r.timeframe,
-                        "baseline_metrics": r.baseline_metrics or {},
-                        "candidate_params": r.candidate_params or {},
-                        "candidate_metrics": r.candidate_metrics or {},
-                        "validator_report": r.validator_report or {},
-                        "decision": r.decision,
-                        "session_id": int(r.session_id) if r.session_id is not None else None,
-                    }
-                )
-            return out
 
     def create_trading_session(
         self,
