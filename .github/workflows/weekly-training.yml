@@ -104,12 +104,38 @@ jobs:
         OUTPUT=$(aws sts get-caller-identity 2>&1)
         STATUS=$?
         set -e
+        # Redact 12-digit AWS account IDs from any output before logging.
+        # Needed because STS errors on AccessDenied embed the caller ARN
+        # (which contains the account ID), and GitHub's secret-masking does
+        # not cover account IDs/ARNs. Word-boundary anchors prevent chewing
+        # off the leading 12 digits of longer numeric runs (e.g. 13-digit
+        # millisecond timestamps) and producing a confusing trailing digit.
+        redact_account() {
+          # Two passes so that adjacent 12-digit runs separated by a single
+          # non-digit (e.g. "123456789012 987654321098") still both redact:
+          # the first pass consumes the trailing boundary as \2, leaving the
+          # next run without a leading boundary — the second pass catches it.
+          printf '%s' "$1" \
+            | sed -E 's/(^|[^0-9])[0-9]{12}([^0-9]|$)/\1<account-id>\2/g' \
+            | sed -E 's/(^|[^0-9])[0-9]{12}([^0-9]|$)/\1<account-id>\2/g'
+        }
         if [ $STATUS -ne 0 ]; then
-          echo "::error title=AWS credential preflight failed::aws sts get-caller-identity failed. The AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY GitHub secrets are likely invalid, expired, or revoked. Rotate them in IAM and update the repo secrets. Raw error: ${OUTPUT}"
+          # Flatten newlines so the entire message stays attached to the
+          # ::error:: workflow annotation (annotations are line-delimited).
+          SANITIZED=$(redact_account "$OUTPUT" | tr '\r\n' '  ')
+          echo "::error title=AWS credential preflight failed::aws sts get-caller-identity failed. The AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY GitHub secrets are likely invalid, expired, or revoked. Rotate them in IAM and update the repo secrets. Sanitized error: ${SANITIZED}"
           echo "aws_preflight_failed=true" >> "$GITHUB_OUTPUT"
           exit 1
         fi
-        echo "AWS credential preflight OK"
+        # Log only the IAM principal short name (e.g. "user/sagemaker-ci"
+        # or "role/weekly-training"), not the full ARN or account ID.
+        # This lets operators catch wrong-account credentials (dev keys in
+        # prod repo) without leaking account metadata into public CI logs.
+        # `// ""` keeps jq rc=0 when OUTPUT is not valid JSON / lacks .Arn;
+        # `|| true` is belt-and-braces against any other jq failure so the
+        # step does not abort under GitHub's default `bash -eo pipefail`.
+        PRINCIPAL=$(printf '%s' "$OUTPUT" | jq -r '(.Arn // "") | split(":")[5] // ""' 2>/dev/null || true)
+        echo "AWS credential preflight OK (principal: ${PRINCIPAL:-unknown})"
 
     - name: Train model on SageMaker
       env:
