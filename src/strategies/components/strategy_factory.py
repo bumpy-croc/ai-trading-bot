@@ -3,6 +3,17 @@ Strategy Factory and Builder
 
 This module provides factory methods and builder patterns for creating
 pre-configured strategies and custom strategy compositions.
+
+.. warning::
+   ``StrategyFactory.create_ml_{basic,adaptive,sentiment}_strategy`` are
+   lightweight preset builders. They deliberately do **not** expose the
+   full tuning kwargs (``long_entry_threshold``, ``short_entry_threshold``,
+   ``confidence_multiplier``, ``min_confidence_floor``, ``stop_loss_pct``,
+   ``take_profit_pct``, ...). For experimentation, use the top-level
+   factory functions in ``src.strategies.ml_basic``,
+   ``src.strategies.ml_adaptive``, ``src.strategies.ml_sentiment`` — those
+   are the strategies instantiated by the experiments framework via
+   :func:`src.experiments.runner.ExperimentRunner._load_strategy`.
 """
 
 from copy import deepcopy

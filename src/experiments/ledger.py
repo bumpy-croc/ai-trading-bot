@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any
 
 from src.experiments.reporter import SuiteReport
 from src.experiments.suite import SuiteResult
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_ROOT = Path("experiments/.history")
 LEDGER_FILE = "ledger.jsonl"
@@ -90,24 +93,33 @@ class Ledger:
             fh.write(json.dumps(entry.to_dict()) + "\n")
         return entry
 
-    def list(self, limit: int | None = None) -> list[LedgerEntry]:
+    def list_entries(self, limit: int | None = None) -> list[LedgerEntry]:
+        """Return ledger entries newest-first, skipping malformed JSON lines."""
         if not self.path().exists():
             return []
         entries: list[LedgerEntry] = []
         with self.path().open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
+            for line_no, line in enumerate(fh, start=1):
+                stripped = line.strip()
+                if not stripped:
                     continue
-                data = json.loads(line)
-                entries.append(LedgerEntry(**data))
+                try:
+                    data = json.loads(stripped)
+                    entries.append(LedgerEntry(**data))
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "ledger: skipping malformed line %d in %s: %s",
+                        line_no,
+                        self.path(),
+                        exc,
+                    )
         entries.sort(key=lambda e: e.timestamp, reverse=True)
         if limit is not None:
             entries = entries[:limit]
         return entries
 
     def find(self, suite_id: str) -> LedgerEntry | None:
-        for entry in self.list():
+        for entry in self.list_entries():
             if entry.suite_id == suite_id:
                 return entry
         return None

@@ -32,4 +32,3 @@ comparison:
   target_metric: sharpe_ratio
   min_trades: 30
   significance_level: 0.05
-  per_regime_breakdown: false

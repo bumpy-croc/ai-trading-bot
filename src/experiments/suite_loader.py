@@ -30,7 +30,6 @@ _ALLOWED_COMPARISON = {
     "target_metric",
     "min_trades",
     "significance_level",
-    "per_regime_breakdown",
 }
 _ALLOWED_PROVIDERS = {"binance", "coinbase", "mock", "fixture"}
 

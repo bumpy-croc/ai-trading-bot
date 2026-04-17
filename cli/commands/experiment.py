@@ -6,7 +6,8 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.infrastructure.runtime.paths import get_project_root
@@ -57,7 +58,10 @@ def _handle_run(ns: argparse.Namespace) -> int:
         history_root = Path(ns.history_dir) if ns.history_dir else Path("experiments/.history")
         ledger = Ledger(root=history_root)
         promotion_manager = PromotionManager(ledger=ledger, reporter=reporter)
-        run_id = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        # Microsecond precision + random suffix prevent collisions when two
+        # runs finish within the same second (CI parallelism, mocked suites).
+        now = datetime.now(UTC)
+        run_id = f"{now.strftime('%Y%m%dT%H%M%S_%f')}Z_{uuid.uuid4().hex[:8]}"
         artifacts_path = _safe_artifacts_dir(ledger.root, suite.id, run_id)
         promotion_manager.record_run(result, report, artifacts_path)
         print(f"\nArtifacts: {artifacts_path}")
@@ -77,7 +81,7 @@ def _handle_list(ns: argparse.Namespace) -> int:
         ledger = Ledger(
             root=Path(ns.history_dir) if ns.history_dir else Path("experiments/.history")
         )
-        entries = ledger.list(limit=ns.limit)
+        entries = ledger.list_entries(limit=ns.limit)
         if not entries:
             print("(no suites recorded)")
             return 0

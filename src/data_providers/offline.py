@@ -38,9 +38,10 @@ class FixtureProvider(DataProvider):
         self.df = self._load()
 
     def _load(self) -> pd.DataFrame:
-        if not self.path.exists():
+        try:
+            df = pd.read_feather(self.path)
+        except (FileNotFoundError, OSError):
             return pd.DataFrame()
-        df = pd.read_feather(self.path)
         df.set_index("timestamp", inplace=True)
         return df
 
@@ -53,6 +54,23 @@ class FixtureProvider(DataProvider):
         return self.df.loc[
             (self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))
         ].copy()
+
+    def get_live_data(
+        self, symbol: str, timeframe: str, limit: int = 100
+    ) -> pd.DataFrame:  # type: ignore[override]
+        if self.df.empty:
+            return self.df
+        return self.df.tail(limit).copy()
+
+    def update_live_data(
+        self, symbol: str, timeframe: str
+    ) -> pd.DataFrame:  # type: ignore[override]
+        return self.get_live_data(symbol, timeframe, limit=1)
+
+    def get_current_price(self, symbol: str) -> float:  # type: ignore[override]
+        if self.df.empty:
+            return 0.0
+        return float(self.df["close"].iloc[-1])
 
 
 class RandomWalkProvider(DataProvider):

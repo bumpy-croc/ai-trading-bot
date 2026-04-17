@@ -37,10 +37,12 @@ class MLSignalGenerator(SignalGenerator):
     - Optional prediction engine integration
     """
 
-    # Default thresholds (overridable per-instance for experiments)
-    LONG_ENTRY_THRESHOLD = 0.0005  # Base threshold for long entries (+0.05%)
+    # Default thresholds (overridable per-instance for experiments).
+    # LONG_ENTRY_THRESHOLD=0.0 preserves pre-refactor behavior (any positive
+    # predicted return triggers BUY). Experiments tighten via overrides.
+    LONG_ENTRY_THRESHOLD = 0.0
     SHORT_ENTRY_THRESHOLD = -0.0005  # Base threshold for short entries (-0.05%)
-    CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
+    CONFIDENCE_MULTIPLIER = 12.0  # Multiplier for confidence calculation
 
     # Dynamic threshold configuration for different market regimes
     SHORT_THRESHOLD_TREND_UP = -0.0003  # Less conservative in uptrend (-0.03%)
@@ -444,6 +446,14 @@ class MLSignalGenerator(SignalGenerator):
                 "long_entry_threshold": self.long_entry_threshold,
                 "short_entry_threshold": self.short_entry_threshold,
                 "confidence_multiplier": self.confidence_multiplier,
+                "short_threshold_trend_up": self.short_threshold_trend_up,
+                "short_threshold_trend_down": self.short_threshold_trend_down,
+                "short_threshold_range": self.short_threshold_range,
+                "short_threshold_high_vol": self.short_threshold_high_vol,
+                "short_threshold_low_vol": self.short_threshold_low_vol,
+                "short_threshold_confidence_multiplier": (
+                    self.short_threshold_confidence_multiplier
+                ),
             }
         )
         return params
@@ -463,10 +473,12 @@ class MLBasicSignalGenerator(SignalGenerator):
     - Optional prediction engine integration with model registry support
     """
 
-    # Default thresholds (overridable per-instance for experiments)
-    LONG_ENTRY_THRESHOLD = 0.0005  # +0.05% threshold for long entries
+    # Default thresholds (overridable per-instance for experiments).
+    # LONG_ENTRY_THRESHOLD=0.0 preserves pre-refactor behavior (any positive
+    # predicted return triggers BUY). Experiments tighten via overrides.
+    LONG_ENTRY_THRESHOLD = 0.0
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
-    CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
+    CONFIDENCE_MULTIPLIER = 12.0  # Multiplier for confidence calculation
 
     # Default symbol used for registry selection when none specified
     DEFAULT_SYMBOL = "BTCUSDT"

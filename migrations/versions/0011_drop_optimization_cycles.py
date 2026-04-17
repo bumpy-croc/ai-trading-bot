@@ -25,22 +25,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Indexes must be dropped before the table on some backends.
-    with op.get_context().autocommit_block():
-        bind = op.get_bind()
-        inspector = sa.inspect(bind)
-        if "optimization_cycles" in inspector.get_table_names():
-            for idx_name in (
-                "ix_optimization_cycles_timestamp",
-                "idx_opt_cycle_time",
-                "idx_opt_cycle_strategy",
-            ):
-                try:
-                    op.drop_index(idx_name, table_name="optimization_cycles")
-                except Exception:
-                    # Index may not exist on older databases; continue.
-                    pass
-            op.drop_table("optimization_cycles")
+    # PostgreSQL supports transactional DDL — run the whole drop in the
+    # migration's transaction so either all indexes and the table are gone,
+    # or nothing is. No autocommit_block.
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "optimization_cycles" not in inspector.get_table_names():
+        return
+    existing_indexes = {idx["name"] for idx in inspector.get_indexes("optimization_cycles")}
+    for idx_name in (
+        "ix_optimization_cycles_timestamp",
+        "idx_opt_cycle_time",
+        "idx_opt_cycle_strategy",
+    ):
+        if idx_name in existing_indexes:
+            op.drop_index(idx_name, table_name="optimization_cycles")
+    op.drop_table("optimization_cycles")
 
 
 def downgrade() -> None:

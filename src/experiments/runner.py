@@ -75,15 +75,22 @@ class ExperimentRunner:
 
         for key, value in config.parameters.values.items():
             if "." not in key:
-                continue
+                raise ValueError(f"Override key {key!r} is not in '<strategy>.<attr>' form")
 
             namespace, attr = key.split(".", 1)
             if namespace.replace("_", "").lower() != strategy_key:
-                continue
+                # Namespace mismatch is almost always a copy-paste bug — fail
+                # loudly so the user notices rather than running the variant
+                # with unintended baseline-like behavior.
+                raise ValueError(
+                    f"Override {key!r} targets strategy namespace "
+                    f"{namespace!r} but suite strategy is {config.strategy_name!r}"
+                )
 
             if not self._apply_strategy_attribute(strategy, attr, value):
-                self.logger.debug(
-                    "Failed to apply override %s for strategy %s", key, config.strategy_name
+                raise ValueError(
+                    f"Unknown override attribute {attr!r} for strategy "
+                    f"{config.strategy_name!r}; no component accepts it."
                 )
 
     def _apply_strategy_attribute(self, strategy: Strategy, attr: str, value: object) -> bool:
@@ -142,8 +149,12 @@ class ExperimentRunner:
         # overrides mapping — the risk manager consults this at runtime, and
         # some strategies (e.g. ml_basic) do not expose them as instance attrs.
         if attr in {"stop_loss_pct", "take_profit_pct"}:
+            try:
+                numeric_value = float(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Override {attr!r} must be numeric, got {value!r}") from exc
             overrides = getattr(strategy, "_risk_overrides", None) or {}
-            overrides[attr] = self._coerce_value(overrides.get(attr), value)
+            overrides[attr] = numeric_value
             strategy._risk_overrides = overrides
             applied = True
 
@@ -151,14 +162,22 @@ class ExperimentRunner:
 
     @staticmethod
     def _coerce_value(current: object, new_value: object) -> object:
-        """Coerce overrides to the same type as the existing attribute when possible."""
+        """Coerce overrides to match the existing attribute type when possible.
+
+        Int → float widening: when the existing attribute is an ``int`` but
+        the override is a non-integer ``float``, keep the float precision
+        rather than silently truncating (e.g. ``confidence_multiplier = 12``
+        overridden to ``20.5`` must not become ``20``).
+        """
 
         if current is None:
             return new_value
 
         target_type = type(current)
+        if target_type is int and isinstance(new_value, float) and not new_value.is_integer():
+            return new_value
         try:
-            return target_type(new_value)
+            return target_type(new_value)  # type: ignore[call-arg]
         except Exception:
             return new_value
 

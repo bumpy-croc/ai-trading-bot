@@ -99,7 +99,7 @@ def test_suite_round_trip_with_promotion(tmp_path: Path) -> None:
     assert (artifacts_path / "report.txt").exists()
     assert (artifacts_path / "suite.json").exists()
 
-    entries = ledger.list()
+    entries = ledger.list_entries()
     assert len(entries) == 1
     assert entries[0].suite_id == "integration_suite"
 

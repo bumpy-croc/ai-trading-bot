@@ -160,6 +160,11 @@ class PromotionManager:
             "variants": [
                 {"name": v.name, "overrides": v.overrides} for v in suite_result.config.variants
             ],
+            "comparison": {
+                "target_metric": suite_result.config.comparison.target_metric,
+                "min_trades": suite_result.config.comparison.min_trades,
+                "significance_level": suite_result.config.comparison.significance_level,
+            },
             "winner": report.winner,
         }
 
@@ -209,7 +214,7 @@ class PromotionManager:
                     "win_rate",
                     "total_trades",
                     "delta_vs_baseline",
-                    "p_value",
+                    "ranking_confidence",
                     "verdict",
                 )
             },
@@ -239,7 +244,7 @@ class PromotionManager:
             change_type=ChangeType.PARAMETER_CHANGE,
             description=f"Promoted variant {variant_name}",
             impact_level=impact,
-            changed_components=sorted({k.split(".", 1)[1].split(".", 1)[0] for k in overrides}),
+            changed_components=sorted(_components_touched(overrides)),
             parameter_changes=overrides,
             performance_impact={
                 "delta_sharpe": float(
@@ -281,12 +286,14 @@ class PromotionManager:
                 "overrides": overrides,
             },
             "variants": [],
-            "comparison": {
-                "target_metric": "sharpe_ratio",
-                "min_trades": 30,
-                "significance_level": 0.05,
-                "per_regime_breakdown": False,
-            },
+            "comparison": suite_snapshot.get(
+                "comparison",
+                {
+                    "target_metric": "sharpe_ratio",
+                    "min_trades": 30,
+                    "significance_level": 0.05,
+                },
+            ),
         }
         patch_path.write_text(yaml.safe_dump(patch_doc, sort_keys=False))
         return patch_path
@@ -313,6 +320,44 @@ def _find_variant_overrides(suite_snapshot: dict, variant_name: str) -> dict:
         if v.get("name") == variant_name:
             return dict(v.get("overrides", {}))
     raise PromotionError(f"Variant {variant_name!r} not found in suite snapshot")
+
+
+# Mirrors the ``component_targets`` map in ``ExperimentRunner._apply_strategy_attribute``.
+# Used to describe *which component* was tuned when recording lineage.
+_ATTR_TO_COMPONENT: dict[str, str] = {
+    "stop_loss_pct": "risk_manager",
+    "take_profit_pct": "risk_manager",
+    "risk_per_trade": "risk_manager",
+    "trailing_stop_pct": "risk_manager",
+    "atr_multiplier": "risk_manager",
+    "base_fraction": "position_sizer",
+    "min_confidence": "position_sizer",
+    "min_confidence_floor": "position_sizer",
+    "sequence_length": "signal_generator",
+    "model_path": "signal_generator",
+    "use_prediction_engine": "signal_generator",
+    "model_name": "signal_generator",
+    "model_type": "signal_generator",
+    "timeframe": "signal_generator",
+    "long_entry_threshold": "signal_generator",
+    "short_entry_threshold": "signal_generator",
+    "confidence_multiplier": "signal_generator",
+    "short_threshold_trend_up": "signal_generator",
+    "short_threshold_trend_down": "signal_generator",
+    "short_threshold_range": "signal_generator",
+    "short_threshold_high_vol": "signal_generator",
+    "short_threshold_low_vol": "signal_generator",
+    "short_threshold_confidence_multiplier": "signal_generator",
+}
+
+
+def _components_touched(overrides: dict) -> set[str]:
+    """Map dotted override keys → set of component names touched."""
+    components: set[str] = set()
+    for key in overrides:
+        attr = key.split(".", 1)[1] if "." in key else key
+        components.add(_ATTR_TO_COMPONENT.get(attr, "strategy"))
+    return components
 
 
 def _impact_from_sharpe_delta(delta_sharpe: float) -> ImpactLevel:

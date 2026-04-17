@@ -31,7 +31,6 @@ class ComparisonSettings:
     target_metric: str = "sharpe_ratio"
     min_trades: int = 0
     significance_level: float = 0.05
-    per_regime_breakdown: bool = False
 
     def __post_init__(self) -> None:
         allowed = {

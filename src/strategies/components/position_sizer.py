@@ -6,6 +6,7 @@ for calculating position sizes based on various factors in the component-based
 strategy architecture.
 """
 
+import logging
 import threading
 from abc import ABC, abstractmethod
 from collections import deque
@@ -13,6 +14,8 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from src.config.constants import (
     DEFAULT_KELLY_EXPECTED_REWARD_RISK,
@@ -274,6 +277,18 @@ class ConfidenceWeightedSizer(PositionSizer):
         if not 0.0 <= min_confidence_floor <= 1.0:
             raise ValueError(
                 f"min_confidence_floor must be between 0.0 and 1.0, got {min_confidence_floor}"
+            )
+
+        if min_confidence_floor > min_confidence:
+            # Floor raises the effective confidence factor for signals that
+            # just pass the gate — a signal with confidence 0.35 and floor
+            # 0.6 would size as if confidence were 0.6. Usually a mistake.
+            logger.warning(
+                "min_confidence_floor (%s) > min_confidence (%s): "
+                "low-confidence signals that pass the gate will be sized "
+                "as if confidence equalled the floor.",
+                min_confidence_floor,
+                min_confidence,
             )
 
         self.base_fraction = base_fraction

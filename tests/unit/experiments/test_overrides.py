@@ -156,3 +156,45 @@ def test_default_thresholds_unchanged_when_no_override() -> None:
     assert adaptive_sg.short_threshold_range == MLSignalGenerator.SHORT_THRESHOLD_RANGE
     assert adaptive_sg.short_threshold_high_vol == MLSignalGenerator.SHORT_THRESHOLD_HIGH_VOL
     assert adaptive_sg.short_threshold_low_vol == MLSignalGenerator.SHORT_THRESHOLD_LOW_VOL
+
+
+def test_parity_long_entry_threshold_preserves_pre_refactor_behavior() -> None:
+    """Default long threshold must be 0.0 so historical backtests remain comparable."""
+    from src.strategies.components.ml_signal_generator import (
+        MLBasicSignalGenerator,
+        MLSignalGenerator,
+    )
+
+    # Both signal generators: `predicted_return > 0` must still trigger BUY
+    # out of the box. Any non-zero default would silently change live trading.
+    assert MLBasicSignalGenerator.LONG_ENTRY_THRESHOLD == 0.0
+    assert MLSignalGenerator.LONG_ENTRY_THRESHOLD == 0.0
+
+
+def test_float_override_on_int_attr_preserves_precision(runner: ExperimentRunner) -> None:
+    """confidence_multiplier default is 12.0 (float) so overrides keep precision."""
+    strategy = runner._load_strategy("ml_basic")
+    cfg = _cfg("ml_basic", {"ml_basic.confidence_multiplier": 20.5})
+    runner._apply_parameter_overrides(strategy, cfg)
+    assert pytest.approx(strategy.signal_generator.confidence_multiplier, rel=1e-9) == 20.5
+
+
+def test_unknown_override_raises(runner: ExperimentRunner) -> None:
+    strategy = runner._load_strategy("ml_basic")
+    cfg = _cfg("ml_basic", {"ml_basic.definitely_not_a_real_attr": 0.42})
+    with pytest.raises(ValueError, match="Unknown override attribute"):
+        runner._apply_parameter_overrides(strategy, cfg)
+
+
+def test_namespace_mismatch_raises(runner: ExperimentRunner) -> None:
+    strategy = runner._load_strategy("ml_basic")
+    cfg = _cfg("ml_basic", {"ml_adaptive.long_entry_threshold": 0.001})
+    with pytest.raises(ValueError, match="namespace"):
+        runner._apply_parameter_overrides(strategy, cfg)
+
+
+def test_stop_loss_override_must_be_numeric(runner: ExperimentRunner) -> None:
+    strategy = runner._load_strategy("ml_basic")
+    cfg = _cfg("ml_basic", {"ml_basic.stop_loss_pct": "not a number"})
+    with pytest.raises(ValueError, match="numeric"):
+        runner._apply_parameter_overrides(strategy, cfg)

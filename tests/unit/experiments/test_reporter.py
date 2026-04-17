@@ -152,7 +152,7 @@ def test_csv_report_includes_rows_and_headers() -> None:
     assert "baseline" in csv_text
 
 
-def test_delta_and_p_value_populated_for_variants() -> None:
+def test_delta_and_confidence_populated_for_variants() -> None:
     suite = _suite(
         [VariantSpec(name="v1", overrides={"ml_basic.stop_loss_pct": 0.03})], min_trades=0
     )
@@ -163,4 +163,5 @@ def test_delta_and_p_value_populated_for_variants() -> None:
 
     v1 = next(r for r in report.rows if r.name == "v1")
     assert pytest.approx(v1.delta_vs_baseline, rel=1e-9) == 1.0
-    assert v1.p_value is not None
+    assert v1.ranking_confidence is not None
+    assert 0.0 <= v1.ranking_confidence <= 1.0

@@ -30,7 +30,6 @@ comparison:
   target_metric: sharpe_ratio
   min_trades: 30
   significance_level: 0.05
-  per_regime_breakdown: true
 """
 
 
@@ -47,7 +46,7 @@ def test_load_full_example(tmp_path: Path) -> None:
     assert cfg.variants[0].overrides["ml_basic.long_entry_threshold"] == 0.0003
     assert cfg.comparison.target_metric == "sharpe_ratio"
     assert cfg.comparison.min_trades == 30
-    assert cfg.comparison.per_regime_breakdown is True
+    assert cfg.comparison.significance_level == 0.05
 
 
 def test_missing_id_raises() -> None:
