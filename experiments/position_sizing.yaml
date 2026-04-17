@@ -21,12 +21,17 @@ variants:
   - name: base_fraction_25pct
     overrides:
       ml_basic.base_fraction: 0.25
-  - name: min_confidence_floor_0_5
+  - name: min_confidence_floor_0_25
+    # Floor must stay <= min_confidence (default 0.3) or the sizer raises.
+    # 0.25 lets low-confidence signals that pass the 0.3 gate size as if
+    # their confidence were at least 0.25.
     overrides:
-      ml_basic.min_confidence_floor: 0.5
+      ml_basic.min_confidence_floor: 0.25
   - name: confidence_gate_0_4
+    # Pair the tighter gate with a matching floor to stay below it.
     overrides:
       ml_basic.min_confidence: 0.4
+      ml_basic.min_confidence_floor: 0.3
 
 comparison:
   target_metric: sharpe_ratio
