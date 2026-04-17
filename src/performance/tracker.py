@@ -41,9 +41,16 @@ MIN_VAR_BALANCE_POINTS = 30
 MIN_VAR_RETURNS = 20
 
 
-@dataclass
+@dataclass(frozen=True)
 class PerformanceMetrics:
     """Comprehensive performance metrics container.
+
+    Immutable: instances are returned by reference from
+    ``PerformanceTracker.get_metrics()`` and may be shared across callers via
+    the metrics cache. Mutation would corrupt the cached snapshot seen by
+    every subsequent reader; frozen=True enforces this contract at the type
+    system level.
+
 
     Attributes:
         # Trade statistics
@@ -261,6 +268,11 @@ class PerformanceTracker:
         exit_time = self._normalize_timestamp(exit_time_raw) if exit_time_raw is not None else None
 
         with self._lock:
+            # Invalidate cache up-front: if any statement below raises after
+            # partial state mutation, a clean cache over dirty state would
+            # silently serve stale metrics for the rest of the process.
+            self._metrics_dirty = True
+
             # Update trade counts (explicitly handle zero-PnL case)
             if pnl > 0:
                 self._winning_trades += 1
@@ -322,9 +334,6 @@ class PerformanceTracker:
             if len(self._trades) > self._max_trade_history:
                 self._trades = self._trades[-self._max_trade_history :]
 
-            # Invalidate metrics cache after state mutation
-            self._metrics_dirty = True
-
     def update_balance(
         self,
         balance: float,
@@ -345,6 +354,9 @@ class PerformanceTracker:
             raise ValueError(f"balance must be non-negative, got {balance}")
 
         with self._lock:
+            # Invalidate cache up-front; see ``record_trade`` for rationale.
+            self._metrics_dirty = True
+
             self.current_balance = balance
 
             # Update peak balance
@@ -364,9 +376,6 @@ class PerformanceTracker:
             # Limit memory usage (same cap as trade history)
             if len(self._balance_history) > self._max_trade_history:
                 self._balance_history = self._balance_history[-self._max_trade_history :]
-
-            # Invalidate metrics cache after state mutation
-            self._metrics_dirty = True
 
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics.
@@ -612,6 +621,14 @@ class PerformanceTracker:
                 if not math.isfinite(initial_balance):
                     raise ValueError(f"initial_balance must be finite, got {initial_balance}")
                 self.initial_balance = initial_balance
+
+            # Invalidate cache up-front; see ``record_trade`` for rationale.
+            # Both fields are cleared here (rather than only the dirty flag)
+            # because reset represents a full state discontinuity — release
+            # the stale reference for GC as well.
+            self._cached_metrics = None
+            self._metrics_dirty = True
+
             self.current_balance = self.initial_balance
             self.peak_balance = self.initial_balance
             self.max_drawdown = 0.0
@@ -631,10 +648,6 @@ class PerformanceTracker:
             self._max_win_streak = 0
             self._max_loss_streak = 0
             self._balance_history = [(datetime.now(UTC), self.initial_balance)]
-
-            # Invalidate metrics cache after state mutation
-            self._cached_metrics = None
-            self._metrics_dirty = True
 
 
 __all__ = [

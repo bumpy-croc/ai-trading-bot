@@ -1,5 +1,6 @@
 """Unit tests for src.performance.tracker module."""
 
+import dataclasses
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -771,6 +772,38 @@ class TestPerformanceTrackerMetricsCache:
         assert refreshed is not cached
         assert refreshed.total_trades == 0
 
+    def test_cached_value_equals_fresh_recompute(self):
+        """Cache-hit values match what an uncached recompute would produce.
+
+        Guards against a future refactor that adds a field to the recompute
+        path but forgets the cache (or vice-versa): identity-only tests would
+        miss this, but a value-level comparison catches any drift.
+        """
+        tracker = PerformanceTracker(initial_balance=10000)
+        tracker.record_trade(_make_trade(50.0), fee=0.1)
+        tracker.record_trade(_make_trade(-20.0), fee=0.1)
+        tracker.update_balance(10030.0)
+
+        cached = tracker.get_metrics()
+
+        # Force a recompute without changing any observable state: flip the
+        # dirty flag directly. The next call takes the recompute branch.
+        tracker._metrics_dirty = True
+        recomputed = tracker.get_metrics()
+
+        # Value-level equality across every field proves the two paths agree.
+        assert cached is not recomputed
+        assert cached.to_dict() == recomputed.to_dict()
+
+    def test_cached_metrics_are_immutable(self):
+        """PerformanceMetrics is frozen so callers cannot corrupt the cache."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        tracker.record_trade(_make_trade(50.0), fee=0.1)
+        metrics = tracker.get_metrics()
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            metrics.total_trades = 999  # type: ignore[misc]
+
     def test_cache_thread_safety_concurrent_reads_writes(self):
         """Concurrent record_trade and get_metrics do not corrupt state."""
         import threading
@@ -793,8 +826,18 @@ class TestPerformanceTrackerMetricsCache:
             try:
                 while not stop.is_set():
                     metrics = tracker.get_metrics()
-                    # Invariant: counts must be internally consistent
-                    assert metrics.total_trades >= metrics.winning_trades + metrics.losing_trades
+                    # Writer only produces winning trades (pnl=1.0) so zero-pnl
+                    # and losing counters must stay at zero. Any cache
+                    # staleness that let winning_trades advance while
+                    # total_trades lagged would fail this equality.
+                    assert metrics.total_trades == (
+                        metrics.winning_trades + metrics.losing_trades
+                    ), (
+                        "inconsistent cached snapshot: "
+                        f"total_trades={metrics.total_trades} "
+                        f"winning_trades={metrics.winning_trades} "
+                        f"losing_trades={metrics.losing_trades}"
+                    )
             except BaseException as exc:  # pragma: no cover - surfaced via assert
                 errors.append(exc)
 
