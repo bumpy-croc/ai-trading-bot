@@ -104,8 +104,10 @@ class ExperimentRunner:
             # Risk manager attributes
             "stop_loss_pct": [strategy, risk_manager],
             "risk_per_trade": [risk_manager],
-            "trailing_stop_pct": [strategy, risk_manager],
-            "atr_multiplier": [strategy, risk_manager],
+            # atr_multiplier exists on VolatilityRiskManager only; the map tries
+            # risk_manager first and falls through with a clear error if the
+            # active strategy's risk manager does not accept it.
+            "atr_multiplier": [risk_manager],
             # Position sizer attributes
             "base_fraction": [position_sizer],
             "min_confidence": [position_sizer],
@@ -192,25 +194,46 @@ class ExperimentRunner:
         """Re-check component invariants after override setattrs ran.
 
         ``setattr`` bypasses ``__init__`` so override combinations that
-        violate a component's construction invariants (e.g. position
-        sizer confidence floor exceeding gate) must be re-validated here.
+        violate a component's construction invariants must be re-validated
+        here. Bounds mirror what the components enforce at construction:
+
+        * ``ConfidenceWeightedSizer``: ``base_fraction`` ∈ [0.001, 0.5],
+          ``min_confidence`` / ``min_confidence_floor`` ∈ [0, 1],
+          ``min_confidence_floor`` ≤ ``min_confidence``.
+        * ``VolatilityRiskManager``: ``base_risk`` ∈ [0.001, 0.1],
+          ``atr_multiplier`` ∈ [0.5, 5.0], ``min_risk`` ≤ ``max_risk``.
         """
         position_sizer = getattr(strategy, "position_sizer", None)
         if position_sizer is not None:
+            _check_numeric_bound(position_sizer, "base_fraction", 0.001, 0.5)
+            _check_numeric_bound(position_sizer, "min_confidence", 0.0, 1.0)
+            _check_numeric_bound(position_sizer, "min_confidence_floor", 0.0, 1.0)
             floor = getattr(position_sizer, "min_confidence_floor", None)
             gate = getattr(position_sizer, "min_confidence", None)
-            if (
-                floor is not None
-                and gate is not None
-                and isinstance(floor, int | float)
-                and isinstance(gate, int | float)
-                and floor > gate
-            ):
+            if isinstance(floor, int | float) and isinstance(gate, int | float) and floor > gate:
                 raise ValueError(
                     f"Invalid sizer state after overrides: "
                     f"min_confidence_floor ({floor}) must be <= "
                     f"min_confidence ({gate}); floor exceeding gate would "
                     f"over-size low-confidence signals."
+                )
+
+        risk_manager = getattr(strategy, "risk_manager", None)
+        if risk_manager is not None:
+            _check_numeric_bound(risk_manager, "base_risk", 0.001, 0.1)
+            _check_numeric_bound(risk_manager, "atr_multiplier", 0.5, 5.0)
+            _check_numeric_bound(risk_manager, "min_risk", 0.001, 0.2)
+            _check_numeric_bound(risk_manager, "max_risk", 0.001, 0.2)
+            min_risk = getattr(risk_manager, "min_risk", None)
+            max_risk = getattr(risk_manager, "max_risk", None)
+            if (
+                isinstance(min_risk, int | float)
+                and isinstance(max_risk, int | float)
+                and min_risk > max_risk
+            ):
+                raise ValueError(
+                    f"Invalid risk state after overrides: "
+                    f"min_risk ({min_risk}) must be <= max_risk ({max_risk})."
                 )
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:
@@ -261,3 +284,22 @@ class ExperimentRunner:
 
     def run_sweep(self, configs: list[ExperimentConfig]) -> list[ExperimentResult]:
         return [self.run(cfg) for cfg in configs]
+
+
+def _check_numeric_bound(
+    target: object,
+    attr: str,
+    lower: float,
+    upper: float,
+) -> None:
+    """Raise ValueError when ``target.attr`` is set and outside [lower, upper]."""
+    if not hasattr(target, attr):
+        return
+    value = getattr(target, attr)
+    if not isinstance(value, int | float):
+        return
+    if value < lower or value > upper:
+        raise ValueError(
+            f"Invalid state after overrides: {type(target).__name__}.{attr} "
+            f"({value}) must be in [{lower}, {upper}]."
+        )

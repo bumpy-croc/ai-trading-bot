@@ -43,7 +43,15 @@ def _handle_run(ns: argparse.Namespace) -> int:
         if ns.provider:
             suite.backtest.provider = ns.provider
         if ns.days:
-            suite.backtest.days = ns.days
+            if suite.backtest.start is not None and suite.backtest.end is not None:
+                logging.getLogger(__name__).warning(
+                    "--days=%d is ignored because the suite pins start=%s end=%s",
+                    ns.days,
+                    suite.backtest.start.isoformat(),
+                    suite.backtest.end.isoformat(),
+                )
+            else:
+                suite.backtest.days = ns.days
         if ns.no_cache:
             suite.backtest.use_cache = False
 

@@ -146,6 +146,9 @@ class PromotionManager:
         return {
             "id": suite_result.config.id,
             "description": suite_result.config.description,
+            # Freeze the actual resolved window into the snapshot so a
+            # promoted patch reproduces this run's data slice even when the
+            # original YAML used the relative ``days`` window.
             "backtest": {
                 "strategy": suite_result.config.backtest.strategy,
                 "symbol": suite_result.config.backtest.symbol,
@@ -155,16 +158,8 @@ class PromotionManager:
                 "provider": suite_result.config.backtest.provider,
                 "use_cache": suite_result.config.backtest.use_cache,
                 "random_seed": suite_result.config.backtest.random_seed,
-                "start": (
-                    suite_result.config.backtest.start.isoformat()
-                    if suite_result.config.backtest.start is not None
-                    else None
-                ),
-                "end": (
-                    suite_result.config.backtest.end.isoformat()
-                    if suite_result.config.backtest.end is not None
-                    else None
-                ),
+                "start": suite_result.baseline.config.start.isoformat(),
+                "end": suite_result.baseline.config.end.isoformat(),
             },
             "baseline": {
                 "name": suite_result.config.baseline.name,
@@ -179,6 +174,9 @@ class PromotionManager:
                 "significance_level": suite_result.config.comparison.significance_level,
             },
             "winner": report.winner,
+            # Persist variant exception messages so ``atb experiment show``
+            # and downstream analysis can surface the failure reason.
+            "errors": dict(getattr(suite_result, "errors", {}) or {}),
         }
 
     def record_run(
@@ -358,7 +356,6 @@ _ATTR_TO_COMPONENT: dict[str, str] = {
     "stop_loss_pct": "risk_manager",
     "take_profit_pct": "risk_manager",
     "risk_per_trade": "risk_manager",
-    "trailing_stop_pct": "risk_manager",
     "atr_multiplier": "risk_manager",
     "base_fraction": "position_sizer",
     "min_confidence": "position_sizer",

@@ -64,6 +64,10 @@ class SuiteReport:
     baseline_name: str
     winner: str | None
     rows: list[VariantReport] = field(default_factory=list)
+    # Map of variant_name → exception string for variants whose backtest
+    # raised. Persisted to the JSON/text/CSV artifacts so the reason
+    # survives overnight runs.
+    errors: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -283,11 +287,15 @@ class ExperimentReporter:
                 )
             )
 
-        ranked = sorted(
-            rows,
-            key=lambda r: _metric_for_row(r, settings.target_metric),
-            reverse=True,
-        )
+        def _sort_key(row: VariantReport) -> float:
+            # ERRORED variants go to the bottom regardless of their (zero)
+            # metrics — otherwise a crashed variant can rank above a losing
+            # baseline and mislead a reader.
+            if row.verdict == Verdict.ERRORED:
+                return -math.inf
+            return _metric_for_row(row, settings.target_metric)
+
+        ranked = sorted(rows, key=_sort_key, reverse=True)
         winner: str | None = None
         for row in ranked:
             if row.is_baseline:
@@ -305,6 +313,7 @@ class ExperimentReporter:
             baseline_name=suite_result.config.baseline.name,
             winner=winner,
             rows=ranked,
+            errors=dict(errors),
         )
 
     def render_text(self, report: SuiteReport) -> str:
@@ -336,6 +345,11 @@ class ExperimentReporter:
                 f"{row.win_rate:>6.2f} {row.total_trades:>5d} "
                 f"{delta_str} {conf_txt:>6} {tag:>18}"
             )
+        if report.errors:
+            lines.append("")
+            lines.append(f"Variant errors ({len(report.errors)}):")
+            for variant_name, err in report.errors.items():
+                lines.append(f"  - {variant_name}: {err}")
         return "\n".join(lines)
 
     def render_csv(self, report: SuiteReport) -> str:
