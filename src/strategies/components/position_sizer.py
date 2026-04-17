@@ -280,15 +280,15 @@ class ConfidenceWeightedSizer(PositionSizer):
             )
 
         if min_confidence_floor > min_confidence:
-            # Floor raises the effective confidence factor for signals that
-            # just pass the gate — a signal with confidence 0.35 and floor
-            # 0.6 would size as if confidence were 0.6. Usually a mistake.
-            logger.warning(
-                "min_confidence_floor (%s) > min_confidence (%s): "
-                "low-confidence signals that pass the gate will be sized "
-                "as if confidence equalled the floor.",
-                min_confidence_floor,
-                min_confidence,
+            # Floor above gate would size low-confidence signals as if they
+            # were stronger than they are. The experiment runner treats this
+            # as an invariant violation, so the constructor must too — any
+            # divergence between construction and override validation is a
+            # loophole for capital-loss bugs.
+            raise ValueError(
+                f"min_confidence_floor ({min_confidence_floor}) must be <= "
+                f"min_confidence ({min_confidence}); floor exceeding gate "
+                "would over-size low-confidence signals."
             )
 
         self.base_fraction = base_fraction

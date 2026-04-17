@@ -117,10 +117,17 @@ def _parse_backtest(data: Any, *, source: str) -> BacktestSettings:
     if not isinstance(days, int) or days <= 0:
         raise SuiteValidationError(f"{source}.days: must be a positive int, got {days!r}")
 
-    initial_balance = float(data.get("initial_balance", 1000.0))
-    if initial_balance <= 0:
+    import math as _math
+
+    raw_balance = data.get("initial_balance", 1000.0)
+    if isinstance(raw_balance, bool) or not isinstance(raw_balance, int | float):
         raise SuiteValidationError(
-            f"{source}.initial_balance: must be positive, got {initial_balance}"
+            f"{source}.initial_balance: must be a number, got {raw_balance!r}"
+        )
+    initial_balance = float(raw_balance)
+    if not _math.isfinite(initial_balance) or initial_balance <= 0:
+        raise SuiteValidationError(
+            f"{source}.initial_balance: must be finite and positive, got {initial_balance}"
         )
 
     start = _parse_datetime(data.get("start"), f"{source}.start")
@@ -176,10 +183,19 @@ def _parse_variant(data: Any, *, source: str, required_name: bool) -> VariantSpe
     overrides = data.get("overrides") or {}
     if not isinstance(overrides, dict):
         raise SuiteValidationError(f"{source}.overrides: must be a mapping")
-    for k in overrides:
+    for k, v in overrides.items():
         if not isinstance(k, str) or "." not in k:
             raise SuiteValidationError(
                 f"{source}.overrides: keys must be dotted '<strategy>.<attr>' strings, got {k!r}"
+            )
+        # YAML aliases / containers / anchors can round-trip into dict or
+        # list values (and recursive anchors self-reference, crashing
+        # json.dumps downstream). Constrain to JSON-safe scalars: the
+        # runner applies overrides with setattr one value at a time.
+        if not isinstance(v, str | int | float | bool) and v is not None:
+            raise SuiteValidationError(
+                f"{source}.overrides[{k!r}]: value must be a scalar "
+                f"(str, int, float, bool, or null), got {type(v).__name__}"
             )
 
     return VariantSpec(name=name or "baseline", overrides=dict(overrides))

@@ -374,6 +374,129 @@ def test_string_override_on_numeric_knob_is_caught_post_validation() -> None:
         runner._validate_post_override_invariants(strategy)
 
 
+def test_check_numeric_bound_rejects_nan() -> None:
+    """NaN silently passes < and > comparisons; explicit isfinite guard needed."""
+    from src.experiments.runner import _check_numeric_bound
+
+    class _Target:
+        base_fraction = math.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        _check_numeric_bound(_Target(), "base_fraction", 0.001, 0.5)
+
+
+def test_check_numeric_bound_rejects_inf() -> None:
+    from src.experiments.runner import _check_numeric_bound
+
+    class _Target:
+        base_fraction = math.inf
+
+    with pytest.raises(ValueError, match="finite"):
+        _check_numeric_bound(_Target(), "base_fraction", 0.001, 0.5)
+
+
+def test_runner_rejects_nan_base_fraction_via_override() -> None:
+    from src.experiments.runner import ExperimentRunner
+    from src.experiments.schemas import ParameterSet
+
+    runner = ExperimentRunner()
+    strategy = runner._load_strategy("ml_basic")
+    cfg = ExperimentConfig(
+        strategy_name="ml_basic",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        initial_balance=1000.0,
+        parameters=ParameterSet(
+            name="nan_frac",
+            values={"ml_basic.base_fraction": math.nan},
+        ),
+    )
+    runner._apply_parameter_overrides(strategy, cfg)
+    with pytest.raises(ValueError, match="finite"):
+        runner._validate_post_override_invariants(strategy)
+
+
+def test_suite_loader_rejects_nan_initial_balance() -> None:
+    with pytest.raises(SuiteValidationError, match="finite"):
+        parse_suite(
+            {
+                "id": "ok",
+                "backtest": {"strategy": "ml_basic", "initial_balance": float("nan")},
+                "baseline": {"name": "baseline", "overrides": {}},
+            }
+        )
+
+
+def test_suite_loader_rejects_inf_initial_balance() -> None:
+    with pytest.raises(SuiteValidationError, match="finite"):
+        parse_suite(
+            {
+                "id": "ok",
+                "backtest": {"strategy": "ml_basic", "initial_balance": float("inf")},
+                "baseline": {"name": "baseline", "overrides": {}},
+            }
+        )
+
+
+def test_confidence_weighted_sizer_raises_when_floor_exceeds_gate() -> None:
+    """Constructor and override paths must agree: floor>gate is invalid."""
+    from src.strategies.components.position_sizer import ConfidenceWeightedSizer
+
+    with pytest.raises(ValueError, match="min_confidence_floor"):
+        ConfidenceWeightedSizer(
+            base_fraction=0.05,
+            min_confidence=0.3,
+            min_confidence_floor=0.5,
+        )
+
+
+def test_suite_loader_rejects_non_scalar_override_value() -> None:
+    """Recursive YAML anchors / nested containers crash JSON serialization."""
+    with pytest.raises(SuiteValidationError, match="scalar"):
+        parse_suite(
+            {
+                "id": "ok",
+                "backtest": {"strategy": "ml_basic"},
+                "baseline": {"name": "baseline", "overrides": {}},
+                "variants": [
+                    {"name": "bad", "overrides": {"ml_basic.model_name": ["list", "not", "scalar"]}}
+                ],
+            }
+        )
+
+
+def test_suite_loader_accepts_scalar_override_values() -> None:
+    cfg = parse_suite(
+        {
+            "id": "ok",
+            "backtest": {"strategy": "ml_basic"},
+            "baseline": {"name": "baseline", "overrides": {}},
+            "variants": [
+                {
+                    "name": "good",
+                    "overrides": {
+                        "ml_basic.long_entry_threshold": 0.001,
+                        "ml_basic.model_name": "basic",
+                        "ml_basic.use_prediction_engine": True,
+                    },
+                }
+            ],
+        }
+    )
+    assert cfg.variants[0].name == "good"
+
+
+def test_ledger_artifacts_dir_accepts_single_char_slug(tmp_path: Path) -> None:
+    """Slug alphabet must match the loader: one-char ids are legal."""
+    from src.experiments.ledger import Ledger
+
+    ledger = Ledger(root=tmp_path)
+    path = ledger.artifacts_dir("a", "1")
+    assert str(path).startswith(str(tmp_path.resolve()))
+
+
 def test_timestamp_includes_microseconds_and_uuid_suffix() -> None:
     from src.experiments.promotion import _timestamp
 

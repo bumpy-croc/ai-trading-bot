@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 # root from both the CLI (``atb experiment run``) and programmatic callers
 # (tests, notebooks); validating here guards against traversal regardless of
 # who builds the path.
-_SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]+$")
+# Matches the suite-loader slug (:data:`src.experiments.suite_loader._SLUG_RE`)
+# so a valid suite id / variant name cannot be rejected by the ledger alone.
+_SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$")
 
 DEFAULT_ROOT = Path("experiments/.history")
 LEDGER_FILE = "ledger.jsonl"

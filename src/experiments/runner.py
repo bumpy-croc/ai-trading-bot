@@ -313,11 +313,13 @@ def _check_numeric_bound(
 ) -> None:
     """Raise ValueError when ``target.attr`` is set and outside [lower, upper].
 
-    Also raises when the attribute exists but holds a non-numeric value, so
-    a string override like ``base_fraction: "lots"`` cannot sneak through
-    (``_coerce_value`` returns such inputs unchanged when ``float()`` of
-    them fails).
+    Also raises when the attribute exists but holds a non-numeric value
+    (string override slipping past ``_coerce_value``), or a non-finite one
+    (NaN fails both ``< lower`` and ``> upper`` comparisons, so an earlier
+    version silently accepted it).
     """
+    import math as _math
+
     if not hasattr(target, attr):
         return
     value = getattr(target, attr)
@@ -325,6 +327,11 @@ def _check_numeric_bound(
         raise ValueError(
             f"Invalid state after overrides: {type(target).__name__}.{attr} "
             f"must be numeric, got {value!r}."
+        )
+    if not _math.isfinite(value):
+        raise ValueError(
+            f"Invalid state after overrides: {type(target).__name__}.{attr} "
+            f"must be finite, got {value!r}."
         )
     if value < lower or value > upper:
         raise ValueError(
