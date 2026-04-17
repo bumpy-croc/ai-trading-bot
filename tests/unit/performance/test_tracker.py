@@ -1,5 +1,6 @@
 """Unit tests for src.performance.tracker module."""
 
+import dataclasses
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -704,3 +705,150 @@ class TestPerformanceTrackerEdgeCases:
         # Should have recorded all trades without errors
         metrics = tracker.get_metrics()
         assert metrics.total_trades == 250  # 50 trades * 5 threads
+
+
+def _make_trade(pnl: float, symbol: str = "BTCUSDT", side: str = "long") -> Mock:
+    """Build a mock trade matching TradeProtocol attributes."""
+    trade = Mock()
+    trade.pnl = pnl
+    trade.entry_time = datetime.now(UTC) - timedelta(hours=1)
+    trade.exit_time = datetime.now(UTC)
+    trade.symbol = symbol
+    trade.side = side
+    return trade
+
+
+@pytest.mark.fast
+class TestPerformanceTrackerMetricsCache:
+    """Tests for get_metrics() caching with dirty-flag invalidation."""
+
+    def test_cache_hit_returns_same_object(self):
+        """Repeated get_metrics() calls without state changes return the cached instance."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        tracker.record_trade(_make_trade(50.0), fee=0.1)
+
+        first = tracker.get_metrics()
+        second = tracker.get_metrics()
+
+        # Same identity proves cache was used (not recomputed)
+        assert first is second
+
+    def test_cache_invalidated_after_record_trade(self):
+        """record_trade() invalidates the cache so the next read recomputes."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        tracker.record_trade(_make_trade(50.0), fee=0.1)
+        cached = tracker.get_metrics()
+        assert cached.total_trades == 1
+
+        tracker.record_trade(_make_trade(25.0), fee=0.1)
+        refreshed = tracker.get_metrics()
+
+        assert refreshed is not cached
+        assert refreshed.total_trades == 2
+        assert refreshed.total_pnl == 75.0
+
+    def test_cache_invalidated_after_update_balance(self):
+        """update_balance() invalidates the cache."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        cached = tracker.get_metrics()
+        assert cached.current_balance == 10000
+
+        tracker.update_balance(11000.0)
+        refreshed = tracker.get_metrics()
+
+        assert refreshed is not cached
+        assert refreshed.current_balance == 11000.0
+
+    def test_cache_invalidated_after_reset(self):
+        """reset() clears the cache."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        tracker.record_trade(_make_trade(50.0), fee=0.1)
+        cached = tracker.get_metrics()
+        assert cached.total_trades == 1
+
+        tracker.reset()
+        refreshed = tracker.get_metrics()
+
+        assert refreshed is not cached
+        assert refreshed.total_trades == 0
+
+    def test_cached_value_equals_fresh_recompute(self):
+        """Cache-hit values match what an uncached recompute would produce.
+
+        Guards against a future refactor that adds a field to the recompute
+        path but forgets the cache (or vice-versa): identity-only tests would
+        miss this, but a value-level comparison catches any drift.
+        """
+        tracker = PerformanceTracker(initial_balance=10000)
+        tracker.record_trade(_make_trade(50.0), fee=0.1)
+        tracker.record_trade(_make_trade(-20.0), fee=0.1)
+        tracker.update_balance(10030.0)
+
+        cached = tracker.get_metrics()
+
+        # Force a recompute without changing any observable state: flip the
+        # dirty flag directly. The next call takes the recompute branch.
+        tracker._metrics_dirty = True
+        recomputed = tracker.get_metrics()
+
+        # Value-level equality across every field proves the two paths agree.
+        assert cached is not recomputed
+        assert cached.to_dict() == recomputed.to_dict()
+
+    def test_cached_metrics_are_immutable(self):
+        """PerformanceMetrics is frozen so callers cannot corrupt the cache."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        tracker.record_trade(_make_trade(50.0), fee=0.1)
+        metrics = tracker.get_metrics()
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            metrics.total_trades = 999  # type: ignore[misc]
+
+    def test_cache_thread_safety_concurrent_reads_writes(self):
+        """Concurrent record_trade and get_metrics do not corrupt state."""
+        import threading
+
+        tracker = PerformanceTracker(initial_balance=10000)
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def writer() -> None:
+            try:
+                for _ in range(100):
+                    tracker.record_trade(_make_trade(1.0), fee=0.0)
+                    tracker.update_balance(tracker.current_balance + 1.0)
+            except BaseException as exc:  # pragma: no cover - surfaced via assert
+                errors.append(exc)
+            finally:
+                stop.set()
+
+        def reader() -> None:
+            try:
+                while not stop.is_set():
+                    metrics = tracker.get_metrics()
+                    # Writer only produces winning trades (pnl=1.0) so zero-pnl
+                    # and losing counters must stay at zero. Any cache
+                    # staleness that let winning_trades advance while
+                    # total_trades lagged would fail this equality.
+                    assert metrics.total_trades == (
+                        metrics.winning_trades + metrics.losing_trades
+                    ), (
+                        "inconsistent cached snapshot: "
+                        f"total_trades={metrics.total_trades} "
+                        f"winning_trades={metrics.winning_trades} "
+                        f"losing_trades={metrics.losing_trades}"
+                    )
+            except BaseException as exc:  # pragma: no cover - surfaced via assert
+                errors.append(exc)
+
+        threads = [threading.Thread(target=writer)]
+        threads.extend(threading.Thread(target=reader) for _ in range(3))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        final = tracker.get_metrics()
+        assert final.total_trades == 100
+        assert final.winning_trades == 100

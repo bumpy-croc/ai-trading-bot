@@ -41,9 +41,16 @@ MIN_VAR_BALANCE_POINTS = 30
 MIN_VAR_RETURNS = 20
 
 
-@dataclass
+@dataclass(frozen=True)
 class PerformanceMetrics:
     """Comprehensive performance metrics container.
+
+    Immutable: instances are returned by reference from
+    ``PerformanceTracker.get_metrics()`` and may be shared across callers via
+    the metrics cache. Mutation would corrupt the cached snapshot seen by
+    every subsequent reader; frozen=True enforces this contract at the type
+    system level.
+
 
     Attributes:
         # Trade statistics
@@ -216,6 +223,11 @@ class PerformanceTracker:
         # Thread safety lock for mutable state (reentrant to allow nested calls)
         self._lock = threading.RLock()
 
+        # Metrics cache: avoid recomputing get_metrics() on every call in
+        # high-frequency live trading. Invalidated by any state-mutating method.
+        self._cached_metrics: PerformanceMetrics | None = None
+        self._metrics_dirty = True
+
     def record_trade(
         self,
         trade: TradeProtocol,
@@ -256,6 +268,11 @@ class PerformanceTracker:
         exit_time = self._normalize_timestamp(exit_time_raw) if exit_time_raw is not None else None
 
         with self._lock:
+            # Invalidate cache up-front: if any statement below raises after
+            # partial state mutation, a clean cache over dirty state would
+            # silently serve stale metrics for the rest of the process.
+            self._metrics_dirty = True
+
             # Update trade counts (explicitly handle zero-PnL case)
             if pnl > 0:
                 self._winning_trades += 1
@@ -337,6 +354,9 @@ class PerformanceTracker:
             raise ValueError(f"balance must be non-negative, got {balance}")
 
         with self._lock:
+            # Invalidate cache up-front; see ``record_trade`` for rationale.
+            self._metrics_dirty = True
+
             self.current_balance = balance
 
             # Update peak balance
@@ -367,6 +387,12 @@ class PerformanceTracker:
             PerformanceMetrics with calculated values.
         """
         with self._lock:
+            # Return cached metrics if no state has changed since last computation.
+            # Significantly reduces CPU usage in high-frequency live trading where
+            # get_metrics() is called repeatedly between state mutations.
+            if not self._metrics_dirty and self._cached_metrics is not None:
+                return self._cached_metrics
+
             # Include zero-PnL trades in total count for consistency
             total_trades = self._winning_trades + self._losing_trades + self._zero_pnl_trades
 
@@ -460,7 +486,7 @@ class PerformanceTracker:
                 if len(returns) >= MIN_VAR_RETURNS:
                     var_95 = perf_metrics.value_at_risk(returns, confidence=0.95)
 
-            return PerformanceMetrics(
+            metrics = PerformanceMetrics(
                 # Trade statistics
                 total_trades=total_trades,
                 winning_trades=self._winning_trades,
@@ -496,6 +522,11 @@ class PerformanceTracker:
                 current_balance=self.current_balance,
                 peak_balance=self.peak_balance,
             )
+
+            # Store in cache; cleared by any state-mutating method
+            self._cached_metrics = metrics
+            self._metrics_dirty = False
+            return metrics
 
     def get_trade_history(self) -> list[dict]:
         """Get list of recorded trades.
@@ -590,6 +621,14 @@ class PerformanceTracker:
                 if not math.isfinite(initial_balance):
                     raise ValueError(f"initial_balance must be finite, got {initial_balance}")
                 self.initial_balance = initial_balance
+
+            # Invalidate cache up-front; see ``record_trade`` for rationale.
+            # Both fields are cleared here (rather than only the dirty flag)
+            # because reset represents a full state discontinuity — release
+            # the stale reference for GC as well.
+            self._cached_metrics = None
+            self._metrics_dirty = True
+
             self.current_balance = self.initial_balance
             self.peak_balance = self.initial_balance
             self.max_drawdown = 0.0
