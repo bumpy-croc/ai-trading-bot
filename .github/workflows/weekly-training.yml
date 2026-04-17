@@ -109,7 +109,7 @@ jobs:
           echo "aws_preflight_failed=true" >> "$GITHUB_OUTPUT"
           exit 1
         fi
-        echo "AWS identity: $OUTPUT"
+        echo "AWS credential preflight OK"
 
     - name: Train model on SageMaker
       env:
