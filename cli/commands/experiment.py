@@ -110,13 +110,25 @@ def _handle_list(ns: argparse.Namespace) -> int:
             print("(no suites recorded)")
             return 0
 
-        header = f"{'Timestamp':<26} {'Suite':<30} {'Winner':<20} {'Metric':<18}"
+        header = (
+            f"{'Timestamp':<26} {'Suite':<30} {'Winner':<20} "
+            f"{'Metric':<12} {'BaseSharpe':>10} {'BaseReturn%':>12}"
+        )
         print(header)
         print("-" * len(header))
         for e in entries:
+            baseline_sharpe = e.metrics.get("baseline_sharpe")
+            baseline_return = e.metrics.get("baseline_return")
+            sharpe_str = (
+                f"{baseline_sharpe:>10.3f}" if baseline_sharpe is not None else f"{'—':>10}"
+            )
+            return_str = (
+                f"{baseline_return:>12.2f}" if baseline_return is not None else f"{'—':>12}"
+            )
             print(
                 f"{e.timestamp:<26} {e.suite_id:<30} "
-                f"{(e.winner or '—'):<20} {e.target_metric:<18}"
+                f"{(e.winner or '—'):<20} {e.target_metric:<12} "
+                f"{sharpe_str} {return_str}"
             )
         return 0
     except Exception as exc:
@@ -209,7 +221,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     run_p.set_defaults(func=_handle_run)
 
     list_p = subs.add_parser("list", help="List recorded suite runs.")
-    list_p.add_argument("--limit", type=int, default=20)
+    list_p.add_argument("--limit", type=_positive_int, default=20)
     list_p.set_defaults(func=_handle_list)
 
     show_p = subs.add_parser("show", help="Show the most recent report for a suite.")

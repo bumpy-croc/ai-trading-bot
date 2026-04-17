@@ -143,6 +143,17 @@ class PromotionManager:
             raise PromotionError(f"Variant {variant_name!r} not in suite {suite_id!r}")
 
         verdict = Verdict(variant_row["verdict"])
+        # ERRORED variants never had a measured run — their metrics are
+        # sentinel zeros. Promoting one would stamp a misleading version
+        # record that future lineage queries treat as a real data point.
+        # --force is meant for "HOLD that I want anyway," not for crashed
+        # experiments; reject ERRORED regardless of force.
+        if verdict == Verdict.ERRORED:
+            raise PromotionError(
+                f"Variant {variant_name!r} has verdict ERRORED; its backtest "
+                "raised, so there are no real metrics to promote. Fix the "
+                "variant and rerun the suite before promoting."
+            )
         if verdict != Verdict.PROMOTE and not force:
             raise PromotionError(
                 f"Variant {variant_name!r} has verdict {verdict.value}; use --force to override."

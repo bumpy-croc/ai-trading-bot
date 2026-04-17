@@ -153,17 +153,35 @@ class ExperimentRunner:
                     f"{type(target).__name__}: {exc}"
                 ) from exc
 
-        # Risk-related attributes must always land in the strategy's risk
-        # overrides mapping — the risk manager consults this at runtime, and
-        # some strategies (e.g. ml_basic) do not expose them as instance attrs.
+        # Risk-related attributes must land in the strategy's risk-overrides
+        # mapping AND the active risk manager must actually consume it at
+        # trade time. Only CoreRiskAdapter reads ``context["strategy_overrides"]``
+        # (via ``_resolve_overrides``). Other risk managers
+        # (``RegimeAdaptiveRiskManager`` for ml_adaptive,
+        # ``VolatilityRiskManager`` / ``FixedRiskManager``) derive stops
+        # from regime / ATR / constants and would silently ignore the
+        # override — producing meaningless variant rankings.
         if attr in {"stop_loss_pct", "take_profit_pct"}:
             try:
                 numeric_value = float(value)  # type: ignore[arg-type]
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"Override {attr!r} must be numeric, got {value!r}") from exc
+            if risk_manager is not None and not hasattr(risk_manager, "_strategy_overrides"):
+                raise ValueError(
+                    f"Override {attr!r} is not supported for "
+                    f"{type(risk_manager).__name__}; the risk manager does "
+                    "not consume strategy_overrides at trade time. Only "
+                    "CoreRiskAdapter-backed strategies (ml_basic, "
+                    "ml_sentiment, hyper_growth) honor this knob."
+                )
             overrides = getattr(strategy, "_risk_overrides", None) or {}
             overrides[attr] = numeric_value
             strategy._risk_overrides = overrides
+            # Mirror onto the risk manager's internal overrides map so that
+            # ``_resolve_overrides`` (merge adapter + context) sees the
+            # change even for code paths that don't pass context through.
+            if risk_manager is not None and hasattr(risk_manager, "_strategy_overrides"):
+                risk_manager._strategy_overrides[attr] = numeric_value
             applied = True
 
         return applied
@@ -176,6 +194,10 @@ class ExperimentRunner:
         the override is a non-integer ``float``, keep the float precision
         rather than silently truncating (e.g. ``confidence_multiplier = 12``
         overridden to ``20.5`` must not become ``20``).
+
+        For numeric targets, coercion failures raise ``ValueError`` — a
+        silent fallback to the raw string would corrupt the attribute and
+        push the failure deep into the backtest.
         """
 
         if current is None:
@@ -186,7 +208,11 @@ class ExperimentRunner:
             return new_value
         try:
             return target_type(new_value)  # type: ignore[call-arg]
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            if target_type in (int, float):
+                raise ValueError(
+                    f"override value {new_value!r} is not convertible to " f"{target_type.__name__}"
+                ) from exc
             return new_value
 
     @staticmethod
@@ -221,6 +247,18 @@ class ExperimentRunner:
             ):
                 _require_finite_attr(signal_generator, attr)
             _require_finite_attr(signal_generator, "confidence_multiplier", positive=True)
+            # sequence_length slices DataFrames via ``.iloc[index - n : index]``
+            # and must stay an integer. The ``_coerce_value`` widen-on-non-int
+            # rule preserves float precision for multipliers; we undo that
+            # here for this specific index-like attribute.
+            seq_len = getattr(signal_generator, "sequence_length", None)
+            if seq_len is not None:
+                if isinstance(seq_len, bool) or not isinstance(seq_len, int | float):
+                    raise ValueError(f"sequence_length must be numeric, got {seq_len!r}")
+                if isinstance(seq_len, float) and not seq_len.is_integer():
+                    raise ValueError(f"sequence_length must be a whole number, got {seq_len!r}")
+                if int(seq_len) < 1:
+                    raise ValueError(f"sequence_length must be >= 1, got {seq_len!r}")
 
         position_sizer = getattr(strategy, "position_sizer", None)
         if position_sizer is not None:

@@ -349,9 +349,10 @@ def test_metric_rejects_nan_calmar_inputs() -> None:
         _metric(result, "calmar")
 
 
-def test_string_override_on_numeric_knob_is_caught_post_validation() -> None:
-    """A YAML override `"abc"` on a numeric knob slips through _coerce_value;
-    the post-override validator must reject it rather than deferring to signal gen."""
+def test_string_override_on_numeric_knob_fails_fast_in_coerce() -> None:
+    """A YAML override ``"abc"`` on a numeric knob is rejected at coerce time —
+    _coerce_value raises for numeric targets instead of returning the raw
+    value and corrupting the attribute."""
     from src.experiments.runner import ExperimentRunner
     from src.experiments.schemas import ParameterSet
 
@@ -369,10 +370,8 @@ def test_string_override_on_numeric_knob_is_caught_post_validation() -> None:
             values={"ml_basic.long_entry_threshold": "abc"},
         ),
     )
-    runner._apply_parameter_overrides(strategy, cfg)
-    # Value is now a str on signal_generator.long_entry_threshold — post-validation must raise.
-    with pytest.raises(ValueError, match="numeric"):
-        runner._validate_post_override_invariants(strategy)
+    with pytest.raises(ValueError, match="not convertible to float"):
+        runner._apply_parameter_overrides(strategy, cfg)
 
 
 def test_check_numeric_bound_rejects_nan() -> None:
