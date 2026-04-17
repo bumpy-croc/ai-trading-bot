@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,13 @@ from src.experiments.reporter import SuiteReport
 from src.experiments.suite import SuiteResult
 
 logger = logging.getLogger(__name__)
+
+# Mirrors the alphabets enforced in :mod:`src.experiments.suite_loader` and
+# :mod:`src.experiments.promotion`. Artifact paths are appended to the ledger
+# root from both the CLI (``atb experiment run``) and programmatic callers
+# (tests, notebooks); validating here guards against traversal regardless of
+# who builds the path.
+_SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]+$")
 
 DEFAULT_ROOT = Path("experiments/.history")
 LEDGER_FILE = "ledger.jsonl"
@@ -67,7 +75,24 @@ class Ledger:
         return self.root / LEDGER_FILE
 
     def artifacts_dir(self, suite_id: str, run_id: str) -> Path:
-        return self.root / suite_id / run_id
+        """Return the artifact directory for ``suite_id``/``run_id``.
+
+        Rejects path-traversal attempts on either segment and confirms the
+        resolved path stays within :attr:`root` — every programmatic caller
+        (CLI, tests, notebooks) needs the same guarantee.
+        """
+        for segment in (suite_id, run_id):
+            if not isinstance(segment, str) or not _SAFE_SEGMENT_RE.match(segment):
+                raise ValueError(
+                    f"unsafe path segment {segment!r}; must match " f"{_SAFE_SEGMENT_RE.pattern}"
+                )
+        root_resolved = self.root.resolve()
+        candidate = (self.root / suite_id / run_id).resolve()
+        if candidate != root_resolved and root_resolved not in candidate.parents:
+            raise ValueError(
+                f"resolved artifact path {candidate} is outside ledger root {root_resolved}"
+            )
+        return candidate
 
     def append(
         self,

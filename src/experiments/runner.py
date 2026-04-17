@@ -311,12 +311,21 @@ def _check_numeric_bound(
     lower: float,
     upper: float,
 ) -> None:
-    """Raise ValueError when ``target.attr`` is set and outside [lower, upper]."""
+    """Raise ValueError when ``target.attr`` is set and outside [lower, upper].
+
+    Also raises when the attribute exists but holds a non-numeric value, so
+    a string override like ``base_fraction: "lots"`` cannot sneak through
+    (``_coerce_value`` returns such inputs unchanged when ``float()`` of
+    them fails).
+    """
     if not hasattr(target, attr):
         return
     value = getattr(target, attr)
-    if not isinstance(value, int | float):
-        return
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ValueError(
+            f"Invalid state after overrides: {type(target).__name__}.{attr} "
+            f"must be numeric, got {value!r}."
+        )
     if value < lower or value > upper:
         raise ValueError(
             f"Invalid state after overrides: {type(target).__name__}.{attr} "
@@ -325,17 +334,22 @@ def _check_numeric_bound(
 
 
 def _require_finite_attr(target: object, attr: str, *, positive: bool = False) -> None:
-    """Raise ValueError when ``target.attr`` is set to a non-finite number.
+    """Raise ValueError when ``target.attr`` is non-numeric or non-finite.
 
-    ``positive=True`` additionally requires the value to be > 0.
+    ``positive=True`` additionally requires the value to be > 0. A string
+    override to a numeric knob (e.g. YAML ``long_entry_threshold: "abc"``)
+    no longer slips through: we require an ``int | float`` and fail loudly.
     """
     import math as _math  # local import to avoid polluting module-level name
 
     if not hasattr(target, attr):
         return
     value = getattr(target, attr)
-    if not isinstance(value, int | float):
-        return
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ValueError(
+            f"Invalid state after overrides: {type(target).__name__}.{attr} "
+            f"must be numeric, got {value!r}."
+        )
     if not _math.isfinite(value):
         raise ValueError(
             f"Invalid state after overrides: {type(target).__name__}.{attr} "

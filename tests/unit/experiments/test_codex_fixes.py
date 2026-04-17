@@ -91,6 +91,36 @@ def test_safe_child_accepts_legal_segments(tmp_path: Path) -> None:
     assert str(p).startswith(str(tmp_path.resolve()))
 
 
+def test_safe_child_allows_generated_long_filenames(tmp_path: Path) -> None:
+    """Composed filenames (strategy-variant-timestamp-uuid) exceed the slug
+    length allowed for user-provided fields; the path check must still accept
+    them as long as no separator/null/.. appears."""
+    from src.experiments.promotion import _safe_child
+
+    # e.g. ``<strategy>-<variant_128>-<timestamp_30>.json`` ≈ 170 chars
+    long_name = f"{'x' * 128}-{'y' * 128}-20260101T000000_000000Z_abcdef12.json"
+    p = _safe_child(tmp_path, long_name)
+    assert str(p).startswith(str(tmp_path.resolve()))
+
+
+def test_ledger_artifacts_dir_rejects_traversal(tmp_path: Path) -> None:
+    from src.experiments.ledger import Ledger
+
+    ledger = Ledger(root=tmp_path)
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        ledger.artifacts_dir("../escape", "run1")
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        ledger.artifacts_dir("ok_id", "..")
+
+
+def test_ledger_artifacts_dir_accepts_legal_segments(tmp_path: Path) -> None:
+    from src.experiments.ledger import Ledger
+
+    ledger = Ledger(root=tmp_path)
+    path = ledger.artifacts_dir("suite_v1", "run_20260417T000000_abcd1234")
+    assert str(path).startswith(str(tmp_path.resolve()))
+
+
 # ----------------------------------------------------------------------------
 # P1: Non-finite override rejection at signal generator construction
 # ----------------------------------------------------------------------------
@@ -278,6 +308,70 @@ def test_timestamp_is_unique_within_same_second() -> None:
 
     seen = {_timestamp() for _ in range(50)}
     assert len(seen) == 50
+
+
+def test_metric_rejects_nan_sharpe() -> None:
+    """NaN Sharpe would propagate silently through ranking and verdict."""
+    from src.experiments.reporter import _metric
+
+    cfg = _make_cfg()
+    result = ExperimentResult(
+        config=cfg,
+        total_trades=100,
+        win_rate=55.0,
+        total_return=1.0,
+        annualized_return=2.0,
+        max_drawdown=5.0,
+        sharpe_ratio=math.nan,
+        final_balance=1010.0,
+    )
+    with pytest.raises(ValueError, match="NaN"):
+        _metric(result, "sharpe_ratio")
+
+
+def test_metric_rejects_nan_calmar_inputs() -> None:
+    """Calmar with NaN annualized_return must not silently yield a number."""
+    from src.experiments.reporter import _metric
+
+    cfg = _make_cfg()
+    result = ExperimentResult(
+        config=cfg,
+        total_trades=100,
+        win_rate=55.0,
+        total_return=1.0,
+        annualized_return=math.nan,
+        max_drawdown=5.0,
+        sharpe_ratio=1.0,
+        final_balance=1010.0,
+    )
+    with pytest.raises(ValueError, match="NaN"):
+        _metric(result, "calmar")
+
+
+def test_string_override_on_numeric_knob_is_caught_post_validation() -> None:
+    """A YAML override `"abc"` on a numeric knob slips through _coerce_value;
+    the post-override validator must reject it rather than deferring to signal gen."""
+    from src.experiments.runner import ExperimentRunner
+    from src.experiments.schemas import ParameterSet
+
+    runner = ExperimentRunner()
+    strategy = runner._load_strategy("ml_basic")
+    cfg = ExperimentConfig(
+        strategy_name="ml_basic",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        initial_balance=1000.0,
+        parameters=ParameterSet(
+            name="stringy",
+            values={"ml_basic.long_entry_threshold": "abc"},
+        ),
+    )
+    runner._apply_parameter_overrides(strategy, cfg)
+    # Value is now a str on signal_generator.long_entry_threshold — post-validation must raise.
+    with pytest.raises(ValueError, match="numeric"):
+        runner._validate_post_override_invariants(strategy)
 
 
 def test_timestamp_includes_microseconds_and_uuid_suffix() -> None:

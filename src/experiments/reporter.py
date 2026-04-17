@@ -88,9 +88,20 @@ def _metric(result: ExperimentResult, metric: str) -> float:
     return is positive (perfect loss-free profitability ranks best, not
     worst). A zero-return zero-drawdown combination is ``0.0``; negative
     return with zero drawdown is ``-math.inf``.
+
+    NaN inputs are rejected: they propagate silently through sorting and
+    comparisons (``nan`` compares False to everything), so a strategy that
+    emits NaN Sharpe / annualized return would be classified HOLD and
+    rendered as ``−∞``. Fail loudly instead.
     """
     if metric == "calmar":
         dd = abs(result.max_drawdown)
+        if math.isnan(result.annualized_return) or math.isnan(result.max_drawdown):
+            raise ValueError(
+                f"ExperimentResult has NaN inputs for Calmar "
+                f"(annualized_return={result.annualized_return!r}, "
+                f"max_drawdown={result.max_drawdown!r})"
+            )
         if dd < 1e-9:
             ann = result.annualized_return
             if ann > 0:
@@ -104,7 +115,13 @@ def _metric(result: ExperimentResult, metric: str) -> float:
     value = getattr(result, metric, None)
     if value is None:
         raise ValueError(f"ExperimentResult has no attribute {metric!r}")
-    return float(value)
+    coerced = float(value)
+    if math.isnan(coerced):
+        raise ValueError(
+            f"ExperimentResult.{metric} is NaN; refusing to rank an experiment "
+            "whose metric is not a real number."
+        )
+    return coerced
 
 
 def _metric_delta(variant_val: float, baseline_val: float) -> float:
@@ -357,11 +374,12 @@ class ExperimentReporter:
         for row in report.rows:
             conf_txt = "—" if row.ranking_confidence is None else f"{row.ranking_confidence:0.3f}"
             tag = row.verdict.value + (" *" if row.is_baseline else "")
-            delta_str = (
-                f"{row.delta_vs_baseline:>+8.3f}"
-                if math.isfinite(row.delta_vs_baseline)
-                else f"{'+∞' if row.delta_vs_baseline > 0 else '−∞':>8}"
-            )
+            if math.isnan(row.delta_vs_baseline):
+                delta_str = f"{'NaN':>8}"
+            elif math.isfinite(row.delta_vs_baseline):
+                delta_str = f"{row.delta_vs_baseline:>+8.3f}"
+            else:
+                delta_str = f"{'+∞' if row.delta_vs_baseline > 0 else '−∞':>8}"
             lines.append(
                 f"{row.name:<24} {row.total_return:>8.2f} {row.annualized_return:>8.2f} "
                 f"{row.sharpe_ratio:>7.2f} {row.max_drawdown:>7.2f} "

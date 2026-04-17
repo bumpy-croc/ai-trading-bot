@@ -21,21 +21,27 @@ import yaml
 logger = logging.getLogger(__name__)
 
 # Defense-in-depth: the suite loader already restricts suite/variant/strategy
-# names to this slug alphabet, but the promotion writer validates again before
-# building filesystem paths so a programmatic caller cannot bypass the loader.
-_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}$")
+# names to a length-bounded slug alphabet. The promotion writer composes
+# generated filenames (e.g. ``<strategy>-<variant>-<timestamp>.json``) that
+# can exceed that per-segment length even when every user-provided component
+# was valid. The check here therefore rejects any path separator, null byte,
+# or ``..`` component but does not reimpose the upstream length cap.
+_FILENAME_FORBIDDEN = re.compile(r"[\\/\x00]|(?:^|[\\/])\.\.(?:$|[\\/])")
 
 
 def _safe_child(root: Path, *segments: str) -> Path:
-    """Return ``root / *segments`` after slug-validating each segment and
+    """Return ``root / *segments`` after sanity-checking each segment and
     confirming the resolved path stays inside ``root``. Raises
     :class:`ValueError` if either check fails.
     """
     root = root.resolve()
     for segment in segments:
-        if not isinstance(segment, str) or not _SAFE_FILENAME_RE.match(segment):
+        if not isinstance(segment, str) or not segment:
+            raise ValueError(f"unsafe path segment {segment!r}; must be a non-empty string")
+        if _FILENAME_FORBIDDEN.search(segment) or segment in {".", ".."}:
             raise ValueError(
-                f"unsafe path segment {segment!r}; must match " f"{_SAFE_FILENAME_RE.pattern}"
+                f"unsafe path segment {segment!r}; must not contain path separators, "
+                "null bytes, or '..' traversal."
             )
     candidate = root.joinpath(*segments).resolve()
     if root != candidate and root not in candidate.parents:

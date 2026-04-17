@@ -177,12 +177,16 @@ def test_ranking_is_stable_for_ties() -> None:
     assert variant_names == ["tie_a", "tie_b"]
 
 
-def test_isnan_values_in_metric_gracefully_handled() -> None:
-    """NaN baseline → confidence is None (shouldn't crash)."""
-    base = _result(sharpe=math.nan, trades=200)
-    var = _result(sharpe=1.5, trades=200)
-    conf = _ranking_confidence(base, var, "sharpe_ratio")
-    assert conf is None
+def test_nan_metric_values_raise_in_metric() -> None:
+    """NaN metrics must fail loudly — prior policy (silent None confidence)
+    allowed NaN to reach verdict classification and render as ``−∞``."""
+    import pytest as _pytest
+
+    from src.experiments.reporter import _metric
+
+    result = _result(sharpe=math.nan, trades=200)
+    with _pytest.raises(ValueError, match="NaN"):
+        _metric(result, "sharpe_ratio")
 
 
 def test_calmar_opposite_infinities_classified_correctly() -> None:
