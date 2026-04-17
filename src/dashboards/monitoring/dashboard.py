@@ -398,22 +398,6 @@ class MonitoringDashboard:
             except (ValueError, TypeError):
                 return jsonify({"success": False, "error": "Invalid balance value"})
 
-        @self.app.route("/api/optimizer/cycles")
-        def get_optimizer_cycles():
-            """List recent optimizer cycles."""
-            limit_raw = request.args.get("limit", 50, type=int)
-            offset_raw = request.args.get("offset", 0, type=int)
-
-            # Validate parameters to prevent DoS attacks
-            limit = _validate_limit(limit_raw, default=50, max_limit=1000)
-            offset = _validate_offset(offset_raw, default=0)
-
-            try:
-                rows = self.db_manager.fetch_optimization_cycles(limit=limit, offset=offset)
-                return jsonify({"items": rows, "count": len(rows)})
-            except Exception as e:
-                return jsonify({"items": [], "error": str(e)}), 200
-
         @self.app.route("/api/correlation/matrix")
         def get_correlation_matrix():
             """Return recent correlation matrix entries (flattened)."""

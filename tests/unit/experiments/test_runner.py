@@ -1,7 +1,11 @@
 from datetime import UTC, datetime, timedelta
 
-from src.optimizer.runner import ExperimentRunner
-from src.optimizer.schemas import ExperimentConfig, ParameterSet
+import pytest
+
+from src.experiments.runner import ExperimentRunner
+from src.experiments.schemas import ExperimentConfig, ParameterSet
+
+pytestmark = pytest.mark.fast
 
 
 def test_runner_with_mock_provider_executes():

@@ -694,36 +694,6 @@ class AccountBalance(Base):
         return balance_record
 
 
-class OptimizationCycle(Base):
-    """Stores optimizer proposals, validations, and decisions per cycle."""
-
-    __tablename__ = "optimization_cycles"
-
-    id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, nullable=False, index=True, default=utc_now)
-    strategy_name = Column(String(100), nullable=False)
-    symbol = Column(String(20), nullable=False)
-    timeframe = Column(String(10), nullable=False)
-
-    baseline_metrics = Column(JSONType)  # KPIs from baseline run
-    candidate_params = Column(JSONType)  # Proposed parameter changes
-    candidate_metrics = Column(JSONType)  # KPIs from candidate run
-
-    validator_report = Column(JSONType)  # p-value, effect size, pass/fail
-    decision = Column(String(20))  # 'propose', 'reject', 'apply'
-
-    # Relationships
-    session_id = Column(Integer, ForeignKey("trading_sessions.id"), nullable=True)
-
-    __table_args__ = (
-        Index("idx_opt_cycle_time", "timestamp"),
-        Index("idx_opt_cycle_strategy", "strategy_name", "symbol", "timeframe"),
-    )
-
-    created_at = Column(DateTime, default=utc_now)
-    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
-
-
 class PredictionPerformance(Base):
     """Aggregated prediction calibration and accuracy metrics."""
 

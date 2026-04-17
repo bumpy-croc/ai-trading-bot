@@ -1,0 +1,34 @@
+id: risk_params_v1
+description: Explore stop-loss and take-profit variants on ml_basic.
+
+backtest:
+  strategy: ml_basic
+  symbol: BTCUSDT
+  timeframe: 1h
+  days: 90
+  initial_balance: 1000
+  provider: mock
+  random_seed: 42
+
+baseline:
+  name: current_defaults
+  overrides: {}
+
+variants:
+  - name: tight_stop_2pct
+    overrides:
+      ml_basic.stop_loss_pct: 0.02
+  - name: wider_stop_5pct
+    overrides:
+      ml_basic.stop_loss_pct: 0.05
+  - name: higher_tp_6pct
+    overrides:
+      ml_basic.take_profit_pct: 0.06
+  - name: aggressive_tp_8pct
+    overrides:
+      ml_basic.take_profit_pct: 0.08
+
+comparison:
+  target_metric: sharpe_ratio
+  min_trades: 30
+  significance_level: 0.05

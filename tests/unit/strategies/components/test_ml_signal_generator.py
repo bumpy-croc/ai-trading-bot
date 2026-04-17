@@ -461,7 +461,8 @@ class TestMLBasicSignalGenerator:
         assert 0.0 <= signal.strength <= 1.0
         assert 0.0 <= signal.confidence <= 1.0
         assert "prediction" in signal.metadata
-        assert "short_threshold" in signal.metadata
+        assert "short_entry_threshold" in signal.metadata
+        assert "long_entry_threshold" in signal.metadata
         # Should not have regime-specific metadata
         assert "dynamic_threshold" not in signal.metadata
 

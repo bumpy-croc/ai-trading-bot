@@ -1,13 +1,17 @@
 # Project Status
 
-> **Last Updated**: 2026-02-18
+> **Last Updated**: 2026-04-17
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## Current Focus
 
-Implementing PSB (Plan, Setup, Build) framework improvements: automated documentation, slash commands, and regression prevention patterns.
+Shipping the declarative experimentation framework (`src/experiments/`) that
+replaces the never-used first-attempt optimizer module. The framework drives
+hand-picked variants through YAML suites, ranks results with statistical
+verdicts, and promotes winners via lineage and patch YAML writes — all without
+silently editing strategy defaults.
 
 ---
 

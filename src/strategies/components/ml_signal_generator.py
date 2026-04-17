@@ -23,6 +23,31 @@ from src.strategies.components.signal_generator import Signal, SignalDirection, 
 logger = logging.getLogger(__name__)
 
 
+def _require_finite(name: str, value: Any) -> float:
+    """Coerce ``value`` to ``float`` and reject NaN/Inf.
+
+    NaN comparisons are always False, so a NaN threshold would silently
+    disable an entry side; a NaN multiplier poisons downstream confidence
+    calculations. Rejecting at construction time makes tuning-override
+    mistakes fail loudly.
+    """
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be numeric, got {value!r}") from exc
+    if not math.isfinite(coerced):
+        raise ValueError(f"{name} must be finite, got {value!r}")
+    return coerced
+
+
+def _require_finite_positive(name: str, value: Any) -> float:
+    """Like :func:`_require_finite` but also requires ``value > 0``."""
+    coerced = _require_finite(name, value)
+    if coerced <= 0:
+        raise ValueError(f"{name} must be > 0, got {coerced}")
+    return coerced
+
+
 class MLSignalGenerator(SignalGenerator):
     """
     ML Signal Generator extracted from MlAdaptive strategy
@@ -37,9 +62,12 @@ class MLSignalGenerator(SignalGenerator):
     - Optional prediction engine integration
     """
 
-    # Configuration constants
+    # Default thresholds (overridable per-instance for experiments).
+    # LONG_ENTRY_THRESHOLD=0.0 preserves pre-refactor behavior (any positive
+    # predicted return triggers BUY). Experiments tighten via overrides.
+    LONG_ENTRY_THRESHOLD = 0.0
     SHORT_ENTRY_THRESHOLD = -0.0005  # Base threshold for short entries (-0.05%)
-    CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
+    CONFIDENCE_MULTIPLIER = 12.0  # Multiplier for confidence calculation
 
     # Dynamic threshold configuration for different market regimes
     SHORT_THRESHOLD_TREND_UP = -0.0003  # Less conservative in uptrend (-0.03%)
@@ -54,6 +82,16 @@ class MLSignalGenerator(SignalGenerator):
         name: str = "ml_signal_generator",
         sequence_length: int = 120,
         model_name: str | None = None,
+        *,
+        long_entry_threshold: float | None = None,
+        short_entry_threshold: float | None = None,
+        confidence_multiplier: float | None = None,
+        short_threshold_trend_up: float | None = None,
+        short_threshold_trend_down: float | None = None,
+        short_threshold_range: float | None = None,
+        short_threshold_high_vol: float | None = None,
+        short_threshold_low_vol: float | None = None,
+        short_threshold_confidence_multiplier: float | None = None,
     ):
         """
         Initialize ML Signal Generator
@@ -62,10 +100,80 @@ class MLSignalGenerator(SignalGenerator):
             name: Name for this signal generator
             sequence_length: Sequence length for model input
             model_name: Model name for prediction engine (optional)
+            long_entry_threshold: Minimum predicted return to open a long.
+            short_entry_threshold: Maximum predicted return to open a short
+                (expected to be negative).
+            confidence_multiplier: Scales |predicted_return| → confidence score.
+            short_threshold_*: Regime-specific short thresholds; defaults fall
+                back to the corresponding class constants.
         """
         super().__init__(name)
 
         self.sequence_length = sequence_length
+
+        # Instance-level thresholds (experiments override these without mutating
+        # class state shared across strategies). Every numeric knob is
+        # validated finite via ``_require_finite`` so a NaN/Inf override
+        # (trivial to land via YAML) cannot silently corrupt a trading
+        # decision — NaN comparisons are always False so a NaN threshold
+        # would disable entries, and a NaN multiplier would NaN-poison
+        # confidence scores.
+        self.long_entry_threshold = _require_finite(
+            "long_entry_threshold",
+            self.LONG_ENTRY_THRESHOLD if long_entry_threshold is None else long_entry_threshold,
+        )
+        self.short_entry_threshold = _require_finite(
+            "short_entry_threshold",
+            self.SHORT_ENTRY_THRESHOLD if short_entry_threshold is None else short_entry_threshold,
+        )
+        self.confidence_multiplier = _require_finite_positive(
+            "confidence_multiplier",
+            self.CONFIDENCE_MULTIPLIER if confidence_multiplier is None else confidence_multiplier,
+        )
+        self.short_threshold_trend_up = _require_finite(
+            "short_threshold_trend_up",
+            (
+                self.SHORT_THRESHOLD_TREND_UP
+                if short_threshold_trend_up is None
+                else short_threshold_trend_up
+            ),
+        )
+        self.short_threshold_trend_down = _require_finite(
+            "short_threshold_trend_down",
+            (
+                self.SHORT_THRESHOLD_TREND_DOWN
+                if short_threshold_trend_down is None
+                else short_threshold_trend_down
+            ),
+        )
+        self.short_threshold_range = _require_finite(
+            "short_threshold_range",
+            self.SHORT_THRESHOLD_RANGE if short_threshold_range is None else short_threshold_range,
+        )
+        self.short_threshold_high_vol = _require_finite(
+            "short_threshold_high_vol",
+            (
+                self.SHORT_THRESHOLD_HIGH_VOL
+                if short_threshold_high_vol is None
+                else short_threshold_high_vol
+            ),
+        )
+        self.short_threshold_low_vol = _require_finite(
+            "short_threshold_low_vol",
+            (
+                self.SHORT_THRESHOLD_LOW_VOL
+                if short_threshold_low_vol is None
+                else short_threshold_low_vol
+            ),
+        )
+        self.short_threshold_confidence_multiplier = _require_finite(
+            "short_threshold_confidence_multiplier",
+            (
+                self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
+                if short_threshold_confidence_multiplier is None
+                else short_threshold_confidence_multiplier
+            ),
+        )
 
         # Model name configuration
         cfg = get_config()
@@ -195,7 +303,7 @@ class MLSignalGenerator(SignalGenerator):
         predicted_return = (prediction - current_price) / current_price
 
         # Determine signal direction
-        if predicted_return > 0:
+        if predicted_return > self.long_entry_threshold:
             direction = SignalDirection.BUY
             strength = min(1.0, abs(predicted_return) * 10)  # Scale to 0-1
         elif self._should_generate_short_signal(predicted_return, regime):
@@ -216,6 +324,7 @@ class MLSignalGenerator(SignalGenerator):
             "predicted_return": predicted_return,
             "index": index,
             "sequence_length": self.sequence_length,
+            "long_entry_threshold": self.long_entry_threshold,
             "engine_model_name": self.model_name,
             "engine_batch": self.use_engine_batch,
         }
@@ -315,7 +424,7 @@ class MLSignalGenerator(SignalGenerator):
         if regime is not None:
             dynamic_threshold = self._calculate_dynamic_short_threshold(regime)
         else:
-            dynamic_threshold = self.SHORT_ENTRY_THRESHOLD
+            dynamic_threshold = self.short_entry_threshold
 
         return predicted_return < dynamic_threshold
 
@@ -331,17 +440,17 @@ class MLSignalGenerator(SignalGenerator):
         """
         # Start with base threshold based on trend
         if regime.trend == TrendLabel.TREND_UP:
-            base_threshold = self.SHORT_THRESHOLD_TREND_UP
+            base_threshold = self.short_threshold_trend_up
         elif regime.trend == TrendLabel.TREND_DOWN:
-            base_threshold = self.SHORT_THRESHOLD_TREND_DOWN
+            base_threshold = self.short_threshold_trend_down
         else:  # range
-            base_threshold = self.SHORT_THRESHOLD_RANGE
+            base_threshold = self.short_threshold_range
 
         # Adjust for volatility
         if regime.volatility == VolLabel.HIGH:
-            vol_adjustment = self.SHORT_THRESHOLD_HIGH_VOL
+            vol_adjustment = self.short_threshold_high_vol
         else:  # low_vol
-            vol_adjustment = self.SHORT_THRESHOLD_LOW_VOL
+            vol_adjustment = self.short_threshold_low_vol
 
         # Combine trend and volatility adjustments (weighted average)
         threshold = (base_threshold + vol_adjustment) / 2
@@ -350,7 +459,7 @@ class MLSignalGenerator(SignalGenerator):
         # Higher confidence = more aggressive threshold (closer to 0)
         # Lower confidence = more conservative threshold (further from 0)
         # Since threshold is negative, we scale it: high confidence reduces magnitude, low confidence increases magnitude
-        confidence_factor = 1 + regime.confidence * self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
+        confidence_factor = 1 + regime.confidence * self.short_threshold_confidence_multiplier
         threshold = threshold / confidence_factor
 
         # Ensure threshold is within reasonable bounds
@@ -368,7 +477,7 @@ class MLSignalGenerator(SignalGenerator):
         Returns:
             Confidence score between 0.0 and 1.0
         """
-        confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
+        confidence = min(1.0, abs(predicted_return) * self.confidence_multiplier)
         return max(0.0, confidence)
 
     @property
@@ -383,8 +492,17 @@ class MLSignalGenerator(SignalGenerator):
             {
                 "sequence_length": self.sequence_length,
                 "model_name": self.model_name,
-                "short_entry_threshold": self.SHORT_ENTRY_THRESHOLD,
-                "confidence_multiplier": self.CONFIDENCE_MULTIPLIER,
+                "long_entry_threshold": self.long_entry_threshold,
+                "short_entry_threshold": self.short_entry_threshold,
+                "confidence_multiplier": self.confidence_multiplier,
+                "short_threshold_trend_up": self.short_threshold_trend_up,
+                "short_threshold_trend_down": self.short_threshold_trend_down,
+                "short_threshold_range": self.short_threshold_range,
+                "short_threshold_high_vol": self.short_threshold_high_vol,
+                "short_threshold_low_vol": self.short_threshold_low_vol,
+                "short_threshold_confidence_multiplier": (
+                    self.short_threshold_confidence_multiplier
+                ),
             }
         )
         return params
@@ -404,9 +522,12 @@ class MLBasicSignalGenerator(SignalGenerator):
     - Optional prediction engine integration with model registry support
     """
 
-    # Configuration constants
+    # Default thresholds (overridable per-instance for experiments).
+    # LONG_ENTRY_THRESHOLD=0.0 preserves pre-refactor behavior (any positive
+    # predicted return triggers BUY). Experiments tighten via overrides.
+    LONG_ENTRY_THRESHOLD = 0.0
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
-    CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
+    CONFIDENCE_MULTIPLIER = 12.0  # Multiplier for confidence calculation
 
     # Default symbol used for registry selection when none specified
     DEFAULT_SYMBOL = "BTCUSDT"
@@ -419,6 +540,10 @@ class MLBasicSignalGenerator(SignalGenerator):
         model_type: str | None = None,
         timeframe: str | None = None,
         symbol: str | None = None,
+        *,
+        long_entry_threshold: float | None = None,
+        short_entry_threshold: float | None = None,
+        confidence_multiplier: float | None = None,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -430,10 +555,29 @@ class MLBasicSignalGenerator(SignalGenerator):
             model_type: Model type for registry selection (optional)
             timeframe: Timeframe for registry selection (optional)
             symbol: Trading symbol for registry selection (optional, defaults to BTCUSDT)
+            long_entry_threshold: Minimum predicted return for long entry.
+            short_entry_threshold: Maximum predicted return for short entry.
+            confidence_multiplier: Scales |predicted_return| → confidence.
         """
         super().__init__(name)
 
         self.sequence_length = sequence_length
+
+        # Instance-level thresholds (experiments override these without mutating
+        # class state shared across strategies). Validate finite to block
+        # NaN/Inf overrides from corrupting signal decisions.
+        self.long_entry_threshold = _require_finite(
+            "long_entry_threshold",
+            self.LONG_ENTRY_THRESHOLD if long_entry_threshold is None else long_entry_threshold,
+        )
+        self.short_entry_threshold = _require_finite(
+            "short_entry_threshold",
+            self.SHORT_ENTRY_THRESHOLD if short_entry_threshold is None else short_entry_threshold,
+        )
+        self.confidence_multiplier = _require_finite_positive(
+            "confidence_multiplier",
+            self.CONFIDENCE_MULTIPLIER if confidence_multiplier is None else confidence_multiplier,
+        )
 
         # Registry model selection preferences
         self.model_type = model_type or "basic"
@@ -578,10 +722,10 @@ class MLBasicSignalGenerator(SignalGenerator):
         predicted_return = (prediction - current_price) / current_price
 
         # Determine signal direction (basic logic without regime awareness)
-        if predicted_return > 0:
+        if predicted_return > self.long_entry_threshold:
             direction = SignalDirection.BUY
             strength = min(1.0, abs(predicted_return) * 10)  # Scale to 0-1
-        elif predicted_return < self.SHORT_ENTRY_THRESHOLD:
+        elif predicted_return < self.short_entry_threshold:
             direction = SignalDirection.SELL
             strength = min(1.0, abs(predicted_return) * 10)  # Scale to 0-1
         else:
@@ -599,7 +743,8 @@ class MLBasicSignalGenerator(SignalGenerator):
             "predicted_return": predicted_return,
             "index": index,
             "sequence_length": self.sequence_length,
-            "short_threshold": self.SHORT_ENTRY_THRESHOLD,
+            "long_entry_threshold": self.long_entry_threshold,
+            "short_entry_threshold": self.short_entry_threshold,
             "engine_model_name": self.model_name,
             "engine_batch": self.use_engine_batch,
             "model_type": self.model_type,
@@ -711,7 +856,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         Returns:
             Confidence score between 0.0 and 1.0
         """
-        confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
+        confidence = min(1.0, abs(predicted_return) * self.confidence_multiplier)
         return max(0.0, confidence)
 
     @property
@@ -729,8 +874,9 @@ class MLBasicSignalGenerator(SignalGenerator):
                 "model_type": self.model_type,
                 "model_timeframe": self.model_timeframe,
                 "symbol": self.symbol,
-                "short_entry_threshold": self.SHORT_ENTRY_THRESHOLD,
-                "confidence_multiplier": self.CONFIDENCE_MULTIPLIER,
+                "long_entry_threshold": self.long_entry_threshold,
+                "short_entry_threshold": self.short_entry_threshold,
+                "confidence_multiplier": self.confidence_multiplier,
             }
         )
         return params

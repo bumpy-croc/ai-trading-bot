@@ -4,8 +4,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from src.optimizer.runner import ExperimentRunner
-from src.optimizer.schemas import ExperimentConfig, ExperimentResult
+from src.experiments.runner import ExperimentRunner
+from src.experiments.schemas import ExperimentConfig, ExperimentResult
 
 
 @dataclass

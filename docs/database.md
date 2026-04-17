@@ -10,12 +10,12 @@ only allowed for unit tests) and creates the full schema on startup using SQLAlc
 
 - Connection pooling (`QueuePool`) with health checks and secure defaults (SSL, timeouts).
 - Automatic table creation and Alembic-aware migrations.
-- Logging trades, positions, orders, partial fills, account history, and optimisation cycles.
+- Logging trades, positions, orders, partial fills, and account history.
 - Persisting strategy execution events and system diagnostics used by dashboards.
 - Optional prediction cache storage for the ML subsystem.
 
 Key tables include `trades`, `positions`, `orders`, `account_history`, `performance_metrics`, `system_events`,
-`trading_sessions`, `optimization_cycles`, and `prediction_cache`. The enums (`TradeSource`, `OrderStatus`, etc.) live alongside
+`trading_sessions`, and `prediction_cache`. The enums (`TradeSource`, `OrderStatus`, etc.) live alongside
 these models to keep the schema consistent between backtesting and live trading.
 
 ## Configuration and setup

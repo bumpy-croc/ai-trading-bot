@@ -61,7 +61,6 @@ The admin UI provides CRUD access to:
 - **performance_metrics** - Performance snapshots
 - **system_events** - System logs and events
 - **trading_sessions** - Trading session metadata
-- **optimization_cycles** - Optimization history
 
 ## Customization
 

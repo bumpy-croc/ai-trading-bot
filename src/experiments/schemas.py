@@ -47,14 +47,3 @@ class ExperimentResult:
     final_balance: float
     session_id: int | None = None
     artifacts_path: str | None = None
-
-
-@dataclass
-class Suggestion:
-    """Proposed bounded change to configuration with rationale and expected impact."""
-
-    target: str  # e.g., "risk", "strategy:ml_basic", "feature_flags"
-    change: dict[str, Any]
-    rationale: str
-    expected_delta: dict[str, float]  # {"annualized_return": +x, "max_drawdown": -y}
-    confidence: float
