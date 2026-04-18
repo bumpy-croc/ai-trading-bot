@@ -43,7 +43,7 @@ def test_ml_adaptive_stop_loss_override_raises() -> None:
             values={"ml_adaptive.stop_loss_pct": 0.015},
         ),
     )
-    with pytest.raises(ValueError, match="does not consume strategy_overrides"):
+    with pytest.raises(ValueError, match="is not supported for RegimeAdaptiveRiskManager"):
         runner._apply_parameter_overrides(strategy, cfg)
 
 
@@ -62,7 +62,7 @@ def test_ml_adaptive_take_profit_override_raises() -> None:
             values={"ml_adaptive.take_profit_pct": 0.08},
         ),
     )
-    with pytest.raises(ValueError, match="does not consume strategy_overrides"):
+    with pytest.raises(ValueError, match="is not supported for RegimeAdaptiveRiskManager"):
         runner._apply_parameter_overrides(strategy, cfg)
 
 

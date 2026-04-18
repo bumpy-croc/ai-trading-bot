@@ -55,7 +55,20 @@ class ExperimentRunner:
             return CachedDataProvider(provider, cache_ttl_hours=cache_ttl_hours)
         return provider
 
-    def _load_strategy(self, strategy_name: str) -> Strategy:
+    def _load_strategy(
+        self,
+        strategy_name: str,
+        factory_kwargs: dict[str, object] | None = None,
+    ) -> Strategy:
+        """Construct a strategy, optionally passing kwargs to the factory.
+
+        ``factory_kwargs`` carries construction-time settings that cannot be
+        changed by setattr afterwards — e.g. ``model_type`` on hyper_growth
+        (which wires a different signal generator class), ``max_leverage``
+        (which is baked into the LeverageManager at construction), and
+        ``min_regime_bars``. For post-construction knobs like
+        ``long_entry_threshold`` use ``parameters`` overrides instead.
+        """
         strategies = {
             "ml_basic": create_ml_basic_strategy,
             "ml_adaptive": create_ml_adaptive_strategy,
@@ -63,9 +76,21 @@ class ExperimentRunner:
             "hyper_growth": create_hyper_growth_strategy,
         }
         builder = strategies.get(strategy_name)
-        if builder is not None:
+        if builder is None:
+            raise ValueError(f"Unknown strategy: {strategy_name}")
+        kwargs = dict(factory_kwargs or {})
+        if not kwargs:
             return builder()
-        raise ValueError(f"Unknown strategy: {strategy_name}")
+        try:
+            return builder(**kwargs)
+        except TypeError as exc:
+            # Surface the factory name so the user can diff their YAML against
+            # the builder signature rather than squinting at a bare
+            # "unexpected keyword argument" trace.
+            raise ValueError(
+                f"factory_kwargs rejected by {builder.__name__}: {exc}. "
+                f"Check that every key matches the factory signature."
+            ) from exc
 
     def _apply_parameter_overrides(self, strategy: Strategy, config: ExperimentConfig) -> None:
         if not (config.parameters and config.parameters.values):
@@ -88,10 +113,50 @@ class ExperimentRunner:
                 )
 
             if not self._apply_strategy_attribute(strategy, attr, value):
+                # Try to emit a more precise error than "no component accepts
+                # it" — a common failure mode is copying a regime-aware
+                # threshold key onto a regime-agnostic strategy like
+                # ``ml_basic`` / ``hyper_growth``. The gap report (G4)
+                # specifically called out the confusing blanket error on
+                # MLBasicSignalGenerator.
+                if attr in self._ATTR_REQUIRES_REGIME_AWARE:
+                    sg = getattr(strategy, "signal_generator", None)
+                    sg_class = type(sg).__name__ if sg is not None else "None"
+                    raise ValueError(
+                        f"Override {attr!r} requires a regime-aware signal "
+                        f"generator (MLSignalGenerator, used by ml_adaptive / "
+                        f"ml_sentiment). Strategy {config.strategy_name!r} "
+                        f"uses {sg_class} which is regime-agnostic and does "
+                        f"not expose regime-specific short thresholds. Use "
+                        "'short_entry_threshold' to tune the flat short gate."
+                    )
                 raise ValueError(
                     f"Unknown override attribute {attr!r} for strategy "
                     f"{config.strategy_name!r}; no component accepts it."
                 )
+
+    # Maps override attr name → (attr_candidates). When a wrapping sizer like
+    # ``LeveragedPositionSizer`` doesn't own the canonical attribute, the
+    # runner walks ``target.base_sizer`` chains trying each candidate in
+    # order. ``base_fraction`` is the YAML-facing canonical name;
+    # ``FixedFractionSizer`` stores the same quantity under ``fraction``.
+    _SIZER_ATTR_ALIASES: dict[str, tuple[str, ...]] = {
+        "base_fraction": ("base_fraction", "fraction"),
+    }
+
+    # Per-attribute "supported by these classes" hints used to build a
+    # crisp error when the override targets a component that lacks the
+    # attribute (instead of the generic "Unknown override attribute").
+    _ATTR_REQUIRES_REGIME_AWARE: frozenset[str] = frozenset(
+        {
+            "short_threshold_trend_up",
+            "short_threshold_trend_down",
+            "short_threshold_range",
+            "short_threshold_high_vol",
+            "short_threshold_low_vol",
+            "short_threshold_confidence_multiplier",
+        }
+    )
 
     def _apply_strategy_attribute(self, strategy: Strategy, attr: str, value: object) -> bool:
         """Apply overrides to the correct component on a component-based strategy."""
@@ -137,7 +202,28 @@ class ExperimentRunner:
         coerced_value: object = value
 
         for target in targets:
-            if target is None or not hasattr(target, attr):
+            if target is None:
+                continue
+            # Position-sizer overrides may need to unwrap a wrapping sizer
+            # (e.g. LeveragedPositionSizer -> FixedFractionSizer). The
+            # unwrap also resolves canonical-vs-underlying attribute names
+            # (``base_fraction`` -> ``fraction``).
+            if target is position_sizer and attr in self._SIZER_ATTR_ALIASES:
+                resolved = self._resolve_sizer_override_target(target, attr)
+                if resolved is not None:
+                    resolved_target, resolved_attr = resolved
+                    try:
+                        current = getattr(resolved_target, resolved_attr)
+                        coerced_value = self._coerce_value(current, value)
+                        setattr(resolved_target, resolved_attr, coerced_value)
+                        applied = True
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"Failed to apply override {attr!r}={value!r} to "
+                            f"{type(resolved_target).__name__}.{resolved_attr}: {exc}"
+                        ) from exc
+                    continue
+            if not hasattr(target, attr):
                 continue
             try:
                 current = getattr(target, attr)
@@ -154,37 +240,83 @@ class ExperimentRunner:
                 ) from exc
 
         # Risk-related attributes must land in the strategy's risk-overrides
-        # mapping AND the active risk manager must actually consume it at
-        # trade time. Only CoreRiskAdapter reads ``context["strategy_overrides"]``
-        # (via ``_resolve_overrides``). Other risk managers
-        # (``RegimeAdaptiveRiskManager`` for ml_adaptive,
-        # ``VolatilityRiskManager`` / ``FixedRiskManager``) derive stops
-        # from regime / ATR / constants and would silently ignore the
-        # override — producing meaningless variant rankings.
+        # mapping AND at least one consumer must actually honor it at trade
+        # time. A strategy/manager honors the override via one of three
+        # contracts (any one suffices):
+        #
+        #   (a) The risk manager exposes ``_strategy_overrides`` — CoreRiskAdapter
+        #       reads ``context["strategy_overrides"]`` via ``_resolve_overrides``.
+        #   (b) The risk manager declares the attribute in
+        #       ``_direct_runtime_overrides`` — it reads ``self.<attr>`` directly
+        #       at trade time (e.g. ``FlatRiskManager.stop_loss_pct``).
+        #   (c) The strategy factory already populated
+        #       ``strategy._risk_overrides[attr]`` during construction —
+        #       explicit declaration that the engine-level partial-exit /
+        #       trailing-stop / drawdown logic will consume it. This is the
+        #       ``take_profit_pct`` path on ``hyper_growth``: FlatRiskManager
+        #       ignores TP, but the engine's partial-exit plumbing reads
+        #       ``strategy._risk_overrides["take_profit_pct"]``.
+        #
+        # Managers/strategies that do none of these (``RegimeAdaptiveRiskManager``
+        # on ml_adaptive derives stops from regime context, never honors
+        # ``_risk_overrides``) still raise — silently ignoring the override
+        # would produce meaningless variant rankings.
         if attr in {"stop_loss_pct", "take_profit_pct"}:
             try:
                 numeric_value = float(value)  # type: ignore[arg-type]
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"Override {attr!r} must be numeric, got {value!r}") from exc
-            if risk_manager is not None and not hasattr(risk_manager, "_strategy_overrides"):
+            honors_direct = attr in getattr(risk_manager, "_direct_runtime_overrides", frozenset())
+            honors_via_dict = risk_manager is not None and hasattr(
+                risk_manager, "_strategy_overrides"
+            )
+            existing_overrides = getattr(strategy, "_risk_overrides", None) or {}
+            strategy_wires_attr = attr in existing_overrides
+            if risk_manager is not None and not (
+                honors_direct or honors_via_dict or strategy_wires_attr
+            ):
                 raise ValueError(
                     f"Override {attr!r} is not supported for "
-                    f"{type(risk_manager).__name__}; the risk manager does "
-                    "not consume strategy_overrides at trade time. Only "
-                    "CoreRiskAdapter-backed strategies (ml_basic, "
-                    "ml_sentiment, hyper_growth) honor this knob."
+                    f"{type(risk_manager).__name__}; the risk manager neither "
+                    f"declares {attr!r} in ``_direct_runtime_overrides`` nor "
+                    f"reads ``_strategy_overrides`` at trade time, and the "
+                    f"strategy factory did not wire {attr!r} into "
+                    f"``strategy._risk_overrides``. Only CoreRiskAdapter-backed "
+                    "strategies (ml_basic, ml_sentiment) and strategies that "
+                    "plumb the knob through ``set_risk_overrides`` (hyper_growth) "
+                    "honor this override."
                 )
-            overrides = getattr(strategy, "_risk_overrides", None) or {}
-            overrides[attr] = numeric_value
-            strategy._risk_overrides = overrides
+            existing_overrides[attr] = numeric_value
+            strategy._risk_overrides = existing_overrides
             # Mirror onto the risk manager's internal overrides map so that
             # ``_resolve_overrides`` (merge adapter + context) sees the
             # change even for code paths that don't pass context through.
-            if risk_manager is not None and hasattr(risk_manager, "_strategy_overrides"):
+            if honors_via_dict:
                 risk_manager._strategy_overrides[attr] = numeric_value
             applied = True
 
         return applied
+
+    @classmethod
+    def _resolve_sizer_override_target(cls, sizer: object, attr: str) -> tuple[object, str] | None:
+        """Walk wrapping sizers to find who owns ``attr`` (or an alias).
+
+        Returns ``(target, actual_attr)`` when found, else ``None``. The
+        walk uses the ``base_sizer`` attribute (present on
+        ``LeveragedPositionSizer``) to unwrap, and falls through any alias
+        names listed in :data:`_SIZER_ATTR_ALIASES`.
+        """
+        candidates = cls._SIZER_ATTR_ALIASES.get(attr, (attr,))
+        cursor: object | None = sizer
+        # Guard against pathological cycles: cap the walk at a sane depth.
+        for _ in range(8):
+            if cursor is None:
+                return None
+            for name in candidates:
+                if hasattr(cursor, name):
+                    return cursor, name
+            cursor = getattr(cursor, "base_sizer", None)
+        return None
 
     @staticmethod
     def _coerce_value(current: object, new_value: object) -> object:
@@ -262,7 +394,15 @@ class ExperimentRunner:
 
         position_sizer = getattr(strategy, "position_sizer", None)
         if position_sizer is not None:
-            _check_numeric_bound(position_sizer, "base_fraction", 0.001, 0.5)
+            # For wrapping sizers (``LeveragedPositionSizer``) the
+            # ``base_fraction`` lives on the wrapped sizer under either
+            # ``base_fraction`` or ``fraction``. Locate whoever owns it so
+            # the bound check validates the actual value in use.
+            bf_target = ExperimentRunner._resolve_sizer_override_target(
+                position_sizer, "base_fraction"
+            )
+            if bf_target is not None:
+                _check_numeric_bound(bf_target[0], bf_target[1], 0.001, 0.5)
             _check_numeric_bound(position_sizer, "min_confidence", 0.0, 1.0)
             _check_numeric_bound(position_sizer, "min_confidence_floor", 0.0, 1.0)
             floor = getattr(position_sizer, "min_confidence_floor", None)
@@ -294,7 +434,10 @@ class ExperimentRunner:
                 )
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:
-        strategy = self._load_strategy(config.strategy_name)
+        strategy = self._load_strategy(
+            config.strategy_name,
+            factory_kwargs=config.factory_kwargs or None,
+        )
         # Apply any parameter overrides for strategy-level tuning
         self._apply_parameter_overrides(strategy, config)
         self._validate_post_override_invariants(strategy)
@@ -327,6 +470,9 @@ class ExperimentRunner:
             end=config.end,
         )
 
+        raw_trade_pnls = results.get("trade_pnl_pcts") or []
+        trade_pnl_pcts = [float(x) for x in raw_trade_pnls if isinstance(x, int | float)]
+
         return ExperimentResult(
             config=config,
             total_trades=int(results.get("total_trades", 0)),
@@ -337,6 +483,7 @@ class ExperimentRunner:
             sharpe_ratio=float(results.get("sharpe_ratio", 0.0)),
             final_balance=float(results.get("final_balance", config.initial_balance)),
             session_id=results.get("session_id"),
+            trade_pnl_pcts=trade_pnl_pcts,
         )
 
     def run_sweep(self, configs: list[ExperimentConfig]) -> list[ExperimentResult]:

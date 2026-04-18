@@ -216,3 +216,167 @@ def test_calmar_baseline_infinite_variant_finite_rejects_when_worse() -> None:
 
     row = next(r for r in report.rows if r.name == "finite_var")
     assert row.verdict == Verdict.REJECT
+
+
+# --------------------------------------------------------------------------
+# G6 / G7: Dead-code-override warnings.
+#
+# When a variant's headline metrics tie baseline within floating-point
+# tolerance, the reporter emits a warning pointing at the most common
+# cause — an override that didn't take effect. The per-trade P&L sequence
+# decides between "literally the same trades" (strong signal of a no-op
+# override) and "different trades, same aggregate" (rare; worth inspection).
+# --------------------------------------------------------------------------
+
+
+def _result_with_trades(
+    trades: list[float],
+    *,
+    total_return: float,
+    sharpe: float = 1.0,
+    annualized: float | None = None,
+    max_drawdown: float = 5.0,
+) -> ExperimentResult:
+    r = _result(
+        total_return=total_return,
+        sharpe=sharpe,
+        trades=len(trades),
+        annualized=annualized,
+        max_drawdown=max_drawdown,
+    )
+    r.trade_pnl_pcts = list(trades)
+    return r
+
+
+def test_identical_variant_emits_dead_code_warning() -> None:
+    """Variant matches every headline metric AND every per-trade P&L →
+    near-certain dead-code override. Reporter must emit G6 warning."""
+    suite = _suite([VariantSpec(name="noop_var")])
+    trades = [0.01, -0.005, 0.02]
+    baseline = _result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    variants = [_result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)]
+    report = ExperimentReporter().render(_suite_result(suite, baseline, variants))
+    row = next(r for r in report.rows if r.name == "noop_var")
+    assert row.warnings, "expected identical-variant warning"
+    assert any("did not take effect" in w for w in row.warnings)
+
+
+def test_identical_aggregate_different_trades_emits_distinct_warning() -> None:
+    """Aggregate metrics tie baseline, but per-trade sequence differs —
+    the G7 "different trades, same aggregate" message, not G6."""
+    suite = _suite([VariantSpec(name="path_var")])
+    b_trades = [0.01, 0.01, -0.015]
+    v_trades = [0.005, -0.005, 0.015]
+    baseline = _result_with_trades(b_trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    variant = _result_with_trades(v_trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    report = ExperimentReporter().render(_suite_result(suite, baseline, [variant]))
+    row = next(r for r in report.rows if r.name == "path_var")
+    assert row.warnings, "expected sequence-tiebreak warning"
+    assert any("different trades" in w.lower() for w in row.warnings)
+    assert not any("did not take effect" in w for w in row.warnings)
+
+
+def test_differing_variant_emits_no_warning() -> None:
+    """Any headline metric difference above tolerance → no G6 warning."""
+    suite = _suite([VariantSpec(name="real_var")])
+    baseline = _result_with_trades([0.01, 0.02], total_return=2.5, sharpe=1.2)
+    variant = _result_with_trades([0.015, 0.02], total_return=3.5, sharpe=1.5)
+    report = ExperimentReporter().render(_suite_result(suite, baseline, [variant]))
+    row = next(r for r in report.rows if r.name == "real_var")
+    assert row.warnings == []
+
+
+def test_baseline_row_never_gets_identical_warning() -> None:
+    """The baseline is trivially identical to itself; warning is nonsense."""
+    suite = _suite([VariantSpec(name="noop_var")])
+    trades = [0.01, -0.005]
+    baseline = _result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    variant = _result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    report = ExperimentReporter().render(_suite_result(suite, baseline, [variant]))
+    baseline_row = next(r for r in report.rows if r.is_baseline)
+    assert baseline_row.warnings == []
+
+
+def test_warning_rendered_in_text_report() -> None:
+    """The text renderer must surface warnings so operators see them."""
+    suite = _suite([VariantSpec(name="noop_var")])
+    trades = [0.01, -0.005]
+    baseline = _result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    variant = _result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    report = ExperimentReporter().render(_suite_result(suite, baseline, [variant]))
+    text = ExperimentReporter().render_text(report)
+    assert "Variant warnings" in text
+    assert "noop_var" in text
+
+
+def test_warning_serialized_in_csv_report() -> None:
+    suite = _suite([VariantSpec(name="noop_var")])
+    trades = [0.01]
+    baseline = _result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    variant = _result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    report = ExperimentReporter().render(_suite_result(suite, baseline, [variant]))
+    csv_text = ExperimentReporter().render_csv(report)
+    # Header includes the new column
+    assert ",warnings\r\n" in csv_text or ",warnings\n" in csv_text
+    # Warning cell contains the key diagnostic phrase
+    assert "did not take effect" in csv_text
+
+
+def test_tolerance_floors_tiny_fp_noise_still_triggers_warning() -> None:
+    """FP noise below the identical-tolerance must still trigger the
+    warning so a 1-ULP difference doesn't hide a dead-code override."""
+    suite = _suite([VariantSpec(name="noop_var")])
+    trades = [0.01, -0.005]
+    baseline = _result_with_trades(trades, total_return=2.5, sharpe=1.2, annualized=3.0)
+    # 1e-11 < 1e-9 tolerance
+    variant = _result_with_trades(trades, total_return=2.5 + 1e-11, sharpe=1.2, annualized=3.0)
+    report = ExperimentReporter().render(_suite_result(suite, baseline, [variant]))
+    row = next(r for r in report.rows if r.name == "noop_var")
+    assert row.warnings, "FP noise below tolerance must not suppress warning"
+
+
+def test_identical_metrics_zero_trades_both_sides_still_warns() -> None:
+    """A variant that produced zero trades and matches an empty-trade
+    baseline is still likely a dead-code override — warn the same way."""
+    suite = _suite([VariantSpec(name="dead_var")])
+    baseline = _result_with_trades([], total_return=0.0, sharpe=0.0, annualized=0.0)
+    variant = _result_with_trades([], total_return=0.0, sharpe=0.0, annualized=0.0)
+    report = ExperimentReporter().render(_suite_result(suite, baseline, [variant]))
+    row = next(r for r in report.rows if r.name == "dead_var")
+    assert row.warnings, "empty-trade tie should still warn"
+
+
+def test_csv_warnings_column_escapes_multiline_to_single_cell() -> None:
+    """Multi-warning cells must use a delimiter that CSV spreadsheets can
+    read as a single cell — ensuring report.csv stays row-per-variant."""
+    from src.experiments.reporter import VariantReport
+
+    row = VariantReport(
+        name="v",
+        total_return=0.0,
+        annualized_return=0.0,
+        sharpe_ratio=0.0,
+        max_drawdown=0.0,
+        win_rate=0.0,
+        total_trades=0,
+        final_balance=0.0,
+        delta_vs_baseline=0.0,
+        ranking_confidence=None,
+        verdict=Verdict.HOLD,
+        warnings=["first warning", "second warning"],
+    )
+    from src.experiments.reporter import SuiteReport
+
+    report = SuiteReport(
+        suite_id="x",
+        description="",
+        target_metric="sharpe_ratio",
+        significance_level=0.05,
+        min_trades=0,
+        baseline_name="baseline",
+        winner=None,
+        rows=[row],
+    )
+    csv_text = ExperimentReporter().render_csv(report)
+    # Both warnings in the same cell, separated by " | "
+    assert "first warning | second warning" in csv_text

@@ -33,6 +33,7 @@ _ALLOWED_BACKTEST = {
     "random_seed",
     "start",
     "end",
+    "factory_kwargs",
 }
 _ALLOWED_VARIANT = {"name", "overrides"}
 _ALLOWED_COMPARISON = {
@@ -135,6 +136,10 @@ def _parse_backtest(data: Any, *, source: str) -> BacktestSettings:
     if start is not None and end is not None and start >= end:
         raise SuiteValidationError(f"{source}: start ({start}) must be earlier than end ({end})")
 
+    factory_kwargs = _parse_factory_kwargs(
+        data.get("factory_kwargs"), source=f"{source}.factory_kwargs"
+    )
+
     return BacktestSettings(
         strategy=_require_str(data, "strategy", source),
         symbol=str(data.get("symbol", "BTCUSDT")),
@@ -146,7 +151,36 @@ def _parse_backtest(data: Any, *, source: str) -> BacktestSettings:
         random_seed=data.get("random_seed"),
         start=start,
         end=end,
+        factory_kwargs=factory_kwargs,
     )
+
+
+def _parse_factory_kwargs(value: Any, *, source: str) -> dict[str, Any]:
+    """Validate and coerce ``factory_kwargs`` from YAML.
+
+    Keys must be non-empty identifiers (no dots — factory kwargs map
+    directly to Python keyword arguments, not dotted override paths). Values
+    must be JSON-safe scalars, matching the same constraint applied to
+    variant overrides. The runner surfaces a clear error if the key is not
+    a valid builder parameter.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise SuiteValidationError(f"{source}: must be a mapping, got {type(value).__name__}")
+    result: dict[str, Any] = {}
+    for k, v in value.items():
+        if not isinstance(k, str) or not k or not k.isidentifier():
+            raise SuiteValidationError(
+                f"{source}: keys must be valid Python identifiers, got {k!r}"
+            )
+        if not isinstance(v, str | int | float | bool) and v is not None:
+            raise SuiteValidationError(
+                f"{source}[{k!r}]: value must be a scalar "
+                f"(str, int, float, bool, or null), got {type(v).__name__}"
+            )
+        result[k] = v
+    return result
 
 
 def _parse_datetime(value: Any, source: str) -> datetime | None:

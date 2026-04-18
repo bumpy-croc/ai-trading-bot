@@ -53,6 +53,13 @@ class FlatRiskManager(RiskManager):
     manager control sizing.
     """
 
+    # Experimentation-runner contract: overrides listed here are honored
+    # because this manager reads ``self.<attr>`` directly at trade time.
+    # The runner consults this set to decide whether a setattr-based
+    # override (as opposed to a ``_strategy_overrides`` dict override) is
+    # sufficient for this manager class.
+    _direct_runtime_overrides: frozenset[str] = frozenset({"stop_loss_pct"})
+
     def __init__(
         self,
         risk_fraction: float = 0.10,

@@ -31,6 +31,12 @@ class ExperimentConfig:
     use_cache: bool = True
     provider: str = "binance"
     random_seed: int | None = None
+    # Keyword arguments forwarded to the strategy factory at construction time
+    # by :meth:`ExperimentRunner._load_strategy`. Use this for knobs the
+    # strategy only honors in ``__init__`` (e.g. ``model_type`` on
+    # hyper_growth, which swaps the underlying signal generator and cannot be
+    # changed by setattr afterwards).
+    factory_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -47,3 +53,9 @@ class ExperimentResult:
     final_balance: float
     session_id: int | None = None
     artifacts_path: str | None = None
+    # Per-trade P&L sequence (as fractional returns in the order trades
+    # closed). The reporter uses this to distinguish "different trades, same
+    # aggregate" from "literally the same trades" when variants tie the
+    # baseline on the headline metrics — a critical tie-breaker for
+    # diagnosing dead-code overrides.
+    trade_pnl_pcts: list[float] = field(default_factory=list)

@@ -131,3 +131,76 @@ def test_negative_initial_balance_rejected() -> None:
 def test_missing_file() -> None:
     with pytest.raises(FileNotFoundError):
         load_suite("/tmp/does_not_exist_xyz123.yaml")
+
+
+# --------------------------------------------------------------------------
+# G1 — factory_kwargs YAML schema. The runner forwards these to the
+# strategy factory at construction time (distinct from ``overrides`` which
+# setattr post-construction).
+# --------------------------------------------------------------------------
+
+
+def test_factory_kwargs_parsed_as_dict_under_backtest() -> None:
+    cfg = parse_suite(
+        {
+            "id": "fk",
+            "backtest": {
+                "strategy": "hyper_growth",
+                "factory_kwargs": {"max_leverage": 2.0, "min_regime_bars": 5},
+            },
+            "baseline": {"name": "b", "overrides": {}},
+        }
+    )
+    assert cfg.backtest.factory_kwargs == {"max_leverage": 2.0, "min_regime_bars": 5}
+
+
+def test_factory_kwargs_default_is_empty_dict() -> None:
+    cfg = parse_suite(
+        {
+            "id": "nofk",
+            "backtest": {"strategy": "ml_basic"},
+            "baseline": {"name": "b", "overrides": {}},
+        }
+    )
+    assert cfg.backtest.factory_kwargs == {}
+
+
+def test_factory_kwargs_non_mapping_rejected() -> None:
+    with pytest.raises(SuiteValidationError, match="must be a mapping"):
+        parse_suite(
+            {
+                "id": "bad",
+                "backtest": {"strategy": "ml_basic", "factory_kwargs": ["not", "a", "map"]},
+                "baseline": {"name": "b", "overrides": {}},
+            }
+        )
+
+
+def test_factory_kwargs_non_identifier_key_rejected() -> None:
+    """Factory kwargs map to Python keyword arguments; keys must be valid
+    identifiers (no dots, no spaces)."""
+    with pytest.raises(SuiteValidationError, match="valid Python identifiers"):
+        parse_suite(
+            {
+                "id": "bad",
+                "backtest": {
+                    "strategy": "ml_basic",
+                    "factory_kwargs": {"max.leverage": 2.0},
+                },
+                "baseline": {"name": "b", "overrides": {}},
+            }
+        )
+
+
+def test_factory_kwargs_non_scalar_value_rejected() -> None:
+    with pytest.raises(SuiteValidationError, match="must be a scalar"):
+        parse_suite(
+            {
+                "id": "bad",
+                "backtest": {
+                    "strategy": "ml_basic",
+                    "factory_kwargs": {"something": {"nested": 1}},
+                },
+                "baseline": {"name": "b", "overrides": {}},
+            }
+        )
