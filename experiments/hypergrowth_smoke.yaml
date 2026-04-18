@@ -1,0 +1,26 @@
+id: hypergrowth_smoke
+description: Smoke test — hypergrowth baseline on 2023-2024 BTCUSDT fixture.
+
+backtest:
+  strategy: hyper_growth
+  symbol: BTCUSDT
+  timeframe: 1h
+  initial_balance: 1000
+  provider: fixture
+  start: "2023-01-01T00:00:00Z"
+  end: "2024-12-31T00:00:00Z"
+  random_seed: 42
+
+baseline:
+  name: defaults
+  overrides: {}
+
+variants:
+  - name: tighter_long_thr
+    overrides:
+      hyper_growth.long_entry_threshold: 0.0005
+
+comparison:
+  target_metric: total_return
+  min_trades: 10
+  significance_level: 0.05

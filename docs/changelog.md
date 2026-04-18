@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Add ban-aware retry to Binance client startup — parses `-1003` ban expiry and sleeps until lifted instead of crashing (#590)
+- `hyper_growth`: fix silent-SELL bug caused by feature-shape mismatch
+  (#603). The factory wired `MLBasicSignalGenerator(model_type="sentiment")`
+  but fed the sentiment model the 5-column price-only feature tensor
+  instead of the 10 columns it was trained on. The model returned 0.0 on
+  every bar, which the generator converted to `predicted_return=-1.0` and
+  emitted as a constant SELL with confidence=1.0. Swapped to
+  `model_type="basic"` (real directional edge of 55-57% BUY accuracy at
+  12-24h horizons). Also tightened the default `stop_loss_pct` from 0.20
+  to 0.10. On BTCUSDT 1h 2024: 14.16% → 99.80% return, 7.24% → 4.74% max
+  drawdown, 0.055 → 0.259 Sharpe.
 
 ---
 

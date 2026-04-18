@@ -1,17 +1,22 @@
 # Project Status
 
-> **Last Updated**: 2026-04-17
+> **Last Updated**: 2026-04-18
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## Current Focus
 
-Shipping the declarative experimentation framework (`src/experiments/`) that
-replaces the never-used first-attempt optimizer module. The framework drives
-hand-picked variants through YAML suites, ranks results with statistical
-verdicts, and promotes winners via lineage and patch YAML writes — all without
-silently editing strategy defaults.
+Hardening `hyper_growth` on top of the declarative experimentation framework
+(`src/experiments/`). A sweep surfaced a silent-SELL bug — the factory fed
+the sentiment ONNX model a price-only feature tensor and the model returned
+its fallback sentinel on every bar. Fix landed in #603
+(`model_type="sentiment"` → `"basic"`, `stop_loss_pct` default 0.20 → 0.10).
+Seven experimentation-framework gaps surfaced by the same sweep are being
+addressed in a follow-up (#604): factory_kwargs plumbing, FlatRiskManager
+override contract, base_fraction routing through wrapping sizers, clearer
+regime-attr errors, signal-quality diagnostic, bitwise-identical-variant
+warning, per-trade sequence tie-break.
 
 ---
 
