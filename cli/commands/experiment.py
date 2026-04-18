@@ -165,6 +165,67 @@ def _handle_show(ns: argparse.Namespace) -> int:
         return 1
 
 
+def _handle_diagnose(ns: argparse.Namespace) -> int:
+    try:
+        from src.experiments.diagnostics import SignalDiagnostic
+
+        start = datetime.fromisoformat(ns.start.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(ns.end.replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=UTC)
+
+        factory_kwargs: dict[str, object] = {}
+        for kv in ns.factory_kwarg or []:
+            if "=" not in kv:
+                raise ValueError(f"--factory-kwarg must be KEY=VALUE, got {kv!r}")
+            key, raw = kv.split("=", 1)
+            factory_kwargs[key.strip()] = _coerce_cli_scalar(raw)
+
+        diag = SignalDiagnostic()
+        report = diag.run(
+            strategy_name=ns.strategy,
+            symbol=ns.symbol,
+            timeframe=ns.timeframe,
+            start=start,
+            end=end,
+            provider=ns.provider,
+            use_cache=not ns.no_cache,
+            random_seed=ns.random_seed,
+            factory_kwargs=factory_kwargs or None,
+        )
+        if ns.format == "json":
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(report.render_text())
+        return 0 if report.constant_signal_warning is None else 2
+    except Exception as exc:
+        if getattr(ns, "debug", False):
+            raise
+        logging.exception("Experiment diagnose failed")
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _coerce_cli_scalar(raw: str) -> object:
+    """Best-effort coercion of CLI string values to int/float/bool/None/str."""
+    stripped = raw.strip()
+    if stripped.lower() in {"true", "false"}:
+        return stripped.lower() == "true"
+    if stripped.lower() in {"none", "null", ""}:
+        return None
+    try:
+        return int(stripped)
+    except ValueError:
+        pass
+    try:
+        return float(stripped)
+    except ValueError:
+        pass
+    return stripped
+
+
 def _handle_promote(ns: argparse.Namespace) -> int:
     try:
         from src.experiments.ledger import Ledger
@@ -237,3 +298,37 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Promote even when the verdict is not PROMOTE.",
     )
     promote_p.set_defaults(func=_handle_promote)
+
+    diag_p = subs.add_parser(
+        "diagnose",
+        help=(
+            "Walk the strategy's signal generator bar-by-bar and report "
+            "decision mix, predicted-return distribution, confidence "
+            "distribution, and direction-conditional hit rate. Useful for "
+            "catching broken signals that nonetheless produce non-zero P&L."
+        ),
+    )
+    diag_p.add_argument("--strategy", required=True, help="Strategy name (e.g. ml_basic).")
+    diag_p.add_argument("--symbol", default="BTCUSDT")
+    diag_p.add_argument("--timeframe", default="1h")
+    diag_p.add_argument("--start", required=True, help="ISO-8601 start (e.g. 2024-01-01).")
+    diag_p.add_argument("--end", required=True, help="ISO-8601 end (e.g. 2024-12-31).")
+    diag_p.add_argument(
+        "--provider",
+        choices=["binance", "coinbase", "mock", "fixture"],
+        default="fixture",
+    )
+    diag_p.add_argument("--no-cache", action="store_true")
+    diag_p.add_argument("--random-seed", type=int, default=None)
+    diag_p.add_argument(
+        "--factory-kwarg",
+        action="append",
+        metavar="KEY=VALUE",
+        help=(
+            "Keyword argument to pass to the strategy factory at "
+            "construction time. Repeatable. Use for knobs like "
+            "model_type=basic or max_leverage=2.0."
+        ),
+    )
+    diag_p.add_argument("--format", choices=["text", "json"], default="text")
+    diag_p.set_defaults(func=_handle_diagnose)

@@ -202,6 +202,186 @@ def test_stop_loss_override_must_be_numeric(runner: ExperimentRunner) -> None:
         runner._apply_parameter_overrides(strategy, cfg)
 
 
+# --------------------------------------------------------------------------
+# G1: factory_kwargs plumbing — kwargs the strategy factory accepts at
+# construction time (e.g. ``model_type``, ``max_leverage``) must reach
+# ``builder(**kwargs)`` instead of being silently dropped.
+# --------------------------------------------------------------------------
+
+
+def test_factory_kwargs_passed_to_hyper_growth_builder(runner: ExperimentRunner) -> None:
+    """``max_leverage`` / ``stop_loss_pct`` are construction-only on hyper_growth."""
+    strategy = runner._load_strategy(
+        "hyper_growth",
+        factory_kwargs={"max_leverage": 2.5, "stop_loss_pct": 0.07},
+    )
+    # The factory wires max_leverage into the LeverageManager and
+    # stop_loss_pct into the FlatRiskManager's instance attribute.
+    assert pytest.approx(strategy.leverage_manager.max_leverage, rel=1e-9) == 2.5
+    assert pytest.approx(strategy.risk_manager.stop_loss_pct, rel=1e-9) == 0.07
+
+
+def test_factory_kwargs_empty_dict_is_noop(runner: ExperimentRunner) -> None:
+    """Empty / missing factory_kwargs must behave exactly like no kwargs."""
+    default = runner._load_strategy("hyper_growth")
+    with_empty = runner._load_strategy("hyper_growth", factory_kwargs={})
+    with_none = runner._load_strategy("hyper_growth", factory_kwargs=None)
+    assert default.risk_manager.stop_loss_pct == with_empty.risk_manager.stop_loss_pct
+    assert default.risk_manager.stop_loss_pct == with_none.risk_manager.stop_loss_pct
+
+
+def test_factory_kwargs_unknown_kwarg_surfaces_factory_name(runner: ExperimentRunner) -> None:
+    """Typos must fail loudly with the factory name attached to the error."""
+    with pytest.raises(ValueError, match="factory_kwargs rejected by create_hyper_growth_strategy"):
+        runner._load_strategy(
+            "hyper_growth",
+            factory_kwargs={"definitely_not_a_kwarg": 1.0},
+        )
+
+
+def test_factory_kwargs_flow_end_to_end_via_run(runner: ExperimentRunner) -> None:
+    """``ExperimentConfig.factory_kwargs`` must reach ``_load_strategy``.
+
+    Uses a mock provider so we don't hit the network, and only runs long
+    enough to confirm the strategy was built with the requested kwargs —
+    we inspect the runner's resolved strategy via ``_load_strategy``
+    directly (``run`` rebuilds every time so the same contract holds).
+    """
+    from src.experiments.schemas import ExperimentConfig
+
+    end = datetime.now(UTC)
+    start = end - timedelta(days=1)
+    cfg = ExperimentConfig(
+        strategy_name="hyper_growth",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        start=start,
+        end=end,
+        initial_balance=1000.0,
+        provider="mock",
+        random_seed=42,
+        factory_kwargs={"max_leverage": 1.75},
+    )
+    built = runner._load_strategy(cfg.strategy_name, factory_kwargs=cfg.factory_kwargs)
+    assert pytest.approx(built.leverage_manager.max_leverage, rel=1e-9) == 1.75
+
+
+# --------------------------------------------------------------------------
+# G2: FlatRiskManager (hyper_growth) honors stop_loss_pct directly via its
+# instance attribute, not via ``_strategy_overrides``. The runner must
+# accept the override instead of rejecting it with "does not consume
+# strategy_overrides".
+# --------------------------------------------------------------------------
+
+
+def test_hyper_growth_stop_loss_override_lands_on_flat_risk_manager(
+    runner: ExperimentRunner,
+) -> None:
+    strategy = runner._load_strategy("hyper_growth")
+    cfg = _cfg("hyper_growth", {"hyper_growth.stop_loss_pct": 0.07})
+    runner._apply_parameter_overrides(strategy, cfg)
+
+    # FlatRiskManager reads self.stop_loss_pct at trade time (via
+    # get_stop_loss / should_exit) — the override must mutate the
+    # instance attribute, not just the strategy's risk_overrides dict.
+    assert pytest.approx(strategy.risk_manager.stop_loss_pct, rel=1e-9) == 0.07
+    overrides = getattr(strategy, "_risk_overrides", {}) or {}
+    assert pytest.approx(overrides["stop_loss_pct"], rel=1e-9) == 0.07
+
+
+def test_hyper_growth_take_profit_override_does_not_require_strategy_overrides_dict(
+    runner: ExperimentRunner,
+) -> None:
+    """FlatRiskManager doesn't consume TP directly, but the engine-level
+    _risk_overrides dict on the strategy does. The override must reach it
+    rather than being rejected upfront on the risk-manager gate."""
+    strategy = runner._load_strategy("hyper_growth")
+    cfg = _cfg("hyper_growth", {"hyper_growth.take_profit_pct": 0.35})
+    runner._apply_parameter_overrides(strategy, cfg)
+
+    overrides = getattr(strategy, "_risk_overrides", {}) or {}
+    assert pytest.approx(overrides["take_profit_pct"], rel=1e-9) == 0.35
+
+
+def test_flat_risk_manager_declares_direct_runtime_override_contract() -> None:
+    """The runner gate checks this class attribute — it must include
+    ``stop_loss_pct`` so FlatRiskManager-backed strategies are honored."""
+    from src.strategies.hyper_growth import FlatRiskManager
+
+    assert "stop_loss_pct" in FlatRiskManager._direct_runtime_overrides
+
+
+# --------------------------------------------------------------------------
+# G3: ``base_fraction`` routing must walk ``LeveragedPositionSizer ->
+# base_sizer``, and alias to the underlying ``FixedFractionSizer.fraction``
+# attribute. Before this fix, the override silently bounced.
+# --------------------------------------------------------------------------
+
+
+def test_hyper_growth_base_fraction_override_reaches_wrapped_sizer(
+    runner: ExperimentRunner,
+) -> None:
+    strategy = runner._load_strategy("hyper_growth")
+    cfg = _cfg("hyper_growth", {"hyper_growth.base_fraction": 0.12})
+    runner._apply_parameter_overrides(strategy, cfg)
+
+    # hyper_growth's outer sizer is LeveragedPositionSizer which wraps a
+    # FixedFractionSizer under .base_sizer. The fraction attribute is
+    # 'fraction' (not 'base_fraction') on FixedFractionSizer.
+    assert pytest.approx(strategy.position_sizer.base_sizer.fraction, rel=1e-9) == 0.12
+
+
+def test_hyper_growth_base_fraction_post_override_invariant_enforced(
+    runner: ExperimentRunner,
+) -> None:
+    """The bounds check must walk through the wrapping sizer too —
+    otherwise an invalid 0.9 override would pass validation."""
+    strategy = runner._load_strategy("hyper_growth")
+    cfg = _cfg("hyper_growth", {"hyper_growth.base_fraction": 0.9})
+    runner._apply_parameter_overrides(strategy, cfg)
+    with pytest.raises(ValueError, match="base_fraction|fraction"):
+        runner._validate_post_override_invariants(strategy)
+
+
+def test_ml_basic_base_fraction_still_works_on_unwrapped_sizer(
+    runner: ExperimentRunner,
+) -> None:
+    """Sanity guard — the unwrap logic must not break the already-working
+    ConfidenceWeightedSizer path on ml_basic."""
+    strategy = runner._load_strategy("ml_basic")
+    cfg = _cfg("ml_basic", {"ml_basic.base_fraction": 0.15})
+    runner._apply_parameter_overrides(strategy, cfg)
+    assert pytest.approx(strategy.position_sizer.base_fraction, rel=1e-9) == 0.15
+
+
+# --------------------------------------------------------------------------
+# G4: regime-specific ``short_threshold_*`` overrides only exist on
+# regime-aware generators. Attempting them on a regime-agnostic strategy
+# must fail with a clear error that points at the class mismatch — not
+# the generic "no component accepts it".
+# --------------------------------------------------------------------------
+
+
+def test_regime_short_threshold_on_ml_basic_raises_specific_error(
+    runner: ExperimentRunner,
+) -> None:
+    strategy = runner._load_strategy("ml_basic")
+    cfg = _cfg("ml_basic", {"ml_basic.short_threshold_trend_up": -0.0002})
+    with pytest.raises(ValueError, match="regime-aware signal generator"):
+        runner._apply_parameter_overrides(strategy, cfg)
+
+
+def test_regime_short_threshold_error_names_actual_generator_class(
+    runner: ExperimentRunner,
+) -> None:
+    """The error message must name the concrete signal generator class the
+    strategy is using so the operator can fix the YAML without grep."""
+    strategy = runner._load_strategy("hyper_growth")
+    cfg = _cfg("hyper_growth", {"hyper_growth.short_threshold_range": -0.0004})
+    with pytest.raises(ValueError, match="MLBasicSignalGenerator"):
+        runner._apply_parameter_overrides(strategy, cfg)
+
+
 def test_min_confidence_floor_invariant_enforced_after_override(
     runner: ExperimentRunner,
 ) -> None:

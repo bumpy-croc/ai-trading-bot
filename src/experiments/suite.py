@@ -72,6 +72,12 @@ class BacktestSettings:
     random_seed: int | None = None
     start: datetime | None = None
     end: datetime | None = None
+    # Keyword arguments passed to the strategy factory at construction time.
+    # Distinct from ``VariantSpec.overrides`` which mutate attributes post-
+    # construction via setattr. Factory kwargs handle settings the strategy
+    # only honors during ``__init__`` (e.g. ``model_type``, ``max_leverage``,
+    # ``min_regime_bars``, any knob whose value reshapes the component tree).
+    factory_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def resolve_window(self, now: datetime | None = None) -> tuple[datetime, datetime]:
         if self.end is not None and self.start is not None:
@@ -179,6 +185,7 @@ def _build_experiment_config(
         use_cache=suite.backtest.use_cache,
         provider=suite.backtest.provider,
         random_seed=suite.backtest.random_seed,
+        factory_kwargs=dict(suite.backtest.factory_kwargs),
     )
 
 

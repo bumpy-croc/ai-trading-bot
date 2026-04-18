@@ -52,6 +52,12 @@ class VariantReport:
     ranking_confidence: float | None
     verdict: Verdict
     is_baseline: bool = False
+    # Human-readable diagnostic warnings surfaced by the reporter. The most
+    # important case (gap report G6/G7): a variant whose every headline
+    # metric and per-trade P&L sequence ties the baseline — almost
+    # certainly a dead-code override that didn't actually mutate the
+    # strategy. Rendered in the text/CSV/JSON report.
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -259,6 +265,116 @@ def _classify(
     return Verdict.HOLD
 
 
+# Tolerance for "bitwise-identical" comparisons. Floating-point math in the
+# backtest engine is deterministic given identical inputs, so two runs with
+# effective-noop overrides are typically equal to ULP precision — but we
+# allow a tiny slack to survive pandas/numpy version drift.
+_IDENTICAL_TOL = 1e-9
+
+# Metrics compared when deciding whether a variant is "identical to
+# baseline" for G6/G7 warning purposes. The set deliberately omits
+# ``max_drawdown`` derivatives and non-P&L headline numbers — the point
+# of the warning is that the VARIANT'S P&L profile is
+# indistinguishable from baseline, i.e. the override was a no-op.
+_IDENTICAL_METRIC_FIELDS: tuple[str, ...] = (
+    "total_return",
+    "annualized_return",
+    "sharpe_ratio",
+    "max_drawdown",
+    "win_rate",
+    "total_trades",
+    "final_balance",
+)
+
+
+def _is_identical_to_baseline(
+    baseline: ExperimentResult,
+    variant: ExperimentResult,
+) -> bool:
+    """True when every headline metric matches baseline within ``_IDENTICAL_TOL``.
+
+    Used as a trigger for the dead-code-override warning (G6). Integer
+    metrics (``total_trades``) require strict equality; floats use the
+    tolerance so pandas/numpy FP noise doesn't produce false negatives.
+    """
+    for field_name in _IDENTICAL_METRIC_FIELDS:
+        b = getattr(baseline, field_name)
+        v = getattr(variant, field_name)
+        if isinstance(b, int) and isinstance(v, int):
+            if b != v:
+                return False
+            continue
+        bv = float(b)
+        vv = float(v)
+        if math.isnan(bv) or math.isnan(vv):
+            # NaN inputs are rejected upstream by `_metric`; if one slips
+            # through here, treat as non-identical rather than masking it.
+            return False
+        if abs(bv - vv) > _IDENTICAL_TOL:
+            return False
+    return True
+
+
+def _pnl_sequence_identical(
+    baseline_trades: list[float],
+    variant_trades: list[float],
+) -> bool:
+    """True when two per-trade P&L sequences match element-wise.
+
+    Empty baseline AND empty variant sequences count as identical (no
+    trades is trivially "the same" trades). A single-sequence-empty case
+    is treated as different — the tie on aggregate metrics is spurious.
+    """
+    if len(baseline_trades) != len(variant_trades):
+        return False
+    for a, b in zip(baseline_trades, variant_trades, strict=True):
+        if math.isnan(a) or math.isnan(b):
+            # NaN per-trade PnL is invalid upstream; fail the identity
+            # check rather than return True for two NaN-filled lists.
+            return False
+        if abs(float(a) - float(b)) > _IDENTICAL_TOL:
+            return False
+    return True
+
+
+def _detect_identical_to_baseline(
+    baseline: ExperimentResult,
+    variant: ExperimentResult,
+    variant_name: str,
+) -> list[str]:
+    """Return warnings describing baseline-identical variants (G6/G7).
+
+    Emits at most one warning. When the aggregate metrics match, the
+    per-trade P&L sequence decides between:
+      * "literally the same trades" — the override almost certainly did
+        nothing (wrong attribute name, silently dropped, dead-code
+        component target)
+      * "different trades, same aggregate" — rare but interesting: the
+        variant took a different path that happened to tie the baseline
+        on every headline metric, worth surfacing so the operator can
+        decide whether to dig in or trust the tie.
+    """
+    if variant_name == "baseline" or variant is baseline:
+        return []
+    if not _is_identical_to_baseline(baseline, variant):
+        return []
+    if _pnl_sequence_identical(baseline.trade_pnl_pcts, variant.trade_pnl_pcts):
+        return [
+            "Every headline metric AND the per-trade P&L sequence match "
+            "baseline bitwise. The override almost certainly did not take "
+            "effect — verify the attribute name routes to a live component "
+            "and the override isn't a no-op on this strategy's risk "
+            "manager / sizer."
+        ]
+    return [
+        "Headline metrics match baseline exactly but the per-trade P&L "
+        "sequence differs — the variant took different trades that "
+        "happened to tie on aggregates. This is rare and may indicate a "
+        "degenerate signal path; inspect the diagnostic "
+        "(atb experiment diagnose ...) to confirm signal quality."
+    ]
+
+
 class ExperimentReporter:
     """Build a :class:`SuiteReport` from a :class:`SuiteResult`."""
 
@@ -311,6 +427,7 @@ class ExperimentReporter:
             )
             confidence = _ranking_confidence(baseline, result, settings.target_metric)
             verdict = _classify(baseline, result, settings, confidence)
+            warnings = _detect_identical_to_baseline(baseline, result, spec.name)
             rows.append(
                 VariantReport(
                     name=spec.name,
@@ -324,6 +441,7 @@ class ExperimentReporter:
                     delta_vs_baseline=delta,
                     ranking_confidence=confidence,
                     verdict=verdict,
+                    warnings=warnings,
                 )
             )
 
@@ -386,6 +504,13 @@ class ExperimentReporter:
                 f"{row.win_rate:>6.2f} {row.total_trades:>5d} "
                 f"{delta_str} {conf_txt:>6} {tag:>18}"
             )
+        rows_with_warnings = [row for row in report.rows if row.warnings]
+        if rows_with_warnings:
+            lines.append("")
+            lines.append(f"Variant warnings ({len(rows_with_warnings)}):")
+            for row in rows_with_warnings:
+                for msg in row.warnings:
+                    lines.append(f"  - {row.name}: {msg}")
         if report.errors:
             lines.append("")
             lines.append(f"Variant errors ({len(report.errors)}):")
@@ -410,6 +535,7 @@ class ExperimentReporter:
                 "ranking_confidence",
                 "verdict",
                 "is_baseline",
+                "warnings",
             ]
         )
         for row in report.rows:
@@ -427,6 +553,9 @@ class ExperimentReporter:
                     "" if row.ranking_confidence is None else row.ranking_confidence,
                     row.verdict.value,
                     row.is_baseline,
+                    # Join multi-line warnings with " | " so the CSV cell
+                    # stays a single line readable in spreadsheets.
+                    " | ".join(row.warnings),
                 ]
             )
         return buf.getvalue()

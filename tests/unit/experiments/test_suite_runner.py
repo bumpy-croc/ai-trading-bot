@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
+from src.experiments.runner import ExperimentRunner
 from src.experiments.schemas import ExperimentConfig, ExperimentResult
 from src.experiments.suite import (
     BacktestSettings,
@@ -15,6 +16,18 @@ from src.experiments.suite import (
     SuiteConfig,
     VariantSpec,
 )
+
+
+def _mock_runner() -> MagicMock:
+    """Build an ExperimentRunner mock with a strict spec.
+
+    ``create_autospec(..., instance=True)`` verifies both the attribute
+    names and method signatures, so a future rename/resignature of
+    ``ExperimentRunner.run`` breaks these tests loudly instead of
+    silently passing through a permissive ``MagicMock()``.
+    """
+    return create_autospec(ExperimentRunner, instance=True)
+
 
 pytestmark = pytest.mark.fast
 
@@ -64,7 +77,7 @@ def suite() -> SuiteConfig:
 
 def test_build_configs_emits_baseline_then_variants(suite: SuiteConfig) -> None:
     now = datetime(2026, 4, 1, tzinfo=UTC)
-    sut = ExperimentSuiteRunner(runner=MagicMock())
+    sut = ExperimentSuiteRunner(runner=_mock_runner())
     configs = sut.build_configs(suite, now=now)
 
     assert [c.parameters.name if c.parameters is not None else None for c in configs] == [
@@ -80,7 +93,7 @@ def test_build_configs_emits_baseline_then_variants(suite: SuiteConfig) -> None:
 
 
 def test_run_calls_runner_once_per_variant(suite: SuiteConfig) -> None:
-    mock_runner = MagicMock()
+    mock_runner = _mock_runner()
     mock_runner.run.side_effect = [
         _fake_result(MagicMock(spec=ExperimentConfig), total_return=1.0),
         _fake_result(MagicMock(spec=ExperimentConfig), total_return=2.0),
@@ -119,6 +132,57 @@ def test_comparison_validates_significance_level() -> None:
 
 
 def test_baseline_with_no_overrides_yields_no_parameters(suite: SuiteConfig) -> None:
-    sut = ExperimentSuiteRunner(runner=MagicMock())
+    sut = ExperimentSuiteRunner(runner=_mock_runner())
     configs = sut.build_configs(suite, now=datetime(2026, 4, 1, tzinfo=UTC))
     assert configs[0].parameters is None
+
+
+# --------------------------------------------------------------------------
+# G1: factory_kwargs on BacktestSettings must be propagated into every
+# generated ExperimentConfig so the runner can forward them to the
+# strategy builder at construction time.
+# --------------------------------------------------------------------------
+
+
+def test_factory_kwargs_propagate_from_backtest_to_every_config() -> None:
+    fk = {"max_leverage": 2.0, "min_regime_bars": 5}
+    suite = SuiteConfig(
+        id="fk_propagation",
+        description="",
+        backtest=BacktestSettings(
+            strategy="hyper_growth",
+            provider="mock",
+            factory_kwargs=fk,
+        ),
+        baseline=VariantSpec(name="baseline"),
+        variants=[VariantSpec(name="v1", overrides={"hyper_growth.stop_loss_pct": 0.1})],
+    )
+    sut = ExperimentSuiteRunner(runner=_mock_runner())
+    configs = sut.build_configs(suite, now=datetime(2026, 4, 1, tzinfo=UTC))
+    assert len(configs) == 2
+    for c in configs:
+        assert c.factory_kwargs == fk
+
+
+def test_factory_kwargs_are_copied_not_shared_between_configs() -> None:
+    """Mutating one config's factory_kwargs must not bleed into others —
+    ExperimentRunner.run mutates via ``dict(...)`` but the safer boundary
+    is at suite-build time."""
+    suite = SuiteConfig(
+        id="fk_isolation",
+        description="",
+        backtest=BacktestSettings(
+            strategy="hyper_growth",
+            provider="mock",
+            factory_kwargs={"max_leverage": 2.0},
+        ),
+        baseline=VariantSpec(name="baseline"),
+        variants=[VariantSpec(name="v1")],
+    )
+    sut = ExperimentSuiteRunner(runner=_mock_runner())
+    configs = sut.build_configs(suite, now=datetime(2026, 4, 1, tzinfo=UTC))
+    configs[0].factory_kwargs["max_leverage"] = 9.9
+    assert configs[1].factory_kwargs["max_leverage"] == 2.0
+    # The suite's template is also untouched so re-running produces the
+    # same configs.
+    assert suite.backtest.factory_kwargs["max_leverage"] == 2.0

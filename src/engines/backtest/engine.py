@@ -1460,6 +1460,16 @@ class Backtester:
             "total_fees": perf_metrics.total_fees_paid,
             "total_slippage_cost": perf_metrics.total_slippage_cost,
             "execution_settings": self.execution_engine.get_execution_settings(),
+            # Per-trade P&L sequence (in the order trades closed). The
+            # experimentation reporter uses this to distinguish variants
+            # whose aggregate metrics tie the baseline but took different
+            # trade paths from variants whose dead-code overrides produced
+            # literally the same trade sequence. Only populated with trades
+            # whose ``pnl_percent`` was recorded (filters out positions
+            # still open at backtest end, which have None).
+            "trade_pnl_pcts": [
+                float(t.pnl_percent) for t in self.trades if t.pnl_percent is not None
+            ],
         }
 
         # Add regime switching results
