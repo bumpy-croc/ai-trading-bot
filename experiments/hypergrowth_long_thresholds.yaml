@@ -1,0 +1,42 @@
+id: hypergrowth_long_thresholds
+description: Tighten ML long-entry threshold to filter out low-quality long signals.
+
+# HYPOTHESIS: HyperGrowth's baseline long_entry_threshold=0.0 triggers on any
+# positive predicted return. In consolidation / low-vol periods the model
+# produces tiny positive biases (+0.01–0.03%) that look like noise. Tightening
+# the threshold should (a) reduce whipsaw entries, (b) avoid opening positions
+# before trailing-stop accumulation can offset fees, and (c) concentrate
+# capital in higher-conviction bars.
+
+backtest:
+  strategy: hyper_growth
+  symbol: BTCUSDT
+  timeframe: 1h
+  initial_balance: 1000
+  provider: fixture
+  start: "2024-01-01T00:00:00Z"
+  end: "2024-12-31T00:00:00Z"
+  random_seed: 42
+
+baseline:
+  name: defaults
+  overrides: {}
+
+variants:
+  - name: long_thr_0.02pct
+    overrides:
+      hyper_growth.long_entry_threshold: 0.0002
+  - name: long_thr_0.05pct
+    overrides:
+      hyper_growth.long_entry_threshold: 0.0005
+  - name: long_thr_0.10pct
+    overrides:
+      hyper_growth.long_entry_threshold: 0.001
+  - name: long_thr_0.20pct
+    overrides:
+      hyper_growth.long_entry_threshold: 0.002
+
+comparison:
+  target_metric: total_return
+  min_trades: 10
+  significance_level: 0.05

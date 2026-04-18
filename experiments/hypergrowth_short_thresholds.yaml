@@ -1,0 +1,46 @@
+id: hypergrowth_short_thresholds
+description: Regime-aware short-entry threshold tuning.
+
+# HYPOTHESIS: HyperGrowth's research doc noted that 2022 (bear) produced
+# +84% via shorts, but 2024 consolidation was only +17.6%. Tightening shorts
+# in uptrends (avoid counter-trend shorts) and loosening in downtrends
+# (catch bear moves earlier) should help — especially in choppy ranges.
+
+backtest:
+  strategy: hyper_growth
+  symbol: BTCUSDT
+  timeframe: 1h
+  initial_balance: 1000
+  provider: fixture
+  start: "2024-01-01T00:00:00Z"
+  end: "2024-12-31T00:00:00Z"
+  random_seed: 42
+
+baseline:
+  name: defaults
+  overrides: {}
+
+variants:
+  # Turn off / heavily suppress shorts in uptrends (effectively long-only bull)
+  - name: no_shorts_in_bull
+    overrides:
+      hyper_growth.short_threshold_trend_up: -0.005
+  # Loosen shorts in downtrends — catch bear moves earlier
+  - name: earlier_bear_shorts
+    overrides:
+      hyper_growth.short_threshold_trend_down: -0.0003
+  # Across-the-board tighter shorts (fewer but higher-conviction shorts)
+  - name: tight_shorts_all
+    overrides:
+      hyper_growth.short_entry_threshold: -0.001
+      hyper_growth.short_threshold_trend_up: -0.0015
+      hyper_growth.short_threshold_range: -0.001
+  # Looser short confidence multiplier — regime-aware magnitude amplification
+  - name: regime_short_conf_x2
+    overrides:
+      hyper_growth.short_threshold_confidence_multiplier: 0.5
+
+comparison:
+  target_metric: total_return
+  min_trades: 10
+  significance_level: 0.05

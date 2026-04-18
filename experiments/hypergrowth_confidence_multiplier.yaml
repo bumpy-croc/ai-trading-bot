@@ -1,0 +1,40 @@
+id: hypergrowth_confidence_multiplier
+description: Sweep the ML confidence multiplier that scales predicted-return magnitude.
+
+# HYPOTHESIS: confidence = min(1.0, |predicted_return| * confidence_multiplier).
+# HyperGrowth's FlatRiskManager gates trades at confidence >= 0.05 but ignores
+# magnitude beyond the gate. A HIGHER multiplier lets more low-magnitude
+# predictions clear the 0.05 gate (more trades, more noise). A LOWER multiplier
+# demands stronger model conviction (fewer, higher-quality entries).
+# Default is 12.0 — tuned historically against ml_basic, not hyper_growth's
+# wider SL/TP regime. Worth questioning.
+
+backtest:
+  strategy: hyper_growth
+  symbol: BTCUSDT
+  timeframe: 1h
+  initial_balance: 1000
+  provider: fixture
+  start: "2024-01-01T00:00:00Z"
+  end: "2024-12-31T00:00:00Z"
+  random_seed: 42
+
+baseline:
+  name: defaults
+  overrides: {}
+
+variants:
+  - name: conf_mult_6
+    overrides:
+      hyper_growth.confidence_multiplier: 6.0
+  - name: conf_mult_20
+    overrides:
+      hyper_growth.confidence_multiplier: 20.0
+  - name: conf_mult_30
+    overrides:
+      hyper_growth.confidence_multiplier: 30.0
+
+comparison:
+  target_metric: total_return
+  min_trades: 10
+  significance_level: 0.05
