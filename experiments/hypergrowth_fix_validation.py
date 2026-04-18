@@ -60,12 +60,15 @@ def run(strategy, start: datetime, end: datetime) -> dict:
 
 
 def describe(name: str, r: dict) -> str:
+    # Backtester already returns total_return / max_drawdown / win_rate in
+    # percent units (see perf_metrics.total_return_pct and the `* 100`
+    # conversions in engine.py). Do not re-scale here.
     return (
         f"{name:32s}  trades={r.get('total_trades', 0):4d}  "
-        f"return={r.get('total_return', 0.0)*100:7.2f}%  "
-        f"maxDD={r.get('max_drawdown', 0.0)*100:6.2f}%  "
+        f"return={r.get('total_return', 0.0):7.2f}%  "
+        f"maxDD={r.get('max_drawdown', 0.0):6.2f}%  "
         f"sharpe={r.get('sharpe_ratio', 0.0):6.3f}  "
-        f"winR={r.get('win_rate', 0.0)*100:5.1f}%"
+        f"winR={r.get('win_rate', 0.0):5.1f}%"
     )
 
 
@@ -97,13 +100,15 @@ def main() -> int:
     print(describe("post-fix (basic, sl=0.10)", r_post))
     print(describe("control (new defaults)", r_ctrl))
 
-    # Sanity checks
+    # Sanity checks. total_return is already in percent (14.16 means 14.16%),
+    # so the +30 threshold and the lift arithmetic both operate in
+    # percentage-point units directly — no extra * 100 required.
     ok = True
-    if r_ctrl.get("total_return", 0.0) < r_pre.get("total_return", 0.0) + 0.30:
+    if r_ctrl.get("total_return", 0.0) < r_pre.get("total_return", 0.0) + 30.0:
         print("\n  FAIL: new-default return not at least +30 pp vs pre-fix")
         ok = False
     else:
-        lift_pp = (r_ctrl["total_return"] - r_pre["total_return"]) * 100
+        lift_pp = r_ctrl["total_return"] - r_pre["total_return"]
         print(f"\n  OK: return lift vs pre-fix: +{lift_pp:.1f} percentage points")
 
     if abs(r_ctrl.get("total_return", 0.0) - r_post.get("total_return", 0.0)) > 1e-9:

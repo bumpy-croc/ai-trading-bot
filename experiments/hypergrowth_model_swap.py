@@ -26,7 +26,13 @@ from typing import Any
 
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
-for noisy in ("atb", "atb.src.engines", "atb.src.strategies", "atb.src.prediction", "atb.matplotlib.font_manager"):
+for noisy in (
+    "atb",
+    "atb.src.engines",
+    "atb.src.strategies",
+    "atb.src.prediction",
+    "atb.matplotlib.font_manager",
+):
     logging.getLogger(noisy).setLevel(logging.ERROR)
 
 from src.data_providers.offline import FixtureProvider  # noqa: E402
@@ -37,9 +43,13 @@ from src.strategies.hyper_growth import create_hyper_growth_strategy  # noqa: E4
 
 
 def make_strategy_with_basic_model(**kwargs: Any):
-    """Build hyper_growth and swap its signal generator to model_type='basic'."""
+    """Build hyper_growth and force its signal generator to model_type='basic'.
+
+    This is the post-fix configuration (matches the new default), kept
+    explicit here so the comparison with the sentiment variant is
+    symmetric and independent of any future default change.
+    """
     strategy = create_hyper_growth_strategy(**kwargs)
-    # Replace signal generator with the basic-model variant.
     strategy.signal_generator = MLBasicSignalGenerator(
         name=f"{strategy.name}_signals",
         model_type="basic",
@@ -47,7 +57,28 @@ def make_strategy_with_basic_model(**kwargs: Any):
     return strategy
 
 
-def run_variant(name: str, builder, start: datetime, end: datetime) -> tuple[float, float, float, int, float, float]:
+def make_strategy_with_sentiment_model(**kwargs: Any):
+    """Build hyper_growth and force the broken sentiment-model signal generator.
+
+    Reproduces the pre-fix pathology: MLBasicSignalGenerator installs a
+    5-column PriceOnlyFeatureExtractor, but the sentiment bundle was
+    trained on 10 features. The model returns 0.0 on every bar, which
+    the generator converts to predicted_return=-1.0 — a constant SELL
+    sentinel. Without this explicit swap, ``create_hyper_growth_strategy()``
+    now defaults to the basic model (post-fix) so the "broken" variant
+    would otherwise silently test the same pipeline as the "working" one.
+    """
+    strategy = create_hyper_growth_strategy(**kwargs)
+    strategy.signal_generator = MLBasicSignalGenerator(
+        name=f"{strategy.name}_signals",
+        model_type="sentiment",
+    )
+    return strategy
+
+
+def run_variant(
+    name: str, builder, start: datetime, end: datetime
+) -> tuple[float, float, float, int, float, float]:
     strategy = builder()
     provider = FixtureProvider(Path("tests/data/BTCUSDT_1h_2023-01-01_2024-12-31.feather"))
     bt = Backtester(
@@ -79,11 +110,22 @@ def main() -> int:
     t_start = time.time()
 
     variants = [
-        ("sentiment(broken) — baseline", lambda: create_hyper_growth_strategy()),
-        ("sentiment(broken) — sl_10pct", lambda: create_hyper_growth_strategy(stop_loss_pct=0.10)),
+        # "broken" variants explicitly install the sentiment-model signal
+        # generator. Using the bare factory here would silently run the
+        # post-fix basic model and make this comparison meaningless.
+        ("sentiment(broken) — baseline", lambda: make_strategy_with_sentiment_model()),
+        (
+            "sentiment(broken) — sl_10pct",
+            lambda: make_strategy_with_sentiment_model(stop_loss_pct=0.10),
+        ),
         ("basic(working) — baseline", lambda: make_strategy_with_basic_model()),
         ("basic(working) — sl_10pct", lambda: make_strategy_with_basic_model(stop_loss_pct=0.10)),
-        ("basic(working) — sl_10_frac30", lambda: make_strategy_with_basic_model(stop_loss_pct=0.10, base_fraction=0.30, risk_fraction=0.30)),
+        (
+            "basic(working) — sl_10_frac30",
+            lambda: make_strategy_with_basic_model(
+                stop_loss_pct=0.10, base_fraction=0.30, risk_fraction=0.30
+            ),
+        ),
     ]
 
     baseline_ret = None
@@ -96,7 +138,9 @@ def main() -> int:
             continue
         dt = time.time() - t0
         delta = "" if baseline_ret is None else f"  (Δ{ret - baseline_ret:+.2f})"
-        print(f"{name:<42} {trades:>6} {wr:>6.1f} {ret:>8.2f} {dd:>7.2f} {sharpe:>7.3f} {final:>9.0f}{delta}  [{dt:.0f}s]")
+        print(
+            f"{name:<42} {trades:>6} {wr:>6.1f} {ret:>8.2f} {dd:>7.2f} {sharpe:>7.3f} {final:>9.0f}{delta}  [{dt:.0f}s]"
+        )
         if baseline_ret is None:
             baseline_ret = ret
 

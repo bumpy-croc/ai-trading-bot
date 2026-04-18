@@ -169,7 +169,7 @@ def create_hyper_growth_strategy(
     take_profit_pct: float = 0.30,
     stop_loss_pct: float = 0.10,
 ) -> Strategy:
-    """Create hyper-growth strategy targeting 500% annual returns.
+    """Create hyper-growth strategy targeting high annual returns.
 
     Combines ML signal generation with aggressive position sizing to
     maximize compounding during favorable conditions while preserving

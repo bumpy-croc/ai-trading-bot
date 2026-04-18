@@ -3,7 +3,10 @@
 import pytest
 
 from src.strategies.components import Signal, SignalDirection
+from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
 from src.strategies.hyper_growth import FlatRiskManager, create_hyper_growth_strategy
+
+pytestmark = pytest.mark.unit
 
 
 class TestFlatRiskManager:
@@ -225,6 +228,23 @@ class TestHyperGrowthStrategy:
         assert hasattr(strategy, "leverage_manager")
         assert getattr(strategy, "base_position_size", None) == 0.20
         assert getattr(strategy, "take_profit_pct", None) == 0.30
+
+    def test_default_signal_generator_uses_basic_model(self):
+        """Regression guard: the factory must wire the basic ML model.
+
+        Prior to the signal-fix commit the factory installed
+        ``MLBasicSignalGenerator(model_type="sentiment")``. The sentiment
+        bundle expects 10 features, but MLBasicSignalGenerator only feeds
+        5 (OHLCV via PriceOnlyFeatureExtractor), so the model silently
+        returned 0.0 on every bar — which the generator converted to a
+        constant SELL sentinel. Asserting the default here prevents a
+        silent reversion.
+        """
+        strategy = create_hyper_growth_strategy()
+
+        sg = strategy.signal_generator
+        assert isinstance(sg, MLBasicSignalGenerator)
+        assert sg.model_type == "basic"
 
     def test_create_hyper_growth_strategy_custom_params(self):
         """Test strategy creation with custom parameters."""
