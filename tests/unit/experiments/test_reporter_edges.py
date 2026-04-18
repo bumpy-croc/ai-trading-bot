@@ -317,7 +317,7 @@ def test_warning_serialized_in_csv_report() -> None:
     report = ExperimentReporter().render(_suite_result(suite, baseline, [variant]))
     csv_text = ExperimentReporter().render_csv(report)
     # Header includes the new column
-    assert ",warnings\r\n" in csv_text or ",warnings\n" in csv_text
+    assert ",warnings" in csv_text.replace("\r\n", "\n")
     # Warning cell contains the key diagnostic phrase
     assert "did not take effect" in csv_text
 

@@ -1,40 +1,14 @@
-"""Signal-quality diagnostic — measure the raw predictive signal of a strategy.
-
-The ExperimentRunner ranks variants by backtest P&L. That is the right metric
-for picking a winner, but it has a critical blind spot: a degenerate signal
-(e.g. constant SELL because the model was fed the wrong feature tensor) can
-still produce non-zero P&L from stop-loss and trailing-stop mechanics, and
-every variant on top of that signal looks bitwise-identical in the reporter.
-See ``.claude/reports/hyper_growth_experiment_sweep_2026-04-17.md`` for the
-incident that motivated this tool.
-
-The diagnostic walks the strategy's ``SignalGenerator`` bar-by-bar over a
-range of history and reports four distributions that, together, tell you
-whether the model has any directional edge at all:
-
-* **Decision mix** — counts of BUY / SELL / HOLD. If it's 100% any-one-side
-  or 100% HOLD the signal is dead regardless of how good the P&L looks.
-* **Predicted return** — ``(prediction - current_price) / current_price``
-  from the generator's metadata. A healthy model has a real distribution;
-  a broken pipeline returns constants like ``-1.0`` (prediction = 0.0).
-* **Confidence** — the generator's per-bar confidence score. A useful
-  signal varies between high- and low-conviction bars.
-* **Direction-conditional hit rate** — ``P(forward return > 0 | BUY)`` and
-  ``P(forward return < 0 | SELL)`` at 1h / 4h / 12h / 24h horizons. These
-  are the quantities any confidence-weighted sizer is trying to exploit.
-
-Run via ``atb experiment diagnose --strategy <name> ...`` or programmatically
-through :class:`SignalDiagnostic`. The module has no dependencies beyond the
-framework that `src/experiments/runner.py` already pulls in.
-"""
+"""SignalDiagnostic — walks a strategy's signal generator bar-by-bar."""
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from src.experiments.diagnostics.hit_rate import HitRate
+from src.experiments.diagnostics.report import DiagnosticReport
+from src.experiments.diagnostics.stats import DistributionStats
 from src.experiments.runner import ExperimentRunner
 from src.experiments.schemas import ExperimentConfig
 from src.strategies.components.signal_generator import Signal, SignalDirection
@@ -43,150 +17,6 @@ from src.strategies.components.signal_generator import Signal, SignalDirection
 # 1h/4h/12h/24h matches the horizons a typical ML signal generator is
 # trained to predict, and matches the horizons the incident report used.
 DEFAULT_HORIZONS: tuple[int, ...] = (1, 4, 12, 24)
-
-
-@dataclass
-class DistributionStats:
-    """Summary statistics for a numeric series."""
-
-    n: int
-    mean: float
-    std: float
-    min: float
-    max: float
-    positive_fraction: float
-
-    @classmethod
-    def from_series(cls, values: list[float]) -> DistributionStats:
-        if not values:
-            return cls(n=0, mean=0.0, std=0.0, min=0.0, max=0.0, positive_fraction=0.0)
-        n = len(values)
-        mean = sum(values) / n
-        # Guard n=1 (std is 0 by definition). Use sample std for n≥2.
-        if n == 1:
-            std = 0.0
-        else:
-            var = sum((v - mean) ** 2 for v in values) / (n - 1)
-            std = math.sqrt(var)
-        pos = sum(1 for v in values if v > 0) / n
-        return cls(
-            n=n,
-            mean=float(mean),
-            std=float(std),
-            min=float(min(values)),
-            max=float(max(values)),
-            positive_fraction=float(pos),
-        )
-
-    def to_dict(self) -> dict[str, float | int]:
-        return {
-            "n": self.n,
-            "mean": self.mean,
-            "std": self.std,
-            "min": self.min,
-            "max": self.max,
-            "positive_fraction": self.positive_fraction,
-        }
-
-
-@dataclass
-class HitRate:
-    """Direction-conditional accuracy at a specific forward horizon."""
-
-    horizon: int
-    buy_samples: int
-    buy_accuracy: float
-    sell_samples: int
-    sell_accuracy: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "horizon": self.horizon,
-            "buy_samples": self.buy_samples,
-            "buy_accuracy": self.buy_accuracy,
-            "sell_samples": self.sell_samples,
-            "sell_accuracy": self.sell_accuracy,
-        }
-
-
-@dataclass
-class DiagnosticReport:
-    """Full signal-quality report for a single strategy run."""
-
-    strategy_name: str
-    symbol: str
-    timeframe: str
-    bars_evaluated: int
-    buy_count: int
-    sell_count: int
-    hold_count: int
-    predicted_return: DistributionStats
-    confidence: DistributionStats
-    hit_rates: list[HitRate] = field(default_factory=list)
-    # Set when predicted_return is literally constant (n>0 and std≈0) —
-    # the single strongest signal that the feature pipeline feeds the
-    # model a shape it can't consume and the model is returning a
-    # fallback-path sentinel value.
-    constant_signal_warning: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "strategy": self.strategy_name,
-            "symbol": self.symbol,
-            "timeframe": self.timeframe,
-            "bars_evaluated": self.bars_evaluated,
-            "decisions": {
-                "buy": self.buy_count,
-                "sell": self.sell_count,
-                "hold": self.hold_count,
-            },
-            "predicted_return": self.predicted_return.to_dict(),
-            "confidence": self.confidence.to_dict(),
-            "hit_rates": [hr.to_dict() for hr in self.hit_rates],
-            "constant_signal_warning": self.constant_signal_warning,
-        }
-
-    def render_text(self) -> str:
-        lines = [
-            f"Signal-quality diagnostic: {self.strategy_name} " f"{self.symbol} {self.timeframe}",
-            f"  bars evaluated: {self.bars_evaluated}",
-            "",
-            "Decision mix",
-            f"  BUY : {self.buy_count:>6}  ({_pct(self.buy_count, self.bars_evaluated)}%)",
-            f"  SELL: {self.sell_count:>6}  ({_pct(self.sell_count, self.bars_evaluated)}%)",
-            f"  HOLD: {self.hold_count:>6}  ({_pct(self.hold_count, self.bars_evaluated)}%)",
-            "",
-            "Predicted return",
-            f"  n={self.predicted_return.n}  "
-            f"mean={self.predicted_return.mean:+.6f}  "
-            f"std={self.predicted_return.std:.6f}  "
-            f"min={self.predicted_return.min:+.6f}  "
-            f"max={self.predicted_return.max:+.6f}  "
-            f"pos_frac={self.predicted_return.positive_fraction:.2%}",
-            "",
-            "Confidence",
-            f"  n={self.confidence.n}  "
-            f"mean={self.confidence.mean:.4f}  "
-            f"std={self.confidence.std:.4f}",
-            "",
-            "Direction-conditional hit rate",
-        ]
-        for hr in self.hit_rates:
-            lines.append(
-                f"  h={hr.horizon:>3}: "
-                f"BUY  acc={hr.buy_accuracy * 100:5.2f}%  n={hr.buy_samples:>5}  "
-                f"SELL acc={hr.sell_accuracy * 100:5.2f}%  n={hr.sell_samples:>5}"
-            )
-        if self.constant_signal_warning:
-            lines.append("")
-            lines.append(f"WARNING: {self.constant_signal_warning}")
-        return "\n".join(lines)
-
-
-def _pct(n: int, total: int) -> str:
-    if total <= 0:
-        return "  —  "
-    return f"{100.0 * n / total:5.2f}"
 
 
 class SignalDiagnostic:
@@ -277,10 +107,20 @@ class SignalDiagnostic:
         timeframe: str,
         horizons: tuple[int, ...],
     ) -> DiagnosticReport:
+        """Iterate over ``df`` bars and build the diagnostic report."""
         if df is None or len(df) == 0:
             raise ValueError(
                 f"No historical data returned for diagnostic of {strategy_name!r} "
                 f"on {symbol} {timeframe}; cannot walk bars."
+            )
+
+        # Validate the DataFrame shape BEFORE accessing ``df["close"]`` —
+        # a missing 'close' column would otherwise raise a bare KeyError
+        # deep in the indexer, bypassing the helpful error below.
+        if not hasattr(df, "columns") or "close" not in getattr(df, "columns", []):
+            raise ValueError(
+                "Diagnostic requires a DataFrame with a 'close' column; "
+                f"got {type(df).__name__}."
             )
 
         seq_len = int(getattr(signal_generator, "sequence_length", 1) or 1)
@@ -294,14 +134,7 @@ class SignalDiagnostic:
         buy_count = sell_count = hold_count = 0
 
         # ``close`` column is the reference price for forward-return math.
-        closes = df["close"].to_numpy() if hasattr(df, "to_numpy") else None
-        if closes is None:
-            # FixtureProvider / live providers return DataFrames; bail with
-            # a clear message rather than crashing deep in the walk.
-            raise ValueError(
-                "Diagnostic requires a DataFrame with a 'close' column; "
-                f"got {type(df).__name__}."
-            )
+        closes = df["close"].to_numpy()
 
         n_bars = len(df)
         for i in range(start_idx, n_bars):
@@ -390,10 +223,4 @@ class SignalDiagnostic:
         )
 
 
-__all__ = [
-    "DEFAULT_HORIZONS",
-    "DiagnosticReport",
-    "DistributionStats",
-    "HitRate",
-    "SignalDiagnostic",
-]
+__all__ = ["DEFAULT_HORIZONS", "SignalDiagnostic"]

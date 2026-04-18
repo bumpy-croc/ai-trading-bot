@@ -351,7 +351,8 @@ def test_to_dict_round_trips_all_fields() -> None:
     assert d["decisions"]["buy"] == report.buy_count
     assert d["decisions"]["sell"] == report.sell_count
     assert d["decisions"]["hold"] == report.hold_count
-    assert "predicted_return" in d and d["predicted_return"]["n"] == report.predicted_return.n
+    assert "predicted_return" in d
+    assert d["predicted_return"]["n"] == report.predicted_return.n
     assert len(d["hit_rates"]) == len(DEFAULT_HORIZONS)
 
 
@@ -362,7 +363,9 @@ def test_render_text_includes_decision_mix_and_hit_rates() -> None:
     assert "Decision mix" in text
     assert "Predicted return" in text
     assert "Direction-conditional hit rate" in text
-    assert "BUY" in text and "SELL" in text and "HOLD" in text
+    assert "BUY" in text
+    assert "SELL" in text
+    assert "HOLD" in text
 
 
 def test_render_text_includes_warning_when_present() -> None:
