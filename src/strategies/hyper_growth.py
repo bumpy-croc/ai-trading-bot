@@ -1,10 +1,12 @@
 """
 Hyper Growth Strategy - Aggressive Component-Based Implementation
 
-Targets 500% annual returns by combining three key mechanisms from research:
-1. ML-driven signal generation for directional alpha (66%+ win rate)
+Targets high annual returns by combining three mechanisms from research:
+1. ML-driven signal generation using the basic (price-only) model for
+   directional alpha
 2. High base position sizing (20% of balance per trade)
-3. Aggressive risk overrides: wider stops, deeper drawdown tolerance
+3. Aggressive risk overrides: tight stops (10%), wide drawdown tolerance,
+   partial exits, trailing stops
 
 NOTE: Leverage is DISABLED by default (max_leverage=1.0). Backtesting showed
 that enabling leverage (e.g. 3x) hurt overall returns by -32% due to amplified
@@ -13,11 +15,18 @@ and _HYPER_LEVERAGE_MAP remain in place for future experimentation — callers
 can pass max_leverage > 1.0 to re-enable it.
 
 Key architectural decision: ML models produce very low raw confidence values
-(0.01-0.05 per bar) even when their directional accuracy is high (66%+).
+(0.01-0.05 per bar) even when their directional accuracy is meaningful.
 Standard risk managers and sizers multiply by confidence, crushing positions
 to $10. This strategy uses a FlatRiskManager that returns a fixed fraction
 of balance regardless of confidence — the ML direction filter IS the edge,
 not the per-bar confidence score.
+
+Model choice: the signal generator uses model_type="basic" (not "sentiment").
+MLBasicSignalGenerator installs a 5-column PriceOnlyFeatureExtractor; the
+sentiment bundle was trained on 10 features and silently returns 0.0 when
+fed price-only inputs, which the generator converts to predicted_return=-1.0
+and emits as a constant SELL sentinel. See
+.claude/reports/hyper_growth_experiment_sweep_2026-04-17.md.
 
 Reference: docs/research/500_percent_annual_returns.md
 """
@@ -158,7 +167,7 @@ def create_hyper_growth_strategy(
     leverage_decay_rate: float = 0.20,
     min_regime_bars: int = 3,
     take_profit_pct: float = 0.30,
-    stop_loss_pct: float = 0.20,
+    stop_loss_pct: float = 0.10,
 ) -> Strategy:
     """Create hyper-growth strategy targeting 500% annual returns.
 
@@ -182,7 +191,10 @@ def create_hyper_growth_strategy(
         leverage_decay_rate: Exponential decay for smooth transitions.
         min_regime_bars: Bars before conviction scaling begins.
         take_profit_pct: Target profit percentage for scaling out.
-        stop_loss_pct: Stop loss percentage.
+        stop_loss_pct: Stop loss percentage (default 0.10 — tighter stops
+            outperform 0.20 on BTCUSDT 2024 by ~50 pp of annualized return
+            because the trailing stop and partial exits capture upside while
+            tight SL caps short-side losses in the 2024 uptrend).
 
     Returns:
         Configured Strategy instance.
@@ -195,10 +207,15 @@ def create_hyper_growth_strategy(
             strong_momentum_threshold=0.005,  # 0.5%
         )
     else:
-        # ML signals — the model predicts direction with ~65% accuracy
-        # but per-bar confidence is very low (0.01-0.10)
-        # Uses sentiment model type since only a sentiment bundle is available for BTCUSDT
-        signal_generator = MLBasicSignalGenerator(name=f"{name}_signals", model_type="sentiment")
+        # ML signals — the basic model predicts direction with a measurable
+        # edge (55-57% BUY accuracy at 12-24h horizons) and per-bar confidence
+        # of 0.01-0.10. The sentiment model is intentionally NOT used here:
+        # MLBasicSignalGenerator installs a 5-column PriceOnlyFeatureExtractor
+        # while the sentiment bundle expects 10 features (incl.
+        # sentiment_momentum_scaled), so feeding it the price-only tensor
+        # silently returns 0.0 on every bar — which the generator converts to
+        # predicted_return = -1.0 (a constant SELL sentinel, not a prediction).
+        signal_generator = MLBasicSignalGenerator(name=f"{name}_signals", model_type="basic")
 
     risk_manager = FlatRiskManager(
         risk_fraction=risk_fraction,
