@@ -10,5 +10,11 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(source .venv/bin/activate)",
+      "mcp__Claude_in_Chrome__find"
+    ]
   }
 }
