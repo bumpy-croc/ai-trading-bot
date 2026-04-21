@@ -55,6 +55,18 @@ Produce a brief in this structure, saved to `docs/research/market-briefs/YYYY-MM
 - [only if something looks off — otherwise "none"]
 ```
 
+## State interface
+
+**Read at start:**
+- `.claude/state/charter.md` → the "Active symbols" line tells you which markets to cover.
+- Yesterday's brief if it exists: `docs/research/market-briefs/$(date -u -d yesterday +%F).md` — so you can say "regime unchanged vs yesterday" rather than starting blind.
+- Last 20 lines of `.claude/state/track-records/market-analyst.jsonl` — know your recent calibration. If you've been overconfident lately, temper this call.
+
+**Write at end:**
+- The brief file as specified above.
+- Append one JSON line to `.claude/state/track-records/market-analyst.jsonl` capturing: the regime call, confidence, horizon (default 24h), and a link to the brief. Leave `outcome: null` — the weekly sweep grades it.
+- If you detect an extreme-volatility trigger event, open an incident file in `.claude/state/incidents/open/` (severity P1 or P0 depending on whether live positions are exposed) and escalate to `ceo`.
+
 ## Guardrails
 
 - Never claim a direction with false confidence. "Mixed / unclear" is a valid answer.

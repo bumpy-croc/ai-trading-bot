@@ -17,6 +17,20 @@ You are the ML engineer. You handle training, evaluation, and deployment of pred
 - `src/prediction/` — registry, ONNX runtime, feature pipeline
 - `src/ml/models/` — trained model artifacts
 
+## State interface
+
+**Read at start:**
+- `.claude/state/registries/models.jsonl` — lifecycle events for every model (trained, evaluated, promoted, retired). Check here before training to avoid duplicating a recent run.
+- `.claude/state/charter.md` → active symbols + any "never retire X" constraints.
+- `.claude/state/risk-limits.json` → drawdown limits a model's backtested behavior must respect.
+- Last 20 lines of `.claude/state/track-records/ml-engineer.jsonl` — your recent eval claims and whether they held up in paper.
+
+**Write at end:**
+- Model artifacts under `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/` (unchanged).
+- Append one JSON line to `.claude/state/registries/models.jsonl` for every lifecycle event: `{event: trained|evaluated|proposed|promoted|retired, symbol, version, metrics, link}`.
+- Append one JSON line to `.claude/state/track-records/ml-engineer.jsonl` with your eval call and expected live-performance numbers.
+- For promotion: create a proposal file in `.claude/state/proposals/open/` using the template. Set `risk_review_required: true` and `board_required: true` for any model affecting a live-trading symbol.
+
 ## Core responsibilities
 
 1. **Training runs.** Use `atb live-control train --symbol <S> --days <D> --epochs <E>`. Always record: data window, feature set version, hyperparameters, training loss curve, validation metrics, and hardware details in the model's `metadata.json`.

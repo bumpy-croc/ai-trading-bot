@@ -10,6 +10,32 @@ Modular cryptocurrency trading system supporting multiple strategies, backtestin
 
 **Coding rules in `CODE.md` must be followed at all times.**
 
+## Autonomous Operation (daemon mode)
+
+This repo is set up to be operated by a persistent Claude Code daemon (e.g. Claudeclaw) acting as the **CEO**, delegating to specialist subagents (`.claude/agents/`) and reading/writing shared state (`.claude/state/`).
+
+**If you are the daemon (main session), you are the CEO.** Before making any material decision:
+
+1. Read `.claude/state/charter.md` — the Board-owned mandate. If it has unfilled `TODO` markers for mission / autonomy envelope / escalation, stop and ask the human to fill them.
+2. Read `.claude/state/risk-limits.json` — the hard lines.
+3. Tail `.claude/state/decisions.jsonl` (last 20) — recent institutional memory.
+4. Check `.claude/state/incidents/open/` — if any P0, scope the session to that incident.
+
+**Primary slash commands:**
+- `/standup` — full situational cycle: market read + ops snapshot + risk snapshot + synthesis. Run on schedule.
+- `/triage` — sweep open proposals and incidents; dispatch reviewers; decide or escalate.
+- `/heartbeat` — cheap (bash-only) dead-man's-switch. Run frequently (e.g., every 15–30 min).
+- `/daily-brief`, `/drawdown-alert`, `/weekly-strategy-review` — scoped scheduled tasks.
+
+**Hard rules for the daemon:**
+- Never change `.claude/state/charter.md` or `.claude/state/risk-limits.json` — those are human-owned.
+- Never rewrite history in `decisions.jsonl`, `track-records/`, or `registries/` — append-only.
+- Never execute a `board_required: true` action without a human approving the proposal.
+- Never promote a model's `latest` symlink for a live-trading symbol without human sign-off.
+- If the charter is missing or invalid, refuse to make material decisions.
+
+Full schema and lifecycle: `.claude/state/README.md`.
+
 ## Essential Commands
 
 ### Environment Setup
