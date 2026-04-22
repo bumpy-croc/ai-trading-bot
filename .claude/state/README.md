@@ -37,9 +37,43 @@ Rationale: risk review clean; 48h paper passed.
 Ref: proposals/2026-04-20-01-promote-btc-v4.md
 ```
 
+## Backlog — lives on GitHub
+
+The live work queue is **GitHub Issues + the "Agent PM Board" Project** (`bumpy-croc/projects/6`). Files above are for durable audit and human-owned config; the backlog itself is on GitHub so humans can triage from anywhere and PR linkage is native.
+
+**Label taxonomy** (every card carries one each of `state`, `priority`, `type`, `owned-by`, `source`, plus ≥1 `area`, plus 0+ `needs`):
+
+- `state:idea → researching → proposed → building → paper → shipped → monitoring → closed | icebox`
+- `priority:p0..p3`
+- `type:research | feature | fix | experiment | model-promotion | strategy-change | infra | incident | post-mortem-action`
+- `area:strategy | ml-model | risk | live-ops | data | infra | backtest | sentiment`
+- `owned-by:pm | quant-researcher | ml-engineer | risk-officer | live-ops | market-analyst | code-reviewer | architecture-reviewer | human`
+- `needs:risk-review | code-review | human-approval | human-input | data`
+- `source:ideation | forensics | human | market-anomaly | parity-gap | incident`
+
+**Custom fields** (on the Project): `Priority Score` (number), `Wake At` (date), `Effort Days` (number), `Cost Tokens` (number), `Confidence` (Low/Med/High).
+
+**Agent queries** (read-only for most):
+
+```bash
+# What's actionable right now?
+gh issue list --state open --label state:researching,state:proposed,state:building --json number,title,labels,updatedAt
+
+# What's blocked on the human?
+gh issue list --state open --label needs:human-approval --json number,title
+
+# Open incidents?
+gh issue list --state open --label type:incident --json number,title,labels
+
+# Due paper tests (requires Project field lookup — use the "In Paper" Project view for humans)
+```
+
+**See** `.claude/docs/project-setup.md` for the Project views the human needs to create in the UI and related setup notes.
+
 ## Rules
 
 - **Human-owned files never change without a Board decision.** Daemon proposes; human edits `charter.md` and `risk-limits.json`.
 - **`log.md` is append-only.** Corrections are new entries referencing the earlier one. Never edit history.
 - **Timestamps are UTC, ISO-like.** Always.
 - **Missing or invalid state blocks material decisions.** If `charter.md` or `risk-limits.json` is missing or has unfilled TODOs, daemon stops and pages the human.
+- **Status is canonical in frontmatter (files) and in `state:*` labels (issues).** If they disagree, the label wins and the PM logs a cleanup.
