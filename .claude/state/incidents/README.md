@@ -13,14 +13,17 @@ An incident is a deviation from expected operation that required attention. Open
 
 ## Lifecycle
 
+Flat directory. Status lives in frontmatter; files never move between subdirs.
+
 ```
-open/*.md  --mitigated-->  open/*.md (with `status: mitigated`)
-                                 |
-                           post-mortem
-                                 |
-                                 v
-                         closed/*.md
+status: open         (just detected; paging, evidence-gathering)
+  → mitigating actions applied
+status: mitigated    (bleeding stopped, observation window)
+  → post-mortem section filled (required for P0/P1)
+status: closed
 ```
+
+Companion GitHub Issue (`type:incident`) tracks the incident for notifications and cross-linking to fix PRs. The markdown file is the durable post-mortem record.
 
 ## File naming
 

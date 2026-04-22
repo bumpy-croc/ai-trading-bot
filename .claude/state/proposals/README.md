@@ -4,29 +4,22 @@ A proposal is a structured request for a material change, produced by a speciali
 
 ## Lifecycle
 
+Flat directory. Status lives in frontmatter; files never move between subdirs.
+
 ```
-[draft] --submit--> open/*.md
-                     |
-         review by   |  review by
-         risk-officer|  code-reviewer
-                     v
-                    open/*.md (updated with verdicts)
-                     |
-              pm-decide
-                     |
-        +------------+------------+
-        v                         v
- approved/*.md              rejected/*.md
-        |
-   execute (by owner)
-        |
-        v
- approved/*.md (with `executed: YYYY-MM-DDThh:mm:ssZ` in frontmatter)
+status: open        (submitted, awaiting reviews)
+  → risk-officer and/or code-reviewer fill their verdict sections
+  → pm decides
+status: approved    (board_required: false, or human approval recorded)
+  → owner executes; adds `executed: YYYY-MM-DDThh:mm:ssZ` to frontmatter
+status: rejected    (any reject verdict, or pm reject rationale appended)
 ```
+
+The companion GitHub Issue tracks the card through `state:*` labels; the proposal file is the concrete artifact reviewed in the PR.
 
 ## File naming
 
-`YYYY-MM-DD-NN-short-slug.md` — e.g., `2026-04-21-01-promote-btc-model-v4.md`. `NN` is a daily counter. The id stays the same when the file moves between directories.
+`YYYY-MM-DD-NN-short-slug.md` — e.g., `2026-04-21-01-promote-btc-model-v4.md`. `NN` is a daily counter. The filename and `id` never change.
 
 ## Template
 
@@ -85,5 +78,5 @@ Exact steps and commands.
 ## Rules
 
 - **Never edit a rejected proposal in-place** — submit a new proposal with a reference to the prior one.
-- **`status` is the single authoritative field.** If frontmatter and directory disagree, frontmatter wins — and `pm` should log a cleanup decision.
-- **`board_required: true` blocks auto-execution.** The pm produces a Board Brief; the human moves the file to `approved/` to unblock.
+- **`status` is the single authoritative field.** PM transitions it; no subdirs to keep in sync.
+- **`board_required: true` blocks auto-execution.** PM produces the Board Brief; the human unblocks by commenting `approved` on the linked GitHub Issue (or setting `status: approved` in the file). PM records the transition in `log.md`.

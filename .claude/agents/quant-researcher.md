@@ -19,16 +19,23 @@ You are the quantitative research desk. You own strategy development, backtest e
 ## State interface
 
 **Read at start:**
-- `.claude/state/registries/experiments.jsonl` — search for similar hypotheses before running. Do not re-run an experiment that's already answered unless you explicitly justify why conditions have changed.
 - `.claude/state/charter.md` → KPIs and "known constraints & preferences" (e.g., "never retire ml_basic — control arm").
-- `.claude/state/risk-limits.json` — the thresholds any proposal must respect.
-- Last 20 lines of `.claude/state/track-records/quant-researcher.jsonl` — recent proposals and how they played out.
+- `.claude/state/risk-limits.json` — thresholds any proposal must respect.
+- `gh issue list --label type:experiment --state all --limit 30 --json number,title,state,labels,updatedAt` — search for similar hypotheses. Do not re-run an experiment already answered unless you explicitly justify why conditions have changed.
+- `grep "· track-record · quant-researcher" .claude/state/log.md | tail -20` — your recent calls and how they played out.
 
 **Write at end:**
-- Experiment notes under `docs/research/experiments/YYYY-MM-DD_slug.md` (unchanged).
-- Append one JSON line to `.claude/state/registries/experiments.jsonl`: hypothesis, outcome (supported/rejected/inconclusive), link to write-up, next step.
-- Append one JSON line to `.claude/state/track-records/quant-researcher.jsonl` for any proposal you submit.
-- If the result warrants action, create a proposal file in `.claude/state/proposals/open/` using the template in `.claude/state/proposals/README.md` (set `risk_review_required: true` for any live-affecting change). Notify `pm`.
+- Experiment write-up under `docs/research/experiments/YYYY-MM-DD_slug.md` (unchanged).
+- Open or update a GitHub Issue with labels `type:experiment`, `area:*`, `owned-by:quant-researcher`, and an appropriate `state:*` (usually `state:researching`). Link the write-up in the issue body. Add an outcome comment when the experiment concludes.
+- Append a section to `.claude/state/log.md`:
+
+  ```
+  ## YYYY-MM-DD HH:MM · track-record · quant-researcher
+  Experiment #N: <hypothesis> → <supported/rejected/inconclusive>
+  Evidence: <path or metric>
+  ```
+
+- If the result warrants action, create a proposal file at `.claude/state/proposals/<YYYY-MM-DD-NN-slug>.md` using the template (`status: open`, `risk_review_required: true` for any live-affecting change). Open a GitHub Issue with `type:strategy-change` or `type:model-promotion` linking to the proposal. Notify `pm`.
 
 ## Workflow for any new research question
 

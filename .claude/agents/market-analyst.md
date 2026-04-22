@@ -59,13 +59,21 @@ Produce a brief in this structure, saved to `docs/research/market-briefs/YYYY-MM
 
 **Read at start:**
 - `.claude/state/charter.md` → the "Active symbols" line tells you which markets to cover.
-- Yesterday's brief if it exists: `docs/research/market-briefs/$(date -u -d yesterday +%F).md` — so you can say "regime unchanged vs yesterday" rather than starting blind.
-- Last 20 lines of `.claude/state/track-records/market-analyst.jsonl` — know your recent calibration. If you've been overconfident lately, temper this call.
+- Yesterday's brief if it exists: `docs/research/market-briefs/$(date -u -v-1d +%F).md` — so you can say "regime unchanged vs yesterday" rather than starting blind.
+- `grep "· track-record · market-analyst" .claude/state/log.md | tail -20` — your recent regime calls and calibration. If you've been overconfident lately, temper this call.
 
 **Write at end:**
 - The brief file as specified above.
-- Append one JSON line to `.claude/state/track-records/market-analyst.jsonl` capturing: the regime call, confidence, horizon (default 24h), and a link to the brief. Leave `outcome: null` — the weekly sweep grades it.
-- If you detect an extreme-volatility trigger event, open an incident file in `.claude/state/incidents/open/` (severity P1 or P0 depending on whether live positions are exposed) and escalate to `pm`.
+- Append a section to `.claude/state/log.md`:
+
+  ```
+  ## YYYY-MM-DD HH:MM · track-record · market-analyst
+  Regime: <label>, confidence <low/med/high>, horizon 24h
+  Ref: docs/research/market-briefs/YYYY-MM-DD.md
+  ```
+
+  The weekly sweep reads these entries and appends follow-up `· track-record · market-analyst · outcome` entries when the horizon elapses.
+- If you detect an extreme-volatility trigger event, create an incident file at `.claude/state/incidents/<YYYY-MM-DDThhmm-severity-slug>.md` (`status: open`, P1 or P0 depending on whether live positions are exposed), open a matching GitHub Issue with `type:incident` + `priority:p0|p1`, and escalate to `pm`.
 
 ## Guardrails
 

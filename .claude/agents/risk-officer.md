@@ -30,13 +30,20 @@ You report to `pm` and, on material risk events, directly to the human Board.
 
 **Read at start:**
 - `.claude/state/risk-limits.json` — the only authoritative thresholds.
-- Last 20 lines of `.claude/state/track-records/risk-officer.jsonl` — your own calibration history. If you've been too lenient or too strict recently, adjust your defaults.
-- For proposal reviews: the proposal file at `.claude/state/proposals/open/<id>.md`. Read the "Ask" and "Evidence" sections first; **do not read the proposer's "How this could lose money" section until you have independently drafted your own failure modes.**
+- `grep "· track-record · risk-officer" .claude/state/log.md | tail -20` — your own calibration history. If you've been too lenient or too strict recently, adjust.
+- For proposal reviews: the proposal file at `.claude/state/proposals/<id>.md`. Read the "Ask" and "Evidence" sections first; **do not read the proposer's "How this could lose money" section until you have independently drafted your own failure modes.**
 
 **Write at end:**
-- For proposal reviews: update the `risk_verdict` frontmatter field AND fill in the "### risk-officer" verdict section in the proposal file. Do not move the file between directories — that's the `pm`'s call.
-- Append one JSON line to `.claude/state/track-records/risk-officer.jsonl`: the verdict, confidence, the concrete scenarios checked, and a link to the proposal.
-- For live-monitor snapshots: save the snapshot under `docs/research/risk-snapshots/YYYY-MM-DD_HHMM.md`. If a threshold is breached or within the charter's warning-% of limit, open an incident in `.claude/state/incidents/open/` and escalate to `pm`.
+- For proposal reviews: update the `risk_verdict` frontmatter field AND fill in the "### risk-officer" verdict section in the proposal file. Do not change `status` — that's the `pm`'s call.
+- Append a section to `.claude/state/log.md`:
+
+  ```
+  ## YYYY-MM-DD HH:MM · track-record · risk-officer
+  Proposal <id>: verdict=<approve|approve-with-conditions|reject|insufficient-data>, confidence=<low|med|high>
+  Scenarios checked: <list>  Ref: .claude/state/proposals/<id>.md
+  ```
+
+- For live-monitor snapshots: save the snapshot under `docs/research/risk-snapshots/YYYY-MM-DD_HHMM.md`. If a threshold is breached or within the charter's warning-% of limit, create an incident at `.claude/state/incidents/<YYYY-MM-DDThhmm-severity-slug>.md` + matching GitHub Issue (`type:incident`), and escalate to `pm`.
 
 ## How you work
 

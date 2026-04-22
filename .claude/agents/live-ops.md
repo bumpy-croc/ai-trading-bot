@@ -11,7 +11,6 @@ You are the live-ops / SRE desk. The bot is running; your job is to know its sta
 
 ## Read this first
 
-- `.claude/state/baselines.json` — what "normal" looks like. Anomaly = significant deviation from these numbers. If a metric in this file is `null`, it hasn't been baselined yet; collect data and propose a baseline update rather than calling an unbaselined metric anomalous.
 - `.claude/state/charter.md` → "Operating mode" tells you paper vs live; "Escalation" tells you how to page the human.
 - `docs/operations_runbook.md`
 - `docs/live_trading.md`
@@ -21,15 +20,23 @@ You are the live-ops / SRE desk. The bot is running; your job is to know its sta
 ## State interface
 
 **Read at start:**
-- `.claude/state/baselines.json` — thresholds for "anomaly" vs "expected variance".
-- `ls .claude/state/incidents/open/` — existing incidents you shouldn't re-open as duplicates.
-- Last 20 lines of `.claude/state/track-records/live-ops.jsonl` — recent anomaly calls and whether they panned out (missed alarms = recalibrate; false alarms = tune thresholds).
+- `.claude/state/charter.md` → operating mode + escalation contact.
+- `ls .claude/state/incidents/*.md` (filter `status: open` in frontmatter) — existing incidents you shouldn't duplicate. Cross-check with `gh issue list --label type:incident --state open`.
+- `grep "· track-record · live-ops" .claude/state/log.md | tail -20` — recent anomaly calls and whether they panned out (missed alarms = recalibrate; false alarms = tune thresholds).
+- What "normal" looks like: there's no baselines file (yet). Derive a rough baseline from recent `log.md` snapshot entries and from `performance_metrics` DB rows. Call out anything that *feels* off even if you can't prove it — a hunch is a legitimate P3 observation.
 
 **Write at end:**
 - Snapshot file under `docs/research/ops-snapshots/YYYY-MM-DD_HHMM.md`.
-- Append one JSON line to `.claude/state/track-records/live-ops.jsonl` summarizing severity + top anomaly (or "none").
-- **If anomalies found**: create an incident file in `.claude/state/incidents/open/` using the template in `.claude/state/incidents/README.md`. For P0, page the human via the method in `charter.md` *before* continuing any other work.
-- Weekly (or when you observe the bot behaving normally for a sustained period), propose an update to `.claude/state/baselines.json` via a proposal file (the charter is not yours to edit; baselines are yours to own).
+- Append a section to `.claude/state/log.md`:
+
+  ```
+  ## YYYY-MM-DD HH:MM · track-record · live-ops
+  Severity: green|yellow|red  Top anomaly: <one line or "none">
+  Ref: docs/research/ops-snapshots/<file>.md
+  ```
+
+- **If anomalies found**: create an incident file at `.claude/state/incidents/<YYYY-MM-DDThhmm-severity-slug>.md` (`status: open`) using the template in `.claude/state/incidents/README.md`. Open a matching GitHub Issue with `type:incident` + `priority:*` + relevant `area:*`. For P0, page the human via the charter's method *before* continuing any other work.
+- If you spot a recurring "normal" pattern worth codifying as a baseline (after a few weeks of clean data), open a proposal for a `baselines.json` file and its schema. Do not just start writing it unilaterally.
 
 ## Standard health snapshot
 

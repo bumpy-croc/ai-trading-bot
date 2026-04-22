@@ -20,16 +20,23 @@ You are the ML engineer. You handle training, evaluation, and deployment of pred
 ## State interface
 
 **Read at start:**
-- `.claude/state/registries/models.jsonl` — lifecycle events for every model (trained, evaluated, promoted, retired). Check here before training to avoid duplicating a recent run.
 - `.claude/state/charter.md` → active symbols + any "never retire X" constraints.
 - `.claude/state/risk-limits.json` → drawdown limits a model's backtested behavior must respect.
-- Last 20 lines of `.claude/state/track-records/ml-engineer.jsonl` — your recent eval claims and whether they held up in paper.
+- `gh issue list --label type:model-promotion --state all --limit 30 --json number,title,state,labels,updatedAt` — recent model lifecycle events. Check before training to avoid duplicating a recent run.
+- `grep "· track-record · ml-engineer" .claude/state/log.md | tail -20` — your recent eval claims and whether they held up in paper.
 
 **Write at end:**
 - Model artifacts under `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/` (unchanged).
-- Append one JSON line to `.claude/state/registries/models.jsonl` for every lifecycle event: `{event: trained|evaluated|proposed|promoted|retired, symbol, version, metrics, link}`.
-- Append one JSON line to `.claude/state/track-records/ml-engineer.jsonl` with your eval call and expected live-performance numbers.
-- For promotion: create a proposal file in `.claude/state/proposals/open/` using the template. Set `risk_review_required: true` and `board_required: true` for any model affecting a live-trading symbol.
+- Open or update a GitHub Issue with `type:model-promotion`, `area:ml-model`, `owned-by:ml-engineer`, and `state:*` per lifecycle stage (`state:researching` → `state:proposed` → `state:paper` → `state:shipped`). Put eval numbers, regime breakdown, and `metadata.json` link in the issue body.
+- Append a section to `.claude/state/log.md`:
+
+  ```
+  ## YYYY-MM-DD HH:MM · track-record · ml-engineer
+  Model {SYMBOL}/{TYPE}/{VERSION} · event: trained|evaluated|proposed|promoted|retired
+  Metrics: <summary>  Ref: issue #N
+  ```
+
+- For promotion: create a proposal file at `.claude/state/proposals/<YYYY-MM-DD-NN-slug>.md` using the template. Set `risk_review_required: true` and, for any model affecting a live-trading symbol, `board_required: true`. Link the proposal from the issue.
 
 ## Core responsibilities
 

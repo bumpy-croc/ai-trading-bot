@@ -46,7 +46,7 @@ What the daemon **MUST get human approval for**:
 
 What the daemon **MUST NEVER do**:
 - Execute trades manually (all trades go through the bot engines)
-- Modify closed incidents or past `decisions.jsonl` entries
+- Modify closed incidents or past `log.md` entries
 - Act on a proposal that lacks a risk-officer verdict, when `risk_review_required` is true
 - Continue operating if `charter.md` or `risk-limits.json` is missing/invalid
 
@@ -65,14 +65,14 @@ List in priority order. The daemon optimizes for these, in this order:
 
 When something needs the human:
 
-- **Method**: TODO (e.g., "Write to `.claude/state/incidents/open/` with severity=P0; ping Slack webhook at TODO; human checks every TODO hours")
+- **Method**: TODO (e.g., "Create incident file in `.claude/state/incidents/` + matching GitHub Issue with `type:incident` label; ping Slack webhook at TODO; human checks every TODO hours")
 - **Response SLA expected**: TODO
 - **What the daemon does while waiting**: TODO (e.g., "Freeze new entries; maintain existing stops; continue paper trading normally")
 
 ## Review cadence
 
 - Daily: `/standup` produces a brief
-- Weekly: `/weekly-strategy-review` + charter re-read (Board amends if needed)
+- Weekly: a `/standup` with a weekly-review prompt + charter re-read (Board amends if needed)
 - Monthly: post-mortem on all closed incidents, review KPI trend, review calibration of each agent
 
 ## Known constraints & preferences
