@@ -1,6 +1,6 @@
 # Proposals
 
-A proposal is a structured request for a material change, produced by a specialist agent and reviewed by the CEO (and `risk-officer`, if required).
+A proposal is a structured request for a material change, produced by a specialist agent and reviewed by the PM (and `risk-officer`, if required).
 
 ## Lifecycle
 
@@ -12,7 +12,7 @@ A proposal is a structured request for a material change, produced by a speciali
                      v
                     open/*.md (updated with verdicts)
                      |
-              ceo-decide
+              pm-decide
                      |
         +------------+------------+
         v                         v
@@ -34,12 +34,12 @@ A proposal is a structured request for a material change, produced by a speciali
 ---
 id: 2026-04-21-01-promote-btc-model-v4
 from: ml-engineer
-to: ceo
+to: pm
 status: open
 risk_review_required: true
 risk_verdict: null         # null | approve | approve-with-conditions | reject
 code_review_required: false
-board_required: true       # if true, ceo must escalate to human
+board_required: true       # if true, pm must escalate to human
 created: 2026-04-21T09:30:00Z
 updated: 2026-04-21T09:30:00Z
 ---
@@ -78,12 +78,12 @@ Exact steps and commands.
 ### code-reviewer
 (filled by code-reviewer; leave blank if review not yet run)
 
-### ceo
-(filled by ceo; one of: approve / reject / escalate-to-board)
+### pm
+(filled by pm; one of: approve / reject / escalate-to-board)
 ```
 
 ## Rules
 
 - **Never edit a rejected proposal in-place** — submit a new proposal with a reference to the prior one.
-- **`status` is the single authoritative field.** If frontmatter and directory disagree, frontmatter wins — and `ceo` should log a cleanup decision.
-- **`board_required: true` blocks auto-execution.** The ceo produces a Board Brief; the human moves the file to `approved/` to unblock.
+- **`status` is the single authoritative field.** If frontmatter and directory disagree, frontmatter wins — and `pm` should log a cleanup decision.
+- **`board_required: true` blocks auto-execution.** The pm produces a Board Brief; the human moves the file to `approved/` to unblock.

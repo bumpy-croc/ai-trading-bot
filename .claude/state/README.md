@@ -31,7 +31,7 @@ One append-only markdown file. Each entry is an H2 section. H2 line pattern: `YY
 Kinds: `decision`, `escalation`, `proposal-open`, `incident-open`, `incident-close`, `post-mortem`, `note`.
 
 ```
-## 2026-04-21 10:00 · decision · ceo
+## 2026-04-21 10:00 · decision · pm
 Approved BTC model v4 promotion to staging.
 Rationale: risk review clean; 48h paper passed.
 Ref: proposals/2026-04-20-01-promote-btc-v4.md

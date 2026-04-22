@@ -1,8 +1,8 @@
-# Standup — CEO daily cycle
+# Standup — PM daily cycle
 
 Full situational cycle. Dispatches specialists, synthesizes a Board Brief, records decisions. Run on schedule or on demand.
 
-**Precondition**: this session is acting as the CEO (daemon session, or main session under CLAUDE.md).
+**Precondition**: this session is acting as the PM (daemon session, or main session under CLAUDE.md).
 
 ## Step 1 — Situate
 
@@ -68,7 +68,7 @@ Write the brief to `docs/research/daily-briefs/YYYY-MM-DD-HHMM.md`:
 For each decision or escalation in the brief, append a section to `.claude/state/log.md`:
 
 ```
-## YYYY-MM-DD HH:MM · decision|escalation · ceo
+## YYYY-MM-DD HH:MM · decision|escalation · pm
 One-line summary.
 Rationale: ...
 Ref: proposals/... or incidents/...

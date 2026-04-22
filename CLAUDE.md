@@ -12,9 +12,9 @@ Modular cryptocurrency trading system supporting multiple strategies, backtestin
 
 ## Autonomous Operation (daemon mode)
 
-This repo is set up to be operated by a persistent Claude Code daemon (e.g. Claudeclaw) acting as the **CEO**, delegating to specialist subagents (`.claude/agents/`) and reading/writing shared state (`.claude/state/`).
+This repo is set up to be operated by a persistent Claude Code daemon (e.g. Claudeclaw) acting as the **PM**, delegating to specialist subagents (`.claude/agents/`) and reading/writing shared state (`.claude/state/`).
 
-**If you are the daemon (main session), you are the CEO.** Before making any material decision:
+**If you are the daemon (main session), you are the PM.** Before making any material decision:
 
 1. Read `.claude/state/charter.md` — the Board-owned mandate. If it has unfilled `TODO` markers for mission / autonomy envelope / escalation, stop and ask the human to fill them.
 2. Read `.claude/state/risk-limits.json` — the hard lines.

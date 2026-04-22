@@ -7,8 +7,8 @@ An incident is a deviation from expected operation that required attention. Open
 | | Definition | Who decides | Auto-response |
 |---|---|---|---|
 | **P0** | Live capital at risk RIGHT NOW. Duplicate orders, DB/memory divergence, auth failure with open positions, data corruption, kill-switch condition. | `live-ops` or `risk-officer` | Page human immediately. Do not attempt automatic recovery on live-capital processes. |
-| **P1** | Trading degraded but not bleeding. Paper process down, stale data > 2× timeframe, elevated error rate, health endpoint down. | `live-ops` | Capture evidence, attempt paper-safe mitigation, notify CEO on next cycle. |
-| **P2** | Slow or non-critical. High API latency, minor deploy issue, warning thresholds approached but not breached. | `ceo` | Log, monitor, address in next standup. |
+| **P1** | Trading degraded but not bleeding. Paper process down, stale data > 2× timeframe, elevated error rate, health endpoint down. | `live-ops` | Capture evidence, attempt paper-safe mitigation, notify PM on next cycle. |
+| **P2** | Slow or non-critical. High API latency, minor deploy issue, warning thresholds approached but not breached. | `pm` | Log, monitor, address in next standup. |
 | **P3** | Observation. Baseline drift, agent disagreement worth noting. | any | Log; no action required. |
 
 ## Lifecycle

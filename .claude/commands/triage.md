@@ -23,7 +23,7 @@ Check what's outstanding:
 
 - `risk_verdict: null` and the proposal is live-affecting → dispatch `risk-officer` with a narrow prompt pointing to the proposal file.
 - Code diff attached and no review → dispatch `code-reviewer`.
-- All required reviews complete → CEO decides (step 4).
+- All required reviews complete → PM decides (step 4).
 
 Dispatch independent reviewers **in parallel** in one message.
 
