@@ -1,36 +1,34 @@
 # Standup — CEO daily cycle
 
-The daemon's primary workflow. Superset of `/daily-brief`: situational awareness + queue triage + synthesis + board brief. Run on schedule (e.g., every 6 hours) or on demand.
+Full situational cycle. Dispatches specialists, synthesizes a Board Brief, records decisions. Run on schedule or on demand.
 
-**Precondition**: this session is acting as the CEO. The daemon (or user) is the main session; `ceo.md` subagent is available but need not be invoked — the persona is inherited from `CLAUDE.md`.
+**Precondition**: this session is acting as the CEO (daemon session, or main session under CLAUDE.md).
 
-## Step 1 — Situate (read-only)
+## Step 1 — Situate
 
-Read, in parallel:
+Read (cheap, sequential):
 
-1. `.claude/state/charter.md` — reconfirm mandate. If TODOs remain, note it in the brief.
-2. `.claude/state/risk-limits.json` — know the lines.
-3. Last 20 lines of `.claude/state/decisions.jsonl`.
-4. `ls .claude/state/proposals/open/` and `ls .claude/state/incidents/open/`.
-5. `docs/project_status.md` (current focus).
+1. `.claude/state/charter.md` — if any `TODO` remains in mission / autonomy / escalation, **STOP**, print a one-line message telling the human which sections to fill, exit.
+2. `.claude/state/risk-limits.json`.
+3. Tail of `.claude/state/log.md` (last ~50 lines).
+4. `ls .claude/state/proposals/*.md` and `ls .claude/state/incidents/*.md`; filter `status: open` from frontmatter.
+5. Yesterday's brief if present under `docs/research/daily-briefs/` — note deltas.
 
-**Guardrail**: if `charter.md` contains unfilled `TODO` markers for mission or autonomy envelope, STOP. Produce a one-paragraph message: "Cannot run standup — charter is incomplete. Please fill: [list of TODOs]." Exit.
+**Halt rule**: if any P0 is open, scope the session to `/triage` for that incident. Don't continue standup.
 
-**Guardrail**: if any P0 incident is in `incidents/open/`, STOP normal standup. Invoke `/triage` scoped to that incident. Standup does not continue until P0 is mitigated or explicitly acknowledged by the human.
+## Step 2 — Dispatch (parallel)
 
-## Step 2 — Dispatch specialists (parallel)
+Send these in ONE message as three Agent tool calls:
 
-Send these in ONE message with multiple Agent tool calls:
-
-- `market-analyst`: "Run your standard pre-market protocol for symbols listed in `charter.md`. Save to `docs/research/market-briefs/`. Return a 5-bullet summary AND append a call to `.claude/state/track-records/market-analyst.jsonl`."
-- `live-ops`: "Standard health snapshot. Read `.claude/state/baselines.json` to know normal. Save to `docs/research/ops-snapshots/`. Return severity + anomalies AND append to your track record."
-- `risk-officer`: "Live-monitor mode risk snapshot. Read `.claude/state/risk-limits.json` for thresholds. Return verdict + top 3 open risks AND append to your track record."
+- `market-analyst`: "Run your standard pre-market protocol for symbols listed in `.claude/state/charter.md`. Save brief to `docs/research/market-briefs/`. Return a 5-bullet summary."
+- `live-ops`: "Standard health snapshot. Save to `docs/research/ops-snapshots/`. Return severity + anomalies."
+- `risk-officer`: "Live-monitor mode. Use `.claude/state/risk-limits.json` as the canonical thresholds. Return verdict + top 3 open risks."
 
 Wait for all three.
 
 ## Step 3 — Synthesize
 
-Produce a **Board Brief** written to `docs/research/daily-briefs/YYYY-MM-DD-HHMM.md`:
+Write the brief to `docs/research/daily-briefs/YYYY-MM-DD-HHMM.md`:
 
 ```
 # Board Brief — YYYY-MM-DD HH:MM UTC
@@ -41,49 +39,45 @@ Produce a **Board Brief** written to `docs/research/daily-briefs/YYYY-MM-DD-HHMM
 ## Market
 [3 bullets]
 
-## Bot health
+## Health
 [3 bullets]
 
 ## Risk
 - Drawdown: X% (limit Y%, %-of-limit: Z%)
-- Concentration: …
 - Top risks: …
 
 ## Open queue
-- Proposals: N open (list ids, one-line asks, board_required flag)
-- Incidents: N open (list ids, severity, status)
+- Proposals: N open (ids, one-line asks, board_required flags)
+- Incidents: N open (ids, severity, status)
 
-## Decisions made this cycle (autonomous)
-- [bullets; each becomes a decisions.jsonl entry]
+## Decisions this cycle (autonomous)
+- …
 
-## Recommendations needing human approval
-- [bullets with rationale; each becomes a board_required decision]
+## Needs human approval
+- …
 
-## Open risks / follow-ups
+## Deltas since yesterday
 - …
 
 ## Next check-in
 [when]
 ```
 
-## Step 4 — Write back to state
+## Step 4 — Record
 
-For every material item in "Decisions made" and "Recommendations needing approval":
+For each decision or escalation in the brief, append a section to `.claude/state/log.md`:
 
-```bash
-# Append to decisions.jsonl (one line per decision)
-echo '{"ts":"...","actor":"ceo","kind":"decision|escalation","ref":"...","summary":"...","rationale":"...","board_required":false|true}' >> .claude/state/decisions.jsonl
+```
+## YYYY-MM-DD HH:MM · decision|escalation · ceo
+One-line summary.
+Rationale: ...
+Ref: proposals/... or incidents/...
 ```
 
-Also update `docs/project_status.md` if focus changed.
+If any item is `board_required: true`, fire the charter's notification webhook with the brief path.
 
-## Step 5 — Escalation
+## Guardrails
 
-If any recommendation is `board_required: true`:
-- The Board Brief already contains it.
-- Do NOT execute the underlying action.
-- If the charter specifies a notification webhook, fire it with the brief URL.
-
-## Cost cap
-
-This workflow should complete within one cycle. If it's been running > 10 minutes or a subagent is looping, abort and log a P2 incident: "standup exceeded cost cap".
+- Read-only except for the brief file and `log.md` appends.
+- No kill-switch, no production deploys, no model-`latest` promotions in standup.
+- If a subagent runs > 10 minutes or loops, abort and log a P2 incident "standup cost cap exceeded".

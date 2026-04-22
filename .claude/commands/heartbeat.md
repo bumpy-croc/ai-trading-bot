@@ -1,54 +1,75 @@
-# Heartbeat — dead-man's-switch
+# Heartbeat — dead-man's switch
 
-The most important automation is the one that catches the automation being broken. Run on a short schedule (e.g., every 30 minutes). If this command has not run in > 36 hours, the human should be paged and live trading halted.
+Pure bash. No LLM calls, no subagents. Cheap, frequent, and includes a drawdown tripwire.
 
-## Step 1 — Write heartbeat
-
-```bash
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) heartbeat ok pid=$$" >> .claude/state/heartbeat.log
-```
-
-## Step 2 — Self-check
-
-Verify the state system is sane:
-
-- `.claude/state/charter.md` exists and is non-empty.
-- `.claude/state/risk-limits.json` parses as JSON and has all required keys.
-- `.claude/state/decisions.jsonl` is append-only (last-mtime > first-mtime; size monotonic via a size-snapshot file — optional but recommended).
-- No P0 incident has been in `open/` for > 2 hours (if so, human contact has failed — rotate to a louder alert).
-
-On ANY failure: this is itself a P0. Open an incident `.claude/state/incidents/open/` with id `heartbeat-self-check-failed` and page the human.
-
-## Step 3 — Liveness check on the bot
-
-Use the real health mechanisms, do NOT spawn subagents (heartbeat must be cheap):
+## Step 1 — Heartbeat
 
 ```bash
-# Process check
-pgrep -af "atb live" || echo "no live process"
-# Health endpoint if configured
-curl -sf -m 5 http://localhost:8000/health || echo "health endpoint fail"
-# DB check (read-only)
-atb db verify 2>&1 | head -5
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo "$ts ok" >> .claude/state/heartbeat.log
 ```
 
-## Step 4 — Classify
+## Step 2 — Bot liveness
 
-- **All green** → append `status=green` to heartbeat.log, exit silently.
-- **Bot process missing but charter says paper-only** → append `status=yellow`, open a P1 incident if no existing one.
-- **Bot process missing in live mode, or health endpoint down** → append `status=red`, open a P0 incident, page human.
-- **DB unreachable** → P0. Do not proceed. Page.
+```bash
+# Process
+pgrep -af "atb live" >/dev/null || echo "$ts WARN no-live-process" >> .claude/state/heartbeat.log
+# Health endpoint (if configured)
+curl -sf -m 5 http://localhost:8000/health >/dev/null 2>&1 || echo "$ts WARN health-endpoint-down" >> .claude/state/heartbeat.log
+# DB
+atb db verify >/dev/null 2>&1 || echo "$ts ERROR db-unreachable" >> .claude/state/heartbeat.log
+```
 
-## Step 5 — Cost discipline
+## Step 3 — Drawdown tripwire
 
-The heartbeat must be cheap: no LLM calls, no subagents, just bash. Budget < 1 second of wall clock and < 5KB of context. If this ever starts spawning agents, something is wrong — simplify it.
+```bash
+# Replace with real query. Must exit cleanly on error, not crash the heartbeat.
+current_dd=$(atb risk drawdown --json 2>/dev/null | jq -r '.current_pct // empty')
+limit=$(jq -r '.portfolio.max_drawdown_pct' .claude/state/risk-limits.json)
+warn_frac=$(jq -r '.escalation.warning_at_pct_of_limit' .claude/state/risk-limits.json)
 
-## The dead-man mechanism (external)
+if [ -n "$current_dd" ] && [ -n "$limit" ]; then
+  warn_at=$(awk -v a="$limit" -v b="$warn_frac" 'BEGIN{print a*b}')
+  if awk -v c="$current_dd" -v l="$limit" 'BEGIN{exit !(c>=l)}'; then
+    # Breach — open P0 incident
+    slug=".claude/state/incidents/$(date -u +%Y-%m-%dT%H%M)-P0-drawdown-breach.md"
+    cat > "$slug" <<EOF
+---
+id: $(basename "$slug" .md)
+severity: P0
+status: open
+opened_by: heartbeat
+opened_at: $ts
+human_paged: true
+---
+## What happened
+Drawdown $current_dd breached limit $limit at $ts.
+EOF
+    echo "$ts ERROR drawdown-breach dd=$current_dd limit=$limit" >> .claude/state/heartbeat.log
+    # Fire webhook per charter (example; real command from charter.md)
+    # curl -X POST "$ALERT_WEBHOOK" -d "P0 drawdown breach: $current_dd / $limit"
+  elif awk -v c="$current_dd" -v w="$warn_at" 'BEGIN{exit !(c>=w)}'; then
+    echo "$ts WARN drawdown-approach dd=$current_dd warn=$warn_at" >> .claude/state/heartbeat.log
+  fi
+fi
+```
 
-This command is the *internal* heartbeat. The dead-man side (external to Claude) should be:
+## Step 4 — Self-check
 
-1. A cron job or Railway scheduled task that checks `mtime` on `.claude/state/heartbeat.log`.
-2. If mtime is > 36h old → it fires an alert via whatever channel the charter specifies.
-3. If `status=red` was the last entry and no recovery in 1h → it halts live trading (e.g., `atb live-control halt` or stops the Railway deploy).
+```bash
+test -s .claude/state/charter.md     || echo "$ts ERROR charter-missing"     >> .claude/state/heartbeat.log
+test -s .claude/state/risk-limits.json || echo "$ts ERROR risk-limits-missing" >> .claude/state/heartbeat.log
+```
 
-Without the external piece, this command is only half of a dead-man switch. Document the external wiring in the `charter.md` "Escalation" section.
+## External dead-man
+
+This command is the *internal* heartbeat. The external watchdog (cron, systemd, Railway scheduler) must:
+
+1. Check `mtime` of `.claude/state/heartbeat.log`. If > 36h stale → page human and run `atb live-control halt`.
+2. Tail last 10 lines; if any `ERROR` with no subsequent `ok` in 1h → same response.
+
+Document the external wiring in `charter.md` "Escalation" section.
+
+## Cost discipline
+
+No LLM calls. No subagents. Budget < 2s wall clock. If this command ever starts spawning agents, revert — something is wrong.
