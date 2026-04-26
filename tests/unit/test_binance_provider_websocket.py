@@ -69,7 +69,10 @@ class TestEnsureTwm:
         """TLD 'us' is set for Binance US endpoint."""
         with (
             patch("src.data_providers.binance_provider.ThreadedWebsocketManager") as mock_twm_cls,
-            patch("src.data_providers.binance_provider.get_binance_api_endpoint", return_value="binanceus"),
+            patch(
+                "src.data_providers.binance_provider.get_binance_api_endpoint",
+                return_value="binanceus",
+            ),
         ):
             mock_twm_cls.return_value = MagicMock()
             provider._ensure_twm()
@@ -276,12 +279,96 @@ class TestWsProperties:
 
     @pytest.mark.fast
     def test_ws_healthy_true_even_when_user_stream_resyncing(self, provider):
-        """ws_healthy returns True when kline is PRIMARY even if user stream is RESYNCING."""
+        """ws_healthy is True when kline is PRIMARY and no user stream configured.
+
+        This is the paper-trading / data-only path where ``start_user_stream``
+        has never been called. ``_on_user_event_cb`` remains None so the
+        user stream's state must be ignored.
+        """
         provider._kline_ws_state = WebSocketState.PRIMARY
         provider._kline_event_received = True
         provider._user_ws_state = WebSocketState.RESYNCING
+        provider._on_user_event_cb = None  # explicit: no user stream configured
         provider._last_kline_event_time = datetime.now(UTC)
         assert provider.ws_healthy is True
+
+    # ------------------------------------------------------------------ #
+    # GH #608: user-stream watchdog                                       #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.fast
+    def test_ws_healthy_false_when_user_stream_configured_but_resyncing(self, provider):
+        """When user stream IS configured, RESYNCING flips ws_healthy to False.
+
+        Live margin trading subscribes a user stream — its state must be
+        reflected in the global health flag so the engine can fall back to
+        REST account-sync rather than trusting potentially stale WS state.
+        """
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._kline_event_received = True
+        provider._last_kline_event_time = datetime.now(UTC)
+        provider._on_user_event_cb = MagicMock()  # user stream configured
+        provider._user_ws_state = WebSocketState.RESYNCING
+        provider._user_event_received = True
+        provider._last_user_event_time = datetime.now(UTC)
+        assert provider.ws_healthy is False
+
+    @pytest.mark.fast
+    def test_ws_healthy_false_when_user_stream_stale(self, provider):
+        """User stream PRIMARY but no events for >120s flips ws_healthy off."""
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._kline_event_received = True
+        provider._last_kline_event_time = datetime.now(UTC)
+        provider._on_user_event_cb = MagicMock()
+        provider._user_ws_state = WebSocketState.PRIMARY
+        provider._user_event_received = True
+        provider._last_user_event_time = datetime.now(UTC) - timedelta(seconds=130)
+        assert provider.ws_healthy is False
+
+    @pytest.mark.fast
+    def test_ws_healthy_true_when_both_streams_primary_and_fresh(self, provider):
+        """Both streams configured, both PRIMARY, both fresh → healthy."""
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._kline_event_received = True
+        provider._last_kline_event_time = datetime.now(UTC)
+        provider._on_user_event_cb = MagicMock()
+        provider._user_ws_state = WebSocketState.PRIMARY
+        provider._user_event_received = True
+        provider._last_user_event_time = datetime.now(UTC)
+        assert provider.ws_healthy is True
+
+    @pytest.mark.fast
+    def test_ws_healthy_false_when_user_event_never_received(self, provider):
+        """User stream PRIMARY but first event not yet seen → not healthy."""
+        provider._kline_ws_state = WebSocketState.PRIMARY
+        provider._kline_event_received = True
+        provider._last_kline_event_time = datetime.now(UTC)
+        provider._on_user_event_cb = MagicMock()
+        provider._user_ws_state = WebSocketState.PRIMARY
+        provider._user_event_received = False  # not yet
+        provider._last_user_event_time = datetime.now(UTC)
+        assert provider.ws_healthy is False
+
+    @pytest.mark.fast
+    def test_user_ws_healthy_false_when_no_callback(self, provider):
+        """user_ws_healthy reports False when no user stream is configured.
+
+        Caller must combine with ``_on_user_event_cb is not None`` to tell
+        'unhealthy' from 'not configured'. Documented on the property.
+        """
+        provider._on_user_event_cb = None
+        provider._user_ws_state = WebSocketState.PRIMARY
+        provider._user_event_received = True
+        provider._last_user_event_time = datetime.now(UTC)
+        assert provider.user_ws_healthy is False
+
+    @pytest.mark.fast
+    def test_user_ws_healthy_true_when_primary_fresh_and_received(self, provider):
+        provider._on_user_event_cb = MagicMock()
+        provider._user_ws_state = WebSocketState.PRIMARY
+        provider._user_event_received = True
+        provider._last_user_event_time = datetime.now(UTC)
+        assert provider.user_ws_healthy is True
 
 
 class TestReconnect:
