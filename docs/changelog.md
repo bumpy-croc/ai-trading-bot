@@ -34,6 +34,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/experiments/walk_forward.py`.
 
 ### Fixed
+- Binance margin-WS keepalive noise + user-stream watchdog gap (#608).
+  `python-binance==1.0.36` multiplexes margin user-data subscriptions over a
+  shared `ws_api` connection that Binance closes every ~2 min with WS code
+  1011 'keepalive ping timeout'. The library's reconnect machinery recovers
+  but each cycle surfaces an unretrieved-task exception on the asyncio
+  default handler (~720/day on prod). Added
+  `BinanceWSKeepaliveFilter` (rate-limits to one full traceback per 60s
+  window with a periodic suppression summary) and extended
+  `BinanceProvider.ws_healthy` to fail when the user/margin stream is
+  configured but stale or non-PRIMARY (was previously kline-only, masking a
+  permanently-dark user stream). New `user_ws_healthy` property exposes the
+  user-stream status directly.
 - Add ban-aware retry to Binance client startup — parses `-1003` ban expiry and sleeps until lifted instead of crashing (#590)
 - `hyper_growth`: fix silent-SELL bug caused by feature-shape mismatch
   (#603). The factory wired `MLBasicSignalGenerator(model_type="sentiment")`
