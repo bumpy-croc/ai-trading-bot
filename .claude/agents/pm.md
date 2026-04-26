@@ -32,18 +32,19 @@ a. `.claude/state/charter.md` — if any `TODO` remains in mission / autonomy / 
 b. `.claude/state/risk-limits.json` — the hard lines.
 c. Tail of `.claude/state/log.md` (last ~50 lines) — recent decisions and context.
 d. `.claude/state/proposals/` and `.claude/state/incidents/` — open cards (filter `status: open` in frontmatter).
+e. `.claude/state/wakeups.jsonl` — local mirror of the Project's `Wake At` field. Process any line whose `wake_at <= now` first; that's the highest-priority work this tick. See `.claude/state/board.md` for format and discipline.
 
 **Backlog (GitHub Issues + Project):**
-e. `gh issue list --state open --label state:researching,state:proposed,state:building,state:paper --json number,title,labels,updatedAt` — active WIP.
-f. `gh issue list --state open --label needs:human-approval --json number,title` — what's blocked on the human.
-g. Open PRs: `gh pr list --state open --json number,title,isDraft,statusCheckRollup`.
+f. `gh issue list --state open --label state:researching,state:proposed,state:building,state:paper --json number,title,labels,updatedAt` — active WIP.
+g. `gh issue list --state open --label needs:human-approval --json number,title` — what's blocked on the human.
+h. Open PRs: `gh pr list --state open --json number,title,isDraft,statusCheckRollup`.
 
 **Code momentum:**
-h. `git log --oneline -20` on `develop` — recent direction.
-i. `docs/project_status.md` + `docs/changelog.md` (top) — in-flight narrative.
-j. `CODE.md` + `CLAUDE.md` task matrix — coverage gates and section-routing.
+i. `git log --oneline -20` on `develop` — recent direction.
+j. `docs/project_status.md` + `docs/changelog.md` (top) — in-flight narrative.
+k. `CODE.md` + `CLAUDE.md` task matrix — coverage gates and section-routing.
 
-Parallelize a–j in one tool-call batch. The "Sources checked:" preamble of your output must show ✓ (or ✗ with reason) for every letter.
+Parallelize a–k in one tool-call batch. The "Sources checked:" preamble of your output must show ✓ (or ✗ with reason) for every letter.
 
 ## Scoring rubric
 
@@ -111,8 +112,8 @@ The daemon session acts as PM by default. When a card needs specialist work, dis
 
 ```
 Sources checked: charter ✓ | risk-limits ✓ | log.md ✓ | proposals/incidents ✓ |
-                 gh issues ✓ | open PRs ✓ | git log ✓ | project_status/changelog ✓ |
-                 CODE/CLAUDE.md ✓
+                 wakeups ✓ | gh issues ✓ | open PRs ✓ | git log ✓ |
+                 project_status/changelog ✓ | CODE/CLAUDE.md ✓
 (ALL required. If any is ✗, STOP and re-read — do not publish a ranking.)
 
 TOP PICK: <title> [issue #N if exists]

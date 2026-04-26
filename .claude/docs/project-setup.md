@@ -49,6 +49,50 @@ Post-ship: did it actually help?
 
 v1 uses your PAT (simpler). If the daemon is ever hosted on Railway / elsewhere and runs unattended, switch to a **separate GitHub App or fine-grained PAT** so daemon comments / labels / PR actions are visually distinct from yours. Decision deferred until the daemon is actually running autonomously.
 
+### When you switch to a bot account (appendix)
+
+Concrete steps — do these only when the daemon is about to run unattended.
+
+**Choose one** — default recommendation is the bot account PAT (less ceremony for a single repo):
+
+| | GitHub App | Fine-grained PAT under a bot account |
+|---|---|---|
+| Setup | Create an App, install on the repo | Create a 2nd account, generate a PAT |
+| UI identity | `App-name[bot]` | `bot-username` |
+| Best for | Multi-repo / org-wide | Single personal repo |
+
+**Bot account PAT — steps:**
+
+1. Sign out, create account `<your-handle>-bot`. Verify email.
+2. Add it as a collaborator on `bumpy-croc/ai-trading-bot` with **Write** access.
+3. Sign in as the bot, generate a fine-grained PAT scoped to:
+   - **Repository access:** only `bumpy-croc/ai-trading-bot`
+   - **Repository permissions:** `Issues: R/W`, `Pull requests: R/W`, `Contents: R/W`, `Metadata: R`, `Actions: R` (optional)
+   - **User permissions:** `Profile: R`
+4. Add the bot account to the Project (`bumpy-croc/projects/6` → Settings → Manage access → invite, role **Write**). Project access is separate from repo access.
+5. Store the PAT where the daemon runs: `GH_BOT_TOKEN` env var on Railway / cron / wherever.
+
+**Authenticate the daemon's `gh`:**
+
+```bash
+GH_TOKEN=$GH_BOT_TOKEN gh auth status   # confirms it's seeing the bot identity
+```
+
+For Railway / cron envs, set `GH_TOKEN` directly — `gh` picks it up.
+
+**Verify:**
+
+```bash
+GH_TOKEN=$GH_BOT_TOKEN gh project view 6 --owner bumpy-croc   # bot can see Project
+GH_TOKEN=$GH_BOT_TOKEN gh issue list -R bumpy-croc/ai-trading-bot --limit 1
+```
+
+**Troubleshooting:**
+
+- `gh: project not found` — bot isn't on the Project. Add via Settings → Manage access.
+- `403 Resource not accessible` — PAT scopes too narrow. Re-issue with full Issues + PRs + Contents.
+- Bot comments still show as you — wrong `GH_TOKEN` exported in that shell.
+
 ## Labels
 
 All 50 labels are created in the repo. Source-of-truth list lives in `.claude/scripts/labels.tsv` (tab-separated: `name<TAB>color<TAB>description`). To re-sync after edits:
