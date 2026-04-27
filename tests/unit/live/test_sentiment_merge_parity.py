@@ -136,3 +136,60 @@ class TestLiveSentimentMergeParity:
         engine = _make_engine(provider)
         out = engine._add_sentiment_data(pd.DataFrame(), "TEST")
         assert isinstance(out, pd.DataFrame)
+
+    def test_join_drops_existing_sentiment_columns_to_avoid_collision(self) -> None:
+        """If the input df already contains a sentiment column (e.g. from a
+        retained kline buffer enriched on a prior call), the merge must
+        drop it before joining so we never produce ``sentiment_score_x``/
+        ``_y`` and silently feed the wrong column to the strategy.
+        """
+        df = _make_buffer_df(periods=24)
+        # Simulate a previously-enriched buffer: every row already carries
+        # a stale sentiment value.
+        df["sentiment_score"] = 0.1
+
+        sentiment_idx = pd.date_range("2024-01-01", periods=24, freq="1h", tz=UTC)
+        historical = pd.DataFrame({"sentiment_score": [0.5] * 24}, index=sentiment_idx)
+
+        provider = Mock()
+        provider.get_historical_sentiment.return_value = historical
+        provider.aggregate_sentiment.return_value = historical
+        provider.get_live_sentiment.return_value = {"sentiment_score": 0.9}
+
+        engine = _make_engine(provider)
+        out = engine._add_sentiment_data(df, "TEST")
+
+        # No suffixed collision columns. Single canonical column wins.
+        assert "sentiment_score_x" not in out.columns
+        assert "sentiment_score_y" not in out.columns
+        # Older bars carry the historical merge value, not the stale 0.1.
+        recent_mask = out.index >= (out.index.max() - pd.Timedelta(hours=4))
+        older_mask = ~recent_mask
+        assert (out.loc[older_mask, "sentiment_score"].sub(0.5).abs() < 1e-9).all()
+        # Recent bars carry the live overlay.
+        assert (out.loc[recent_mask, "sentiment_score"].sub(0.9).abs() < 1e-9).all()
+
+    def test_no_self_timeframe_falls_back_to_default_aggregation_window(self) -> None:
+        """When ``self.timeframe`` is None (e.g. warmup paths), historical
+        backfill must still aggregate (default ``"1h"``) rather than join
+        raw rows that pad the dataframe with NaNs and silently diverge
+        from backtest.
+        """
+        df = _make_buffer_df(periods=12)
+        sentiment_idx = pd.date_range("2024-01-01", periods=12, freq="1h", tz=UTC)
+        historical = pd.DataFrame({"sentiment_score": [0.4] * 12}, index=sentiment_idx)
+
+        provider = Mock()
+        provider.get_historical_sentiment.return_value = historical
+        provider.aggregate_sentiment.return_value = historical
+        provider.get_live_sentiment.return_value = {}
+
+        engine = _make_engine(provider)
+        engine.timeframe = None  # simulate pre-start() state
+
+        engine._add_sentiment_data(df, "TEST")
+
+        # aggregate_sentiment must have been called even when self.timeframe is None.
+        assert provider.aggregate_sentiment.called
+        kwargs = provider.aggregate_sentiment.call_args.kwargs
+        assert kwargs.get("window") == "1h"

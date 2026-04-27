@@ -125,27 +125,49 @@ class TestTimeExitReasonParity:
         assert result.is_time_limit is True
         assert result.exit_reason == "Weekend flat"
 
-    def test_default_fallback_matches_live(self) -> None:
-        """When the policy returns no specific reason, fall back to ``"Time exit"``.
+    def test_default_fallback_matches_live(self, monkeypatch) -> None:
+        """When the policy reports a hit but returns no reason, fall back
+        to ``"Time exit"`` — matching live's ``time_reason or "Time exit"``.
 
-        This matches live's ``time_reason or "Time exit"`` fallback string.
-        Until the policy is extended with reason-less paths this is a forward
-        guard — kept here so the parity convention is locked in by a test.
+        Drives the exit handler with a stubbed policy that returns
+        ``(True, None)`` and asserts the resolved exit_reason. This is a
+        behavioural test (not a source-grep) so future edits to the
+        time-exit branch can't regress silently.
         """
-        # Verify the source code uses the parity fallback (not the legacy
-        # "Time limit") so future edits to the time-exit branch can't regress
-        # silently. The behavioural contract is asserted via the live engine's
-        # equivalent test file.
-        from src.engines.backtest.execution import exit_handler as bt_exit
+        entry_time = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+        candle_time = entry_time + timedelta(hours=5)
 
-        source = bt_exit.__file__
-        with open(source, encoding="utf-8") as f:
-            text = f.read()
-
-        assert 'time_reason or "Time exit"' in text, (
-            "Backtest exit_handler must fall back to 'Time exit' for parity "
-            "with live engine; legacy 'Time limit' wording would diverge."
+        tracker = PositionTracker()
+        tracker.open_position(
+            ActiveTrade(
+                symbol="TEST",
+                side=PositionSide.LONG,
+                entry_price=100.0,
+                entry_time=entry_time,
+                size=0.1,
+            )
         )
+
+        policy = TimeExitPolicy(max_holding_hours=4)
+        # Force the policy to report a hit but with no reason — the exact
+        # contract live falls back to ``"Time exit"`` for.
+        monkeypatch.setattr(policy, "check_time_exit_conditions", lambda *_a, **_k: (True, None))
+
+        handler = _make_handler(tracker, time_exit_policy=policy)
+        candle = pd.Series(
+            {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000.0},
+            name=candle_time,
+        )
+
+        result = handler.check_exit_conditions(
+            runtime_decision=None,
+            candle=candle,
+            current_price=100.5,
+            symbol="TEST",
+        )
+
+        assert result.is_time_limit is True
+        assert result.exit_reason == "Time exit"
 
 
 @pytest.mark.fast

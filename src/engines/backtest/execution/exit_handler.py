@@ -179,10 +179,18 @@ class ExitHandler:
             return 0.0
         if seconds_held <= 0:
             return 0.0
+        # 365 calendar days, matching live MarginInterestTracker's actual/365
+        # convention. Change here only if the live engine ever switches basis.
         seconds_per_year = 365.0 * 24.0 * 3600.0
-        return (
+        interest = (
             position_notional * self.annual_margin_interest_rate * (seconds_held / seconds_per_year)
         )
+        # Defense-in-depth: extreme rate × notional × duration could overflow
+        # to inf/NaN on degenerate inputs, which would propagate through
+        # net_pnl into balance corruption. Treat non-finite as zero.
+        if not math.isfinite(interest) or interest < 0:
+            return 0.0
+        return interest
 
     def _build_snapshot(
         self,

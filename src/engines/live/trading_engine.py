@@ -1135,6 +1135,13 @@ class LiveTradingEngine:
         current_price: float,
         current_time: datetime,
     ) -> RuntimeContext:
+        """Build the StrategyRuntime context with current balance and live positions.
+
+        Delegates the position-translation step to ``_build_component_positions``
+        so the runtime path and the direct ``ComponentStrategy.process_candle``
+        path present an identical position view to the strategy — matching the
+        backtest engine's runtime context construction.
+        """
         positions = self._build_component_positions(current_price)
         return RuntimeContext(balance=float(balance), current_positions=positions or None)
 
@@ -2153,13 +2160,23 @@ class LiveTradingEngine:
                         symbol, start, end
                     )
                     if sentiment_df is not None and not sentiment_df.empty:
-                        if (
-                            hasattr(self.sentiment_provider, "aggregate_sentiment")
-                            and self.timeframe
-                        ):
+                        # Aggregate when the provider supports it. Fall back
+                        # to "1h" when self.timeframe is not yet set (e.g.
+                        # warmup paths) so the join shape is well-defined
+                        # rather than producing NaN-padded raw rows that
+                        # silently diverge from backtest.
+                        if hasattr(self.sentiment_provider, "aggregate_sentiment"):
                             sentiment_df = self.sentiment_provider.aggregate_sentiment(
-                                sentiment_df, window=self.timeframe
+                                sentiment_df, window=self.timeframe or "1h"
                             )
+                        # Drop pre-existing sentiment columns before the
+                        # join so we never produce ``sentiment_score_x``/
+                        # ``_y`` collisions when the buffer was already
+                        # enriched on a prior call (e.g. retained
+                        # _kline_buffer).
+                        collision_cols = [c for c in df.columns if c in sentiment_df.columns]
+                        if collision_cols:
+                            df = df.drop(columns=collision_cols)
                         df = df.join(sentiment_df, how="left")
                         if "sentiment_score" in df.columns:
                             df["sentiment_score"] = df["sentiment_score"].ffill().fillna(0)
@@ -2174,9 +2191,13 @@ class LiveTradingEngine:
             # Step 2: overlay the latest real-time sentiment snapshot on
             # the most recent 4 hours of candles. The historical backfill
             # has already populated older rows with the right values.
+            # The 4h window matches the live sentiment provider's
+            # freshness contract — bars older than that rely on the
+            # historical backfill above.
             if hasattr(self.sentiment_provider, "get_live_sentiment"):
                 live_sentiment = self.sentiment_provider.get_live_sentiment()
                 if live_sentiment and not df.empty:
+                    # 4h: live sentiment freshness window (see step-2 comment).
                     recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
                     for feature, value in live_sentiment.items():
                         if feature not in df.columns:
@@ -2477,9 +2498,18 @@ class LiveTradingEngine:
             # and in backtest. Previously this hardcoded ``None`` and silently
             # diverged from backtest.
             try:
-                current_positions = self._build_component_positions(
-                    float(df["close"].iloc[current_index]) if current_index < len(df) else 0.0
-                )
+                # Fall back to the most recent close (df[-1]) when
+                # current_index is past the end — never to 0.0, which would
+                # produce a -100% pnl_percent in ComponentPosition and could
+                # trigger forced-exit logic in strategies that consult
+                # current_positions.
+                if len(df) == 0:
+                    fallback_price = 0.0
+                elif current_index < len(df):
+                    fallback_price = float(df["close"].iloc[current_index])
+                else:
+                    fallback_price = float(df["close"].iloc[-1])
+                current_positions = self._build_component_positions(fallback_price)
                 decision = self.strategy.process_candle(
                     df,
                     current_index,
@@ -4071,10 +4101,21 @@ class LiveTradingEngine:
 
         for position in positions_snapshot.values():
             try:
+                # Use current_size (post-partial-exit) — passing the original
+                # ``size`` would silently re-inflate risk_manager.daily_risk_used
+                # on every re-registration, undoing the prior
+                # adjust_position_after_partial_exit. CODE.md "Position Fields"
+                # rules: ``current_size`` is the source of truth for capital
+                # currently deployed.
+                effective_size = (
+                    float(position.current_size)
+                    if position.current_size is not None
+                    else float(position.size)
+                )
                 self.risk_manager.update_position(
                     symbol=position.symbol,
                     side=position.side.value,
-                    size=position.size,
+                    size=effective_size,
                     entry_price=position.entry_price,
                 )
             except Exception as e:

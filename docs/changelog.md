@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Backtest-live engine parity: closed nine silent divergences. Backtest now
+  propagates `TimeExitPolicy`-specific exit reasons (`"Max holding period"`,
+  `"Weekend flat"`, etc.) instead of hardcoding `"Time limit"`; gained an
+  optional `annual_margin_interest_rate` parameter on `Backtester` mirroring
+  live's `MarginInterestTracker` (default `0.0` preserves spot-mode
+  behaviour); now sums `entry_fee + exit_fee + margin_interest_cost` into
+  `PerformanceTracker.record_trade` matching live's total-fee semantics;
+  persists `margin_interest_cost` to the `trades` DB column via
+  `EventLogger.log_completed_trade`. Live now wires `CorrelationHandler`
+  into `LiveEntryHandler` and threads the full `symbol/timeframe/df/index`
+  context through `_check_entry_conditions` so correlation-driven sizing
+  reduction actually fires; backfills historical sentiment over the full
+  buffer before overlaying the live snapshot so ML strategies get
+  equivalent inputs; sweeps the position tracker after reconciliation to
+  register reconciler-created positions with the risk manager (using
+  `current_size` to preserve partial-exit accounting); passes the live
+  positions list to the direct `ComponentStrategy.process_candle` path.
+  Documented tick-size rounding, margin interest, and single-vs-multi-position
+  as known parity caveats on the `Backtester` docstring.
+
 ### Added
 - Experimentation framework (`src/experiments/`) with declarative YAML suites,
   `atb experiment run|list|show|promote` CLI, ranked reporter with statistical
