@@ -2180,22 +2180,30 @@ class LiveTradingEngine:
                         # provider's frame happens to expose a same-named
                         # column like ``volume`` or ``close``; (b) the join
                         # never raises pandas' default-overlap error.
-                        sentiment_namespace = ("sentiment_", "sentiment")
                         sentiment_only_cols = [
-                            c for c in sentiment_df.columns if c.startswith(sentiment_namespace)
+                            c for c in sentiment_df.columns if c.startswith("sentiment_")
                         ]
                         if not sentiment_only_cols:
-                            # Provider returned no sentiment columns at all —
-                            # nothing to merge.
-                            sentiment_df = sentiment_df.iloc[0:0]
+                            # Provider returned no ``sentiment_*`` columns
+                            # at all (e.g. misconfigured aggregator that
+                            # emits only OHLCV-style columns). Skip the
+                            # merge entirely rather than letting the
+                            # provider's residual column names leak into
+                            # ``collision_cols`` and silently strip OHLCV
+                            # from ``df``.
+                            logger.debug(
+                                "Historical sentiment provider returned no "
+                                "sentiment_* columns for %s — skipping merge",
+                                symbol,
+                            )
                         else:
                             sentiment_df = sentiment_df[sentiment_only_cols]
-                        collision_cols = [c for c in df.columns if c in sentiment_df.columns]
-                        if collision_cols:
-                            df = df.drop(columns=collision_cols)
-                        df = df.join(sentiment_df, how="left")
-                        if "sentiment_score" in df.columns:
-                            df["sentiment_score"] = df["sentiment_score"].ffill().fillna(0)
+                            collision_cols = [c for c in df.columns if c in sentiment_df.columns]
+                            if collision_cols:
+                                df = df.drop(columns=collision_cols)
+                            df = df.join(sentiment_df, how="left")
+                            if "sentiment_score" in df.columns:
+                                df["sentiment_score"] = df["sentiment_score"].ffill().fillna(0)
                 except Exception as e:
                     logger.warning(
                         "Historical sentiment backfill failed for %s: %s — "

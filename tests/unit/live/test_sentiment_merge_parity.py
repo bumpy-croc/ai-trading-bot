@@ -137,6 +137,39 @@ class TestLiveSentimentMergeParity:
         out = engine._add_sentiment_data(pd.DataFrame(), "TEST")
         assert isinstance(out, pd.DataFrame)
 
+    def test_provider_with_no_sentiment_columns_does_not_strip_ohlcv(self) -> None:
+        """If the provider's frame contains only non-sentiment columns
+        (e.g. a misconfigured aggregator emitting OHLCV only), the merge
+        must skip entirely rather than letting those column names leak
+        into the collision drop and silently strip OHLCV from ``df``.
+        """
+        df = _make_buffer_df(periods=12)
+        df["volume"] = 12345.0  # mark to detect over-broad drop
+
+        sentiment_idx = pd.date_range("2024-01-01", periods=12, freq="1h", tz=UTC)
+        # Provider returns only OHLCV-style columns — no sentiment_*.
+        historical = pd.DataFrame(
+            {"volume": [99999.0] * 12, "close": [101.0] * 12},
+            index=sentiment_idx,
+        )
+
+        provider = Mock()
+        provider.get_historical_sentiment.return_value = historical
+        provider.aggregate_sentiment.return_value = historical
+        provider.get_live_sentiment.return_value = {}
+
+        engine = _make_engine(provider)
+        out = engine._add_sentiment_data(df, "TEST")
+
+        # OHLCV must survive untouched even though the provider's frame
+        # carried matching column names.
+        assert (out["volume"] == 12345.0).all(), (
+            "merge must skip when provider returns no sentiment_* columns; "
+            "OHLCV must never be silently stripped"
+        )
+        # No spurious sentiment_score either.
+        assert "sentiment_score" not in out.columns
+
     def test_collision_drop_does_not_strip_non_sentiment_columns(self) -> None:
         """If a future provider's frame happens to expose a column whose
         name overlaps an OHLCV/indicator column (``volume`` is the obvious
