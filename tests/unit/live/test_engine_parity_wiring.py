@@ -94,6 +94,59 @@ class TestCorrelationHandlerWired:
         assert engine.correlation_handler is None
         assert engine.live_entry_handler.correlation_handler is None
 
+    def test_check_entry_passes_correlation_context(self, monkeypatch) -> None:
+        """``_check_entry_conditions`` must pass symbol/timeframe/df/index to the
+        entry handler so the correlation guard can fire.
+
+        Locks in the fix for the silent no-op: previously
+        ``process_runtime_decision`` was called without these args, so the
+        guard at LiveEntryHandler.process_runtime_decision:208-222
+        (``and df is not None and index is not None``) always evaluated False
+        and ``CorrelationHandler.apply_correlation_control`` never ran in live —
+        making the wired CorrelationHandler a no-op. Backtest passes the full
+        context unconditionally (src/engines/backtest/execution/entry_handler.py:209-216).
+        """
+        import pandas as pd
+
+        engine = _make_engine()
+        engine.timeframe = "1h"
+        engine._active_symbol = "TEST"
+        # Force the runtime path so we hit the call site we patched.
+        monkeypatch.setattr(engine, "_is_runtime_strategy", lambda: True)
+
+        # Use a sentinel exception so we observe the call args without
+        # needing to drive the rest of _check_entry_conditions (which logs
+        # regime info that doesn't tolerate a Mock).
+        class _Captured(Exception):
+            def __init__(self, kwargs):
+                self.kwargs = kwargs
+
+        def fake_process(**kwargs):
+            raise _Captured(kwargs)
+
+        monkeypatch.setattr(engine.live_entry_handler, "process_runtime_decision", fake_process)
+
+        df = pd.DataFrame(
+            {"open": [100.0], "high": [101.0], "low": [99.0], "close": [100.5], "volume": [1.0]}
+        )
+        with pytest.raises(_Captured) as exc_info:
+            engine._check_entry_conditions(
+                df=df,
+                current_index=0,
+                symbol="TEST",
+                current_price=100.0,
+                current_time=datetime.now(UTC),
+                runtime_decision=Mock(),
+            )
+
+        captured = exc_info.value.kwargs
+        # All four context fields must reach the handler — these are exactly
+        # the fields the correlation guard requires to be non-None.
+        assert captured.get("symbol") == "TEST"
+        assert captured.get("timeframe") == "1h"
+        assert captured.get("df") is df
+        assert captured.get("index") == 0
+
 
 @pytest.mark.fast
 class TestRiskManagerSweepRegistersRecoveredPositions:

@@ -2403,11 +2403,22 @@ class LiveTradingEngine:
 
         if use_runtime:
             perf_metrics = self.performance_tracker.get_metrics()
+            # Pass symbol/timeframe/df/index so LiveEntryHandler can run
+            # correlation control. These are required keyword args of the
+            # handler's correlation guard (see LiveEntryHandler.process_runtime_decision
+            # at src/engines/live/execution/entry_handler.py:208-222) — without
+            # them, correlation_handler.apply_correlation_control is silently
+            # skipped, so the live engine over-concentrates in correlated pairs
+            # that the backtest engine de-risks.
             entry_signal_result = self.live_entry_handler.process_runtime_decision(
                 runtime_decision=runtime_decision,
                 balance=self.current_balance,
                 current_price=float(current_price),
                 current_time=datetime.now(UTC),
+                symbol=symbol,
+                timeframe=self.timeframe,
+                df=df,
+                index=current_index,
                 peak_balance=perf_metrics.peak_balance or self.current_balance,
                 trading_session_id=self.trading_session_id,
             )
