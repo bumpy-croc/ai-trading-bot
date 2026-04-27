@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Monitoring dashboard V2 redesign**: chart-led layout with left-rail nav
+  (Dash / Pos / Strat / Trades / Risk / Logs), KPI strip, hero equity chart
+  with overlay toggles (benchmark / trades / drawdown), positions strip, and
+  a swappable right inspector. Light + dark themes (toggle persisted to
+  `localStorage`). Tech stack swap: Bootstrap + Chart.js → React 18 (UMD) +
+  Babel-standalone + socket.io-client. CDN scripts pinned with SRI hashes.
+- New `GET /api/dashboard/state` endpoint bundles metrics + positions +
+  trades + bot meta in a single request to keep first paint snappy. Accepts
+  `?trades_limit=` (clamped to 1..500). Falls back to per-resource fetches
+  in the JS adapter if the bundled endpoint is unavailable.
+- New `MonitoringDashboard._get_bot_meta()` reads strategy / symbols /
+  timeframe / mode / `max_open_positions` from the most recent **running**
+  `trading_sessions` row (falls back to the most recent overall row),
+  matching the "Exchange Mode & Account Type Safety" guidance so a stale
+  paper-mode session can't mask an active live one.
+- `.claude/launch.json` — preview-server configurations for all three
+  dashboards plus live-health.
 - Experimentation framework (`src/experiments/`) with declarative YAML suites,
   `atb experiment run|list|show|promote` CLI, ranked reporter with statistical
   verdicts, file-based ledger under `experiments/.history/`, and promotion

@@ -509,7 +509,9 @@ class MonitoringDashboard:
                 metrics = self._collect_metrics()
                 positions = self._get_current_positions()
                 trades = self._get_recent_trades(trades_limit)
-                bot = self._get_bot_meta()
+                # Reuse the api_connection_status already computed by _collect_metrics
+                # to avoid a second Binance round-trip in the same request.
+                bot = self._get_bot_meta(metrics_hint=metrics)
 
                 return jsonify(
                     {
@@ -520,15 +522,24 @@ class MonitoringDashboard:
                         "server_time": datetime.now(UTC).isoformat(),
                     }
                 )
-            except Exception as e:
-                logger.error(f"Error building dashboard state: {e}")
-                return jsonify({"error": str(e)}), 500
+            except Exception:
+                # Don't leak DB schema / SQLAlchemy details to the client.
+                logger.exception("Error building dashboard state")
+                return jsonify({"error": "internal_error"}), 500
 
-    def _get_bot_meta(self) -> dict[str, Any]:
+    def _get_bot_meta(self, metrics_hint: dict[str, Any] | None = None) -> dict[str, Any]:
         """Return bot identity and runtime context for the dashboard header.
 
         Pulled from the latest trading session so the UI shows the real
-        strategy / symbol / timeframe / mode rather than placeholders.
+        strategy / symbol / timeframe / mode rather than placeholders. Prefers
+        the most recent *running* session (``end_time IS NULL``) so a stale
+        paper-mode row can't mask an active live session — matches the
+        "Exchange Mode & Account Type Safety" guidance in CODE.md.
+
+        Args:
+            metrics_hint: Optional metrics dict (already computed for the
+                current request). If provided, the API connectivity probe is
+                read from it instead of re-hitting the data provider.
         """
         meta: dict[str, Any] = {
             "name": "Unknown",
@@ -537,22 +548,50 @@ class MonitoringDashboard:
             "mode": "paper",
             "status": "running",
             "connected": True,
-            "initial_balance": 1000.0,
+            # No "1000" fallback — let the UI render `—` when unknown to avoid
+            # fabricating a baseline that produces wildly misleading
+            # "all-time return %" values.
+            "initial_balance": None,
+            "max_open_positions": None,
             "uptime_seconds": float(self._get_system_uptime()),
             "last_update": datetime.now(UTC).isoformat(),
         }
+        # Prefer a running session; fall back to the most recent overall row.
+        running_query = """
+        SELECT strategy_name, symbol, timeframe, mode, initial_balance,
+               strategy_config, start_time, end_time
+        FROM trading_sessions
+        WHERE end_time IS NULL
+        ORDER BY start_time DESC
+        LIMIT 1
+        """
+        recent_query = """
+        SELECT strategy_name, symbol, timeframe, mode, initial_balance,
+               strategy_config, start_time, end_time
+        FROM trading_sessions
+        ORDER BY start_time DESC
+        LIMIT 1
+        """
+        row: dict[str, Any] | None = None
         try:
-            query = """
-            SELECT strategy_name, symbol, timeframe, mode, initial_balance, start_time, end_time
-            FROM trading_sessions
-            ORDER BY start_time DESC
-            LIMIT 1
-            """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(running_query)
             if result:
                 row = result[0]
+            else:
+                result = self.db_manager.execute_query(recent_query)
+                if result:
+                    row = result[0]
+        except Exception as e:
+            logger.warning(
+                "Could not load session meta from trading_sessions: %s",
+                e,
+                exc_info=True,
+            )
+
+        if row is not None:
+            try:
                 meta["name"] = str(row.get("strategy_name") or meta["name"])
-                # `symbol` may store one symbol or comma-separated list; normalise
+                # `symbol` may store one symbol or comma-separated list
                 sym_raw = row.get("symbol") or ""
                 symbols = [s.strip().upper() for s in str(sym_raw).split(",") if s.strip()]
                 if symbols:
@@ -561,23 +600,54 @@ class MonitoringDashboard:
                 meta["mode"] = str(row.get("mode") or meta["mode"]).lower()
                 if row.get("initial_balance") is not None:
                     meta["initial_balance"] = self._safe_float(row.get("initial_balance"))
-                # session is "running" only if it has no end_time
                 meta["status"] = "running" if row.get("end_time") is None else "stopped"
-        except Exception as e:
-            logger.debug(f"Could not load session meta: {e}")
+                # Pull max_open_positions from strategy_config when available
+                cfg = row.get("strategy_config")
+                if cfg:
+                    if isinstance(cfg, str):
+                        try:
+                            cfg = json.loads(cfg)
+                        except (TypeError, ValueError):
+                            cfg = {}
+                    if isinstance(cfg, dict):
+                        # Look in a few common locations
+                        for source in (
+                            cfg,
+                            cfg.get("risk", {}) or {},
+                            cfg.get("risk_manager", {}) or {},
+                            cfg.get("position_management", {}) or {},
+                        ):
+                            mx = (
+                                source.get("max_open_positions")
+                                if isinstance(source, dict)
+                                else None
+                            )
+                            if mx is not None:
+                                try:
+                                    meta["max_open_positions"] = int(mx)
+                                except (TypeError, ValueError):
+                                    pass
+                                break
+            except (AttributeError, KeyError, TypeError, ValueError) as e:
+                logger.warning("Failed to parse trading_sessions row: %s", e, exc_info=True)
 
         # Fallback symbol from active position if session had none
         if not meta["symbols"]:
             try:
                 meta["symbols"] = [self._get_active_symbol()]
-            except Exception:
+            except Exception as e:
+                logger.warning("Could not determine active symbol: %s", e, exc_info=True)
                 meta["symbols"] = ["BTCUSDT"]
 
-        # API connectivity probe (already in metrics, but mirrored for header)
-        try:
-            meta["connected"] = self._get_api_status() == "Connected"
-        except Exception:
-            meta["connected"] = False
+        # API connectivity — prefer the metrics_hint to avoid a second probe.
+        if metrics_hint and "api_connection_status" in metrics_hint:
+            meta["connected"] = metrics_hint.get("api_connection_status") == "Connected"
+        else:
+            try:
+                meta["connected"] = self._get_api_status() == "Connected"
+            except Exception as e:
+                logger.warning("Could not probe API status for header: %s", e, exc_info=True)
+                meta["connected"] = False
 
         return meta
 
