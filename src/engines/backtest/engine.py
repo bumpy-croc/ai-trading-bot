@@ -919,7 +919,18 @@ class Backtester:
         start: datetime,
         end: datetime | None,
     ) -> pd.DataFrame:
-        """Merge sentiment data into price DataFrame."""
+        """Merge sentiment data into price DataFrame.
+
+        Also emits the ``sentiment_freshness`` column so feature schemas
+        line up with the live engine, which sets it to 1 for the most
+        recent 4 hours of candles and 0 elsewhere
+        (src/engines/live/trading_engine.py:_add_sentiment_data, and
+        src/tech/adapters/row_extractors.py lists the column as expected).
+        Historical sentiment is by definition stale, so backtest sets the
+        flag to 0 across the entire dataframe — ML features that key off
+        ``sentiment_freshness`` will then see the same column shape in
+        both engines, even if the runtime distribution differs by design.
+        """
         if not self.sentiment_provider:
             return df
 
@@ -931,6 +942,13 @@ class Backtester:
             df = df.join(sentiment_df, how="left")
             if "sentiment_score" in df.columns:
                 df["sentiment_score"] = df["sentiment_score"].ffill().fillna(0)
+
+        # Emit the freshness flag unconditionally so the column is always
+        # present for downstream feature builders. Historical sentiment is
+        # always treated as stale (==0); the live engine flips this to 1
+        # only for the most recent 4-hour window.
+        if "sentiment_freshness" not in df.columns:
+            df["sentiment_freshness"] = 0
 
         return df
 
