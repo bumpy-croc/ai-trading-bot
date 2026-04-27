@@ -743,6 +743,17 @@ class ExitHandler:
                 (current_time - trade.entry_time).total_seconds() / 3600.0,
             )
 
+        # Stash interest_cost on the completed trade's metadata so it can be
+        # persisted to the trades.margin_interest_cost DB column via
+        # event_logger.log_completed_trade — parity with live, which passes
+        # margin_interest_cost=interest_cost directly to db_manager.log_trade
+        # (src/engines/live/trading_engine.py:3397-3420).
+        if interest_cost > 0 and close_result.trade is not None:
+            try:
+                close_result.trade.metadata["margin_interest_cost"] = float(interest_cost)
+            except (AttributeError, TypeError, ValueError):
+                logger.debug("Could not stash margin_interest_cost on completed trade metadata")
+
         # Subtract exit fee and margin interest from PnL
         net_pnl = close_result.pnl_cash - exit_fee - interest_cost
 

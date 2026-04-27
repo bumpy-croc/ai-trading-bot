@@ -141,6 +141,15 @@ class Backtester:
     - **Margin/borrow interest.** Modeled in backtest only when
       ``annual_margin_interest_rate`` is set (default 0.0 = spot). See that
       parameter's docstring for parity guidance.
+    - **Concurrent positions.** The backtest engine is single-position by
+      design — its ``PositionTracker`` holds at most one ``ActiveTrade`` at a
+      time (``current_trade``). The live engine's ``LivePositionTracker``
+      holds a dict keyed by ``order_id`` and respects
+      ``risk_manager.get_max_concurrent_positions()`` for multi-symbol
+      portfolios. A backtest of a multi-symbol strategy will only model the
+      first symbol that signals; live can hold N. If your strategy depends
+      on simultaneous positions, validate live behaviour separately rather
+      than inferring it from backtest.
     - ExitHandler: Processes exit signals and execution
     - CorrelationHandler: Applies correlation-based sizing
     - RegimeHandler: Manages regime-based strategy switching
@@ -1243,9 +1252,20 @@ class Backtester:
             self.balance += net_pnl
             self.trades.append(completed_trade)
 
+            # Sum entry + exit fees / slippage for record_trade so the
+            # PerformanceTracker total_fees_paid metric matches live's
+            # `record_trade(fee=total_fee + interest_cost, ...)` semantics
+            # (src/engines/live/trading_engine.py:3361-3390). Previously
+            # backtest passed only the exit-side fee, so total_fees_paid
+            # silently undercounted the entry leg by ~50%.
+            entry_meta = getattr(completed_trade, "metadata", None) or {}
+            entry_fee_logged = float(entry_meta.get("entry_fee", 0.0) or 0.0)
+            entry_slippage_logged = float(entry_meta.get("entry_slippage_cost", 0.0) or 0.0)
+            total_fee = entry_fee_logged + float(exit_fee)
+            total_slippage = entry_slippage_logged + float(slippage)
             # Update performance tracking
             self.performance_tracker.record_trade(
-                trade=completed_trade, fee=exit_fee, slippage=slippage
+                trade=completed_trade, fee=total_fee, slippage=total_slippage
             )
             self.performance_tracker.update_balance(self.balance, timestamp=current_time)
 

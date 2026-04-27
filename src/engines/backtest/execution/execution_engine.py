@@ -175,7 +175,10 @@ class ExecutionEngine:
             side=pending["side"],
         )
 
-        # Create trade
+        # Create trade. Stash entry fee/slippage on metadata so the exit
+        # path can pass total fees (entry + exit) to PerformanceTracker.record_trade,
+        # matching live's `position.metadata["entry_fee"]` pattern in
+        # src/engines/live/trading_engine.py:2825-2826.
         trade = ActiveTrade(
             symbol=symbol,
             side=pending["side"],
@@ -186,6 +189,8 @@ class ExecutionEngine:
             take_profit=take_profit,
             entry_balance=balance - entry_fee if balance > entry_fee else balance,
         )
+        trade.metadata["entry_fee"] = float(entry_fee)
+        trade.metadata["entry_slippage_cost"] = float(slippage_cost)
         # Note: component_notional removed - computed on-demand as current_size * balance
 
         # Clear pending entry now that execution succeeded
@@ -248,7 +253,10 @@ class ExecutionEngine:
         entry_fee = cost_result.fee
         slippage_cost = cost_result.slippage_cost
 
-        # Create trade
+        # Create trade. Stash entry fee/slippage on metadata so the exit
+        # path can pass total fees (entry + exit) to PerformanceTracker.record_trade,
+        # matching live's `position.metadata["entry_fee"]` pattern in
+        # src/engines/live/trading_engine.py:2825-2826.
         trade = ActiveTrade(
             symbol=symbol,
             side=side,
@@ -259,6 +267,8 @@ class ExecutionEngine:
             take_profit=take_profit,
             entry_balance=balance - entry_fee if balance > entry_fee else balance,
         )
+        trade.metadata["entry_fee"] = float(entry_fee)
+        trade.metadata["entry_slippage_cost"] = float(slippage_cost)
         # Note: component_notional removed - computed on-demand as current_size * balance
 
         logger.info(

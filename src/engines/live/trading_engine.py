@@ -2130,27 +2130,64 @@ class LiveTradingEngine:
             return None
 
     def _add_sentiment_data(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        """Add sentiment data to price data"""
+        """Add sentiment data to price data.
+
+        Backfills the entire buffer with historical sentiment first
+        (parity with backtest's full-history merge at
+        src/engines/backtest/engine.py:957-964), then layers the live
+        snapshot on top of recent candles. Without the historical pass,
+        bars older than 4 hours in the live buffer carried 0.0 sentiment
+        while backtest had populated values — so ML strategies that
+        consume a sequence_length window saw materially different inputs
+        between the two engines.
+        """
         try:
+            # Step 1: backfill historical sentiment over the buffer if the
+            # provider supports it. Mirrors backtest's `_merge_sentiment_data`
+            # join + ffill so older candles carry real sentiment values.
+            if hasattr(self.sentiment_provider, "get_historical_sentiment") and not df.empty:
+                try:
+                    start = df.index.min().to_pydatetime()
+                    end = df.index.max().to_pydatetime()
+                    sentiment_df = self.sentiment_provider.get_historical_sentiment(
+                        symbol, start, end
+                    )
+                    if sentiment_df is not None and not sentiment_df.empty:
+                        if (
+                            hasattr(self.sentiment_provider, "aggregate_sentiment")
+                            and self.timeframe
+                        ):
+                            sentiment_df = self.sentiment_provider.aggregate_sentiment(
+                                sentiment_df, window=self.timeframe
+                            )
+                        df = df.join(sentiment_df, how="left")
+                        if "sentiment_score" in df.columns:
+                            df["sentiment_score"] = df["sentiment_score"].ffill().fillna(0)
+                except Exception as e:
+                    logger.warning(
+                        "Historical sentiment backfill failed for %s: %s — "
+                        "continuing with live-only sentiment which may differ from backtest",
+                        symbol,
+                        e,
+                    )
+
+            # Step 2: overlay the latest real-time sentiment snapshot on
+            # the most recent 4 hours of candles. The historical backfill
+            # has already populated older rows with the right values.
             if hasattr(self.sentiment_provider, "get_live_sentiment"):
-                # Get live sentiment for recent data
                 live_sentiment = self.sentiment_provider.get_live_sentiment()
-
-                # Apply to recent candles (last 4 hours)
-                recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
-                for feature, value in live_sentiment.items():
-                    if feature not in df.columns:
-                        df[feature] = 0.0
-                    df.loc[recent_mask, feature] = value
-
-                # Mark sentiment freshness
-                df["sentiment_freshness"] = 0
-                df.loc[recent_mask, "sentiment_freshness"] = 1
-
-                logger.debug("Applied live sentiment to %s recent candles", recent_mask.sum())
+                if live_sentiment and not df.empty:
+                    recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
+                    for feature, value in live_sentiment.items():
+                        if feature not in df.columns:
+                            df[feature] = 0.0
+                        df.loc[recent_mask, feature] = value
+                    if "sentiment_freshness" not in df.columns:
+                        df["sentiment_freshness"] = 0
+                    df.loc[recent_mask, "sentiment_freshness"] = 1
+                    logger.debug("Applied live sentiment to %s recent candles", recent_mask.sum())
             else:
-                # Fallback to historical sentiment
-                logger.debug("Using historical sentiment data")
+                logger.debug("Using historical sentiment data only (no live provider)")
 
         except Exception as e:
             logger.error("Failed to add sentiment data: %s", e, exc_info=True)
