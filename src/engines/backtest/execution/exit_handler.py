@@ -114,6 +114,7 @@ class ExitHandler:
         partial_manager: PartialOperationsManager | None = None,
         enable_engine_risk_exits: bool = True,
         use_high_low_for_stops: bool = True,
+        annual_margin_interest_rate: float = 0.0,
     ) -> None:
         """Initialize exit handler.
 
@@ -127,7 +128,20 @@ class ExitHandler:
             partial_manager: Unified partial operations manager.
             enable_engine_risk_exits: Enable SL/TP checks.
             use_high_low_for_stops: Use high/low for SL/TP detection.
+            annual_margin_interest_rate: Annual borrow/funding rate as a
+                decimal (e.g. ``0.05`` for 5% APR). Defaults to 0.0 (spot
+                trading, no carry cost). When > 0, interest is accrued on
+                the position notional for the holding period and deducted
+                from realized PnL on close — mirroring the live engine's
+                ``MarginInterestTracker`` behavior so margin-mode backtests
+                do not silently overstate returns.
         """
+        if annual_margin_interest_rate < 0 or not math.isfinite(annual_margin_interest_rate):
+            raise ValueError(
+                f"annual_margin_interest_rate must be non-negative and finite, "
+                f"got {annual_margin_interest_rate}"
+            )
+
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
         self.risk_manager = risk_manager
@@ -137,9 +151,38 @@ class ExitHandler:
         self.partial_manager = partial_manager
         self.enable_engine_risk_exits = enable_engine_risk_exits
         self.use_high_low_for_stops = use_high_low_for_stops
+        self.annual_margin_interest_rate = float(annual_margin_interest_rate)
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
+
+    def _calculate_margin_interest(
+        self,
+        position_notional: float,
+        entry_time: datetime,
+        exit_time: datetime,
+    ) -> float:
+        """Compute margin interest cost for the holding period.
+
+        Mirrors live's ``MarginInterestTracker`` semantics: interest accrues
+        on the position notional from entry to exit at the configured annual
+        rate. Returns 0.0 when the rate is disabled or inputs are invalid,
+        so spot-mode backtests are unaffected.
+        """
+        if self.annual_margin_interest_rate <= 0:
+            return 0.0
+        if position_notional <= 0 or not math.isfinite(position_notional):
+            return 0.0
+        try:
+            seconds_held = (exit_time - entry_time).total_seconds()
+        except (TypeError, ValueError):
+            return 0.0
+        if seconds_held <= 0:
+            return 0.0
+        seconds_per_year = 365.0 * 24.0 * 3600.0
+        return (
+            position_notional * self.annual_margin_interest_rate * (seconds_held / seconds_per_year)
+        )
 
     def _build_snapshot(
         self,
@@ -490,8 +533,12 @@ class ExitHandler:
             if hit_take_profit:
                 tp_exit_price = take_profit_val
 
-        # Check time limit
+        # Check time limit. Capture the policy-specific reason (e.g.
+        # "Max holding period", "Weekend flat", "End of day flat") so it
+        # propagates into Trade.exit_reason — matching the live engine,
+        # which already does `time_reason or "Time exit"`.
         hit_time_limit = False
+        time_reason: str | None = None
         if self.time_exit_policy is not None:
             try:
                 current_time = candle.name if hasattr(candle, "name") else datetime.now(UTC)
@@ -499,7 +546,7 @@ class ExitHandler:
                 # to prevent TypeError when comparing with UTC-aware entry_time
                 if hasattr(current_time, "tzinfo") and current_time.tzinfo is None:
                     current_time = current_time.replace(tzinfo=UTC)
-                should_time_exit, _ = self.time_exit_policy.check_time_exit_conditions(
+                should_time_exit, time_reason = self.time_exit_policy.check_time_exit_conditions(
                     trade.entry_time, current_time
                 )
                 hit_time_limit = should_time_exit
@@ -517,7 +564,9 @@ class ExitHandler:
             exit_reason = "Take profit"
             exit_price = tp_exit_price
         elif hit_time_limit:
-            exit_reason = "Time limit"
+            # Use the policy-specific reason for parity with the live engine.
+            # Default fallback string also matches live ("Time exit").
+            exit_reason = time_reason or "Time exit"
             exit_price = current_price
         elif exit_signal:
             exit_reason = runtime_reason
@@ -676,8 +725,26 @@ class ExitHandler:
             basis_balance=basis_balance,
         )
 
-        # Subtract exit fee from PnL
-        net_pnl = close_result.pnl_cash - exit_fee
+        # Margin/borrow interest accrual over the holding period. Folded into
+        # exit_fee so PerformanceTracker.record_trade reports it as a cost,
+        # matching live's `record_trade(fee=total_fee + interest_cost, ...)`.
+        # Trade.pnl stays gross (price movement only) — same convention as live.
+        interest_cost = self._calculate_margin_interest(
+            position_notional=position_notional,
+            entry_time=trade.entry_time,
+            exit_time=current_time,
+        )
+        if interest_cost > 0:
+            logger.debug(
+                "Deducted margin interest %.4f from %s PnL (rate=%.4f, held=%.2fh)",
+                interest_cost,
+                symbol,
+                self.annual_margin_interest_rate,
+                (current_time - trade.entry_time).total_seconds() / 3600.0,
+            )
+
+        # Subtract exit fee and margin interest from PnL
+        net_pnl = close_result.pnl_cash - exit_fee - interest_cost
 
         # Close position in risk manager
         try:
@@ -685,7 +752,7 @@ class ExitHandler:
         except Exception as e:
             logger.warning("Failed to update risk manager on close for %s: %s", symbol, e)
 
-        return close_result.trade, net_pnl, exit_fee, slippage_cost
+        return close_result.trade, net_pnl, exit_fee + interest_cost, slippage_cost
 
     def calculate_current_pnl_pct(self, current_price: float) -> float:
         """Calculate current unrealized PnL percentage.

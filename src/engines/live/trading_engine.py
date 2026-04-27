@@ -54,14 +54,15 @@ from src.engines.live.data.market_data_handler import MarketDataHandler
 from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
-from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
 )
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.strategy_manager import StrategyManager
+from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
@@ -347,6 +348,27 @@ class LiveTradingEngine:
         except Exception:
             self.correlation_engine = None
 
+        # Correlation handler — applies correlation-based size reduction at
+        # entry. Mirrors backtest engine wiring (src/engines/backtest/engine.py:343-350)
+        # so live entries reduce size for correlated exposure the same way
+        # backtest does. Without this, live silently over-concentrates in
+        # correlated pairs that backtest would have de-risked.
+        self.correlation_handler: CorrelationHandler | None = None
+        if self.correlation_engine is not None:
+            try:
+                self.correlation_handler = CorrelationHandler(
+                    correlation_engine=self.correlation_engine,
+                    risk_manager=self.risk_manager,
+                    data_provider=data_provider,
+                    strategy=self.strategy,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to initialize live correlation handler: %s — "
+                    "live entries will run without correlation controls.",
+                    e,
+                )
+
         # Initialize database manager
         try:
             self.db_manager = DatabaseManager(database_url)
@@ -385,9 +407,11 @@ class LiveTradingEngine:
                     provider, config, testnet
                 )
                 if self.exchange_interface:
-                    use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                    use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                     self.account_synchronizer = AccountSynchronizer(
-                        self.exchange_interface, self.db_manager, self.trading_session_id,
+                        self.exchange_interface,
+                        self.db_manager,
+                        self.trading_session_id,
                         use_margin=use_margin,
                     )
                     # Initialize order tracker for monitoring order fills
@@ -646,7 +670,9 @@ class LiveTradingEngine:
         # Wire db_manager for order journaling (session_id set during start())
         self.live_execution_engine.db_manager = self.db_manager
 
-        # Entry handler
+        # Entry handler. correlation_handler matches backtest engine wiring
+        # so live and backtest both reduce position size for correlated
+        # exposure at entry.
         self.live_entry_handler = entry_handler or LiveEntryHandler(
             execution_engine=self.live_execution_engine,
             execution_model=self.execution_model,
@@ -655,6 +681,7 @@ class LiveTradingEngine:
                 self.strategy if isinstance(self.strategy, ComponentStrategy) else None
             ),
             dynamic_risk_manager=self.dynamic_risk_manager,
+            correlation_handler=self.correlation_handler,
             max_position_size=self.max_position_size,
             default_take_profit_pct=self._resolve_take_profit_pct(),
         )
@@ -1073,12 +1100,18 @@ class LiveTradingEngine:
         self._runtime_warmup = max(0, int(dataset.warmup_period or 0))
         return dataset.data
 
-    def _build_runtime_context(
+    def _build_component_positions(
         self,
-        balance: float,
         current_price: float,
-        current_time: datetime,
-    ) -> RuntimeContext:
+    ) -> list[ComponentPosition]:
+        """Translate live positions into the strategy-side ComponentPosition list.
+
+        Used by both the StrategyRuntime context and the direct
+        ComponentStrategy.process_candle call so a strategy that consults
+        ``current_positions`` (e.g. for anti-pyramiding or correlation-aware
+        sizing) gets the same view in both code paths — and matching the
+        backtest path where positions always flow through.
+        """
         positions: list[ComponentPosition] = []
         for position in self.live_position_tracker.positions.values():
             try:
@@ -1094,7 +1127,15 @@ class LiveTradingEngine:
                 positions.append(component_position)
             except Exception as exc:
                 logger.debug("Failed to translate live position for runtime: %s", exc)
+        return positions
 
+    def _build_runtime_context(
+        self,
+        balance: float,
+        current_price: float,
+        current_time: datetime,
+    ) -> RuntimeContext:
+        positions = self._build_component_positions(current_price)
         return RuntimeContext(balance=float(balance), current_positions=positions or None)
 
     def _compute_component_quantity(
@@ -1272,6 +1313,17 @@ class LiveTradingEngine:
                 # Reconcile positions with exchange (detect offline stop-loss triggers)
                 self._reconcile_positions_with_exchange()
 
+                # Reconciliation paths (e.g. PositionReconciler._reconcile_filled_entry)
+                # may create LivePositions via track_recovered_position without
+                # registering them with risk_manager. The DB-recovery path in
+                # _recover_active_positions does register; the reconciler path
+                # currently does not. Sweep the tracker after reconciliation so
+                # every tracked position is known to the risk manager — this
+                # restores the parity invariant (also enforced on every
+                # backtest entry) that risk_manager has visibility into all
+                # active positions for per-symbol caps and correlation gating.
+                self._ensure_positions_registered_with_risk_manager()
+
             except Exception as e:
                 logger.error("❌ Account synchronization error: %s", e, exc_info=True)
 
@@ -1311,7 +1363,7 @@ class LiveTradingEngine:
             try:
                 from src.engines.live.reconciliation import PeriodicReconciler
 
-                use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                 self._periodic_reconciler = PeriodicReconciler(
                     exchange_interface=self.exchange_interface,
                     position_tracker=self.live_position_tracker,
@@ -1348,9 +1400,7 @@ class LiveTradingEngine:
         """Enter close-only mode: no new entries, exits/stops/trailing still active."""
         if not self._close_only_mode:
             self._close_only_mode = True
-            logger.critical(
-                "🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review"
-            )
+            logger.critical("🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review")
 
     def resume_trading(self) -> None:
         """Resume normal trading after close-only mode review."""
@@ -1527,9 +1577,7 @@ class LiveTradingEngine:
         #    while the old thread may still be mutating order state
         if not processor_clean:
             self.exchange_interface.mark_user_degraded()
-            logger.critical(
-                "UserDataProcessor did not stop cleanly — staying in REST_DEGRADED"
-            )
+            logger.critical("UserDataProcessor did not stop cleanly — staying in REST_DEGRADED")
             return
         # 6. Attempt user stream reconnect with fresh callback
         reconnected = False
@@ -2059,7 +2107,9 @@ class LiveTradingEngine:
             if self._kline_buffer and self._kline_buffer.needs_resync:
                 logger.info("KlineBuffer gap detected — resyncing from REST")
                 self._kline_buffer.resync_from_rest(
-                    self.data_provider, self._active_symbol or symbol, self.timeframe or timeframe,
+                    self.data_provider,
+                    self._active_symbol or symbol,
+                    self.timeframe or timeframe,
                 )
 
             # Use WS cache if available and healthy
@@ -2372,10 +2422,21 @@ class LiveTradingEngine:
         elif isinstance(self.strategy, ComponentStrategy):
             # Component-based strategy: use process_candle() for decision
             # Note: runtime_decision should already be populated if this is a component strategy
-            # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper
+            # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper.
+            # Pass the live positions list so strategies that consult
+            # current_positions (anti-pyramiding, correlation-aware sizing,
+            # etc.) see the same view they would in the StrategyRuntime path
+            # and in backtest. Previously this hardcoded ``None`` and silently
+            # diverged from backtest.
             try:
+                current_positions = self._build_component_positions(
+                    float(df["close"].iloc[current_index]) if current_index < len(df) else 0.0
+                )
                 decision = self.strategy.process_candle(
-                    df, current_index, self.current_balance, None
+                    df,
+                    current_index,
+                    self.current_balance,
+                    current_positions or None,
                 )
                 self._apply_policies_from_decision(decision)
 
@@ -3290,9 +3351,7 @@ class LiveTradingEngine:
                     from src.engines.live.reconciliation import PositionReconciler
 
                     tracker = MarginInterestTracker(self.exchange_interface)
-                    base_asset = PositionReconciler._extract_base_asset(
-                        position.symbol
-                    )
+                    base_asset = PositionReconciler._extract_base_asset(position.symbol)
                     if base_asset == position.symbol:
                         logger.warning(
                             "Could not extract base asset from %s — margin interest may not be queried correctly",
@@ -3934,6 +3993,49 @@ class LiveTradingEngine:
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
             return None
 
+    def _ensure_positions_registered_with_risk_manager(self) -> None:
+        """Register every tracked position with the risk manager.
+
+        Idempotent. Re-registering a known position is a no-op for risk
+        managers that key on (symbol, side); for the few that count entries,
+        registering twice still leaves the position visible — strictly
+        better than the recovered-but-invisible state we are guarding
+        against.
+
+        Parity rationale:
+        - Backtest registers every position at entry
+          (src/engines/backtest/execution/entry_handler.py:407-421).
+        - Live's DB-recovery path registers
+          (src/engines/live/trading_engine.py:_recover_active_positions).
+        - Live's reconciler path (PositionReconciler._reconcile_filled_entry)
+          can also create positions via track_recovered_position but does
+          not register. This sweep closes that gap so per-symbol caps and
+          correlation gating see all active positions, matching the
+          invariant backtest assumes always holds.
+        """
+        if self.risk_manager is None:
+            return
+        try:
+            positions_snapshot = self.live_position_tracker.positions
+        except Exception as e:
+            logger.warning("Failed to snapshot positions for risk-manager sync: %s", e)
+            return
+
+        for position in positions_snapshot.values():
+            try:
+                self.risk_manager.update_position(
+                    symbol=position.symbol,
+                    side=position.side.value,
+                    size=position.size,
+                    entry_price=position.entry_price,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to register recovered position %s with risk manager: %s",
+                    position.symbol,
+                    e,
+                )
+
     def _recover_active_positions(self) -> None:
         """Recover active positions from database"""
         try:
@@ -4001,10 +4103,7 @@ class LiveTradingEngine:
                 # Validate recovered entry_price before tracking. Positions
                 # with invalid entry_price cannot be closed properly and would
                 # become orphaned in the tracker.
-                if (
-                    position.entry_price <= 0
-                    or not math.isfinite(position.entry_price)
-                ):
+                if position.entry_price <= 0 or not math.isfinite(position.entry_price):
                     logger.critical(
                         "SKIPPING recovery of position %s (%s): invalid entry_price %.8f. "
                         "MANUAL RECONCILIATION REQUIRED.",
@@ -4077,7 +4176,7 @@ class LiveTradingEngine:
                     Severity,
                 )
 
-                use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                 reconciler = PositionReconciler(
                     exchange_interface=self.exchange_interface,
                     position_tracker=self.live_position_tracker,
@@ -4094,9 +4193,7 @@ class LiveTradingEngine:
                     # Process results even with no positions — a filled entry
                     # order may create a position, and critical issues must
                     # still trigger close-only mode.
-                    critical_count = sum(
-                        1 for r in results if r.severity == Severity.CRITICAL
-                    )
+                    critical_count = sum(1 for r in results if r.severity == Severity.CRITICAL)
                     if critical_count > 0:
                         logger.critical(
                             "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
@@ -4128,9 +4225,7 @@ class LiveTradingEngine:
                 results = reconciler.reconcile_startup(positions_snapshot)
 
                 # Check for critical issues
-                critical_count = sum(
-                    1 for r in results if r.severity == Severity.CRITICAL
-                )
+                critical_count = sum(1 for r in results if r.severity == Severity.CRITICAL)
                 if critical_count > 0:
                     logger.critical(
                         "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
@@ -4257,9 +4352,7 @@ class LiveTradingEngine:
                             from src.engines.live.reconciliation import PositionReconciler
 
                             tracker = MarginInterestTracker(self.exchange_interface)
-                            base_asset = PositionReconciler._extract_base_asset(
-                                position.symbol
-                            )
+                            base_asset = PositionReconciler._extract_base_asset(position.symbol)
                             interest_base = tracker.get_position_interest_cost(
                                 base_asset, position.entry_time
                             )
