@@ -1,0 +1,57 @@
+{
+  "$schema_version": "1",
+  "$owner": "human_board",
+  "$source_of_truth_note": "Must match src/config/constants.py. Any divergence is a P0.",
+  "$last_reviewed": "1970-01-01",
+  "$last_reviewer": "",
+
+  "portfolio": {
+    "max_drawdown_pct": 0.20,
+    "max_daily_risk_pct": 0.06,
+    "max_correlated_exposure_pct": 0.15,
+    "dynamic_drawdown_thresholds_pct": [0.05, 0.10, 0.15],
+    "dynamic_risk_reduction_factors": [0.8, 0.6, 0.4]
+  },
+
+  "position": {
+    "max_position_size_pct": 0.10,
+    "base_risk_per_trade_pct": 0.02,
+    "max_risk_per_trade_pct": 0.03,
+    "max_leverage": 3.0,
+    "kelly_max_fraction": 0.20,
+    "large_single_position_threshold_pct": 0.20
+  },
+
+  "stops": {
+    "default_stop_loss_pct": 0.05,
+    "min_stop_loss_pct": 0.01,
+    "max_stop_loss_pct": 0.20,
+    "default_take_profit_pct": 0.04,
+    "fallback_trailing_pct": 0.01
+  },
+
+  "operational": {
+    "max_consecutive_errors": 10,
+    "max_holding_hours": 336,
+    "max_filled_price_deviation_pct": 0.50,
+    "balance_discrepancy_warning_pct": 0.01,
+    "reconciliation_balance_critical_pct": 0.05
+  },
+
+  "escalation": {
+    "warning_at_pct_of_limit": 0.50,
+    "critical_at_pct_of_limit": 0.80,
+    "breach_action": "halt_new_entries_and_page_human"
+  },
+
+  "kill_switch": {
+    "authorized_actors": ["human"],
+    "auto_trigger_conditions": [
+      "db_memory_divergence_detected",
+      "duplicate_order_storm",
+      "auth_failure_with_open_positions",
+      "data_corruption_detected"
+    ],
+    "manual_trigger_command": "atb live-control halt"
+  }
+}
