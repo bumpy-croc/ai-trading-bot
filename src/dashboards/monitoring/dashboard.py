@@ -495,6 +495,92 @@ class MonitoringDashboard:
                 logger.error(f"Error getting pending orders: {e}")
                 return jsonify({"error": str(e)}), 500
 
+        @self.app.route("/api/dashboard/state")
+        def get_dashboard_state():
+            """Bundled dashboard state for the V2 redesigned UI.
+
+            Returns metrics, positions, recent trades, and bot meta in a single
+            request — keeps initial paint snappy and reduces socket churn.
+            """
+            try:
+                trades_limit = request.args.get("trades_limit", 50, type=int)
+                trades_limit = _validate_limit(trades_limit, default=50, max_limit=500)
+
+                metrics = self._collect_metrics()
+                positions = self._get_current_positions()
+                trades = self._get_recent_trades(trades_limit)
+                bot = self._get_bot_meta()
+
+                return jsonify(
+                    {
+                        "bot": bot,
+                        "metrics": metrics,
+                        "positions": positions,
+                        "trades": trades,
+                        "server_time": datetime.now(UTC).isoformat(),
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error building dashboard state: {e}")
+                return jsonify({"error": str(e)}), 500
+
+    def _get_bot_meta(self) -> dict[str, Any]:
+        """Return bot identity and runtime context for the dashboard header.
+
+        Pulled from the latest trading session so the UI shows the real
+        strategy / symbol / timeframe / mode rather than placeholders.
+        """
+        meta: dict[str, Any] = {
+            "name": "Unknown",
+            "symbols": [],
+            "timeframe": "1h",
+            "mode": "paper",
+            "status": "running",
+            "connected": True,
+            "initial_balance": 1000.0,
+            "uptime_seconds": float(self._get_system_uptime()),
+            "last_update": datetime.now(UTC).isoformat(),
+        }
+        try:
+            query = """
+            SELECT strategy_name, symbol, timeframe, mode, initial_balance, start_time, end_time
+            FROM trading_sessions
+            ORDER BY start_time DESC
+            LIMIT 1
+            """
+            result = self.db_manager.execute_query(query)
+            if result:
+                row = result[0]
+                meta["name"] = str(row.get("strategy_name") or meta["name"])
+                # `symbol` may store one symbol or comma-separated list; normalise
+                sym_raw = row.get("symbol") or ""
+                symbols = [s.strip().upper() for s in str(sym_raw).split(",") if s.strip()]
+                if symbols:
+                    meta["symbols"] = symbols
+                meta["timeframe"] = str(row.get("timeframe") or meta["timeframe"])
+                meta["mode"] = str(row.get("mode") or meta["mode"]).lower()
+                if row.get("initial_balance") is not None:
+                    meta["initial_balance"] = self._safe_float(row.get("initial_balance"))
+                # session is "running" only if it has no end_time
+                meta["status"] = "running" if row.get("end_time") is None else "stopped"
+        except Exception as e:
+            logger.debug(f"Could not load session meta: {e}")
+
+        # Fallback symbol from active position if session had none
+        if not meta["symbols"]:
+            try:
+                meta["symbols"] = [self._get_active_symbol()]
+            except Exception:
+                meta["symbols"] = ["BTCUSDT"]
+
+        # API connectivity probe (already in metrics, but mirrored for header)
+        try:
+            meta["connected"] = self._get_api_status() == "Connected"
+        except Exception:
+            meta["connected"] = False
+
+        return meta
+
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""
 
