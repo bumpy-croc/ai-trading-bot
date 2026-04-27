@@ -171,8 +171,13 @@ function normalizeTrade(t, idx) {
 }
 
 // Number-or-null helper: collapses non-finite inputs to null so the UI can
-// distinguish "not yet known" from "actual zero".
+// distinguish "not yet known" from "actual zero". Note the explicit
+// null/undefined guard — without it, `Number(null) === 0` and
+// `Number(undefined) === NaN`, so a server-side `null` (the project's
+// "not configured" sentinel) would silently coerce to 0 and the UI would
+// render "0.00%" / "$0" instead of the intended "—" placeholder.
 const numOrNull = (v) => {
+  if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
