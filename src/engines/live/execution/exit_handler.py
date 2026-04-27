@@ -827,14 +827,52 @@ class LiveExitHandler:
                 if scale_result.should_scale:
                     add_size_of_original = scale_result.scale_fraction
 
-                    self._execute_scale_in(
-                        order_id=order_id,
-                        position=position,
-                        delta_fraction=add_size_of_original,
-                        price=current_price,
-                        threshold_level=scale_result.target_index,
-                        fraction_of_original=add_size_of_original,
-                    )
+                    # Clamp scale-in size by remaining daily-risk budget so
+                    # the live engine never exceeds the per-day exposure
+                    # cap that backtest already enforces in its scale-in
+                    # path (src/engines/backtest/execution/exit_handler.py:357-361).
+                    # Without this clamp, a strategy with two scale-in
+                    # targets could push total exposure above
+                    # ``risk_manager.params.max_daily_risk`` while
+                    # backtest results would have it capped.
+                    add_effective = add_size_of_original
+                    if self.risk_manager is not None and add_effective > 0:
+                        try:
+                            params = getattr(self.risk_manager, "params", None)
+                            max_daily_risk = (
+                                getattr(params, "max_daily_risk", None) if params else None
+                            )
+                            daily_risk_used = getattr(self.risk_manager, "daily_risk_used", None)
+                            if max_daily_risk is not None and daily_risk_used is not None:
+                                remaining_daily = max(
+                                    0.0,
+                                    float(max_daily_risk) - float(daily_risk_used),
+                                )
+                                add_effective = min(add_effective, remaining_daily)
+                        except (AttributeError, TypeError, ValueError) as e:
+                            logger.debug(
+                                "Daily-risk clamp skipped for %s scale-in: %s",
+                                position.symbol,
+                                e,
+                            )
+
+                    if add_effective <= 0:
+                        logger.info(
+                            "Skipping %s scale-in: daily-risk budget exhausted "
+                            "(requested=%.4f, remaining=%.4f)",
+                            position.symbol,
+                            add_size_of_original,
+                            add_effective,
+                        )
+                    else:
+                        self._execute_scale_in(
+                            order_id=order_id,
+                            position=position,
+                            delta_fraction=add_effective,
+                            price=current_price,
+                            threshold_level=scale_result.target_index,
+                            fraction_of_original=add_effective,
+                        )
 
             except (AttributeError, ValueError, KeyError, ZeroDivisionError) as e:
                 logger.warning("Partial ops evaluation failed for %s: %s", position.symbol, e)
