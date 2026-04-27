@@ -39,7 +39,7 @@ Ref: proposals/2026-04-20-01-promote-btc-v4.md
 
 ## Backlog — lives on GitHub
 
-The live work queue is **GitHub Issues + the "Agent PM Board" Project** (`bumpy-croc/projects/6`). Files above are for durable audit and human-owned config; the backlog itself is on GitHub so humans can triage from anywhere and PR linkage is native.
+The live work queue is **GitHub Issues + the "Agent PM Board" Project** (`https://github.com/orgs/bumpy-croc/projects/6`, linked to this repo so it shows in the **Projects** tab). Files above are for durable audit and human-owned config; the backlog itself is on GitHub so humans can triage from anywhere and PR linkage is native.
 
 **Label taxonomy** (every card carries one each of `state`, `priority`, `type`, `owned-by`, `source`, plus ≥1 `area`, plus 0+ `needs`):
 
