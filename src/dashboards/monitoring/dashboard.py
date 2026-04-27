@@ -553,6 +553,10 @@ class MonitoringDashboard:
             # "all-time return %" values.
             "initial_balance": None,
             "max_open_positions": None,
+            # risk_per_trade in percent of balance, or None when not configured.
+            # Distinct from the legacy /api/metrics field that defaults to 1.0
+            # and would silently fabricate the value.
+            "risk_per_trade": None,
             "uptime_seconds": float(self._get_system_uptime()),
             "last_update": datetime.now(UTC).isoformat(),
         }
@@ -591,9 +595,17 @@ class MonitoringDashboard:
         if row is not None:
             try:
                 meta["name"] = str(row.get("strategy_name") or meta["name"])
-                # `symbol` may store one symbol or comma-separated list
+                # `symbol` may store one symbol or comma-separated list. Dedup
+                # while preserving order so a misconfigured "BTCUSDT,btcusdt"
+                # doesn't render twice in the header.
                 sym_raw = row.get("symbol") or ""
-                symbols = [s.strip().upper() for s in str(sym_raw).split(",") if s.strip()]
+                seen: set[str] = set()
+                symbols: list[str] = []
+                for s in str(sym_raw).split(","):
+                    sn = s.strip().upper()
+                    if sn and sn not in seen:
+                        seen.add(sn)
+                        symbols.append(sn)
                 if symbols:
                     meta["symbols"] = symbols
                 meta["timeframe"] = str(row.get("timeframe") or meta["timeframe"])
@@ -610,24 +622,28 @@ class MonitoringDashboard:
                         except (TypeError, ValueError):
                             cfg = {}
                     if isinstance(cfg, dict):
-                        # Look in a few common locations
-                        for source in (
+                        # Look in a few common locations for both knobs.
+                        sources = [
                             cfg,
                             cfg.get("risk", {}) or {},
                             cfg.get("risk_manager", {}) or {},
                             cfg.get("position_management", {}) or {},
-                        ):
-                            mx = (
-                                source.get("max_open_positions")
-                                if isinstance(source, dict)
-                                else None
-                            )
-                            if mx is not None:
+                        ]
+                        for source in sources:
+                            if not isinstance(source, dict):
+                                continue
+                            mx = source.get("max_open_positions")
+                            if mx is not None and meta["max_open_positions"] is None:
                                 try:
                                     meta["max_open_positions"] = int(mx)
                                 except (TypeError, ValueError):
                                     pass
-                                break
+                            rpt = source.get("risk_per_trade")
+                            if rpt is not None and meta["risk_per_trade"] is None:
+                                try:
+                                    meta["risk_per_trade"] = float(rpt)
+                                except (TypeError, ValueError):
+                                    pass
             except (AttributeError, KeyError, TypeError, ValueError) as e:
                 logger.warning("Failed to parse trading_sessions row: %s", e, exc_info=True)
 

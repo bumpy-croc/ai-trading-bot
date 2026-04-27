@@ -1,7 +1,21 @@
 # Project Status
 
-> **Last Updated**: 2026-04-18
+> **Last Updated**: 2026-04-27
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
+
+---
+
+## In Flight
+
+- **Monitoring dashboard V2 redesign** — chart-led layout (left rail + KPI
+  strip + hero equity chart + position inspector) replacing the legacy
+  Bootstrap+Chart.js dashboard. Stack swap: React 18 (UMD) +
+  Babel-standalone + socket.io-client, CDN scripts pinned with SRI hashes.
+  Adds `GET /api/dashboard/state` bundled endpoint and `_get_bot_meta()`
+  helper that surfaces real session metadata (strategy / symbols /
+  timeframe / mode / `max_open_positions` / `risk_per_trade`). On branch
+  `claude/brave-jackson-d9e7ee` — under deep-review-auto-fix iteration 3,
+  awaiting clean exit before merge to develop.
 
 ---
 

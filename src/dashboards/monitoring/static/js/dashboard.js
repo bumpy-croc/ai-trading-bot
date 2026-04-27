@@ -116,7 +116,10 @@ function normalizePosition(p, idx) {
   const pnlPct = entry > 0 ? ((current - entry) / entry) * 100 * dir : 0;
   const trailSL = p.trailing_stop_price ?? p.stop_loss ?? null;
   const tp = p.take_profit ?? null;
-  const ageMs = p.entry_time ? Math.max(0, Date.now() - new Date(p.entry_time).getTime()) : 0;
+  // Capture entry time as a real ms timestamp so the Logs view doesn't have to
+  // recover it via `Date.now() - ageMs` (which drifts with render lag).
+  const entryTimeMs = p.entry_time ? new Date(p.entry_time).getTime() : null;
+  const ageMs = entryTimeMs != null ? Math.max(0, Date.now() - entryTimeMs) : 0;
   return {
     id: p.symbol ? `${p.symbol}-${idx}` : `pos-${idx}`,
     symbol: symU(p.symbol),
@@ -131,6 +134,7 @@ function normalizePosition(p, idx) {
     mfe: Number(p.mfe) || 0,
     mae: Number(p.mae) || 0,
     target: { tp, sl: p.stop_loss ?? null, trail: trailSL, trailPct: trailSL && entry ? Math.abs(((trailSL - entry) / entry) * 100) : 0 },
+    entryTimeMs,
     ageMs,
     strategy: p.strategy_name || null,
     confidence: Number.isFinite(Number(p.confidence)) ? Number(p.confidence) : null,
@@ -143,8 +147,17 @@ function normalizeTrade(t, idx) {
   const side = String(t.side || '').toUpperCase();
   const sideShort = side === 'SHORT' || side === 'SELL' || side === 'S' ? 'S' : 'L';
   const exitTime = t.exit_time ? new Date(t.exit_time).getTime() : null;
+  // Use a stable id: prefer the DB id, then a composite of symbol+exit_time
+  // (which is unique within the trades table for a given bot). Index-based
+  // ids would shift between fetches and cause the inspector to show the
+  // wrong trade after a refetch.
+  const stableKey = t.id != null
+    ? `db-${t.id}`
+    : (t.symbol && t.exit_time)
+      ? `nat-${symU(t.symbol)}-${exitTime}`
+      : `t${idx}-${exitTime ?? Date.now()}`;
   return {
-    id: `t${idx}`,
+    id: stableKey,
     symbol: symU(t.symbol),
     side: sideShort,
     qty: Number(t.quantity) || 0,
@@ -176,10 +189,12 @@ function normalizeState(payload, performance) {
   // Backend exposes total_pnl as realized only (SUM(pnl) FROM trades). We
   // surface it as `realized` directly to avoid the historical "totalPnl"
   // double-subtraction bug. `totalPnl` (realized + unrealized) is computed
-  // separately so the UI can show both honestly.
+  // separately so the UI can show both honestly. Preserve null semantics for
+  // unrealized so the UI can render `—` when the metric is genuinely missing
+  // (e.g. metric disabled in config) instead of silently treating it as 0.
   const realized = numOrNull(m.total_pnl);
-  const unrealized = numOrNull(m.unrealized_pnl) ?? 0;
-  const totalPnl = realized != null ? realized + unrealized : null;
+  const unrealized = numOrNull(m.unrealized_pnl);
+  const totalPnl = realized != null ? realized + (unrealized ?? 0) : null;
 
   const todayPnl = numOrNull(m.daily_pnl) ?? 0;
   const todayPnlPct = (initialBalance != null && initialBalance > 0)
@@ -209,7 +224,8 @@ function normalizeState(payload, performance) {
     todayPnl,
     todayPnlPct,
     weeklyPnl: numOrNull(m.weekly_pnl) ?? 0,
-    unrealized,
+    unrealized: unrealized ?? 0,
+    unrealizedRaw: unrealized,    // null-preserving copy for the inspector
     sharpe: numOrNull(m.sharpe_ratio),
     maxDD: numOrNull(m.max_drawdown) ?? 0,
     currentDD: numOrNull(m.current_drawdown) ?? 0,
@@ -223,7 +239,11 @@ function normalizeState(payload, performance) {
     totalPositionValue: numOrNull(m.total_position_value) ?? 0,
     marginUsage: numOrNull(m.margin_usage) ?? 0,
     availableMargin: numOrNull(m.available_margin) ?? 0,
-    riskPerTrade: numOrNull(m.risk_per_trade) ?? 1.0,
+    // riskPerTrade: prefer the session config (null when unconfigured) so the
+    // UI can render `—` instead of fabricating a 1.0% baseline. Only fall
+    // back to the metrics field — which itself may be a 1.0% legacy default
+    // — if the session didn't explicitly carry it.
+    riskPerTrade: numOrNull(bot.risk_per_trade) ?? numOrNull(m.risk_per_trade),
     fillRate: numOrNull(m.fill_rate) ?? 0,
     avgSlippage: numOrNull(m.avg_slippage) ?? 0,
     failedOrders: numOrNull(m.failed_orders) ?? 0,
@@ -252,14 +272,16 @@ function patchMetrics(prev, metrics) {
   const initialBalance = prev.initialBalance;
   const balance = numOrNull(m.current_balance) ?? prev.balance;
   const realized = numOrNull(m.total_pnl) ?? prev.realized;
-  const unrealized = numOrNull(m.unrealized_pnl) ?? prev.unrealized;
-  const totalPnl = realized != null ? realized + (unrealized || 0) : prev.totalPnl;
+  const unrealizedRaw = numOrNull(m.unrealized_pnl) ?? prev.unrealizedRaw ?? null;
+  const unrealized = unrealizedRaw ?? 0;
+  const totalPnl = realized != null ? realized + (unrealizedRaw ?? 0) : prev.totalPnl;
   const todayPnl = numOrNull(m.daily_pnl) ?? prev.todayPnl;
   return {
     ...prev,
     balance,
     realized,
     unrealized,
+    unrealizedRaw,
     totalPnl,
     todayPnl,
     todayPnlPct: (initialBalance != null && initialBalance > 0)
@@ -299,8 +321,6 @@ function StoreProvider({ children }) {
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
   const [range, setRange] = useState('1W');
-  const stateRef = useRef(state);
-  stateRef.current = state;
   const inFlightRef = useRef(null);
 
   // Map design's range tokens to backend ?days=. "1Y" supersedes "ALL" since
@@ -650,21 +670,11 @@ function V2Chart({ data, overlays, onSelectTrade, trades }) {
     path += ` Q ${cx} ${pts[i - 1][1]} ${cx} ${(pts[i - 1][1] + pts[i][1]) / 2} T ${pts[i][0]} ${pts[i][1]}`;
   }
   const areaPath = `${path} L ${pts[pts.length - 1][0]} ${pad.t + h} L ${pts[0][0]} ${pad.t + h} Z`;
-
-  // Approximate buy-and-hold benchmark: indicative only — NOT real market
-  // data. Labelled "(approx)" in the legend so a trader can't mistake it for
-  // an asset-priced HODL line. TODO: replace with real per-symbol historical
-  // data when surfaced by /api/performance.
-  const bench = data.map((d, i) => ({
-    ts: d.ts,
-    v: data[0].v * (1 + (data[data.length - 1].v / data[0].v - 1) * 0.62 * (i / (data.length - 1)) + Math.sin(i * 0.15) * 0.005),
-  }));
-  const bpts = bench.map(d => [sx(d.ts), sy(d.v)]);
-  let bpath = `M ${bpts[0][0]} ${bpts[0][1]}`;
-  for (let i = 1; i < bpts.length; i++) {
-    const cx = (bpts[i - 1][0] + bpts[i][0]) / 2;
-    bpath += ` Q ${cx} ${bpts[i - 1][1]} ${cx} ${(bpts[i - 1][1] + bpts[i][1]) / 2} T ${bpts[i][0]} ${bpts[i][1]}`;
-  }
+  // Benchmark overlay was removed: the prior version computed the line as a
+  // scaled+wiggled function of the bot's *own equity*, which made it
+  // mathematically impossible to lose against the benchmark. A real
+  // per-symbol buy-and-hold series needs to come from data_provider history;
+  // tracked in docs/monitoring.md as a follow-up.
 
   // drawdown shading
   let runMax = ys[0];
@@ -729,7 +739,6 @@ function V2Chart({ data, overlays, onSelectTrade, trades }) {
           </text>;
         })}
         {overlays.drawdown && <path d={ddPath} fill="var(--danger)" opacity="0.08" />}
-        {overlays.benchmark && <path d={bpath} fill="none" stroke="var(--text-3)" strokeWidth="1.4" strokeDasharray="4 4" opacity="0.7" />}
         <path d={areaPath} fill="var(--accent-2)" opacity="0.10" />
         <path d={path} fill="none" stroke="var(--accent-2)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
         {overlays.trades && markers.map(m => (
@@ -759,9 +768,6 @@ function V2Chart({ data, overlays, onSelectTrade, trades }) {
         <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <span style={{ width: 10, height: 2, background: 'var(--accent-2)' }} />equity
         </span>
-        {overlays.benchmark && <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span style={{ width: 10, height: 2, background: 'var(--text-3)', borderTop: '1px dashed' }} />benchmark (approx)
-        </span>}
         {overlays.trades && <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent-2)' }} />trade
         </span>}
@@ -826,7 +832,6 @@ function V2Main({ overlays, setOverlays, selected, setSelected }) {
             <span className="tbm-card-title">Equity · {RANGE_LABEL[range]}</span>
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <HPill active={overlays.benchmark} onClick={() => setOverlays({ ...overlays, benchmark: !overlays.benchmark })} title="Approximate buy-and-hold benchmark (indicative only)">+ benchmark (approx)</HPill>
             <HPill active={overlays.trades} onClick={() => setOverlays({ ...overlays, trades: !overlays.trades })}>+ trades</HPill>
             <HPill active={overlays.drawdown} onClick={() => setOverlays({ ...overlays, drawdown: !overlays.drawdown })}>● drawdown</HPill>
           </div>
@@ -898,28 +903,22 @@ function V2Main({ overlays, setOverlays, selected, setSelected }) {
 function V2Inspector({ selected, setSelected }) {
   const { state } = useStore();
   if (!state) return null;
-  // If selected position no longer exists, fall through to "none" rather than
-  // showing a stale header pointing at a closed position.
-  let effSelected = selected;
-  if (selected.kind === 'position' && !state.positions.find(p => p.symbol === selected.symbol)) {
-    effSelected = { kind: 'none' };
-  }
   return (
     <div style={{ borderLeft: '1px solid var(--border-strong)', background: 'var(--bg-elev)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '14px 18px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span className="tbm-kicker">inspecting</span>
         <span style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.10em' }}>
-          {effSelected.kind === 'position' && `position · ${effSelected.symbol}`}
-          {effSelected.kind === 'trade' && `trade · ${effSelected.id}`}
-          {effSelected.kind === 'strategy' && 'strategy'}
-          {effSelected.kind === 'none' && '—'}
+          {selected.kind === 'position' && `position · ${selected.symbol}`}
+          {selected.kind === 'trade' && `trade · ${selected.id}`}
+          {selected.kind === 'strategy' && 'strategy'}
+          {selected.kind === 'none' && '—'}
         </span>
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: 18 }}>
-        {effSelected.kind === 'position' && <V2InspectPosition symbol={effSelected.symbol} />}
-        {effSelected.kind === 'trade' && <V2InspectTrade id={effSelected.id} setSelected={setSelected} />}
-        {effSelected.kind === 'strategy' && <V2InspectStrategy />}
-        {effSelected.kind === 'none' && (
+        {selected.kind === 'position' && <V2InspectPosition symbol={selected.symbol} />}
+        {selected.kind === 'trade' && <V2InspectTrade id={selected.id} setSelected={setSelected} />}
+        {selected.kind === 'strategy' && <V2InspectStrategy />}
+        {selected.kind === 'none' && (
           <div style={{ color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
             Click a position card or a trade marker on the chart to inspect.
           </div>
@@ -927,6 +926,26 @@ function V2Inspector({ selected, setSelected }) {
       </div>
     </div>
   );
+}
+
+// Hook used by Shell: resets `selected` when its target disappears so the
+// inspector header never points at a missing position/trade. Lifting this to
+// an effect (instead of shadowing inside `V2Inspector`) keeps the parent's
+// `selected` truthful across renders — important when the same symbol's
+// position closes and reopens with a different side.
+function useStaleSelectionReset(state, selected, setSelected, setAutoSelected) {
+  useEffect(() => {
+    if (!state) return;
+    if (selected.kind === 'position'
+        && !state.positions.find(p => p.symbol === selected.symbol)) {
+      setSelected({ kind: 'none' });
+      // Allow auto-select to re-engage on the next opened position.
+      setAutoSelected(false);
+    } else if (selected.kind === 'trade'
+        && !state.trades.find(t => t.id === selected.id)) {
+      setSelected({ kind: 'none' });
+    }
+  }, [state, selected, setSelected, setAutoSelected]);
 }
 
 function V2InspectPosition({ symbol }) {
@@ -1008,9 +1027,29 @@ function V2InspectPosition({ symbol }) {
 
 function V2InspectTrade({ id, setSelected }) {
   const { state } = useStore();
+  useTick(15000);
   const s = state;
-  const t = s.trades.find(x => x.id === id) || s.trades[0];
-  if (!t) return <div style={{ color: 'var(--text-3)' }}>No trade</div>;
+  const t = s.trades.find(x => x.id === id);
+  if (!t) {
+    // Don't silently fall back to a different trade — that would silently
+    // change the financial data the user is looking at after a refetch.
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+          That trade is no longer in view (older than the most recent {s.trades.length} fetched).
+        </div>
+        <button
+          onClick={() => setSelected(s.positions[0]
+            ? { kind: 'position', symbol: s.positions[0].symbol }
+            : { kind: 'none' })}
+          style={{ alignSelf: 'flex-start', background: 'transparent', border: 'none',
+                   color: 'var(--accent)', fontSize: 11, cursor: 'pointer', padding: 0,
+                   fontFamily: 'var(--mono)' }}>
+          ← back
+        </button>
+      </div>
+    );
+  }
   const movePct = t.entry ? ((t.exit - t.entry) / t.entry) * 100 * (t.side === 'L' ? 1 : -1) : 0;
   const onBack = () => {
     if (s.positions[0]) {
@@ -1144,7 +1183,18 @@ function V2StratView() {
   const conf = s.positions[0]?.confidence ?? null;
   const rsi = numOrNull(s.rsi) ?? 50;
   const winRatePct = s.winRate != null ? s.winRate : null;
-  const sharpeNorm = s.sharpe != null ? Math.max(0, Math.min(100, (s.sharpe / 3) * 100)) : 0;
+  // Sharpe bar visualises the magnitude on 0..3+. Negative Sharpe rendered red
+  // so a losing streak doesn't look identical to "no data yet" (null → bar
+  // hidden, sub label "—"). Using absolute value lets the bar fill toward the
+  // expected scale; the colour communicates direction.
+  const sharpeKnown = s.sharpe != null;
+  const sharpeNorm = sharpeKnown
+    ? Math.max(0, Math.min(100, (Math.abs(s.sharpe) / 3) * 100))
+    : 0;
+  const sharpeColor = !sharpeKnown
+    ? 'var(--text-3)'
+    : (s.sharpe < 0 ? 'var(--danger)' : 'var(--accent-2)');
+  const sharpeSub = sharpeKnown ? fmtNum(s.sharpe, 2) : 'no history yet';
   return (
     <div style={{ padding: 22, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, overflow: 'auto' }}>
       <div className="tbm-card" style={{ padding: 18 }}>
@@ -1177,10 +1227,10 @@ function V2StratView() {
                      sub={winRatePct != null ? `${winRatePct.toFixed(0)}%` : 'no trades yet'}
                      color="var(--accent-2)" />
         <div style={{ height: 6 }} />
-        <HBarLabeled k="Sharpe (normalised, 0-3+)"
+        <HBarLabeled k="Sharpe (|value| normalised, 0-3+)"
                      v={sharpeNorm} max={100}
-                     sub={fmtNum(s.sharpe, 2)}
-                     color="var(--accent-2)" />
+                     sub={sharpeSub}
+                     color={sharpeColor} />
         <div style={{ marginTop: 12, fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--mono)', lineHeight: 1.5 }}>
           Bars are aggregate / latest-position proxies, not per-signal factors.
         </div>
@@ -1191,6 +1241,7 @@ function V2StratView() {
 
 function V2TradesView() {
   const { state } = useStore();
+  useTick(15000);
   const s = state;
   const [filter, setFilter] = useState('all');
   const filtered = s.trades.filter(t =>
@@ -1206,13 +1257,22 @@ function V2TradesView() {
   const avgWin = wins ? s.trades.filter(t => t.pnl > 0).reduce((a, t) => a + t.pnl, 0) / wins : 0;
   const avgLoss = (total - wins) ? s.trades.filter(t => t.pnl < 0).reduce((a, t) => a + t.pnl, 0) / (total - wins) : 0;
 
+  // The Trades view's stats cover the most recent N fetched trades (limit=50
+  // on the bundled state endpoint). Lifetime totals live in the Dash KPI strip.
+  // Labelling the KPIs "(last N)" prevents the trader from comparing them to
+  // the global win-rate / total-trades values and getting confused.
+  const recentLabel = `last ${total}`;
   return (
     <div style={{ padding: 22, overflow: 'auto' }}>
       <div style={{ display: 'flex', gap: 24, marginBottom: 16, flexWrap: 'wrap' }}>
-        <HKPI label="trades" value={total} size="md" />
-        <HKPI label="wins" value={total ? `${wins} (${(wins / total * 100).toFixed(0)}%)` : '0'} color="var(--accent-2)" size="md" />
-        <HKPI label="losses" value={total - wins} color="var(--danger)" size="md" />
-        <HKPI label="net" value={fmtUSD(totalPnl, { sign: true })} color={totalPnl >= 0 ? 'var(--accent-2)' : 'var(--danger)'} size="md" />
+        <HKPI label={`trades (${recentLabel})`} value={total} size="md" />
+        <HKPI label={`wins (${recentLabel})`}
+              value={total ? `${wins} (${(wins / total * 100).toFixed(0)}%)` : '0'}
+              color="var(--accent-2)" size="md" />
+        <HKPI label={`losses (${recentLabel})`} value={total - wins} color="var(--danger)" size="md" />
+        <HKPI label={`net (${recentLabel})`}
+              value={fmtUSD(totalPnl, { sign: true })}
+              color={totalPnl >= 0 ? 'var(--accent-2)' : 'var(--danger)'} size="md" />
         <HKPI label="avg win" value={total ? fmtUSD(avgWin, { sign: true }) : '—'} color="var(--accent-2)" size="md" />
         <HKPI label="avg loss" value={total - wins ? fmtUSD(avgLoss, { sign: true }) : '—'} color="var(--danger)" size="md" />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
@@ -1285,7 +1345,11 @@ function V2RiskView() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <HRow k="open positions" v={maxOpen != null ? `${s.activePositions} / ${maxOpen}` : `${s.activePositions}`} sub={maxOpen == null ? 'cap not set' : null} />
           <HRow k="total exposure" v={fmtUSD(s.totalPositionValue)} sub={exposurePct != null ? `${exposurePct.toFixed(0)}% of equity` : ''} />
-          <HRow k="risk / trade" v={`${s.riskPerTrade}%`} sub={s.balance ? `≈ ${fmtUSD(s.balance * s.riskPerTrade / 100)}` : ''} />
+          <HRow k="risk / trade"
+                v={s.riskPerTrade != null ? `${fmtNum(s.riskPerTrade, 2)}%` : '—'}
+                sub={s.riskPerTrade != null && s.balance
+                       ? `≈ ${fmtUSD(s.balance * s.riskPerTrade / 100)}`
+                       : (s.riskPerTrade == null ? 'cap not configured' : '')} />
           <HRow k="margin available" v={fmtUSD(s.availableMargin)} />
         </div>
       </div>
@@ -1312,8 +1376,16 @@ function V2LogsView() {
   // Date.now() — a misleading "live event log" undermines trust.
   const lines = [];
   for (const p of s.positions) {
-    if (p.ageMs > 0) {
-      lines.push({ t: 'OPEN', c: 'var(--accent)', m: `${p.side} ${p.symbol} ${fmtNum(p.size, 4)} @ ${Number(p.entry).toLocaleString()}`, ts: Date.now() - p.ageMs });
+    // Use the real entry timestamp captured at normalize-time. Recovering it
+    // via `Date.now() - p.ageMs` would drift by render lag, especially on
+    // positions opened seconds before the page rendered.
+    if (p.entryTimeMs != null) {
+      lines.push({
+        t: 'OPEN',
+        c: 'var(--accent)',
+        m: `${p.side} ${p.symbol} ${fmtNum(p.size, 4)} @ ${Number(p.entry).toLocaleString()}`,
+        ts: p.entryTimeMs,
+      });
     }
   }
   for (const t of s.trades.slice(0, 30)) {
@@ -1365,7 +1437,7 @@ function Shell() {
   const [navTab, setNavTab] = useState('dash');
   const [selected, setSelected] = useState({ kind: 'none' });
   const [autoSelected, setAutoSelected] = useState(false);
-  const [overlays, setOverlays] = useState({ benchmark: false, trades: true, drawdown: true });
+  const [overlays, setOverlays] = useState({ trades: true, drawdown: true });
   const { state, error } = useStore();
 
   useEffect(() => {
@@ -1381,6 +1453,12 @@ function Shell() {
       setAutoSelected(true);
     }
   }, [state, autoSelected, selected.kind]);
+
+  // Drop selection when its target disappears, so the inspector header never
+  // points at a missing position/trade and a closed-then-reopened symbol
+  // doesn't silently re-bind to a different side. Defined as a separate hook
+  // (above the Shell component) for testability and to keep this body short.
+  useStaleSelectionReset(state, selected, setSelected, setAutoSelected);
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
 

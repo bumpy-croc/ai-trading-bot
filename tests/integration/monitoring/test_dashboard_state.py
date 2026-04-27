@@ -239,3 +239,82 @@ def test_bot_meta_uses_metrics_hint_for_connected(dashboard):
         meta = dashboard._get_bot_meta(metrics_hint={"api_connection_status": "Connected"})
     probe.assert_not_called()
     assert meta["connected"] is True
+
+
+def test_bot_meta_dedupes_repeated_symbols(dashboard):
+    """A misconfigured `BTCUSDT,btcusdt` should emit one upper-cased symbol."""
+    row = {
+        "strategy_name": "ml_basic",
+        "symbol": "BTCUSDT,btcusdt,ETHUSDT",
+        "timeframe": "1h",
+        "mode": "paper",
+        "initial_balance": 1000.0,
+        "strategy_config": None,
+        "start_time": None,
+        "end_time": None,
+    }
+    dashboard.db_manager.execute_query.side_effect = [[row]]
+    with patch.object(dashboard, "_get_api_status", return_value="Connected"):
+        meta = dashboard._get_bot_meta()
+    assert meta["symbols"] == ["BTCUSDT", "ETHUSDT"]
+
+
+def test_bot_meta_extracts_risk_per_trade_from_strategy_config(dashboard):
+    """`risk_per_trade` should be parsed from strategy_config.risk."""
+    row = {
+        "strategy_name": "ml_basic",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "mode": "paper",
+        "initial_balance": 1000.0,
+        "strategy_config": json.dumps({"risk": {"risk_per_trade": 0.5}}),
+        "start_time": None,
+        "end_time": None,
+    }
+    dashboard.db_manager.execute_query.side_effect = [[row]]
+    with patch.object(dashboard, "_get_api_status", return_value="Connected"):
+        meta = dashboard._get_bot_meta()
+    assert meta["risk_per_trade"] == 0.5
+
+
+def test_bot_meta_risk_per_trade_is_none_when_not_configured(dashboard):
+    """When the config doesn't carry risk_per_trade, meta returns None.
+
+    The UI then renders `—` instead of fabricating a 1.0% baseline.
+    """
+    row = {
+        "strategy_name": "ml_basic",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "mode": "paper",
+        "initial_balance": 1000.0,
+        "strategy_config": json.dumps({"risk": {}}),  # no risk_per_trade key
+        "start_time": None,
+        "end_time": None,
+    }
+    dashboard.db_manager.execute_query.side_effect = [[row]]
+    with patch.object(dashboard, "_get_api_status", return_value="Connected"):
+        meta = dashboard._get_bot_meta()
+    assert meta["risk_per_trade"] is None
+    assert meta["max_open_positions"] is None
+
+
+def test_bot_meta_extracts_both_knobs_in_one_pass(dashboard):
+    """Both max_open_positions and risk_per_trade can be parsed from same row."""
+    row = {
+        "strategy_name": "ml_basic",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "mode": "paper",
+        "initial_balance": 1000.0,
+        "strategy_config": json.dumps(
+            {"risk_manager": {"max_open_positions": 2, "risk_per_trade": 1.5}}
+        ),
+        "start_time": None,
+        "end_time": None,
+    }
+    dashboard.db_manager.execute_query.side_effect = [[row]]
+    with patch.object(dashboard, "_get_api_status", return_value="Connected"):
+        meta = dashboard._get_bot_meta()
+    assert meta["max_open_positions"] == 2
+    assert meta["risk_per_trade"] == 1.5
