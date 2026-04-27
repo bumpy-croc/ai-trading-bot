@@ -239,11 +239,13 @@ function normalizeState(payload, performance) {
     totalPositionValue: numOrNull(m.total_position_value) ?? 0,
     marginUsage: numOrNull(m.margin_usage) ?? 0,
     availableMargin: numOrNull(m.available_margin) ?? 0,
-    // riskPerTrade: prefer the session config (null when unconfigured) so the
-    // UI can render `—` instead of fabricating a 1.0% baseline. Only fall
-    // back to the metrics field — which itself may be a 1.0% legacy default
-    // — if the session didn't explicitly carry it.
-    riskPerTrade: numOrNull(bot.risk_per_trade) ?? numOrNull(m.risk_per_trade),
+    // riskPerTrade comes ONLY from the session config (via bot meta). The
+    // legacy `metrics.risk_per_trade` field defaults to 1.0% server-side
+    // when no config carries the knob, which is indistinguishable from an
+    // explicit 1.0% — we'd resurrect the fabricated baseline iter-1 fixed
+    // for `initial_balance` and `max_open_positions` if we used it as a
+    // fallback. Render `—` instead.
+    riskPerTrade: numOrNull(bot.risk_per_trade),
     fillRate: numOrNull(m.fill_rate) ?? 0,
     avgSlippage: numOrNull(m.avg_slippage) ?? 0,
     failedOrders: numOrNull(m.failed_orders) ?? 0,
@@ -928,11 +930,17 @@ function V2Inspector({ selected, setSelected }) {
   );
 }
 
-// Hook used by Shell: resets `selected` when its target disappears so the
-// inspector header never points at a missing position/trade. Lifting this to
-// an effect (instead of shadowing inside `V2Inspector`) keeps the parent's
-// `selected` truthful across renders — important when the same symbol's
-// position closes and reopens with a different side.
+// Hook used by Shell: resets `selected` when a *position* target disappears
+// so the inspector header never points at a missing position. Lifting this
+// to an effect (instead of shadowing inside `V2Inspector`) keeps the
+// parent's `selected` truthful across renders — important when the same
+// symbol's position closes and reopens with a different side.
+//
+// Note: trades are intentionally NOT reset here. The trades list is a sliding
+// window (last N fetched), so a previously-selected trade can roll out of
+// view on every refetch. `V2InspectTrade` renders its own explicit "no
+// longer in view" placeholder + back button when it can't find the id —
+// that's the right UX, and resetting here would short-circuit it.
 function useStaleSelectionReset(state, selected, setSelected, setAutoSelected) {
   useEffect(() => {
     if (!state) return;
@@ -941,9 +949,6 @@ function useStaleSelectionReset(state, selected, setSelected, setAutoSelected) {
       setSelected({ kind: 'none' });
       // Allow auto-select to re-engage on the next opened position.
       setAutoSelected(false);
-    } else if (selected.kind === 'trade'
-        && !state.trades.find(t => t.id === selected.id)) {
-      setSelected({ kind: 'none' });
     }
   }, [state, selected, setSelected, setAutoSelected]);
 }
@@ -1273,8 +1278,12 @@ function V2TradesView() {
         <HKPI label={`net (${recentLabel})`}
               value={fmtUSD(totalPnl, { sign: true })}
               color={totalPnl >= 0 ? 'var(--accent-2)' : 'var(--danger)'} size="md" />
-        <HKPI label="avg win" value={total ? fmtUSD(avgWin, { sign: true }) : '—'} color="var(--accent-2)" size="md" />
-        <HKPI label="avg loss" value={total - wins ? fmtUSD(avgLoss, { sign: true }) : '—'} color="var(--danger)" size="md" />
+        <HKPI label={`avg win (${recentLabel})`}
+              value={total ? fmtUSD(avgWin, { sign: true }) : '—'}
+              color="var(--accent-2)" size="md" />
+        <HKPI label={`avg loss (${recentLabel})`}
+              value={total - wins ? fmtUSD(avgLoss, { sign: true }) : '—'}
+              color="var(--danger)" size="md" />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           {['all', 'wins', 'losses', ...symbols].map(f => <HPill key={f} active={f === filter} onClick={() => setFilter(f)}>{f}</HPill>)}
         </div>

@@ -98,6 +98,9 @@ class PositionDict(TypedDict):
 
 
 class TradeDict(TypedDict):
+    # ``id`` is the DB primary key — used by the V2 dashboard to build stable
+    # client-side IDs that survive refetches.
+    id: int | None
     symbol: str
     side: str
     entry_price: float
@@ -1712,11 +1715,15 @@ class MonitoringDashboard:
             return []
 
     def _get_recent_trades(self, limit: int = 50) -> list[TradeDict]:
-        """Get recent completed trades"""
+        """Get recent completed trades.
+
+        ``id`` is included so the V2 dashboard can build stable client-side
+        IDs for trade markers — the inspector keys off it across refetches.
+        """
         try:
             query = """
             SELECT
-                symbol, side, entry_price, exit_price, quantity,
+                id, symbol, side, entry_price, exit_price, quantity,
                 entry_time, exit_time, pnl, exit_reason
             FROM trades
             WHERE exit_time IS NOT NULL
@@ -1736,6 +1743,7 @@ class MonitoringDashboard:
                     quantity_raw = row.get("quantity")
 
                     trade: TradeDict = {
+                        "id": row.get("id"),
                         "symbol": str(row.get("symbol", "")),
                         "side": str(row.get("side", "")),
                         "entry_price": (

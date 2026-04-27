@@ -299,6 +299,39 @@ def test_bot_meta_risk_per_trade_is_none_when_not_configured(dashboard):
     assert meta["max_open_positions"] is None
 
 
+def test_recent_trades_includes_db_id(dashboard):
+    """`_get_recent_trades` must return the DB primary key.
+
+    The V2 dashboard builds stable client-side trade IDs from this column;
+    if it's missing, the inspector silently picks the wrong trade after a
+    refetch.
+    """
+    captured = {}
+
+    def fake_execute(query, _params=None):
+        captured["query"] = query
+        return [
+            {
+                "id": 42,
+                "symbol": "BTCUSDT",
+                "side": "long",
+                "entry_price": 60000.0,
+                "exit_price": 61000.0,
+                "quantity": 0.01,
+                "entry_time": None,
+                "exit_time": None,
+                "pnl": 10.0,
+                "exit_reason": "take_profit",
+            }
+        ]
+
+    dashboard.db_manager.execute_query = fake_execute
+    trades = dashboard._get_recent_trades(50)
+    assert "id," in captured["query"], "SELECT must include id"
+    assert len(trades) == 1
+    assert trades[0]["id"] == 42
+
+
 def test_bot_meta_extracts_both_knobs_in_one_pass(dashboard):
     """Both max_open_positions and risk_per_trade can be parsed from same row."""
     row = {
