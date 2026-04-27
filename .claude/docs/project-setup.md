@@ -2,7 +2,7 @@
 
 The Project and custom fields are created. Views are **UI-only** in Projects v2 — this doc lists what to create and how.
 
-Project: `https://github.com/users/bumpy-croc/projects/6` (number 6, "Agent PM Board").
+Project: `https://github.com/orgs/bumpy-croc/projects/6` (number 6, "Agent PM Board"). Public, linked to `bumpy-croc/ai-trading-bot` so it appears in the repo's **Projects** tab.
 
 ## Views to create (UI → New view)
 
@@ -69,7 +69,7 @@ Concrete steps — do these only when the daemon is about to run unattended.
    - **Repository access:** only `bumpy-croc/ai-trading-bot`
    - **Repository permissions:** `Issues: R/W`, `Pull requests: R/W`, `Contents: R/W`, `Metadata: R`, `Actions: R` (optional)
    - **User permissions:** `Profile: R`
-4. Add the bot account to the Project (`bumpy-croc/projects/6` → Settings → Manage access → invite, role **Write**). Project access is separate from repo access.
+4. Add the bot account to the Project (`https://github.com/orgs/bumpy-croc/projects/6` → Settings → Manage access → invite, role **Write**). Project access is separate from repo access.
 5. Store the PAT where the daemon runs: `GH_BOT_TOKEN` env var on Railway / cron / wherever.
 
 **Authenticate the daemon's `gh`:**
