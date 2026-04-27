@@ -2169,11 +2169,27 @@ class LiveTradingEngine:
                             sentiment_df = self.sentiment_provider.aggregate_sentiment(
                                 sentiment_df, window=self.timeframe or "1h"
                             )
-                        # Drop pre-existing sentiment columns before the
-                        # join so we never produce ``sentiment_score_x``/
+                        # Restrict the merge to the sentiment namespace and
+                        # drop any pre-existing sentiment columns from the
+                        # local df so we never produce ``sentiment_score_x``/
                         # ``_y`` collisions when the buffer was already
                         # enriched on a prior call (e.g. retained
-                        # _kline_buffer).
+                        # ``_kline_buffer``). Filtering BOTH sides on the
+                        # ``sentiment*`` prefix means: (a) OHLCV / indicator
+                        # columns on ``df`` survive even if a future
+                        # provider's frame happens to expose a same-named
+                        # column like ``volume`` or ``close``; (b) the join
+                        # never raises pandas' default-overlap error.
+                        sentiment_namespace = ("sentiment_", "sentiment")
+                        sentiment_only_cols = [
+                            c for c in sentiment_df.columns if c.startswith(sentiment_namespace)
+                        ]
+                        if not sentiment_only_cols:
+                            # Provider returned no sentiment columns at all —
+                            # nothing to merge.
+                            sentiment_df = sentiment_df.iloc[0:0]
+                        else:
+                            sentiment_df = sentiment_df[sentiment_only_cols]
                         collision_cols = [c for c in df.columns if c in sentiment_df.columns]
                         if collision_cols:
                             df = df.drop(columns=collision_cols)
@@ -4112,6 +4128,23 @@ class LiveTradingEngine:
                     if position.current_size is not None
                     else float(position.size)
                 )
+                if effective_size <= 0:
+                    # 100% partial-exit drained the position but the close
+                    # ack has not popped it from the tracker yet. Calling
+                    # ``update_position(size=0.0)`` would fail the size>0
+                    # validator and leave ``daily_risk_used`` inflated at
+                    # the original allocation. Drain the slot via
+                    # ``close_position`` so the next entry sees the right
+                    # remaining budget, then skip re-registration.
+                    try:
+                        self.risk_manager.close_position(position.symbol)
+                    except (KeyError, ValueError, AttributeError) as drain_err:
+                        logger.debug(
+                            "Risk manager close_position drain skipped for %s: %s",
+                            position.symbol,
+                            drain_err,
+                        )
+                    continue
                 self.risk_manager.update_position(
                     symbol=position.symbol,
                     side=position.side.value,

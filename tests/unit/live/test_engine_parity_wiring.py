@@ -186,6 +186,39 @@ class TestRiskManagerSweepRegistersRecoveredPositions:
         assert kwargs["size"] == pytest.approx(0.1)
         assert kwargs["entry_price"] == pytest.approx(100.0)
 
+    def test_sweep_drains_risk_manager_when_current_size_zero(self) -> None:
+        """A position whose ``current_size`` was drained to 0.0 by partial
+        exits but not yet popped from the tracker must NOT raise in the
+        sweep, and must drain the risk-manager slot via ``close_position``.
+
+        Prior to the fix, ``update_position(size=0.0)`` raised the size>0
+        validator and the prior ``daily_risk_used`` allocation stayed
+        inflated until the close ack popped the position.
+        """
+        engine = _make_engine()
+        engine.risk_manager = MagicMock()
+
+        position = Position(
+            symbol="TEST",
+            side=PositionSide.LONG,
+            size=0.10,
+            entry_price=100.0,
+            entry_time=datetime.now(UTC),
+            order_id="drained-1",
+            original_size=0.10,
+            current_size=0.0,  # 100% partial-exit drained, close ack pending
+        )
+        engine.live_position_tracker.track_recovered_position(position, db_id=None)
+
+        engine._ensure_positions_registered_with_risk_manager()
+
+        # Must not call update_position at all — that path raises ValueError
+        # for size=0 and would leave daily_risk_used stale.
+        engine.risk_manager.update_position.assert_not_called()
+        # Must drain the slot via close_position so the next entry sees the
+        # right remaining daily-risk budget.
+        engine.risk_manager.close_position.assert_called_once_with("TEST")
+
     def test_sweep_uses_current_size_after_partial_exit(self) -> None:
         """After a partial exit shrinks ``current_size``, the next sweep
         must report the post-exit fraction — passing the original ``size``

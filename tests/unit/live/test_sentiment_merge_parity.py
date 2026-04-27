@@ -137,6 +137,41 @@ class TestLiveSentimentMergeParity:
         out = engine._add_sentiment_data(pd.DataFrame(), "TEST")
         assert isinstance(out, pd.DataFrame)
 
+    def test_collision_drop_does_not_strip_non_sentiment_columns(self) -> None:
+        """If a future provider's frame happens to expose a column whose
+        name overlaps an OHLCV/indicator column (``volume`` is the obvious
+        one), the collision-drop must leave the original df column intact.
+        Only ``sentiment*`` columns are eligible for replacement.
+        """
+        df = _make_buffer_df(periods=12)
+        # Mark the original volume so we can detect over-broad drops.
+        df["volume"] = 12345.0
+
+        sentiment_idx = pd.date_range("2024-01-01", periods=12, freq="1h", tz=UTC)
+        # Provider returns a frame with both a sentiment column and a
+        # spurious ``volume`` column — a future-proof check.
+        historical = pd.DataFrame(
+            {"sentiment_score": [0.3] * 12, "volume": [99999.0] * 12},
+            index=sentiment_idx,
+        )
+
+        provider = Mock()
+        provider.get_historical_sentiment.return_value = historical
+        provider.aggregate_sentiment.return_value = historical
+        provider.get_live_sentiment.return_value = {}
+
+        engine = _make_engine(provider)
+        out = engine._add_sentiment_data(df, "TEST")
+
+        # OHLCV ``volume`` must survive untouched even though the provider
+        # frame also had a ``volume`` column.
+        assert (out["volume"] == 12345.0).all(), (
+            "collision-drop must be scoped to the sentiment namespace; "
+            "non-sentiment columns must never be stripped"
+        )
+        # Sentiment column still merged correctly.
+        assert "sentiment_score" in out.columns
+
     def test_join_drops_existing_sentiment_columns_to_avoid_collision(self) -> None:
         """If the input df already contains a sentiment column (e.g. from a
         retained kline buffer enriched on a prior call), the merge must
