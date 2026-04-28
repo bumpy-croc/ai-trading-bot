@@ -673,7 +673,7 @@ function V2BottomTabBar({ tab, onTab }) {
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d={n.icon} />
             </svg>
-            <span style={{ fontSize: 9.5, fontWeight: 500, letterSpacing: '0.04em' }}>{n.label}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 500, letterSpacing: '0.02em' }}>{n.label}</span>
           </button>
         );
       })}
@@ -692,11 +692,17 @@ function V2DashMobile({ overlays, setOverlays, selected, setSelected }) {
     ? (s.totalPnl / s.initialBalance) * 100
     : null;
 
+  // Mirror the desktop "open positions · X / Y" semantics so a mobile glance
+  // shows whether the bot is at its configured cap. Falls back to bare X
+  // when no cap is configured (matches the Risk view's "cap not set" path).
+  const openKpi = s.bot.maxOpenPositions != null
+    ? `${s.activePositions} / ${s.bot.maxOpenPositions}`
+    : String(s.activePositions);
   const kpis = [
     ['sharpe', fmtNum(s.sharpe, 2)],
     ['win', s.winRate != null ? `${s.winRate.toFixed(0)}%` : '—'],
     ['risk', `${fmtNum(s.dynamicRisk.mult, 1)}x`],
-    ['open', String(s.activePositions)],
+    ['open', openKpi],
     ['exposure', fmtUSD(s.totalPositionValue)],
     ['DD', `${s.maxDD.toFixed(1)}%`],
   ];
@@ -735,7 +741,9 @@ function V2DashMobile({ overlays, setOverlays, selected, setSelected }) {
             {RANGES.map(r => <HPill key={r} active={r === range} onClick={() => setRange(r)}>{r}</HPill>)}
           </div>
         </div>
-        <div style={{ height: 200 }}>
+        {/* Fixed mobile chart slot. overflow:hidden defends against the SVG's
+            viewBox aspect ratio painting outside the box on narrow viewports. */}
+        <div style={{ height: 200, overflow: 'hidden', display: 'flex' }}>
           <V2Chart data={s.equityCurve} overlays={overlays} trades={s.trades}
                    onSelectTrade={(id) => setSelected({ kind: 'trade', id })} />
         </div>
@@ -787,13 +795,18 @@ function V2DashMobile({ overlays, setOverlays, selected, setSelected }) {
       </div>
 
       {/* inline inspector — replaces the desktop side panel on mobile */}
-      {(selected.kind === 'position' || selected.kind === 'trade') && (
-        <div style={{ paddingTop: 4 }}>
-          <div className="tbm-kicker" style={{ marginBottom: 8 }}>inspecting</div>
-          {selected.kind === 'position' && <V2InspectPosition symbol={selected.symbol} />}
-          {selected.kind === 'trade' && <V2InspectTrade id={selected.id} setSelected={setSelected} />}
-        </div>
-      )}
+      <div style={{ paddingTop: 4 }}>
+        <div className="tbm-kicker" style={{ marginBottom: 8 }}>inspecting</div>
+        {selected.kind === 'position' && <V2InspectPosition symbol={selected.symbol} />}
+        {selected.kind === 'trade' && <V2InspectTrade id={selected.id} setSelected={setSelected} />}
+        {selected.kind === 'none' && (
+          <div className="tbm-card" style={{ padding: 14, color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+            {s.positions.length > 0
+              ? 'Tap a position card above to inspect.'
+              : 'No open positions to inspect. Tap a trade marker on the chart to inspect a closed trade.'}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -846,21 +859,57 @@ function V2PosViewMobile({ setSelected, setNavTab }) {
   );
 }
 
-function V2TradesViewMobile() {
+function V2TradesViewMobile({ filter, setFilter }) {
   const { state } = useStore();
   useTick(15000);
   const s = state;
+
+  const filtered = s.trades.filter(t =>
+    filter === 'all' ? true :
+    filter === 'wins' ? t.pnl > 0 :
+    filter === 'losses' ? t.pnl < 0 :
+    t.symbol === filter
+  );
+  const symbols = Array.from(new Set(s.trades.map(t => t.symbol))).slice(0, 4);
+  const wins = s.trades.filter(t => t.pnl > 0).length;
+  const total = s.trades.length;
+  const totalPnl = s.trades.reduce((a, t) => a + t.pnl, 0);
+  const recentLabel = `last ${total}`;
+
   return (
-    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 2 }}>
         <span className="tbm-kicker">recent trades</span>
-        <span className="tbm-card-title" style={{ fontSize: 14 }}>{s.trades.length}</span>
+        <span className="tbm-card-title" style={{ fontSize: 14 }}>{filtered.length}</span>
       </div>
-      {s.trades.length === 0 ? (
-        <div className="tbm-card" style={{ padding: 14, color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
-          No trades yet
+
+      {/* Compact KPI ribbon — same shape as desktop, rendered in 3-up
+          since six side-by-side won't fit a phone width. */}
+      <div className="tbm-card" style={{ padding: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+          <HKPI label={`trades (${recentLabel})`} value={total} />
+          <HKPI label={`wins (${recentLabel})`}
+                value={total ? `${wins} (${(wins / total * 100).toFixed(0)}%)` : '0'}
+                color="var(--accent-2)" />
+          <HKPI label={`net (${recentLabel})`}
+                value={fmtUSD(totalPnl, { sign: true })}
+                color={totalPnl >= 0 ? 'var(--accent-2)' : 'var(--danger)'} />
         </div>
-      ) : s.trades.slice(0, 30).map(t => (
+      </div>
+
+      {/* Filter pills — horizontally scrollable so any number of symbols fits */}
+      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4,
+                    scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+        {['all', 'wins', 'losses', ...symbols].map(f => (
+          <HPill key={f} active={f === filter} onClick={() => setFilter(f)}>{f}</HPill>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="tbm-card" style={{ padding: 14, color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+          No trades match filter
+        </div>
+      ) : filtered.slice(0, 30).map(t => (
         <div key={t.id} className="tbm-card" style={{ padding: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -951,7 +1000,7 @@ function V2Chart({ data, overlays, onSelectTrade, trades }) {
   const pad = { l: 50, r: 14, t: 16, b: 26 };
   if (!data || data.length < 2) {
     return (
-      <div style={{ flex: 1, minHeight: 320, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+      <div style={{ flex: 1, minHeight: 0, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
         not enough equity data yet
       </div>
     );
@@ -1021,7 +1070,7 @@ function V2Chart({ data, overlays, onSelectTrade, trades }) {
   }
 
   return (
-    <div style={{ position: 'relative', flex: 1, minHeight: 320 }}>
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, height: '100%' }}>
       <svg ref={ref} width="100%" height="100%" viewBox={`0 0 ${W} ${H}`}
            preserveAspectRatio="xMidYMid meet"
            onMouseMove={onMove} onMouseLeave={() => setHover(null)}
@@ -1547,11 +1596,10 @@ function V2StratView() {
   );
 }
 
-function V2TradesView() {
+function V2TradesView({ filter, setFilter }) {
   const { state } = useStore();
   useTick(15000);
   const s = state;
-  const [filter, setFilter] = useState('all');
   const filtered = s.trades.filter(t =>
     filter === 'all' ? true :
     filter === 'wins' ? t.pnl > 0 :
@@ -1681,6 +1729,9 @@ function V2RiskView() {
 }
 
 function V2LogsView() {
+  // Mobile gets a stacked row layout (timestamp on top, severity+message
+  // below) so the message column doesn't get squeezed/clipped on a phone.
+  const isMobile = useIsMobile();
   const { state } = useStore();
   const s = state;
   // Recent activity is built ONLY from real events (closed trades and the
@@ -1713,8 +1764,8 @@ function V2LogsView() {
   lines.sort((a, b) => b.ts - a.ts);
 
   return (
-    <div style={{ padding: 22 }}>
-      <div className="tbm-card" style={{ padding: 16 }}>
+    <div style={{ padding: isMobile ? 14 : 22 }}>
+      <div className="tbm-card" style={{ padding: isMobile ? 12 : 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
           <span className="tbm-kicker">activity</span>
           <span className="tbm-card-title">Position open / close history</span>
@@ -1722,6 +1773,18 @@ function V2LogsView() {
         {lines.length === 0 ? (
           <div style={{ color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
             No position or trade activity recorded yet.
+          </div>
+        ) : isMobile ? (
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.45, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {lines.map((l, i) => (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                  <span style={{ color: l.c, fontWeight: 600, fontSize: 10 }}>{l.t}</span>
+                  <span style={{ color: 'var(--text-3)', fontSize: 9.5 }}>{new Date(l.ts).toLocaleString()}</span>
+                </div>
+                <span style={{ color: 'var(--text-2)', wordBreak: 'break-word' }}>{l.m}</span>
+              </div>
+            ))}
           </div>
         ) : (
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, lineHeight: 1.7 }}>
@@ -1750,6 +1813,10 @@ function Shell() {
   const [selected, setSelected] = useState({ kind: 'none' });
   const [autoSelected, setAutoSelected] = useState(false);
   const [overlays, setOverlays] = useState({ trades: true, drawdown: true });
+  // Trades filter is hoisted here so it survives layout flips between
+  // desktop and mobile (e.g. iPad rotation). Each variant takes the same
+  // {filter, setFilter} props.
+  const [tradesFilter, setTradesFilter] = useState('all');
   const { state, error } = useStore();
 
   useEffect(() => {
@@ -1813,7 +1880,7 @@ function Shell() {
               )}
               {navTab === 'pos' && <V2PosViewMobile setSelected={setSelected} setNavTab={setNavTab} />}
               {navTab === 'strat' && <V2StratView />}
-              {navTab === 'trades' && <V2TradesViewMobile />}
+              {navTab === 'trades' && <V2TradesViewMobile filter={tradesFilter} setFilter={setTradesFilter} />}
               {navTab === 'risk' && <V2RiskView />}
               {navTab === 'logs' && <V2LogsView />}
             </>
@@ -1849,7 +1916,7 @@ function Shell() {
               )}
               {navTab === 'pos' && <V2PosView setSelected={setSelected} setNavTab={setNavTab} />}
               {navTab === 'strat' && <V2StratView />}
-              {navTab === 'trades' && <V2TradesView />}
+              {navTab === 'trades' && <V2TradesView filter={tradesFilter} setFilter={setTradesFilter} />}
               {navTab === 'risk' && <V2RiskView />}
               {navTab === 'logs' && <V2LogsView />}
             </>
