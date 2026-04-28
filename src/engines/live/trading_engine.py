@@ -54,13 +54,13 @@ from src.engines.live.data.market_data_handler import MarketDataHandler
 from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
-from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
 )
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
@@ -385,9 +385,11 @@ class LiveTradingEngine:
                     provider, config, testnet
                 )
                 if self.exchange_interface:
-                    use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                    use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                     self.account_synchronizer = AccountSynchronizer(
-                        self.exchange_interface, self.db_manager, self.trading_session_id,
+                        self.exchange_interface,
+                        self.db_manager,
+                        self.trading_session_id,
                         use_margin=use_margin,
                     )
                     # Initialize order tracker for monitoring order fills
@@ -1311,7 +1313,7 @@ class LiveTradingEngine:
             try:
                 from src.engines.live.reconciliation import PeriodicReconciler
 
-                use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                 self._periodic_reconciler = PeriodicReconciler(
                     exchange_interface=self.exchange_interface,
                     position_tracker=self.live_position_tracker,
@@ -1348,9 +1350,7 @@ class LiveTradingEngine:
         """Enter close-only mode: no new entries, exits/stops/trailing still active."""
         if not self._close_only_mode:
             self._close_only_mode = True
-            logger.critical(
-                "🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review"
-            )
+            logger.critical("🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review")
 
     def resume_trading(self) -> None:
         """Resume normal trading after close-only mode review."""
@@ -1527,9 +1527,7 @@ class LiveTradingEngine:
         #    while the old thread may still be mutating order state
         if not processor_clean:
             self.exchange_interface.mark_user_degraded()
-            logger.critical(
-                "UserDataProcessor did not stop cleanly — staying in REST_DEGRADED"
-            )
+            logger.critical("UserDataProcessor did not stop cleanly — staying in REST_DEGRADED")
             return
         # 6. Attempt user stream reconnect with fresh callback
         reconnected = False
@@ -1695,17 +1693,8 @@ class LiveTradingEngine:
                 try:
                     if self.strategy_manager and self.strategy_manager.has_pending_update():
                         logger.info("🔄 Applying pending strategy/model update...")
-                        success = self.strategy_manager.apply_pending_update()
-                        if success:
-                            self._finalize_runtime()
-                            updated_strategy = self.strategy_manager.current_strategy
-                            self._configure_strategy(updated_strategy)
-                            self._runtime_dataset = None
-                            self._runtime_warmup = 0
-                            logger.info("✅ Strategy/model update applied successfully")
+                        if self._apply_pending_strategy_update():
                             self._send_alert("Strategy/Model updated in live trading")
-                        else:
-                            logger.error("❌ Failed to apply strategy/model update")
                 except Exception as e:
                     logger.error(
                         "❌ Exception during strategy update check/application: %s",
@@ -2059,7 +2048,9 @@ class LiveTradingEngine:
             if self._kline_buffer and self._kline_buffer.needs_resync:
                 logger.info("KlineBuffer gap detected — resyncing from REST")
                 self._kline_buffer.resync_from_rest(
-                    self.data_provider, self._active_symbol or symbol, self.timeframe or timeframe,
+                    self.data_provider,
+                    self._active_symbol or symbol,
+                    self.timeframe or timeframe,
                 )
 
             # Use WS cache if available and healthy
@@ -3290,9 +3281,7 @@ class LiveTradingEngine:
                     from src.engines.live.reconciliation import PositionReconciler
 
                     tracker = MarginInterestTracker(self.exchange_interface)
-                    base_asset = PositionReconciler._extract_base_asset(
-                        position.symbol
-                    )
+                    base_asset = PositionReconciler._extract_base_asset(position.symbol)
                     if base_asset == position.symbol:
                         logger.warning(
                             "Could not extract base asset from %s — margin interest may not be queried correctly",
@@ -4001,10 +3990,7 @@ class LiveTradingEngine:
                 # Validate recovered entry_price before tracking. Positions
                 # with invalid entry_price cannot be closed properly and would
                 # become orphaned in the tracker.
-                if (
-                    position.entry_price <= 0
-                    or not math.isfinite(position.entry_price)
-                ):
+                if position.entry_price <= 0 or not math.isfinite(position.entry_price):
                     logger.critical(
                         "SKIPPING recovery of position %s (%s): invalid entry_price %.8f. "
                         "MANUAL RECONCILIATION REQUIRED.",
@@ -4077,7 +4063,7 @@ class LiveTradingEngine:
                     Severity,
                 )
 
-                use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                 reconciler = PositionReconciler(
                     exchange_interface=self.exchange_interface,
                     position_tracker=self.live_position_tracker,
@@ -4094,9 +4080,7 @@ class LiveTradingEngine:
                     # Process results even with no positions — a filled entry
                     # order may create a position, and critical issues must
                     # still trigger close-only mode.
-                    critical_count = sum(
-                        1 for r in results if r.severity == Severity.CRITICAL
-                    )
+                    critical_count = sum(1 for r in results if r.severity == Severity.CRITICAL)
                     if critical_count > 0:
                         logger.critical(
                             "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
@@ -4128,9 +4112,7 @@ class LiveTradingEngine:
                 results = reconciler.reconcile_startup(positions_snapshot)
 
                 # Check for critical issues
-                critical_count = sum(
-                    1 for r in results if r.severity == Severity.CRITICAL
-                )
+                critical_count = sum(1 for r in results if r.severity == Severity.CRITICAL)
                 if critical_count > 0:
                     logger.critical(
                         "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
@@ -4257,9 +4239,7 @@ class LiveTradingEngine:
                             from src.engines.live.reconciliation import PositionReconciler
 
                             tracker = MarginInterestTracker(self.exchange_interface)
-                            base_asset = PositionReconciler._extract_base_asset(
-                                position.symbol
-                            )
+                            base_asset = PositionReconciler._extract_base_asset(position.symbol)
                             interest_base = tracker.get_position_interest_cost(
                                 base_asset, position.entry_time
                             )
@@ -4498,3 +4478,242 @@ class LiveTradingEngine:
         Uses shared risk configuration logic for consistency with backtest engine.
         """
         return build_trailing_stop_policy(self.strategy, self.risk_manager)
+
+    def _apply_pending_strategy_update(self) -> bool:
+        """Apply a queued strategy/model update from the StrategyManager.
+
+        Drives the full hot-swap pipeline as observed by the run loop:
+        ``strategy_manager.apply_pending_update()`` then engine-side reconfigure
+        and refresh of all strategy-dependent state. Returns ``True`` on success.
+
+        Extracted as a method so unit tests can drive the same code path the
+        run loop uses.
+        """
+        if not self.strategy_manager:
+            return False
+
+        success = self.strategy_manager.apply_pending_update()
+        if not success:
+            logger.error("❌ Failed to apply strategy/model update")
+            return False
+
+        self._finalize_runtime()
+        updated_strategy = self.strategy_manager.current_strategy
+        self._configure_strategy(updated_strategy)
+        self._runtime_dataset = None
+        self._runtime_warmup = 0
+        # Refresh strategy-dependent state so the new strategy's overrides take
+        # effect on the very next decision (matches backtest _switch_strategy).
+        self._refresh_strategy_dependencies()
+        logger.info("✅ Strategy/model update applied successfully")
+        return True
+
+    def _refresh_strategy_dependencies(self) -> None:
+        """Refresh engine state derived from the active strategy.
+
+        Called after a hot-swap (or model update) to re-bind the new component
+        risk adapter to the engine's portfolio risk manager and rebuild engine-
+        level policies (trailing stop, partial operations, time exits) from the
+        new strategy's risk overrides. Without this, the live engine continues
+        to use the previous strategy's risk plumbing until restart, silently
+        diverging from a backtest-validated strategy.
+
+        Mirrors the backtest equivalent in ``Backtester._switch_strategy``.
+        """
+        component_strategy = getattr(self, "_component_strategy", None)
+        component_risk = (
+            getattr(component_strategy, "risk_manager", None)
+            if component_strategy is not None
+            else None
+        )
+
+        # 1. Re-bind component risk adapter to the engine's portfolio risk
+        #    manager so position-tracking writes hit the canonical instance.
+        if component_risk is not None and hasattr(component_risk, "bind_core_manager"):
+            try:
+                component_risk.bind_core_manager(self.risk_manager)
+            except Exception as exc:
+                logger.warning(
+                    "Hot-swap: failed to re-bind core risk manager to component "
+                    "strategy: %s. Component risk limits may not be enforced.",
+                    exc,
+                    exc_info=True,
+                )
+
+        # 2. Push the new strategy's overrides onto the component risk adapter.
+        #    The factory typically already does this, but engines have
+        #    historically also called it (see __init__ around L250) so the
+        #    adapter is the single source of truth post-swap.
+        new_overrides: dict[str, Any] = {}
+        if component_strategy is not None and hasattr(component_strategy, "get_risk_overrides"):
+            try:
+                fetched = component_strategy.get_risk_overrides()
+            except Exception as exc:
+                logger.debug("Hot-swap: get_risk_overrides() failed: %s", exc)
+                fetched = None
+            if isinstance(fetched, dict):
+                new_overrides = dict(fetched)
+        if component_risk is not None and hasattr(component_risk, "set_strategy_overrides"):
+            adapter_overrides = getattr(component_risk, "_strategy_overrides", None)
+            merged = dict(adapter_overrides) if isinstance(adapter_overrides, dict) else {}
+            merged.update(new_overrides)
+            try:
+                component_risk.set_strategy_overrides(merged)
+            except Exception as exc:
+                logger.warning(
+                    "Hot-swap: failed to propagate strategy overrides to "
+                    "component risk manager: %s",
+                    exc,
+                    exc_info=True,
+                )
+
+        # 3. Rebuild engine-level trailing-stop policy from the new strategy /
+        #    risk-manager and propagate it into the live exit handler so that
+        #    the next trailing-stop tick uses the refreshed configuration.
+        try:
+            self.trailing_stop_policy = self._build_trailing_policy()
+            self._trailing_stop_opt_in = self.trailing_stop_policy is not None
+            exit_handler = getattr(self, "live_exit_handler", None)
+            if exit_handler is not None:
+                exit_handler.trailing_stop_policy = self.trailing_stop_policy
+                trailing_manager = getattr(exit_handler, "_trailing_stop_manager", None)
+                if trailing_manager is not None:
+                    trailing_manager.policy = self.trailing_stop_policy
+        except Exception as exc:
+            logger.warning(
+                "Hot-swap: failed to refresh trailing stop policy: %s",
+                exc,
+                exc_info=True,
+            )
+
+        # 4. Rebuild engine-level partial operations policy from new overrides.
+        try:
+            self._refresh_partial_manager_after_swap(new_overrides)
+        except Exception as exc:
+            logger.warning(
+                "Hot-swap: failed to refresh partial operations manager: %s",
+                exc,
+                exc_info=True,
+            )
+
+        # 5. Rebuild engine-level time exit policy from new overrides.
+        try:
+            self._refresh_time_exit_policy_after_swap(new_overrides)
+        except Exception as exc:
+            logger.warning(
+                "Hot-swap: failed to refresh time exit policy: %s",
+                exc,
+                exc_info=True,
+            )
+
+        # 6. If a correlation handler is wired on the entry handler, refresh
+        #    its strategy reference (mirrors backtest engine.py:817).
+        entry_handler = getattr(self, "live_entry_handler", None)
+        if entry_handler is not None:
+            correlation_handler = getattr(entry_handler, "correlation_handler", None)
+            if correlation_handler is not None and hasattr(correlation_handler, "set_strategy"):
+                try:
+                    correlation_handler.set_strategy(self.strategy)
+                except Exception as exc:
+                    logger.debug("Hot-swap: correlation_handler.set_strategy failed: %s", exc)
+
+        # 7. Defensive invariant guard: ConfidenceWeightedSizer enforces
+        #    min_confidence_floor <= min_confidence at construction time, but
+        #    log a critical signal here if it ever slips through (e.g. via a
+        #    mutated sizer instance) so operators can intervene quickly.
+        position_sizer = getattr(component_strategy, "position_sizer", None)
+        if position_sizer is not None:
+            min_conf = getattr(position_sizer, "min_confidence", None)
+            min_floor = getattr(position_sizer, "min_confidence_floor", None)
+            if min_conf is not None and min_floor is not None and min_floor > min_conf:
+                logger.critical(
+                    "Hot-swap invariant violation: min_confidence_floor (%s) > "
+                    "min_confidence (%s) on new strategy sizer; live engine may "
+                    "over-size low-confidence signals until next swap.",
+                    min_floor,
+                    min_conf,
+                )
+
+    def _refresh_partial_manager_after_swap(
+        self,
+        new_overrides: dict[str, Any],
+    ) -> None:
+        """Rebuild engine-level partial_manager from new strategy overrides.
+
+        Pushes the refreshed policy into the live exit handler's
+        :class:`PartialOperationsManager` so that partial-exit / scale-in
+        decisions on the next bar use the new configuration.
+        """
+        new_policy: PartialExitPolicy | None = None
+        partial_cfg = (
+            new_overrides.get("partial_operations") if isinstance(new_overrides, dict) else None
+        )
+        if isinstance(partial_cfg, dict):
+            new_policy = PartialExitPolicy(
+                exit_targets=partial_cfg.get("exit_targets", []),
+                exit_sizes=partial_cfg.get("exit_sizes", []),
+                scale_in_thresholds=partial_cfg.get("scale_in_thresholds", []),
+                scale_in_sizes=partial_cfg.get("scale_in_sizes", []),
+                max_scale_ins=partial_cfg.get("max_scale_ins", 0),
+            )
+        elif self.enable_partial_operations:
+            rp = self.risk_manager.params if self.risk_manager else RiskParameters()
+            new_policy = PartialExitPolicy(
+                exit_targets=rp.partial_exit_targets or [],
+                exit_sizes=rp.partial_exit_sizes or [],
+                scale_in_thresholds=rp.scale_in_thresholds or [],
+                scale_in_sizes=rp.scale_in_sizes or [],
+                max_scale_ins=rp.max_scale_ins,
+            )
+
+        self.partial_manager = new_policy
+        self._partial_operations_opt_in = bool(
+            self.enable_partial_operations or self.partial_manager is not None
+        )
+
+        exit_handler = getattr(self, "live_exit_handler", None)
+        if exit_handler is None:
+            return
+
+        ops_manager = getattr(exit_handler, "partial_manager", None)
+        if new_policy is None:
+            # Disable partial operations on the exit handler.
+            exit_handler.partial_manager = None
+            return
+
+        if ops_manager is None:
+            exit_handler.partial_manager = PartialOperationsManager(policy=new_policy)
+        elif hasattr(ops_manager, "set_policy"):
+            ops_manager.set_policy(new_policy)
+        else:
+            ops_manager.policy = new_policy
+
+    def _refresh_time_exit_policy_after_swap(
+        self,
+        new_overrides: dict[str, Any],
+    ) -> None:
+        """Rebuild engine-level time_exit_policy from new strategy overrides."""
+        time_cfg = new_overrides.get("time_exits") if isinstance(new_overrides, dict) else None
+        if not time_cfg and self.risk_manager and getattr(self.risk_manager, "params", None):
+            time_cfg = getattr(self.risk_manager.params, "time_exits", None)
+
+        new_policy: TimeExitPolicy | None = None
+        if time_cfg:
+            tr = time_cfg.get("time_restrictions") or DEFAULT_TIME_RESTRICTIONS
+            restrictions = TimeRestrictions(
+                no_overnight=bool(tr.get("no_overnight", False)),
+                no_weekend=bool(tr.get("no_weekend", False)),
+                trading_hours_only=bool(tr.get("trading_hours_only", False)),
+            )
+            new_policy = TimeExitPolicy(
+                max_holding_hours=time_cfg.get("max_holding_hours", DEFAULT_MAX_HOLDING_HOURS),
+                end_of_day_flat=time_cfg.get("end_of_day_flat", DEFAULT_END_OF_DAY_FLAT),
+                weekend_flat=time_cfg.get("weekend_flat", DEFAULT_WEEKEND_FLAT),
+                market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
+                time_restrictions=restrictions,
+            )
+
+        self.time_exit_policy = new_policy
+        exit_handler = getattr(self, "live_exit_handler", None)
+        if exit_handler is not None:
+            exit_handler.time_exit_policy = new_policy
