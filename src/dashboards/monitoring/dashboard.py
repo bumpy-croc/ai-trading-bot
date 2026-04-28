@@ -98,6 +98,9 @@ class PositionDict(TypedDict):
 
 
 class TradeDict(TypedDict):
+    # ``id`` is the DB primary key — used by the V2 dashboard to build stable
+    # client-side IDs that survive refetches.
+    id: int | None
     symbol: str
     side: str
     entry_price: float
@@ -494,6 +497,178 @@ class MonitoringDashboard:
             except Exception as e:
                 logger.error(f"Error getting pending orders: {e}")
                 return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/dashboard/state")
+        def get_dashboard_state():
+            """Bundled dashboard state for the V2 redesigned UI.
+
+            Returns metrics, positions, recent trades, and bot meta in a single
+            request — keeps initial paint snappy and reduces socket churn.
+            """
+            try:
+                trades_limit = request.args.get("trades_limit", 50, type=int)
+                trades_limit = _validate_limit(trades_limit, default=50, max_limit=500)
+
+                metrics = self._collect_metrics()
+                positions = self._get_current_positions()
+                trades = self._get_recent_trades(trades_limit)
+                # Reuse the api_connection_status already computed by _collect_metrics
+                # to avoid a second Binance round-trip in the same request.
+                bot = self._get_bot_meta(metrics_hint=metrics)
+
+                return jsonify(
+                    {
+                        "bot": bot,
+                        "metrics": metrics,
+                        "positions": positions,
+                        "trades": trades,
+                        "server_time": datetime.now(UTC).isoformat(),
+                    }
+                )
+            except Exception:
+                # Don't leak DB schema / SQLAlchemy details to the client.
+                logger.exception("Error building dashboard state")
+                return jsonify({"error": "internal_error"}), 500
+
+    def _get_bot_meta(self, metrics_hint: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return bot identity and runtime context for the dashboard header.
+
+        Pulled from the latest trading session so the UI shows the real
+        strategy / symbol / timeframe / mode rather than placeholders. Prefers
+        the most recent *running* session (``end_time IS NULL``) so a stale
+        paper-mode row can't mask an active live session — matches the
+        "Exchange Mode & Account Type Safety" guidance in CODE.md.
+
+        Args:
+            metrics_hint: Optional metrics dict (already computed for the
+                current request). If provided, the API connectivity probe is
+                read from it instead of re-hitting the data provider.
+        """
+        meta: dict[str, Any] = {
+            "name": "Unknown",
+            "symbols": [],
+            "timeframe": "1h",
+            "mode": "paper",
+            "status": "running",
+            "connected": True,
+            # No "1000" fallback — let the UI render `—` when unknown to avoid
+            # fabricating a baseline that produces wildly misleading
+            # "all-time return %" values.
+            "initial_balance": None,
+            "max_open_positions": None,
+            # risk_per_trade in percent of balance, or None when not configured.
+            # Distinct from the legacy /api/metrics field that defaults to 1.0
+            # and would silently fabricate the value.
+            "risk_per_trade": None,
+            "uptime_seconds": float(self._get_system_uptime()),
+            "last_update": datetime.now(UTC).isoformat(),
+        }
+        # Prefer a running session; fall back to the most recent overall row.
+        running_query = """
+        SELECT strategy_name, symbol, timeframe, mode, initial_balance,
+               strategy_config, start_time, end_time
+        FROM trading_sessions
+        WHERE end_time IS NULL
+        ORDER BY start_time DESC
+        LIMIT 1
+        """
+        recent_query = """
+        SELECT strategy_name, symbol, timeframe, mode, initial_balance,
+               strategy_config, start_time, end_time
+        FROM trading_sessions
+        ORDER BY start_time DESC
+        LIMIT 1
+        """
+        row: dict[str, Any] | None = None
+        try:
+            result = self.db_manager.execute_query(running_query)
+            if result:
+                row = result[0]
+            else:
+                result = self.db_manager.execute_query(recent_query)
+                if result:
+                    row = result[0]
+        except Exception as e:
+            logger.warning(
+                "Could not load session meta from trading_sessions: %s",
+                e,
+                exc_info=True,
+            )
+
+        if row is not None:
+            try:
+                meta["name"] = str(row.get("strategy_name") or meta["name"])
+                # `symbol` may store one symbol or comma-separated list. Dedup
+                # while preserving order so a misconfigured "BTCUSDT,btcusdt"
+                # doesn't render twice in the header.
+                sym_raw = row.get("symbol") or ""
+                seen: set[str] = set()
+                symbols: list[str] = []
+                for s in str(sym_raw).split(","):
+                    sn = s.strip().upper()
+                    if sn and sn not in seen:
+                        seen.add(sn)
+                        symbols.append(sn)
+                if symbols:
+                    meta["symbols"] = symbols
+                meta["timeframe"] = str(row.get("timeframe") or meta["timeframe"])
+                meta["mode"] = str(row.get("mode") or meta["mode"]).lower()
+                if row.get("initial_balance") is not None:
+                    meta["initial_balance"] = self._safe_float(row.get("initial_balance"))
+                meta["status"] = "running" if row.get("end_time") is None else "stopped"
+                # Pull max_open_positions from strategy_config when available
+                cfg = row.get("strategy_config")
+                if cfg:
+                    if isinstance(cfg, str):
+                        try:
+                            cfg = json.loads(cfg)
+                        except (TypeError, ValueError):
+                            cfg = {}
+                    if isinstance(cfg, dict):
+                        # Look in a few common locations for both knobs.
+                        sources = [
+                            cfg,
+                            cfg.get("risk", {}) or {},
+                            cfg.get("risk_manager", {}) or {},
+                            cfg.get("position_management", {}) or {},
+                        ]
+                        for source in sources:
+                            if not isinstance(source, dict):
+                                continue
+                            mx = source.get("max_open_positions")
+                            if mx is not None and meta["max_open_positions"] is None:
+                                try:
+                                    meta["max_open_positions"] = int(mx)
+                                except (TypeError, ValueError):
+                                    pass
+                            rpt = source.get("risk_per_trade")
+                            if rpt is not None and meta["risk_per_trade"] is None:
+                                try:
+                                    meta["risk_per_trade"] = float(rpt)
+                                except (TypeError, ValueError):
+                                    pass
+            except (AttributeError, KeyError, TypeError, ValueError) as e:
+                logger.warning("Failed to parse trading_sessions row: %s", e, exc_info=True)
+
+        # Fallback symbol from active position if session had none
+        if not meta["symbols"]:
+            try:
+                meta["symbols"] = [self._get_active_symbol()]
+            except Exception as e:
+                logger.warning("Could not determine active symbol: %s", e, exc_info=True)
+                meta["symbols"] = ["BTCUSDT"]
+
+        # API connectivity — prefer the metrics_hint to avoid a second probe.
+        if metrics_hint and "api_connection_status" in metrics_hint:
+            meta["connected"] = metrics_hint.get("api_connection_status") == "Connected"
+        else:
+            try:
+                meta["connected"] = self._get_api_status() == "Connected"
+            except Exception as e:
+                logger.warning("Could not probe API status for header: %s", e, exc_info=True)
+                meta["connected"] = False
+
+        return meta
 
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""
@@ -1540,11 +1715,15 @@ class MonitoringDashboard:
             return []
 
     def _get_recent_trades(self, limit: int = 50) -> list[TradeDict]:
-        """Get recent completed trades"""
+        """Get recent completed trades.
+
+        ``id`` is included so the V2 dashboard can build stable client-side
+        IDs for trade markers — the inspector keys off it across refetches.
+        """
         try:
             query = """
             SELECT
-                symbol, side, entry_price, exit_price, quantity,
+                id, symbol, side, entry_price, exit_price, quantity,
                 entry_time, exit_time, pnl, exit_reason
             FROM trades
             WHERE exit_time IS NOT NULL
@@ -1564,6 +1743,7 @@ class MonitoringDashboard:
                     quantity_raw = row.get("quantity")
 
                     trade: TradeDict = {
+                        "id": row.get("id"),
                         "symbol": str(row.get("symbol", "")),
                         "side": str(row.get("side", "")),
                         "entry_price": (
