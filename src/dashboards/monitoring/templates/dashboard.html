@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- viewport-fit=cover lets env(safe-area-inset-*) work on iOS notch / home-indicator -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0c10" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)" />
   <title>Trading Bot Monitor</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />

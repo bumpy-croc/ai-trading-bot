@@ -83,6 +83,30 @@ function useTick(intervalMs = 30000) {
   }, [intervalMs]);
 }
 
+// Returns true when the viewport is mobile-sized (< 768px). Re-evaluates on
+// window resize / orientation change so the dashboard reflows live, not just
+// on initial paint. Uses matchMedia where available with a resize fallback.
+const MOBILE_BREAKPOINT = '(max-width: 768px)';
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia(MOBILE_BREAKPOINT).matches;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia(MOBILE_BREAKPOINT);
+    const handler = (e) => setIsMobile(e.matches);
+    // addEventListener is the modern API; addListener is the Safari fallback
+    if (mq.addEventListener) mq.addEventListener('change', handler);
+    else mq.addListener(handler);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', handler);
+      else mq.removeListener(handler);
+    };
+  }, []);
+  return isMobile;
+}
+
 // ─────────────────────────────────────────── data normalisation ──────────
 //
 // The backend speaks the existing /api/* shape. We translate it into the
@@ -583,6 +607,280 @@ const NAV = [
   { id: 'risk',   label: 'Risk',   icon: 'M9 2l7 4v4c0 4-3 7-7 8-4-1-7-4-7-8V6z' },
   { id: 'logs',   label: 'Logs',   icon: 'M3 3h12v12H3zM5 6h8M5 9h8M5 12h5' },
 ];
+
+// ─────────────────────────────────────────── mobile topbar + tab bar ──────────
+
+function HifiTopBarMobile({ theme, onToggleTheme }) {
+  const { state } = useStore();
+  useTick(15000);
+  if (!state) return null;
+  const s = state;
+  return (
+    <div className="tbm-top-mobile" style={{
+      padding: 'calc(env(safe-area-inset-top, 0px) + 12px) 14px 10px',
+      borderBottom: '1px solid var(--border-strong)',
+      background: 'var(--bg-elev)',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      position: 'sticky', top: 0, zIndex: 5,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <div className="tbm-logo" aria-hidden="true">A</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {s.bot.name}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {s.bot.mode} · {s.bot.status} · {s.bot.symbols[0] || ''}{s.bot.symbols.length > 1 ? ` +${s.bot.symbols.length - 1}` : ''}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        {s.bot.connected
+          ? <HPill success><span className="dot pulse" />live</HPill>
+          : <HPill danger><span className="dot" />off</HPill>}
+        <button className="tbm-btn" onClick={onToggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+                style={{ padding: '6px 8px' }}>
+          {theme === 'dark' ? '☀' : '☾'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function V2BottomTabBar({ tab, onTab }) {
+  return (
+    <nav role="tablist" aria-label="Dashboard sections" className="tbm-bottom-bar" style={{
+      position: 'fixed', left: 0, right: 0, bottom: 0,
+      paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+      background: 'var(--bg-elev)',
+      borderTop: '1px solid var(--border-strong)',
+      display: 'grid', gridTemplateColumns: `repeat(${NAV.length}, 1fr)`,
+      zIndex: 10,
+    }}>
+      {NAV.map((n) => {
+        const active = tab === n.id;
+        return (
+          <button key={n.id} onClick={() => onTab(n.id)}
+                  role="tab" aria-selected={active} aria-label={n.label}
+                  style={{
+            border: 'none', background: 'transparent', cursor: 'pointer',
+            color: active ? 'var(--accent)' : 'var(--text-3)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            gap: 3, padding: '10px 4px 12px', position: 'relative',
+            transition: 'color 120ms', fontFamily: 'inherit',
+          }}>
+            {active && <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: '30%', right: '30%', height: 2, background: 'var(--accent)', borderRadius: '0 0 2px 2px' }} />}
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d={n.icon} />
+            </svg>
+            <span style={{ fontSize: 9.5, fontWeight: 500, letterSpacing: '0.04em' }}>{n.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ─────────────────────────────────────────── mobile views ──────────
+
+function V2DashMobile({ overlays, setOverlays, selected, setSelected }) {
+  const { state, range, setRange } = useStore();
+  if (!state) return null;
+  const s = state;
+
+  const totalReturnPct = (s.totalPnl != null && s.initialBalance && s.initialBalance > 0)
+    ? (s.totalPnl / s.initialBalance) * 100
+    : null;
+
+  const kpis = [
+    ['sharpe', fmtNum(s.sharpe, 2)],
+    ['win', s.winRate != null ? `${s.winRate.toFixed(0)}%` : '—'],
+    ['risk', `${fmtNum(s.dynamicRisk.mult, 1)}x`],
+    ['open', String(s.activePositions)],
+    ['exposure', fmtUSD(s.totalPositionValue)],
+    ['DD', `${s.maxDD.toFixed(1)}%`],
+  ];
+
+  return (
+    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* hero balance card */}
+      <div className="tbm-card" style={{ padding: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+          <span className="tbm-kicker">equity</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: s.todayPnl >= 0 ? 'var(--accent-2)' : 'var(--danger)' }}>
+            {fmtUSD(s.todayPnl, { sign: true })} today
+          </span>
+        </div>
+        <div style={{ fontSize: 30, fontWeight: 600, letterSpacing: '-0.02em' }}>{fmtUSD(s.balance)}</div>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: (s.totalPnl ?? 0) >= 0 ? 'var(--accent-2)' : 'var(--danger)' }}>
+          {totalReturnPct != null ? `${fmtPct(totalReturnPct)} all time` : 'all-time —'}
+        </div>
+      </div>
+
+      {/* 3-col KPI grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+        {kpis.map(([k, v]) => (
+          <div key={k} className="tbm-card" style={{ padding: '8px 10px' }}>
+            <div style={{ fontSize: 9, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.10em' }}>{k}</div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* range chips + chart */}
+      <div className="tbm-card" style={{ padding: 12, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <span className="tbm-kicker">equity curve</span>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {RANGES.map(r => <HPill key={r} active={r === range} onClick={() => setRange(r)}>{r}</HPill>)}
+          </div>
+        </div>
+        <div style={{ height: 200 }}>
+          <V2Chart data={s.equityCurve} overlays={overlays} trades={s.trades}
+                   onSelectTrade={(id) => setSelected({ kind: 'trade', id })} />
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+          <HPill active={overlays.trades} onClick={() => setOverlays({ ...overlays, trades: !overlays.trades })}>+ trades</HPill>
+          <HPill active={overlays.drawdown} onClick={() => setOverlays({ ...overlays, drawdown: !overlays.drawdown })}>● drawdown</HPill>
+        </div>
+      </div>
+
+      {/* positions stack */}
+      <div className="tbm-card" style={{ padding: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <span className="tbm-kicker">open positions · {s.positions.length}</span>
+          {s.positions.length > 0 && <span style={{ fontSize: 10, color: 'var(--text-3)' }}>tap to inspect</span>}
+        </div>
+        {s.positions.length === 0 ? (
+          <div style={{ color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No open positions</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {s.positions.map(p => {
+              const sel = selected.kind === 'position' && selected.symbol === p.symbol;
+              return (
+                <button key={p.id} onClick={() => setSelected({ kind: 'position', symbol: p.symbol })}
+                        aria-pressed={sel}
+                        aria-label={`${p.symbol} ${p.side} ${fmtUSD(p.pnl, { sign: true })} unrealized`}
+                        style={{
+                  textAlign: 'left', cursor: 'pointer',
+                  background: sel ? 'var(--accent-soft)' : 'var(--bg-elev-2)',
+                  border: sel ? '1px solid var(--accent)' : '1px solid var(--border)',
+                  borderRadius: 10, padding: '10px 12px', color: 'var(--text)', fontFamily: 'inherit',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{p.symbol}</span>
+                    <span className={`tbm-tag ${p.side === 'LONG' ? 'long' : 'short'}`}>{p.side}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 6 }}>
+                    <span style={{ fontFamily: 'var(--font)', fontSize: 18, fontWeight: 600, color: p.pnl >= 0 ? 'var(--accent-2)' : 'var(--danger)', letterSpacing: '-0.02em' }}>
+                      {fmtUSD(p.pnl, { sign: true })}
+                    </span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-3)' }}>
+                      {fmtPct(p.pnlPct)}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* inline inspector — replaces the desktop side panel on mobile */}
+      {(selected.kind === 'position' || selected.kind === 'trade') && (
+        <div style={{ paddingTop: 4 }}>
+          <div className="tbm-kicker" style={{ marginBottom: 8 }}>inspecting</div>
+          {selected.kind === 'position' && <V2InspectPosition symbol={selected.symbol} />}
+          {selected.kind === 'trade' && <V2InspectTrade id={selected.id} setSelected={setSelected} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function V2PosViewMobile({ setSelected, setNavTab }) {
+  const { state } = useStore();
+  const s = state;
+  return (
+    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span className="tbm-kicker">positions</span>
+        <span className="tbm-card-title" style={{ fontSize: 14 }}>Open · {s.positions.length}</span>
+      </div>
+      {s.positions.length === 0 ? (
+        <div className="tbm-card" style={{ padding: 14, color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+          No open positions
+        </div>
+      ) : s.positions.map(p => (
+        <button key={p.id}
+                onClick={() => { setSelected({ kind: 'position', symbol: p.symbol }); setNavTab('dash'); }}
+                className="tbm-card"
+                aria-label={`Inspect ${p.symbol}`}
+                style={{ textAlign: 'left', cursor: 'pointer', padding: 14, color: 'var(--text)', fontFamily: 'inherit' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{p.symbol}</span>
+              <span className={`tbm-tag ${p.side === 'LONG' ? 'long' : 'short'}`}>{p.side}</span>
+            </div>
+            <span style={{ fontSize: 18, fontWeight: 600, color: p.pnl >= 0 ? 'var(--accent-2)' : 'var(--danger)' }}>
+              {fmtUSD(p.pnl, { sign: true })}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11 }}>
+            <div>
+              <div style={{ color: 'var(--text-3)', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.10em' }}>entry</div>
+              <div>{Number(p.entry).toLocaleString()}</div>
+            </div>
+            <div>
+              <div style={{ color: 'var(--text-3)', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.10em' }}>mark</div>
+              <div>{Number(p.current).toLocaleString()}</div>
+            </div>
+            <div>
+              <div style={{ color: 'var(--text-3)', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.10em' }}>stop</div>
+              <div>{p.trailSL ? Number(p.trailSL).toLocaleString() : '—'}</div>
+            </div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function V2TradesViewMobile() {
+  const { state } = useStore();
+  useTick(15000);
+  const s = state;
+  return (
+    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <span className="tbm-kicker">recent trades</span>
+        <span className="tbm-card-title" style={{ fontSize: 14 }}>{s.trades.length}</span>
+      </div>
+      {s.trades.length === 0 ? (
+        <div className="tbm-card" style={{ padding: 14, color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+          No trades yet
+        </div>
+      ) : s.trades.slice(0, 30).map(t => (
+        <div key={t.id} className="tbm-card" style={{ padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{t.symbol}</span>
+              <span className={`tbm-tag ${t.side === 'L' ? 'long' : 'short'}`}>{t.side === 'L' ? 'LONG' : 'SHORT'}</span>
+              <span className="tbm-tag">{t.reason}</span>
+            </div>
+            <span style={{ fontSize: 16, fontWeight: 600, color: t.pnl >= 0 ? 'var(--accent-2)' : 'var(--danger)' }}>
+              {fmtUSD(t.pnl, { sign: true })}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-3)' }}>
+            <span>{Number(t.entry).toLocaleString()} → {Number(t.exit).toLocaleString()}</span>
+            <span>{fmtTimeAgo(t.time)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function V2Rail({ tab, onTab }) {
   const onKey = (e, idx) => {
@@ -1206,7 +1504,7 @@ function V2StratView() {
     : (s.sharpe < 0 ? 'var(--danger)' : 'var(--accent-2)');
   const sharpeSub = sharpeKnown ? fmtNum(s.sharpe, 2) : 'no history yet';
   return (
-    <div style={{ padding: 22, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, overflow: 'auto' }}>
+    <div className="tbm-2col-grid" style={{ padding: 22, display: 'grid', gap: 14, overflow: 'auto' }}>
       <div className="tbm-card" style={{ padding: 18 }}>
         <div className="tbm-h2">Bot</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1341,7 +1639,7 @@ function V2RiskView() {
   const winRateBar = s.winRate ?? 0;
   const maxOpen = s.bot.maxOpenPositions; // null if not configured
   return (
-    <div style={{ padding: 22, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, overflow: 'auto' }}>
+    <div className="tbm-2col-grid" style={{ padding: 22, display: 'grid', gap: 14, overflow: 'auto' }}>
       <div className="tbm-card" style={{ padding: 18 }}>
         <div className="tbm-h2">Dynamic risk · {fmtNum(s.dynamicRisk.mult, 2)}x</div>
         <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14, lineHeight: 1.5 }}>
@@ -1369,7 +1667,7 @@ function V2RiskView() {
       </div>
       <div className="tbm-card" style={{ padding: 18, gridColumn: '1 / -1' }}>
         <div className="tbm-h2">Risk metrics</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 18 }}>
+        <div className="tbm-metrics-grid" style={{ display: 'grid', gap: 18 }}>
           <HKPI label="sharpe" value={fmtNum(s.sharpe, 2)} sub="annualized" />
           <HKPI label="max DD" value={`${s.maxDD.toFixed(1)}%`} color="var(--danger)" />
           <HKPI label="curr DD" value={`${s.currentDD.toFixed(1)}%`} color="var(--warn)" />
@@ -1475,11 +1773,53 @@ function Shell() {
   useStaleSelectionReset(state, selected, setSelected, setAutoSelected);
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
+  const isMobile = useIsMobile();
 
   if (!state && !error) {
     return (
       <div className="tbm-boot">
         <div className="tbm-spinner" />loading dashboard
+      </div>
+    );
+  }
+
+  // Mobile layout: bottom tab bar + stacked content + sticky compact topbar.
+  // Strat / Risk / Logs reuse the desktop views, with their 2-col / 6-col
+  // grids dropping to 1-col via the tbm-2col-grid / tbm-metrics-grid CSS
+  // breakpoints below MOBILE_BREAKPOINT.
+  if (isMobile) {
+    return (
+      <div className="tbm tbm-mobile" data-theme={theme}>
+        <HifiTopBarMobile theme={theme} onToggleTheme={toggleTheme} />
+        {error && (
+          <div role="alert" style={{ background: 'var(--danger-soft)', color: 'var(--danger)', padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: 11, borderBottom: '1px solid var(--border)' }}>
+            connection error · {error} · retrying…
+          </div>
+        )}
+        {/* Reserve space for the fixed bottom tab bar so content can scroll under it cleanly. */}
+        <div style={{
+          paddingBottom: 'calc(72px + env(safe-area-inset-bottom, 0px))',
+          minHeight: '100vh',
+        }}>
+          {!state ? (
+            <div style={{ padding: 14, color: 'var(--text-3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+              waiting for data…
+            </div>
+          ) : (
+            <>
+              {navTab === 'dash' && (
+                <V2DashMobile overlays={overlays} setOverlays={setOverlays}
+                              selected={selected} setSelected={setSelected} />
+              )}
+              {navTab === 'pos' && <V2PosViewMobile setSelected={setSelected} setNavTab={setNavTab} />}
+              {navTab === 'strat' && <V2StratView />}
+              {navTab === 'trades' && <V2TradesViewMobile />}
+              {navTab === 'risk' && <V2RiskView />}
+              {navTab === 'logs' && <V2LogsView />}
+            </>
+          )}
+        </div>
+        <V2BottomTabBar tab={navTab} onTab={setNavTab} />
       </div>
     );
   }

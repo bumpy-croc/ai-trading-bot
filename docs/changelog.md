@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Monitoring dashboard mobile layout**: V2 dashboard reflows below 768px to a
+  bottom tab bar + stacked content + inline inspector. Reuses the same React
+  store and data flow; layout swap driven by `useIsMobile()` hook backed by
+  `window.matchMedia` with a resize listener so it adapts live. iOS safe-area
+  insets respected via `viewport-fit=cover` + `env(safe-area-inset-*)`.
 - **Monitoring dashboard V2 redesign**: chart-led layout with left-rail nav
   (Dash / Pos / Strat / Trades / Risk / Logs), KPI strip, hero equity chart
   with overlay toggles (benchmark / trades / drawdown), positions strip, and

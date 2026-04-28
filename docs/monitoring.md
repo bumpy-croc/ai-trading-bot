@@ -64,6 +64,22 @@ events only) so timestamps are always real; system / connection events are not y
 > tool but adds ~2s of CPU on first paint and pulls ~3MB of Babel from the CDN. Pre-building the bundle with `esbuild`
 > is a tracked follow-up; the current setup keeps the edit loop simple.
 
+### Mobile layout
+
+The dashboard reflows to a phone-friendly layout below the **768px** viewport breakpoint, driven by a `useIsMobile()`
+hook backed by `window.matchMedia('(max-width: 768px)')` (re-evaluated on resize, so a desktop user dragging the
+window narrow sees the mobile UI immediately). Specifically:
+
+- The left rail is replaced by a fixed **bottom tab bar** with the same six sections.
+- The topbar shrinks to a sticky compact strip with bot name, mode/status pills, live indicator, and theme toggle.
+- The Dash view stacks: hero equity card → 3-column KPI grid → equity chart with overlay chips → positions list →
+  inline inspector (replaces the desktop side panel).
+- The Pos and Trades views render as full-width cards with stacked metadata instead of tables.
+- The Strat and Risk views drop their two-column grids to single-column via the `.tbm-2col-grid` and
+  `.tbm-metrics-grid` CSS classes (3-up on mobile for the risk-metrics row).
+- iOS safe-area insets are respected via `viewport-fit=cover` plus
+  `padding: env(safe-area-inset-top|bottom)` on the topbar and bottom tab bar.
+
 ### `/api/dashboard/state` (bundled)
 
 ```http

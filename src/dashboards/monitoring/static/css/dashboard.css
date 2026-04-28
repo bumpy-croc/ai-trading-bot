@@ -268,3 +268,29 @@ html, body {
 /* layout root */
 .tbm-shell { display: flex; min-height: 100vh; }
 .tbm-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* ─── responsive grids — desktop default, single-col on small screens ─── */
+.tbm-2col-grid { grid-template-columns: 1fr 1fr; }
+.tbm-metrics-grid { grid-template-columns: repeat(6, 1fr); }
+
+@media (max-width: 768px) {
+  .tbm-2col-grid { grid-template-columns: 1fr; padding: 14px !important; gap: 12px !important; }
+  .tbm-metrics-grid { grid-template-columns: 1fr 1fr 1fr; gap: 12px !important; }
+  /* Risk view's "metrics row" has gridColumn:'1 / -1' which still works. */
+}
+
+/* ─── mobile-specific tweaks ─── */
+.tbm-mobile {
+  /* Disable horizontal scroll the chart's wide viewBox could otherwise cause */
+  overflow-x: hidden;
+}
+.tbm-mobile .tbm-card { padding: 12px; }
+.tbm-mobile .tbm-tbl thead th { font-size: 9px; padding: 6px 6px; }
+.tbm-mobile .tbm-tbl tbody td { padding: 8px 6px; font-size: 11px; }
+
+/* The bottom tab bar should never shrink under iOS rubber-band scroll. */
+.tbm-bottom-bar { -webkit-tap-highlight-color: transparent; }
+.tbm-bottom-bar button { font-family: inherit; }
+
+/* Topbar on mobile gets no horizontal scroll for long bot names */
+.tbm-top-mobile { overflow: hidden; }
