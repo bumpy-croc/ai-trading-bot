@@ -683,7 +683,7 @@ function V2BottomTabBar({ tab, onTab }) {
 
 // ─────────────────────────────────────────── mobile views ──────────
 
-function V2DashMobile({ overlays, setOverlays, selected, setSelected }) {
+function V2DashMobile({ overlays, setOverlays, selected, setSelected, inspectorRef }) {
   const { state, range, setRange } = useStore();
   if (!state) return null;
   const s = state;
@@ -794,8 +794,12 @@ function V2DashMobile({ overlays, setOverlays, selected, setSelected }) {
         )}
       </div>
 
-      {/* inline inspector — replaces the desktop side panel on mobile */}
-      <div style={{ paddingTop: 4 }}>
+      {/* inline inspector — replaces the desktop side panel on mobile.
+          The ref lets V2PosViewMobile's tap-to-inspect flow scroll the
+          inspector into view after navigating to Dash, so the trader
+          actually sees the Size/MFE/MAE/BE block they tapped for instead
+          of landing at the top of a long stacked layout. */}
+      <div ref={inspectorRef} style={{ paddingTop: 4, scrollMarginTop: 16 }}>
         <div className="tbm-kicker" style={{ marginBottom: 8 }}>inspecting</div>
         {selected.kind === 'position' && <V2InspectPosition symbol={selected.symbol} />}
         {selected.kind === 'trade' && <V2InspectTrade id={selected.id} setSelected={setSelected} />}
@@ -811,7 +815,7 @@ function V2DashMobile({ overlays, setOverlays, selected, setSelected }) {
   );
 }
 
-function V2PosViewMobile({ setSelected, setNavTab }) {
+function V2PosViewMobile({ setSelected, setNavTab, scrollInspectorIntoView }) {
   const { state } = useStore();
   const s = state;
   return (
@@ -826,7 +830,17 @@ function V2PosViewMobile({ setSelected, setNavTab }) {
         </div>
       ) : s.positions.map(p => (
         <button key={p.id}
-                onClick={() => { setSelected({ kind: 'position', symbol: p.symbol }); setNavTab('dash'); }}
+                onClick={() => {
+                  setSelected({ kind: 'position', symbol: p.symbol });
+                  setNavTab('dash');
+                  // Scroll the Dash inspector into view next paint —
+                  // otherwise the trader lands at the top of a long stacked
+                  // layout and has to scroll past hero+KPIs+chart+positions
+                  // to find the data they tapped for.
+                  if (scrollInspectorIntoView) {
+                    requestAnimationFrame(() => scrollInspectorIntoView());
+                  }
+                }}
                 className="tbm-card"
                 aria-label={`Inspect ${p.symbol}`}
                 style={{ textAlign: 'left', cursor: 'pointer', padding: 14, color: 'var(--text)', fontFamily: 'inherit' }}>
@@ -1817,6 +1831,15 @@ function Shell() {
   // desktop and mobile (e.g. iPad rotation). Each variant takes the same
   // {filter, setFilter} props.
   const [tradesFilter, setTradesFilter] = useState('all');
+  // Ref to the mobile inline inspector so V2PosViewMobile can scroll it
+  // into view after a tap-to-inspect that crosses tabs.
+  const mobileInspectorRef = useRef(null);
+  const scrollMobileInspectorIntoView = useCallback(() => {
+    const el = mobileInspectorRef.current;
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, []);
   const { state, error } = useStore();
 
   useEffect(() => {
@@ -1876,9 +1899,13 @@ function Shell() {
             <>
               {navTab === 'dash' && (
                 <V2DashMobile overlays={overlays} setOverlays={setOverlays}
-                              selected={selected} setSelected={setSelected} />
+                              selected={selected} setSelected={setSelected}
+                              inspectorRef={mobileInspectorRef} />
               )}
-              {navTab === 'pos' && <V2PosViewMobile setSelected={setSelected} setNavTab={setNavTab} />}
+              {navTab === 'pos' && (
+                <V2PosViewMobile setSelected={setSelected} setNavTab={setNavTab}
+                                 scrollInspectorIntoView={scrollMobileInspectorIntoView} />
+              )}
               {navTab === 'strat' && <V2StratView />}
               {navTab === 'trades' && <V2TradesViewMobile filter={tradesFilter} setFilter={setTradesFilter} />}
               {navTab === 'risk' && <V2RiskView />}
