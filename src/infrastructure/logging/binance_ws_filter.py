@@ -1,15 +1,21 @@
 """Rate-limit Binance WebSocket keepalive-timeout exception noise.
 
 `python-binance==1.0.36` multiplexes margin user-data subscriptions over a
-shared `ws_api` connection. That socket is closed periodically by Binance with
-WebSocket close code ``1011 keepalive ping timeout``. The library's
-ThreadedApiManager surfaces the close as an unretrieved asyncio task
-exception (``Task exception was never retrieved``), which the asyncio default
-exception handler logs at WARNING+ level on the ``atb.asyncio`` logger.
+shared `ws_api` connection, and that connection fails recoverably in two
+ways the library surfaces as an unretrieved asyncio task exception
+(``Task exception was never retrieved``) on the ``atb.asyncio`` logger:
+
+  * the socket is closed by Binance with WebSocket close code
+    ``1011 keepalive ping timeout`` (the original #609 target); or
+  * the ws_api ``userDataStream.subscribe`` request times out after 10s and
+    raises ``BinanceWebsocketUnableToConnect('Request timed out')``. This is
+    what actually fires on prod every ~2 minutes (~720/day) — there is NO
+    "keepalive ping timeout" text, so #609's single fingerprint missed it
+    entirely (GH #608 follow-up).
 
 The library's reconnect machinery recovers automatically — a fresh task is
-spawned on the next subscribe attempt — so live trading is unaffected. But
-on prod the message fires every ~2 minutes (~720/day), drowning real signals.
+spawned on the next subscribe attempt — so live trading is unaffected, but
+the noise drowns real signals.
 
 This filter keeps the *first* occurrence per ``WINDOW_SECONDS`` so an
 operator can still see the full traceback once, suppresses the rest, and
@@ -30,10 +36,11 @@ class BinanceWSKeepaliveFilter(logging.Filter):
     """Rate-limit ``Task exception was never retrieved`` keepalive-timeout noise.
 
     Attached to the console handler in ``build_logging_config``. Inspects the
-    record's message text and exception traceback for the
-    python-binance keepalive-timeout fingerprint; passes the first match per
-    window through, drops subsequent matches, and emits a synthetic summary
-    log when the window rolls over so operators retain visibility.
+    record's message text and exception traceback for any of the
+    python-binance recoverable-ws-churn fingerprints
+    (see ``KEEPALIVE_MARKER_GROUPS``); passes the first match per window
+    through, drops subsequent matches, and emits a synthetic summary log
+    when the window rolls over so operators retain visibility.
 
     Thread-safe: a logging filter can be invoked from multiple threads
     (asyncio default handler runs on the loop thread; other handlers run on
@@ -42,11 +49,26 @@ class BinanceWSKeepaliveFilter(logging.Filter):
     Non-matching records pass through unchanged.
     """
 
-    # Markers that must all appear (in message text or exception traceback)
-    # for a record to be classified as keepalive-timeout noise.
-    KEEPALIVE_MARKERS: tuple[str, ...] = (
-        "keepalive_websocket",
-        "keepalive ping timeout",
+    # A record is classified as recoverable python-binance ws churn noise
+    # when *every* marker in *any one* group appears in its message text or
+    # exception traceback. Two distinct signatures exist (GH #608):
+    #
+    #   * 1011 keepalive-ping-timeout close — the original #609 target. Rare
+    #     in practice; kept for completeness.
+    #   * ws_api subscribe timeout — what actually fires on prod every ~2min:
+    #     the margin user-data subscription is multiplexed over the shared
+    #     ws_api socket, whose request times out after 10s and surfaces as an
+    #     unretrieved task exception. There is NO "keepalive ping timeout"
+    #     text in this case, so it must be matched on its own fingerprint.
+    #     The "binance/ws/" anchor keeps this from swallowing a
+    #     BinanceWebsocketUnableToConnect raised by our own code.
+    KEEPALIVE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
+        ("keepalive_websocket", "keepalive ping timeout"),
+        (
+            "Task exception was never retrieved",
+            "BinanceWebsocketUnableToConnect",
+            "binance/ws/",
+        ),
     )
 
     # Window length in seconds. One traceback per window is preserved; the
@@ -143,4 +165,7 @@ class BinanceWSKeepaliveFilter(logging.Filter):
                 pass
         elif record.exc_text:
             text = text + "\n" + record.exc_text
-        return all(marker in text for marker in self.KEEPALIVE_MARKERS)
+        return any(
+            all(marker in text for marker in group)
+            for group in self.KEEPALIVE_MARKER_GROUPS
+        )
