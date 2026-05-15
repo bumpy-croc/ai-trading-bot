@@ -46,6 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured but stale or non-PRIMARY (was previously kline-only, masking a
   permanently-dark user stream). New `user_ws_healthy` property exposes the
   user-stream status directly.
+- `BinanceWSKeepaliveFilter` now also matches the ws_api subscribe-timeout
+  signature (GH #608 follow-up). #609's filter only matched the 1011
+  'keepalive ping timeout' close code, which never fires on prod — the
+  actual ~2-min churn is the margin `userDataStream.subscribe` request
+  timing out after 10s (`BinanceWebsocketUnableToConnect: Request timed
+  out`), which carries no 'keepalive ping timeout' text and so was never
+  suppressed. Replaced the single fingerprint with `KEEPALIVE_MARKER_GROUPS`
+  (match all markers in any group); a `binance/ws/` anchor prevents
+  swallowing connection errors raised by our own code.
 - Add ban-aware retry to Binance client startup — parses `-1003` ban expiry and sleeps until lifted instead of crashing (#590)
 - `hyper_growth`: fix silent-SELL bug caused by feature-shape mismatch
   (#603). The factory wired `MLBasicSignalGenerator(model_type="sentiment")`

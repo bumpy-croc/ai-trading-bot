@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 import pytest
+from binance.exceptions import BinanceWebsocketUnableToConnect
 from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close, CloseCode
 
@@ -67,6 +68,59 @@ def _keepalive_record() -> logging.LogRecord:
         "Task exception was never retrieved (keepalive_websocket.py)",
         exc=_keepalive_exc(),
     )
+
+
+# Faithful reproduction of the record asyncio's default exception handler
+# emits on `atb.asyncio` in production (see GH #608 follow-up). The python-
+# binance ws_api-multiplexed margin subscription times out after 10s and the
+# unretrieved task exception carries this exact text. Unlike the 1011 close,
+# there is NO "keepalive ping timeout" substring anywhere — only a
+# BinanceWebsocketUnableToConnect('Request timed out') raised from the
+# binance ws stack.
+_PROD_WS_API_TIMEOUT_MSG = (
+    "Task exception was never retrieved\n"
+    "future: <Task finished name='Task-8989572' "
+    "coro=<ThreadedApiManager.start_listener() done, defined at "
+    "/usr/local/lib/python3.11/site-packages/binance/ws/threaded_stream.py:72> "
+    "exception=BinanceWebsocketUnableToConnect('Request timed out')>"
+)
+
+
+def _ws_api_timeout_record() -> logging.LogRecord:
+    """Record matching the real prod ws_api margin-subscribe timeout."""
+    return _make_record(
+        _PROD_WS_API_TIMEOUT_MSG,
+        exc=BinanceWebsocketUnableToConnect("Request timed out"),
+    )
+
+
+class TestWsApiSubscribeTimeoutFingerprint:
+    """The real prod signature (GH #608 follow-up) must be rate-limited.
+
+    #609 only matched the 1011 'keepalive ping timeout' close code, which
+    never fires on prod. The actual recurring noise is the ws_api margin
+    subscribe timing out, surfaced as an unretrieved task exception.
+    """
+
+    def test_first_match_passes_then_suppresses(self):
+        f = BinanceWSKeepaliveFilter(window_seconds=60)
+
+        assert f.filter(_ws_api_timeout_record()) is True
+        for _ in range(5):
+            assert f.filter(_ws_api_timeout_record()) is False
+        assert f.suppressed_count == 5
+
+    def test_unrelated_binance_connect_error_not_suppressed(self):
+        """A BinanceWebsocketUnableToConnect from our own code (no binance
+        ws stack, no unretrieved-task message) must still pass through."""
+        f = BinanceWSKeepaliveFilter(window_seconds=60)
+        record = _make_record(
+            "Failed to place order: connection unavailable",
+            exc=BinanceWebsocketUnableToConnect("boom"),
+        )
+
+        assert f.filter(record) is True
+        assert f.suppressed_count == 0
 
 
 class TestKeepaliveFingerprint:
