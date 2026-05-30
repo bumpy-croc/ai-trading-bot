@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import numpy as np
 import pandas as pd
+import pytest
 
 from cli.commands.data import _download, _prefill, _preload_offline
 
@@ -240,3 +242,124 @@ class TestDataPreloadOffline:
 
         # Assert
         assert result == 0
+
+
+class TestSafePickleLoad:
+    """Regression tests for the restricted unpickler used by cache-manager."""
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize("protocol", [4, 5])
+    def test_round_trips_realistic_cached_frames(self, protocol):
+        """Legitimate cached DataFrames/Series must load unchanged.
+
+        Covers a datetime/tz index (the OHLCV cache shape), naive index,
+        RangeIndex, integer index, mixed dtypes, and a Series.
+        """
+        import io
+        import pickle
+
+        from cli.commands.data import _safe_pickle_load
+
+        idx = pd.date_range("2023-01-01", periods=5, freq="1h", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "open": np.arange(5.0),
+                "close": np.arange(5.0),
+                "volume": np.arange(5),
+            },
+            index=idx,
+        )
+        cases = [
+            df,
+            df.tz_localize(None),
+            df.reset_index(drop=True),
+            df["close"],
+            pd.DataFrame({"a": [1, 2, 3]}, index=pd.Index([10, 20, 30])),
+            pd.DataFrame({"a": [1, 2], "b": [1.5, 2.5], "c": ["p", "q"], "d": [True, False]}),
+        ]
+        for obj in cases:
+            loaded = _safe_pickle_load(io.BytesIO(pickle.dumps(obj, protocol=protocol)))
+            if isinstance(obj, pd.Series):
+                pd.testing.assert_series_equal(loaded, obj)
+            else:
+                pd.testing.assert_frame_equal(loaded, obj)
+
+    @pytest.mark.fast
+    def test_blocks_os_system_gadget(self):
+        import io
+        import pickle
+
+        from cli.commands.data import _safe_pickle_load
+
+        class _Evil:
+            def __reduce__(self):
+                import os
+
+                return (os.system, ("echo pwned",))
+
+        with pytest.raises(pickle.UnpicklingError):
+            _safe_pickle_load(io.BytesIO(pickle.dumps(_Evil())))
+
+    @pytest.mark.fast
+    def test_blocks_builtins_eval_gadget(self):
+        import builtins
+        import io
+        import pickle
+
+        from cli.commands.data import _safe_pickle_load
+
+        class _Evil:
+            def __reduce__(self):
+                return (builtins.eval, ("__import__('os').system('id')",))
+
+        with pytest.raises(pickle.UnpicklingError):
+            _safe_pickle_load(io.BytesIO(pickle.dumps(_Evil())))
+
+    @pytest.mark.fast
+    def test_blocks_pandas_read_pickle_reentrancy_gadget(self, tmp_path):
+        """``pandas.read_pickle`` must be blocked.
+
+        A module-prefix allowlist (pandas.*/numpy.*) would resolve
+        ``pandas.read_pickle``, which performs a fresh *unrestricted*
+        ``pickle.load`` on an attacker path — full RCE escaping the restriction.
+        Verify it is rejected and the nested payload never executes.
+        """
+        import io
+        import pickle
+
+        from cli.commands.data import _safe_pickle_load
+
+        marker = tmp_path / "pwned.txt"
+        nested = tmp_path / "nested.pkl"
+
+        class _Inner:
+            def __reduce__(self):
+                import os
+
+                return (os.system, (f"touch {marker}",))
+
+        nested.write_bytes(pickle.dumps(_Inner()))
+
+        class _Outer:
+            def __reduce__(self):
+                return (pd.read_pickle, (str(nested),))
+
+        with pytest.raises(pickle.UnpicklingError):
+            _safe_pickle_load(io.BytesIO(pickle.dumps(_Outer())))
+        assert not marker.exists(), "read_pickle gadget executed — allowlist bypassed"
+
+    @pytest.mark.fast
+    def test_blocks_numpy_load_gadget(self):
+        """``numpy.load`` (a re-entrant/file-reading gadget) must be blocked
+        before it touches the filesystem."""
+        import io
+        import pickle
+
+        from cli.commands.data import _safe_pickle_load
+
+        class _Evil:
+            def __reduce__(self):
+                return (np.load, ("/nonexistent/whatever.npy",))
+
+        with pytest.raises(pickle.UnpicklingError):
+            _safe_pickle_load(io.BytesIO(pickle.dumps(_Evil())))

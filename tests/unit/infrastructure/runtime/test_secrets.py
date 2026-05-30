@@ -98,14 +98,19 @@ class TestGetSecretKey:
             result = get_secret_key()
             assert result == "dev-key-change-in-production"
 
-    def test_empty_env_treated_as_development(self):
-        """Test that empty/missing ENV defaults to development."""
+    def test_empty_env_fails_closed_as_production(self):
+        """Test that empty/missing ENV fails closed (treated as production).
+
+        A missing ENV/FLASK_ENV must NOT silently fall back to the publicly
+        known dev key, otherwise a misconfigured production deployment would
+        sign sessions with a known key (session-forgery risk).
+        """
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("FLASK_SECRET_KEY", None)
             os.environ.pop("ENV", None)
             os.environ.pop("FLASK_ENV", None)
-            result = get_secret_key()
-            assert result == "dev-key-change-in-production"
+            with pytest.raises(RuntimeError, match="Missing required secret"):
+                get_secret_key()
 
 
 @pytest.mark.fast

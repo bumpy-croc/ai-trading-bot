@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Hardened a batch of security findings from a repo-wide scan (bandit + manual
+  audit):
+  - Monitoring dashboard: added a token auth guard (`MONITORING_DASHBOARD_TOKEN`)
+    on state-changing/data-leaking endpoints (`POST /api/balance`,
+    `POST /api/config`, `POST /api/debug/fix-positions`, `GET /api/debug/positions`).
+    Fails closed in production when no token is set; warns-and-allows only in
+    explicit dev/test envs. Restricted Socket.IO CORS from `"*"` to same-origin
+    (override via `MONITORING_CORS_ALLOWED_ORIGINS`).
+  - SageMaker artifact extraction now validates tar members (rejects path
+    traversal / zip-slip and escaping symlinks). Model-registry sync validates
+    `version_id`/`model_type` from `metadata.json` and asserts the resolved path
+    stays inside the registry before any `rmtree`/`copytree`/`symlink`.
+    S3 artifact download skips object keys that escape the target directory.
+  - `get_secret_key()` now fails closed: an unset `ENV`/`FLASK_ENV` is treated as
+    production instead of silently returning the public dev key.
+  - Admin UI login compares the username in constant time (`hmac.compare_digest`).
+  - `atb data cache-manager --detailed` uses a restricted unpickler (allowlisted
+    pandas/numpy types) instead of raw `pickle.load` on legacy `.pkl` files.
+  - JUnit XML parsing uses `defusedxml` (XXE / billion-laughs hardening).
+  - Tightened temp-shim permissions to `0o700`; quoted/validated table
+    identifiers in the DB integrity check; marked the dashboard's `0.0.0.0`
+    bind intentional.
+
 ### Added
 - Experimentation framework (`src/experiments/`) with declarative YAML suites,
   `atb experiment run|list|show|promote` CLI, ranked reporter with statistical
