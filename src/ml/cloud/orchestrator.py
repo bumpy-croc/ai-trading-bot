@@ -51,6 +51,21 @@ MAX_JOB_SUFFIX_LENGTH = 100
 MAX_METADATA_SEARCH_DEPTH = 100
 
 
+def _validate_registry_component(value: str, field: str) -> str:
+    """Validate a path component used to build local model-registry paths.
+
+    ``version_id``/``model_type`` originate from a downloaded ``metadata.json``
+    (outside this process) and are used to build registry paths that are later
+    targets of rmtree/copytree/symlink. A value containing ``..`` or a path
+    separator would allow writing or deleting files outside the registry, so we
+    only accept simple identifiers.
+    """
+    text = str(value)
+    if text in (".", "..") or not re.match(r"^[\w\-.]+$", text):
+        raise ArtifactSyncError(f"Refusing to use unsafe {field} from metadata: {value!r}")
+    return text
+
+
 class CloudTrainingOrchestrator:
     """Orchestrates cloud training workflow.
 
@@ -411,20 +426,9 @@ class CloudTrainingOrchestrator:
                 version_id = datetime.now(UTC).strftime("%Y-%m-%d_%Hh_v1")
                 model_type = "basic"
 
-            # ``version_id`` and ``model_type`` come from a downloaded
-            # ``metadata.json`` that originates outside this process (S3 / training
-            # container). They are used to build registry paths that are later
-            # targets of rmtree/copytree/symlink, so a value containing ``..`` or a
-            # path separator would allow writing or deleting files outside the
-            # model registry. Reject anything that is not a simple identifier.
-            if not re.match(r"^[\w\-.]+$", str(version_id)) or version_id in (".", ".."):
-                raise ArtifactSyncError(
-                    f"Refusing to use unsafe version_id from metadata: {version_id!r}"
-                )
-            if not re.match(r"^[\w\-.]+$", str(model_type)) or model_type in (".", ".."):
-                raise ArtifactSyncError(
-                    f"Refusing to use unsafe model_type from metadata: {model_type!r}"
-                )
+            # Validate metadata-supplied path components (see helper docstring).
+            version_id = _validate_registry_component(version_id, "version_id")
+            model_type = _validate_registry_component(model_type, "model_type")
 
             # Sync to local registry
             local_registry = get_project_root() / "src" / "ml" / "models"

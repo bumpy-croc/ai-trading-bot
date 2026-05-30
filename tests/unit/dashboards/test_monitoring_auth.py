@@ -47,6 +47,19 @@ def test_token_required_when_configured(client):
 
 
 @pytest.mark.fast
+def test_non_ascii_token_yields_401_not_500(client):
+    """A non-ASCII token must be rejected cleanly (401), not crash with a 500.
+
+    hmac.compare_digest raises TypeError on str inputs with codepoints > 127;
+    the guard compares bytes so an attacker cannot trigger a 500 via the
+    X-Dashboard-Token header.
+    """
+    with patch.dict(os.environ, {"MONITORING_DASHBOARD_TOKEN": "s3cret"}, clear=False):
+        resp = client.post("/protected", headers={"X-Dashboard-Token": "wröng-Ω"})
+        assert resp.status_code == 401
+
+
+@pytest.mark.fast
 def test_correct_token_allows_access(client):
     """A correct token (header or bearer) allows the request through."""
     with patch.dict(os.environ, {"MONITORING_DASHBOARD_TOKEN": "s3cret"}, clear=False):

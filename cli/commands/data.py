@@ -25,29 +25,48 @@ def _safe_pickle_load(file_obj):
 
     Legacy ``.pkl`` cache files are inspected by the cache-manager CLI. A
     crafted pickle can execute arbitrary code on load (``pickle`` is a known
-    RCE sink), so this restricted ``Unpickler`` only permits the classes needed
-    to reconstruct DataFrames/Series/ndarrays and rejects everything else.
+    RCE sink), so this restricted ``Unpickler`` only resolves classes from the
+    ``pandas``/``numpy`` namespaces (plus the handful of stdlib helpers those
+    libraries legitimately emit when reconstructing a DataFrame/Series) and
+    rejects everything else.
+
+    A module-prefix allowlist is used rather than an exact class list because
+    the exact set of reconstruction helpers pandas/numpy emit (e.g.
+    ``DatetimeArray``, ``maybe_get_tz``, ``__pyx_unpickle_NDArrayBacked``,
+    ``_frombuffer``, ``Hour``, ``DatetimeTZDtype`` …) varies by version and
+    would otherwise raise on legitimate cache files. This stays safe: all
+    code-execution gadgets (``eval``/``exec``/``os.system``/``subprocess`` …)
+    live in ``os``/``subprocess``/``posix`` etc., never under
+    ``pandas.*``/``numpy.*``, and the stdlib names allowed below are inert data
+    constructors. ``functools.partial``'s wrapped callable is itself resolved
+    through ``find_class``, so it cannot smuggle a disallowed target.
     """
     import pickle
 
-    _ALLOWED = {
-        "pandas.core.frame": {"DataFrame"},
-        "pandas.core.series": {"Series"},
-        "pandas.core.indexes.base": {"Index", "_new_Index"},
-        "pandas.core.indexes.datetimes": {"DatetimeIndex", "_new_DatetimeIndex"},
-        "pandas.core.indexes.range": {"RangeIndex"},
-        "pandas.core.indexes.numeric": {"Int64Index", "Float64Index"},
-        "pandas.core.internals.managers": {"BlockManager"},
-        "pandas.core.internals.blocks": {"new_block", "_new_block"},
-        "pandas._libs.internals": {"_unpickle_block"},
-        "numpy": {"ndarray", "dtype"},
-        "numpy.core.multiarray": {"_reconstruct", "scalar"},
-        "numpy._core.multiarray": {"_reconstruct", "scalar"},
+    # Inert stdlib helpers pandas/numpy legitimately reference during unpickle.
+    _ALLOWED_STDLIB = {
+        ("builtins", "slice"),
+        ("builtins", "complex"),
+        ("datetime", "datetime"),
+        ("datetime", "date"),
+        ("datetime", "time"),
+        ("datetime", "timedelta"),
+        ("datetime", "timezone"),
+        ("functools", "partial"),
+        ("copyreg", "_reconstructor"),
+        ("collections", "OrderedDict"),
     }
+
+    def _is_allowed(module: str, name: str) -> bool:
+        if module == "pandas" or module.startswith("pandas."):
+            return True
+        if module == "numpy" or module.startswith("numpy."):
+            return True
+        return (module, name) in _ALLOWED_STDLIB
 
     class _RestrictedUnpickler(pickle.Unpickler):
         def find_class(self, module, name):
-            if name in _ALLOWED.get(module, set()):
+            if _is_allowed(module, name):
                 return super().find_class(module, name)
             raise pickle.UnpicklingError(f"Blocked unpickling of disallowed type {module}.{name}")
 

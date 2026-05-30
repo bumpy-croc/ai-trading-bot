@@ -95,7 +95,13 @@ def _dashboard_auth_required(view):
                 auth_header = request.headers.get("Authorization", "")
                 if auth_header.startswith("Bearer "):
                     provided = auth_header[len("Bearer ") :].strip()
-            if not (provided and hmac.compare_digest(provided, token)):
+            # Compare as bytes: hmac.compare_digest raises TypeError on str
+            # inputs containing codepoints > 127, and the token comes from an
+            # attacker-controlled header (Werkzeug decodes headers as latin-1),
+            # which would otherwise surface as an unhandled 500 instead of 401.
+            if not (
+                provided and hmac.compare_digest(provided.encode("utf-8"), token.encode("utf-8"))
+            ):
                 return jsonify({"success": False, "error": "Unauthorized"}), 401
             return view(*args, **kwargs)
         if _is_production_env():
@@ -187,9 +193,14 @@ class MonitoringDashboard:
         # would let any website open a Socket.IO connection and read pushed
         # trading/balance data. Default to same-origin; allow an explicit
         # comma-separated allowlist via MONITORING_CORS_ALLOWED_ORIGINS.
+        #
+        # NB: pass ``None`` (not ``[]``) for the same-origin default. In
+        # python-engineio an empty list is a sentinel that *disables* CORS
+        # handling entirely (no Access-Control-Allow-Origin header, no origin
+        # check), whereas ``None``/omitted means "only the same origin".
         _cors_env = os.environ.get("MONITORING_CORS_ALLOWED_ORIGINS", "").strip()
         cors_allowed_origins: Any = (
-            [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else []
+            [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else None
         )
         self.socketio = SocketIO(
             self.app, cors_allowed_origins=cors_allowed_origins, async_mode=_ASYNC_MODE
