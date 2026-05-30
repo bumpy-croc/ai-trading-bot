@@ -314,3 +314,52 @@ class TestSafePickleLoad:
 
         with pytest.raises(pickle.UnpicklingError):
             _safe_pickle_load(io.BytesIO(pickle.dumps(_Evil())))
+
+    @pytest.mark.fast
+    def test_blocks_pandas_read_pickle_reentrancy_gadget(self, tmp_path):
+        """``pandas.read_pickle`` must be blocked.
+
+        A module-prefix allowlist (pandas.*/numpy.*) would resolve
+        ``pandas.read_pickle``, which performs a fresh *unrestricted*
+        ``pickle.load`` on an attacker path — full RCE escaping the restriction.
+        Verify it is rejected and the nested payload never executes.
+        """
+        import io
+        import pickle
+
+        from cli.commands.data import _safe_pickle_load
+
+        marker = tmp_path / "pwned.txt"
+        nested = tmp_path / "nested.pkl"
+
+        class _Inner:
+            def __reduce__(self):
+                import os
+
+                return (os.system, (f"touch {marker}",))
+
+        nested.write_bytes(pickle.dumps(_Inner()))
+
+        class _Outer:
+            def __reduce__(self):
+                return (pd.read_pickle, (str(nested),))
+
+        with pytest.raises(pickle.UnpicklingError):
+            _safe_pickle_load(io.BytesIO(pickle.dumps(_Outer())))
+        assert not marker.exists(), "read_pickle gadget executed — allowlist bypassed"
+
+    @pytest.mark.fast
+    def test_blocks_numpy_load_gadget(self):
+        """``numpy.load`` (a re-entrant/file-reading gadget) must be blocked
+        before it touches the filesystem."""
+        import io
+        import pickle
+
+        from cli.commands.data import _safe_pickle_load
+
+        class _Evil:
+            def __reduce__(self):
+                return (np.load, ("/nonexistent/whatever.npy",))
+
+        with pytest.raises(pickle.UnpicklingError):
+            _safe_pickle_load(io.BytesIO(pickle.dumps(_Evil())))
