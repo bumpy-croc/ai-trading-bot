@@ -1,0 +1,13 @@
+tests/conftest.py:25:4: UP036 Version block is outdated for minimum Python version
+   |
+23 | os.environ.setdefault("ENV", "test")
+24 | 
+25 | if sys.version_info < (3, 10):
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^ UP036
+26 |     try:
+27 |         import src.prediction  # noqa: F401  # ensure real package is loaded
+   |
+   = help: Remove outdated version block
+
+Found 1 error.
+No fixes available (1 hidden fix can be enabled with the `--unsafe-fixes` option).
