@@ -19,7 +19,6 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 from src.infrastructure.logging.config import configure_logging
 from src.trading.symbols.factory import SymbolFactory
 
-
 # Exact ``(module, name)`` allowlist for the restricted cache unpickler.
 #
 # This MUST be an exact allowlist, NOT a ``pandas.*``/``numpy.*`` module-prefix
