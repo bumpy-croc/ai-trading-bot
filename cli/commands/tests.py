@@ -1,7 +1,17 @@
 import argparse
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
+
+# Prefer defusedxml to harden against XXE / entity-expansion ("billion laughs")
+# attacks when parsing JUnit XML. Fall back to the stdlib parser only if the
+# hardened library is unavailable.
+try:
+    import defusedxml.ElementTree as ET
+    from defusedxml.ElementTree import ParseError as _XMLParseError
+except ImportError:  # pragma: no cover - defusedxml is a declared dependency
+    import xml.etree.ElementTree as ET  # nosec B405 - fallback only
+
+    _XMLParseError = ET.ParseError
 
 from cli.commands.test_commands import (
     heartbeat_main,
@@ -26,11 +36,13 @@ def _handle_secrets(ns: argparse.Namespace) -> int:
 def _collect_failures(xml_path: Path) -> list[dict[str, str]]:
     failures: list[dict[str, str]] = []
     try:
-        tree = ET.parse(xml_path)
+        tree = ET.parse(
+            xml_path
+        )  # nosec B314 - ET is defusedxml (hardened); stdlib only as fallback
     except FileNotFoundError:
         print(f"JUnit XML not found: {xml_path}", file=sys.stderr)
         return failures
-    except ET.ParseError as exc:
+    except _XMLParseError as exc:
         print(f"Unable to parse {xml_path}: {exc}", file=sys.stderr)
         return failures
 

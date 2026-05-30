@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 from typing import TYPE_CHECKING
@@ -265,8 +266,11 @@ def create_app() -> "Flask":
             username = request.form.get("username")
             password = request.form.get("password")
             # SEC-002 Fix: Use secure password hash comparison (timing-attack resistant)
+            # Compare the username in constant time too, so a non-default username
+            # cannot be recovered character-by-character via timing.
             if (
-                username == ADMIN_USERNAME
+                username is not None
+                and hmac.compare_digest(username, ADMIN_USERNAME)
                 and password is not None
                 and check_password_hash(ADMIN_PASSWORD_HASH, password)
             ):

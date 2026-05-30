@@ -411,6 +411,21 @@ class CloudTrainingOrchestrator:
                 version_id = datetime.now(UTC).strftime("%Y-%m-%d_%Hh_v1")
                 model_type = "basic"
 
+            # ``version_id`` and ``model_type`` come from a downloaded
+            # ``metadata.json`` that originates outside this process (S3 / training
+            # container). They are used to build registry paths that are later
+            # targets of rmtree/copytree/symlink, so a value containing ``..`` or a
+            # path separator would allow writing or deleting files outside the
+            # model registry. Reject anything that is not a simple identifier.
+            if not re.match(r"^[\w\-.]+$", str(version_id)) or version_id in (".", ".."):
+                raise ArtifactSyncError(
+                    f"Refusing to use unsafe version_id from metadata: {version_id!r}"
+                )
+            if not re.match(r"^[\w\-.]+$", str(model_type)) or model_type in (".", ".."):
+                raise ArtifactSyncError(
+                    f"Refusing to use unsafe model_type from metadata: {model_type!r}"
+                )
+
             # Sync to local registry
             local_registry = get_project_root() / "src" / "ml" / "models"
             symbol = self.config.training_config.symbol.upper()
@@ -489,6 +504,12 @@ class CloudTrainingOrchestrator:
         """
         # Create expected registry directory path
         version_dir = local_registry / symbol / model_type / version_id
+
+        # Defense in depth: ensure the resolved target never escapes the registry
+        # before any destructive rmtree/copytree/symlink operation runs.
+        registry_root = local_registry.resolve()
+        if not version_dir.resolve().is_relative_to(registry_root):
+            raise ArtifactSyncError(f"Computed model path escapes registry root: {version_dir}")
 
         # If artifact is already in the registry at the correct location, just update the symlink
         if artifact_path.resolve() == version_dir.resolve():

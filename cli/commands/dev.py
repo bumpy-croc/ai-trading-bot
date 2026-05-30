@@ -491,7 +491,10 @@ def _dashboard(ns: argparse.Namespace) -> int:
 
     # Get port from environment or use default
     port = int(os.environ.get("PORT", "8090"))
-    host = os.environ.get("HOST", "0.0.0.0")
+    # Bind all interfaces by default so the dashboard is reachable in container
+    # deployments (e.g. Railway). Sensitive endpoints are protected by the
+    # dashboard's MONITORING_DASHBOARD_TOKEN auth guard.
+    host = os.environ.get("HOST", "0.0.0.0")  # nosec B104 - intentional for container deployment
 
     print(f"Starting monitoring dashboard on {host}:{port}")
 

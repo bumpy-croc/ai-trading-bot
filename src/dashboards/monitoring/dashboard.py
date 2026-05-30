@@ -31,6 +31,7 @@ else:
 
 # Standard library imports
 import argparse
+import hmac
 import json
 import logging
 import threading
@@ -64,6 +65,63 @@ from src.performance.metrics import sharpe as perf_sharpe
 
 # Configure logging via centralized config (set by entry points)
 logger = logging.getLogger(__name__)
+
+
+def _is_production_env() -> bool:
+    """Return True unless an explicit dev/test marker is set (fail closed)."""
+    env = os.environ.get("ENV", os.environ.get("FLASK_ENV", "production")).lower()
+    return env not in {"dev", "development", "test", "testing"}
+
+
+def _dashboard_auth_required(view):
+    """Protect sensitive (state-changing / data-leaking) dashboard endpoints.
+
+    Authentication is enforced via a shared token in ``MONITORING_DASHBOARD_TOKEN``
+    (sent as ``X-Dashboard-Token`` or ``Authorization: Bearer <token>``):
+
+    * Token set   -> the request must present a matching token (constant-time check).
+    * Token unset + production -> the endpoint is disabled (fail closed), since the
+      dashboard has no login and may be bound to all interfaces.
+    * Token unset + dev/test   -> allowed, with a warning logged.
+    """
+    import functools
+
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        token = os.environ.get("MONITORING_DASHBOARD_TOKEN", "").strip()
+        if token:
+            provided = request.headers.get("X-Dashboard-Token", "").strip()
+            if not provided:
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    provided = auth_header[len("Bearer ") :].strip()
+            if not (provided and hmac.compare_digest(provided, token)):
+                return jsonify({"success": False, "error": "Unauthorized"}), 401
+            return view(*args, **kwargs)
+        if _is_production_env():
+            logger.error(
+                "Blocked %s: MONITORING_DASHBOARD_TOKEN is not set in a production "
+                "environment; sensitive dashboard endpoints are disabled.",
+                request.path,
+            )
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Endpoint disabled: set MONITORING_DASHBOARD_TOKEN to enable it.",
+                    }
+                ),
+                403,
+            )
+        logger.warning(
+            "MONITORING_DASHBOARD_TOKEN not set; allowing unauthenticated access to %s "
+            "(non-production environment only).",
+            request.path,
+        )
+        return view(*args, **kwargs)
+
+    return wrapper
+
 
 # after imports define typedicts
 
@@ -125,7 +183,17 @@ class MonitoringDashboard:
         from src.infrastructure.runtime.secrets import get_secret_key
 
         self.app.config["SECRET_KEY"] = get_secret_key()
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
+        # Do not allow arbitrary cross-origin connections by default — a wildcard
+        # would let any website open a Socket.IO connection and read pushed
+        # trading/balance data. Default to same-origin; allow an explicit
+        # comma-separated allowlist via MONITORING_CORS_ALLOWED_ORIGINS.
+        _cors_env = os.environ.get("MONITORING_CORS_ALLOWED_ORIGINS", "").strip()
+        cors_allowed_origins: Any = (
+            [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else []
+        )
+        self.socketio = SocketIO(
+            self.app, cors_allowed_origins=cors_allowed_origins, async_mode=_ASYNC_MODE
+        )
 
         # Initialize database manager – avoid passing None to ease mocking in unit tests
         self.db_manager = DatabaseManager() if db_url is None else DatabaseManager(db_url)
@@ -251,6 +319,7 @@ class MonitoringDashboard:
             return jsonify(self.monitoring_config)
 
         @self.app.route("/api/config", methods=["POST"])
+        @_dashboard_auth_required
         def update_config():
             """Update monitoring configuration"""
             new_config = request.json
@@ -367,6 +436,7 @@ class MonitoringDashboard:
             return jsonify(history)
 
         @self.app.route("/api/balance", methods=["POST"])
+        @_dashboard_auth_required
         def update_balance():
             """Manually update balance"""
             data = request.json or {}
@@ -431,6 +501,7 @@ class MonitoringDashboard:
                 return jsonify({"items": [], "error": str(e)}), 200
 
         @self.app.route("/api/debug/positions")
+        @_dashboard_auth_required
         def debug_positions():
             """Debug endpoint showing positions by all statuses for troubleshooting."""
             try:
@@ -470,6 +541,7 @@ class MonitoringDashboard:
                 return jsonify({"error": str(e)}), 500
 
         @self.app.route("/api/debug/fix-positions", methods=["POST"])
+        @_dashboard_auth_required
         def fix_position_inconsistencies():
             """Endpoint to manually trigger position status fixes."""
             try:

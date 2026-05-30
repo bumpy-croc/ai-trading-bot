@@ -20,6 +20,40 @@ from src.infrastructure.logging.config import configure_logging
 from src.trading.symbols.factory import SymbolFactory
 
 
+def _safe_pickle_load(file_obj):
+    """Load a pickle restricted to pandas/numpy data classes.
+
+    Legacy ``.pkl`` cache files are inspected by the cache-manager CLI. A
+    crafted pickle can execute arbitrary code on load (``pickle`` is a known
+    RCE sink), so this restricted ``Unpickler`` only permits the classes needed
+    to reconstruct DataFrames/Series/ndarrays and rejects everything else.
+    """
+    import pickle
+
+    _ALLOWED = {
+        "pandas.core.frame": {"DataFrame"},
+        "pandas.core.series": {"Series"},
+        "pandas.core.indexes.base": {"Index", "_new_Index"},
+        "pandas.core.indexes.datetimes": {"DatetimeIndex", "_new_DatetimeIndex"},
+        "pandas.core.indexes.range": {"RangeIndex"},
+        "pandas.core.indexes.numeric": {"Int64Index", "Float64Index"},
+        "pandas.core.internals.managers": {"BlockManager"},
+        "pandas.core.internals.blocks": {"new_block", "_new_block"},
+        "pandas._libs.internals": {"_unpickle_block"},
+        "numpy": {"ndarray", "dtype"},
+        "numpy.core.multiarray": {"_reconstruct", "scalar"},
+        "numpy._core.multiarray": {"_reconstruct", "scalar"},
+    }
+
+    class _RestrictedUnpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if name in _ALLOWED.get(module, set()):
+                return super().find_class(module, name)
+            raise pickle.UnpicklingError(f"Blocked unpickling of disallowed type {module}.{name}")
+
+    return _RestrictedUnpickler(file_obj).load()
+
+
 def _normalize_symbols(raw: list[str]) -> list[str]:
     """Normalize symbol names to exchange format (e.g. BTC-USD -> BTCUSDT)."""
     normalized = []
@@ -332,8 +366,6 @@ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str
 
 
 def _cache_manager(ns: argparse.Namespace) -> int:
-    import pickle
-
     from src.config.paths import get_cache_dir
     from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
@@ -380,7 +412,7 @@ def _cache_manager(ns: argparse.Namespace) -> int:
             if ns.detailed:
                 try:
                     with open(info["path"], "rb") as f:
-                        data = pickle.load(f)
+                        data = _safe_pickle_load(f)
                     data_info = ""
                     if hasattr(data, "shape"):
                         data_info = f" - {data.shape[0]} rows"
