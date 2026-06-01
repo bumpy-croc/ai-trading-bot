@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from src.config.constants import (
     DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE,
+    DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES,
     DEFAULT_RECONCILE_TIME_BUDGET_SECONDS,
     DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT,
     DEFAULT_RECONCILIATION_DUST_THRESHOLD,
@@ -171,9 +172,20 @@ class PositionReconciler:
         cannot block startup (#628): each unresolved order costs a REST round-trip,
         so an unbounded backlog could hang the trading loop for hours. Orders are
         processed most-recent first; any excess is deferred (and logged, never
-        silently) and retried on the next startup run. Deterministic collapse of a
-        stale backlog (bulk-failing unsent rows) is tracked in #629.
+        silently) and retried on the next startup run. Never-sent rows are bulk-failed
+        first (spot mode only) to collapse the stale backlog (#629).
         """
+        # Drain never-sent PENDING_SUBMIT rows (no exchange id) that can never resolve
+        # here. ONLY safe in spot mode: account synchronization independently re-adopts
+        # any exchange holding that has no DB position, so wrongly failing a row that did
+        # fill is still recovered. In margin mode that backstop is skipped, so leave those
+        # rows to the bounded per-order loop below, which confirms absence on the exchange
+        # before failing (#629).
+        if not self._use_margin:
+            self.db_manager.expire_stale_pending_orders(
+                self.session_id, older_than_minutes=DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES
+            )
+
         results: list[ReconciliationResult] = []
         unresolved = self.db_manager.get_unresolved_orders(self.session_id)
 
