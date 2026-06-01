@@ -13,6 +13,14 @@ from cli.commands.live_health import _health_payload
 from src.infrastructure import liveness
 
 
+@pytest.fixture(autouse=True)
+def _reset_liveness():
+    """Isolate each test from the process-global heartbeat (order-independent)."""
+    liveness.reset()
+    yield
+    liveness.reset()
+
+
 @pytest.mark.fast
 def test_liveness_beat_and_reset():
     liveness.reset()

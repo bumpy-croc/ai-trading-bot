@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import threading
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from cli.core.forward import forward_to_module_main
+
+logger = logging.getLogger(__name__)
 
 
 def _health_payload() -> tuple[int, dict]:
@@ -28,7 +31,8 @@ def _health_payload() -> tuple[int, dict]:
         from src.infrastructure import liveness
 
         age = liveness.seconds_since_beat()
-    except Exception:  # pragma: no cover - never fail the healthcheck on an import error
+    except ImportError as e:  # liveness/constants unavailable — don't fail the healthcheck
+        logger.warning("Health liveness probe unavailable, reporting healthy: %s", e)
         return 200, body
 
     if age is None:

@@ -32,7 +32,8 @@ def seconds_since_beat() -> float | None:
 
 
 def reset() -> None:
-    """Clear the heartbeat (used by tests and when the loop stops cleanly)."""
+    """Clear the heartbeat (used by tests; the running loop never resets it, so a
+    stopped loop correctly goes stale rather than reporting "starting" forever)."""
     global _last_beat
     with _lock:
         _last_beat = None
