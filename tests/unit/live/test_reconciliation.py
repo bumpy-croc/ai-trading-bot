@@ -200,6 +200,45 @@ class TestPositionReconciler:
         first_processed = reconciler._resolve_single_order.call_args_list[0].args[0]
         assert first_processed["id"] == CAP + 49
 
+    def test_resolve_pending_orders_respects_time_budget(self, reconciler, mock_db):
+        """The loop stops on the time budget even below the count cap (#628)."""
+        from unittest.mock import patch
+
+        # 50 orders is below the count cap, so only the time budget can stop the loop.
+        backlog = [
+            {
+                "id": i,
+                "client_order_id": f"c{i}",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "UNKNOWN",
+                "created_at": datetime.now(UTC),
+            }
+            for i in range(50)
+        ]
+        mock_db.get_unresolved_orders.return_value = backlog
+        reconciler._resolve_single_order = MagicMock(
+            side_effect=lambda od: ReconciliationResult(
+                entity_type="order", entity_id=od["id"], status="resolved"
+            )
+        )
+
+        # monotonic call 1 = deadline; calls 2-4 = checks for the first 3 orders
+        # (within budget); call 5 = check for the 4th order -> past the budget -> break.
+        counter = {"n": 0}
+
+        def fake_monotonic() -> float:
+            counter["n"] += 1
+            return 0.0 if counter["n"] <= 4 else 10_000.0
+
+        with patch("src.engines.live.reconciliation.time.monotonic", side_effect=fake_monotonic):
+            results = reconciler.resolve_pending_orders()
+
+        # Stopped by the budget at 3 orders, not by the count cap.
+        assert reconciler._resolve_single_order.call_count == 3
+        assert len(results) == 3
+
     def test_resolve_pending_order_not_found_pending_submit(
         self, reconciler, mock_exchange, mock_db
     ):

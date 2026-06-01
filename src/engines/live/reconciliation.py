@@ -171,7 +171,8 @@ class PositionReconciler:
         cannot block startup (#628): each unresolved order costs a REST round-trip,
         so an unbounded backlog could hang the trading loop for hours. Orders are
         processed most-recent first; any excess is deferred (and logged, never
-        silently) to a later run / the stale-order cleanup.
+        silently) and retried on the next startup run. Deterministic collapse of a
+        stale backlog (bulk-failing unsent rows) is tracked in #629.
         """
         results: list[ReconciliationResult] = []
         unresolved = self.db_manager.get_unresolved_orders(self.session_id)
@@ -197,7 +198,7 @@ class PositionReconciler:
         if processed < total:
             logger.warning(
                 "Reconciled %d of %d pending orders this run (cap=%d, budget=%ds); "
-                "deferred %d to a later run / stale-order cleanup so startup is not blocked.",
+                "deferred %d to the next startup run so the trading loop is not blocked.",
                 processed,
                 total,
                 DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE,
