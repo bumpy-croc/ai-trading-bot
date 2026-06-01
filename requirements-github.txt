@@ -17,6 +17,7 @@ textblob==0.17.1
 nltk==3.9.1
 ccxt==4.4.85
 tqdm==4.66.3
+defusedxml==0.7.1
 matplotlib==3.8.2
 psutil==5.9.6
 pyarrow==20.0.0

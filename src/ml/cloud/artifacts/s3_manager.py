@@ -158,6 +158,14 @@ class S3ArtifactManager:
                         continue
 
                     local_file = local_dir / relative_path
+                    # S3 object keys may legally contain ".." segments; ensure the
+                    # download target stays within ``local_dir`` (path traversal).
+                    if not local_file.resolve().is_relative_to(local_dir.resolve()):
+                        logger.warning(
+                            "Skipping S3 object with unsafe key outside target dir: %s",
+                            s3_key,
+                        )
+                        continue
                     local_file.parent.mkdir(parents=True, exist_ok=True)
 
                     self._s3_client.download_file(bucket, s3_key, str(local_file))

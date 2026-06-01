@@ -62,6 +62,10 @@ DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 # Error Handling Constants
 DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 10  # Maximum errors before shutdown
+# After the database has been continuously unreachable for this long, the live
+# loop stops opening new positions (close-only) while it keeps retrying, to
+# avoid order churn during a prolonged outage. Exits and server-side stops still run.
+DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS = 1800  # 30 minutes
 
 # Health Monitor Constants (distinct from CPU optimization intervals)
 DEFAULT_HEALTH_BASE_CHECK_INTERVAL = 60  # Base health check interval in seconds
