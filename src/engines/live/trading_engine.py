@@ -1659,6 +1659,8 @@ class LiveTradingEngine:
 
     def _trading_loop(self, symbol: str, timeframe: str, max_steps: int | None = None) -> None:
         """Main trading loop"""
+        from src.infrastructure import liveness  # shared loop-liveness for /health (#627)
+
         logger.info("Trading loop started")
         steps = 0
         cfg = get_config()
@@ -1673,6 +1675,7 @@ class LiveTradingEngine:
                 self.stop()
                 break
             steps += 1
+            liveness.beat()  # record loop liveness for the /health endpoint (#627)
             try:
                 # For mock and real providers, update live data if supported.
                 # Skip when WS kline cache is active (no REST needed).
