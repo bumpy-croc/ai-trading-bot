@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import queue
 import signal
 import sys
 import threading
@@ -470,6 +471,10 @@ class LiveTradingEngine:
         self._ws_kline_active = False
         self._ws_kline_provider = None
         self._ws_health_thread = None
+        # Stop-loss fills are detected on the OrderTracker poll thread but their
+        # bookkeeping exit is deferred to the trading loop so a slow/failing close
+        # can't block order polling or force-remove a filled order (#631).
+        self._pending_fill_exits: queue.SimpleQueue = queue.SimpleQueue()
 
         # Performance tracker (unified with backtest engine)
         from src.performance.tracker import PerformanceTracker
@@ -1454,6 +1459,80 @@ class LiveTradingEngine:
         self._ws_health_thread.start()
         logger.info("WebSocket health monitor started")
 
+    def _ensure_ws_health_monitor_alive(self) -> None:
+        """Watchdog-on-watchdog: restart the WS health monitor if its thread died.
+
+        The monitor is the lone WS-staleness watchdog; if its thread dies, stale
+        streams go unnoticed and never reconnect. The main trading loop — itself
+        liveness-tracked (#627) and crash-exiting (#630) — supervises it here (#631).
+        The initial ``self._ws_health_thread`` write happens-before the loop thread
+        is started, and thereafter only the loop thread writes it, so the two
+        writers never overlap and no lock is needed. Respawns are naturally spaced
+        (the monitor's grace-period wait) so a thread that re-dies immediately
+        can't busy-respawn.
+        """
+        # Only relevant once a stream the monitor watches has been started.
+        if not (self._ws_kline_active or self._user_data_processor):
+            return
+        if not self.is_running or self.stop_event.is_set():
+            return
+        t = self._ws_health_thread
+        if t is not None and t.is_alive():
+            return
+        logger.critical("WS health monitor thread is dead — restarting it (watchdog).")
+        try:
+            self._start_ws_health_monitor()
+        except Exception as e:
+            logger.error("Failed to restart WS health monitor: %s", e)
+
+    def _drain_pending_fill_exits(self) -> None:
+        """Execute stop-loss-fill exits deferred from the OrderTracker poll thread.
+
+        The poll thread enqueues only identifiers (it must stay fast and unblocked);
+        the actual close runs here, on the trading loop, where exits already happen.
+        Each item is isolated so one bad item can't abort the rest of the queue. A
+        close that fails is logged and absorbed by ``_execute_exit`` itself, and the
+        periodic/startup reconcilers (#628/#629) recover an unclosed position (they
+        detect one whose stop-loss has filled on the exchange). The stop-loss has
+        already executed on-exchange, so this is purely local bookkeeping and a
+        small latency here is harmless (#631).
+        """
+        while True:
+            try:
+                position_order_id, fill_price = self._pending_fill_exits.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                position = self.live_position_tracker.get_position(position_order_id)
+                if position is None:
+                    logger.info(
+                        "Deferred stop-loss exit skipped — position %s already closed",
+                        position_order_id,
+                    )
+                    continue
+                self._execute_exit(
+                    position,
+                    reason="stop_loss",
+                    limit_price=fill_price,
+                    current_price=float(fill_price),
+                    candle_high=None,
+                    candle_low=None,
+                    candle=None,
+                    skip_live_close=True,
+                )
+            except Exception as e:
+                # _execute_exit logs and absorbs its own close failures (reconciliation
+                # then recovers an unclosed position); reaching here means an unexpected
+                # error in the drain itself (e.g. the position lookup). Isolate it so
+                # one bad item can't abort the rest of the queue.
+                logger.critical(
+                    "CRITICAL: unexpected error draining deferred stop-loss exit for "
+                    "position %s: %s. Left for reconciliation to recover.",
+                    position_order_id,
+                    e,
+                    exc_info=True,
+                )
+
     def _ws_health_loop(self) -> None:
         """Monitor WebSocket streams and trigger reconnection on failure."""
         from src.config.constants import DEFAULT_WS_HEALTH_CHECK_INTERVAL
@@ -1517,11 +1596,18 @@ class LiveTradingEngine:
                 )
             except Exception as e:
                 logger.error("Kline REST resync failed: %s", e)
-        # Attempt reconnect
-        if (
-            hasattr(self._ws_kline_provider, "reconnect_kline")
-            and self._ws_kline_provider.reconnect_kline()
-        ):
+        # Attempt reconnect. The call is bounded by the REST socket timeout
+        # (#631); treat any failure as "stay on REST polling" rather than letting
+        # it abort recovery / propagate into the WS health thread.
+        reconnected = False
+        try:
+            reconnected = bool(
+                hasattr(self._ws_kline_provider, "reconnect_kline")
+                and self._ws_kline_provider.reconnect_kline()
+            )
+        except Exception as e:
+            logger.error("Kline reconnect attempt failed: %s", e)
+        if reconnected:
             self._ws_kline_active = True
             logger.info("Kline WebSocket reconnected")
         else:
@@ -1546,11 +1632,16 @@ class LiveTradingEngine:
         # 3. Enable REST polling as fallback
         if self.order_tracker:
             self.order_tracker.enable_polling()
-        # 4. Resync order and position state from REST
-        if self.order_tracker:
-            self.order_tracker.poll_once()
-        if self._periodic_reconciler:
-            self._periodic_reconciler.reconcile_once()
+        # 4. Resync order and position state from REST. Bounded by the REST
+        #    socket timeout (#631); a failed resync must not abort the rest of
+        #    recovery — REST polling (step 3) keeps orders tracked meanwhile.
+        try:
+            if self.order_tracker:
+                self.order_tracker.poll_once()
+            if self._periodic_reconciler:
+                self._periodic_reconciler.reconcile_once()
+        except Exception as e:
+            logger.error("User-stream REST resync failed: %s", e)
         # 5. If processor didn't stop cleanly, stay degraded — don't reconnect
         #    while the old thread may still be mutating order state
         if not processor_clean:
@@ -1562,24 +1653,34 @@ class LiveTradingEngine:
         # 6. Attempt user stream reconnect with fresh callback
         reconnected = False
         if hasattr(self.exchange_interface, "reconnect_user"):
-            new_processor = UserDataProcessor(
-                order_tracker=self.order_tracker,
-            )
-            if self.exchange_interface.reconnect_user(
-                on_user_event=new_processor.enqueue,
-            ):
-                self._user_data_processor = new_processor
-                self._user_data_processor.start()
-                # Post-reconnect catch-up: reconcile events from the handoff gap
-                # before disabling polling, so nothing is lost
-                if self.order_tracker:
-                    self.order_tracker.poll_once()
-                if self._periodic_reconciler:
-                    self._periodic_reconciler.reconcile_once()
-                if self.order_tracker:
-                    self.order_tracker.disable_polling()
-                logger.info("User data WebSocket reconnected")
-                reconnected = True
+            try:
+                new_processor = UserDataProcessor(
+                    order_tracker=self.order_tracker,
+                )
+                if self.exchange_interface.reconnect_user(
+                    on_user_event=new_processor.enqueue,
+                ):
+                    self._user_data_processor = new_processor
+                    self._user_data_processor.start()
+                    reconnected = True
+                    logger.info("User data WebSocket reconnected")
+                    # Post-reconnect catch-up: reconcile events from the handoff
+                    # gap before disabling polling, so nothing is lost. A catch-up
+                    # failure leaves REST polling on as a safe fallback rather than
+                    # undoing the reconnect.
+                    try:
+                        if self.order_tracker:
+                            self.order_tracker.poll_once()
+                        if self._periodic_reconciler:
+                            self._periodic_reconciler.reconcile_once()
+                        if self.order_tracker:
+                            self.order_tracker.disable_polling()
+                    except Exception as e:
+                        logger.error(
+                            "Post-reconnect catch-up failed (staying on REST polling): %s", e
+                        )
+            except Exception as e:
+                logger.error("User stream reconnect attempt failed: %s", e)
         if not reconnected:
             self.exchange_interface.mark_user_degraded()
             logger.warning("User stream reconnect failed — order polling resumed")
@@ -1739,6 +1840,11 @@ class LiveTradingEngine:
             steps += 1
             liveness.beat()  # record loop liveness for the /health endpoint (#627)
             try:
+                # Supervise the WS health monitor and drain deferred stop-loss
+                # exits first, so both run every iteration even when a data outage
+                # would `continue` below before reaching them (#631).
+                self._ensure_ws_health_monitor_alive()
+                self._drain_pending_fill_exits()
                 # For mock and real providers, update live data if supported.
                 # Skip when WS kline cache is active (no REST needed).
                 if not self._ws_kline_active and hasattr(self.data_provider, "update_live_data"):
@@ -3206,34 +3312,25 @@ class LiveTradingEngine:
             average_price=avg_price,
         )
 
-        # Check if this is a stop-loss order fill - need to close the position.
-        # positions property returns a thread-safe copy. _execute_exit has its
-        # own defensive has_position() check to handle the race where another
-        # thread closes the position between our lookup and the exit call.
-        position_to_close: Position | None = None
+        # If this is a stop-loss order fill, the position must be closed — but the
+        # close (DB writes, P&L bookkeeping) is DEFERRED to the trading loop via a
+        # queue rather than run here on the OrderTracker poll thread. Running it
+        # inline blocked all order polling on a slow close and, on failure, drove
+        # the order toward force-removal (orphaning the position). The stop-loss
+        # has already executed on-exchange, so the loop drains and runs the exit
+        # with skip_live_close=True; a drain failure is backstopped by the
+        # periodic/startup reconcilers (#631). positions returns a thread-safe copy.
         for pos_order_id, position in self.live_position_tracker.positions.items():
             if position.stop_loss_order_id == order_id:
-                position_to_close = position
                 logger.warning(
-                    "Stop-loss order %s filled for position %s at $%.2f - closing position",
+                    "Stop-loss order %s filled for position %s at $%.2f - "
+                    "queuing position close for the trading loop",
                     order_id,
                     pos_order_id,
                     avg_price,
                 )
+                self._pending_fill_exits.put((pos_order_id, float(avg_price)))
                 break
-        if position_to_close:
-            # _execute_exit re-verifies the position still exists under the
-            # tracker lock before proceeding, preventing double-close races.
-            self._execute_exit(
-                position_to_close,
-                reason="stop_loss",
-                limit_price=avg_price,
-                current_price=float(avg_price),
-                candle_high=None,
-                candle_low=None,
-                candle=None,
-                skip_live_close=True,
-            )
 
     def _handle_partial_fill(
         self, order_id: str, symbol: str, new_filled_qty: float, avg_price: float
