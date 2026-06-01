@@ -279,10 +279,16 @@ DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"
 # - INFERENCE_TIMEOUT_SECONDS
 # - API_REQUEST_TIMEOUT_SECONDS
 # - DATA_FETCH_TIMEOUT_SECONDS
+# - BINANCE_REST_TIMEOUT_SECONDS
 DEFAULT_MODEL_LOAD_TIMEOUT = 60.0  # Timeout for loading ML models (ONNX, Keras)
 DEFAULT_INFERENCE_TIMEOUT = 30.0  # Timeout for model inference
 DEFAULT_API_REQUEST_TIMEOUT = 30.0  # Timeout for external API requests
 DEFAULT_DATA_FETCH_TIMEOUT = 60.0  # Timeout for historical data fetches
+# Socket timeout (seconds) applied to every Binance REST call via the client's
+# requests_params. Bounds disconnect-path resync/reconnect and order polling so
+# a half-open TCP socket can't hang the WS health thread or loop (#631). Kept
+# below the WS health check interval so a stuck call returns before stalling.
+DEFAULT_BINANCE_REST_TIMEOUT = 15.0
 
 # Numeric Precision Constants
 DEFAULT_EPSILON = 1e-9  # Small value for floating point comparisons
