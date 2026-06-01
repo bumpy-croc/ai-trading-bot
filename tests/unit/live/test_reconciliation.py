@@ -239,10 +239,11 @@ class TestPositionReconciler:
         assert reconciler._resolve_single_order.call_count == 3
         assert len(results) == 3
 
-    def test_resolve_pending_orders_bulk_fails_stale_first(self, reconciler, mock_db):
-        """Never-sent PENDING_SUBMIT rows are bulk-failed before the per-order loop (#629)."""
+    def test_resolve_pending_orders_bulk_fails_stale_first_spot(self, reconciler, mock_db):
+        """Spot mode bulk-fails never-sent PENDING_SUBMIT rows before the per-order loop (#629)."""
         from src.config.constants import DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES
 
+        # The default reconciler fixture is spot (use_margin=False).
         mock_db.get_unresolved_orders.return_value = []
 
         reconciler.resolve_pending_orders()
@@ -250,6 +251,25 @@ class TestPositionReconciler:
         mock_db.expire_stale_pending_orders.assert_called_once_with(
             reconciler.session_id, older_than_minutes=DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES
         )
+
+    def test_resolve_pending_orders_skips_bulk_fail_in_margin_mode(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Margin mode skips the bulk-fail (no spot account-sync backstop) so a
+        crash-interrupted fill is not orphaned; rows go through the per-order exchange
+        check instead (#629)."""
+        margin_reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            use_margin=True,
+        )
+        mock_db.get_unresolved_orders.return_value = []
+
+        margin_reconciler.resolve_pending_orders()
+
+        mock_db.expire_stale_pending_orders.assert_not_called()
 
     def test_resolve_pending_order_not_found_pending_submit(
         self, reconciler, mock_exchange, mock_db

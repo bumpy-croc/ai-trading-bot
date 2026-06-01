@@ -3473,7 +3473,8 @@ class DatabaseManager:
 
         Returns the number of rows failed.
         """
-        cutoff = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(minutes=older_than_minutes)
         with self.get_session() as session:
             result = session.execute(
                 sa.text(
@@ -3486,7 +3487,7 @@ class DatabaseManager:
                       AND created_at < :cutoff
                     """
                 ),
-                {"now": datetime.now(UTC), "sid": session_id, "cutoff": cutoff},
+                {"now": now, "sid": session_id, "cutoff": cutoff},
             )
             failed = int(result.rowcount or 0)
             session.commit()
