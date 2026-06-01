@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Live trading engine no longer shuts itself down during transient database
+  outages. Transient DB-connectivity errors (DNS resolution failures, dropped
+  connections, brief Postgres unavailability) are now classified and *ridden
+  out* with a bounded backoff instead of counting toward
+  `max_consecutive_errors`. This was the root cause of the 2026-05-19 incident:
+  a multi-hour Railway internal-DNS outage made `postgres.railway.internal`
+  unresolvable, every loop iteration raised `OperationalError`, the
+  consecutive-error limit tripped, and **both the staging and production bots
+  went offline — silently — for ~12 days**. `pool_pre_ping` reconnects
+  automatically once the database returns. Permanent faults (bad credentials,
+  missing role/database, permission denied) are excluded and still fail fast,
+  and an outage lasting more than 30 minutes drops the engine into close-only
+  mode (new entries suspended; exits and server-side stop-losses continue).
+
+### Added
+- Heartbeat staleness monitor (`scripts/check_heartbeat.py` +
+  `.github/workflows/heartbeat-monitor.yml`): a scheduled, read-only CI job that
+  fails (notifying maintainers) when an active trading session's
+  `account_history` snapshot goes stale beyond a threshold (default 2h) — the
+  canonical liveness signal. Requires the `RAILWAY_STAGING_DATABASE_URL` /
+  `RAILWAY_PRODUCTION_DATABASE_URL` repository secrets.
+
+### Changed
+- `railway.json`: raised the Trading Bot `restartPolicyMaxRetries` from 3 to 10
+  so Railway keeps retrying through longer transient infrastructure failures.
+
 ### Security
 - Hardened a batch of security findings from a repo-wide scan (bandit + manual
   audit):
