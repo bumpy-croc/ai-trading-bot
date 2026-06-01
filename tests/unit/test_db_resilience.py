@@ -438,5 +438,46 @@ def test_drain_failure_is_isolated_and_logged(caplog) -> None:
         engine._drain_pending_fill_exits()
 
     assert engine._execute_exit.call_count == 2  # did not abort after the first failure
-    assert "deferred stop-loss exit failed" in caplog.text
+    assert "draining deferred stop-loss exit" in caplog.text
     assert engine._pending_fill_exits.empty()
+
+
+# --------------------------------------------------------------------------- #
+# Disconnect handlers stay exception-safe once REST calls can time out (#631)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.fast
+def test_kline_disconnect_degrades_when_reconnect_raises() -> None:
+    """A raising kline reconnect (e.g. REST timeout) degrades to polling, not crash."""
+    engine = _make_engine()
+    engine._kline_buffer = None  # skip REST resync
+    provider = Mock()
+    provider.reconnect_kline.side_effect = TimeoutError("rest socket hung")
+    engine._ws_kline_provider = provider
+    engine._ws_kline_active = True
+
+    engine._handle_kline_disconnect()  # must not propagate
+
+    provider.mark_kline_degraded.assert_called_once()
+    assert engine._ws_kline_active is False
+
+
+@pytest.mark.fast
+def test_user_stream_disconnect_survives_resync_timeout() -> None:
+    """A REST resync timeout mid-recovery must not abort the handler (#631)."""
+    engine = _make_engine()
+    engine.enable_live_trading = True
+    exchange = Mock()
+    exchange.reconnect_user.return_value = False  # force the degraded fallback
+    engine.exchange_interface = exchange
+    tracker = Mock()
+    tracker.poll_once.side_effect = TimeoutError("rest socket hung")  # step-4 resync
+    engine.order_tracker = tracker
+    engine._user_data_processor = None
+    engine._periodic_reconciler = None
+
+    with patch("src.engines.live.user_data_processor.UserDataProcessor"):
+        engine._handle_user_stream_disconnect()  # must not propagate
+
+    exchange.mark_user_degraded.assert_called_once()

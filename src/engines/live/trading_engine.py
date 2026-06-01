@@ -1465,9 +1465,11 @@ class LiveTradingEngine:
         The monitor is the lone WS-staleness watchdog; if its thread dies, stale
         streams go unnoticed and never reconnect. The main trading loop — itself
         liveness-tracked (#627) and crash-exiting (#630) — supervises it here (#631).
-        Only the loop thread writes ``self._ws_health_thread`` after start(), so no
-        lock is needed. Respawns are naturally spaced (the monitor's grace-period
-        wait) so a thread that re-dies immediately can't busy-respawn.
+        The initial ``self._ws_health_thread`` write happens-before the loop thread
+        is started, and thereafter only the loop thread writes it, so the two
+        writers never overlap and no lock is needed. Respawns are naturally spaced
+        (the monitor's grace-period wait) so a thread that re-dies immediately
+        can't busy-respawn.
         """
         # Only relevant once a stream the monitor watches has been started.
         if not (self._ws_kline_active or self._user_data_processor):
@@ -1488,11 +1490,12 @@ class LiveTradingEngine:
 
         The poll thread enqueues only identifiers (it must stay fast and unblocked);
         the actual close runs here, on the trading loop, where exits already happen.
-        Each item is isolated: a failure is logged and left for the periodic/startup
-        reconcilers (#628/#629) — which detect an open position whose stop-loss has
-        filled on the exchange — rather than aborting the drain or orphaning the
-        order. The stop-loss has already executed on-exchange, so this is purely
-        local bookkeeping and a small latency here is harmless (#631).
+        Each item is isolated so one bad item can't abort the rest of the queue. A
+        close that fails is logged and absorbed by ``_execute_exit`` itself, and the
+        periodic/startup reconcilers (#628/#629) recover an unclosed position (they
+        detect one whose stop-loss has filled on the exchange). The stop-loss has
+        already executed on-exchange, so this is purely local bookkeeping and a
+        small latency here is harmless (#631).
         """
         while True:
             try:
@@ -1518,9 +1521,13 @@ class LiveTradingEngine:
                     skip_live_close=True,
                 )
             except Exception as e:
+                # _execute_exit logs and absorbs its own close failures (reconciliation
+                # then recovers an unclosed position); reaching here means an unexpected
+                # error in the drain itself (e.g. the position lookup). Isolate it so
+                # one bad item can't abort the rest of the queue.
                 logger.critical(
-                    "CRITICAL: deferred stop-loss exit failed for position %s: %s. "
-                    "Left for reconciliation to recover.",
+                    "CRITICAL: unexpected error draining deferred stop-loss exit for "
+                    "position %s: %s. Left for reconciliation to recover.",
                     position_order_id,
                     e,
                     exc_info=True,
