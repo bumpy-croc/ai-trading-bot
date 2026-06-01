@@ -335,6 +335,9 @@ DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN = 10  # Minutes for timestamp
 # excess beyond the cap / time budget is deferred to the next startup run.
 DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE = 200
 DEFAULT_RECONCILE_TIME_BUDGET_SECONDS = 120
+# Age (minutes) past which a never-sent PENDING_SUBMIT order (no exchange id) is
+# bulk-failed by the startup cleanup, draining stale-order backlogs (#629).
+DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES = 60
 
 # WebSocket Stream Constants
 DEFAULT_WS_KLINE_STALENESS_THRESHOLD = 120  # Seconds before kline stream considered stale

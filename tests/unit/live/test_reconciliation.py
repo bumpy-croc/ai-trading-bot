@@ -239,6 +239,18 @@ class TestPositionReconciler:
         assert reconciler._resolve_single_order.call_count == 3
         assert len(results) == 3
 
+    def test_resolve_pending_orders_bulk_fails_stale_first(self, reconciler, mock_db):
+        """Never-sent PENDING_SUBMIT rows are bulk-failed before the per-order loop (#629)."""
+        from src.config.constants import DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES
+
+        mock_db.get_unresolved_orders.return_value = []
+
+        reconciler.resolve_pending_orders()
+
+        mock_db.expire_stale_pending_orders.assert_called_once_with(
+            reconciler.session_id, older_than_minutes=DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES
+        )
+
     def test_resolve_pending_order_not_found_pending_submit(
         self, reconciler, mock_exchange, mock_db
     ):
