@@ -11,6 +11,9 @@ Covers:
 - Loop behaviour: transient DB errors are ridden out (not counted toward
   ``max_consecutive_errors``); permanent/unrelated errors still trigger
   shutdown; a prolonged outage escalates to close-only mode.
+- An abnormal loop death (unhandled crash or error exhaustion) is recorded so
+  ``start()`` exits non-zero for an orchestrator restart instead of exiting 0
+  and leaving the bot silently dead (#630).
 """
 
 from __future__ import annotations
@@ -155,6 +158,8 @@ def test_transient_db_error_in_loop_is_ridden_out() -> None:
     assert engine._get_latest_data.call_count == 3
     assert engine.consecutive_errors == 0
     assert engine.db_unreachable_since is not None
+    # A clean max_steps stop is not a crash — start() would exit 0 here.
+    assert engine._loop_crashed is False
 
 
 @pytest.mark.fast
@@ -171,6 +176,8 @@ def test_non_transient_error_in_loop_still_shuts_down() -> None:
     # Shut down after the first counted error — did not run all five iterations.
     assert engine._get_latest_data.call_count == 1
     assert engine.is_running is False
+    # Error exhaustion is an abnormal stop: start() must exit non-zero (#630).
+    assert engine._loop_crashed is True
 
 
 @pytest.mark.fast
@@ -189,3 +196,85 @@ def test_prolonged_db_outage_enters_close_only() -> None:
     engine._trading_loop("BTCUSDT", "1h", max_steps=1)
 
     assert engine._close_only_mode is True
+
+
+# --------------------------------------------------------------------------- #
+# Loop-death -> non-zero exit so the orchestrator restarts the process (#630)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.fast
+def test_run_trading_loop_records_unhandled_crash() -> None:
+    """A crash escaping the loop is caught and recorded, not silently swallowed."""
+    engine = _make_engine()
+    engine._trading_loop = Mock(side_effect=RuntimeError("loop blew up"))
+
+    # The thread target must not propagate — it records the crash instead.
+    engine._run_trading_loop("BTCUSDT", "1h")
+
+    assert engine._loop_crashed is True
+
+
+@pytest.mark.fast
+def test_exit_if_loop_crashed_exits_nonzero_when_opted_in() -> None:
+    """An abnormal loop death makes start() exit 1 so Railway ON_FAILURE restarts."""
+    engine = _make_engine()
+    engine._loop_crashed = True
+    engine.main_thread = None  # nothing to join in this unit
+
+    with pytest.raises(SystemExit) as exc_info:
+        engine._exit_if_loop_crashed(exit_on_crash=True)
+
+    assert exc_info.value.code == 1
+
+
+@pytest.mark.fast
+def test_exit_if_loop_crashed_is_noop_after_clean_stop() -> None:
+    """A clean stop leaves the process to exit 0 (no SystemExit raised)."""
+    engine = _make_engine()
+    engine._loop_crashed = False
+
+    # Must return normally — start() then exits 0 as before.
+    assert engine._exit_if_loop_crashed(exit_on_crash=True) is None
+
+
+@pytest.mark.fast
+def test_exit_if_loop_crashed_returns_when_not_opted_in() -> None:
+    """A crash must NOT kill library callers (e.g. the migration baseline tool)
+    that drive start() and read results afterward — only the runner opts in."""
+    engine = _make_engine()
+    engine._loop_crashed = True
+    engine.main_thread = None
+
+    # exit_on_crash defaults False: returns instead of calling sys.exit().
+    assert engine._exit_if_loop_crashed(exit_on_crash=False) is None
+
+
+@pytest.mark.fast
+def test_start_exits_nonzero_on_loop_crash_when_opted_in() -> None:
+    """End-to-end wiring: start(exit_on_crash=True) routes the loop through the
+    crash-catching wrapper and exits 1 when it dies (locks the thread target)."""
+    engine = _make_engine()
+    engine.resume_from_last_balance = False
+    engine._start_websocket_streams = Mock()  # no real WS in this unit
+    engine._trading_loop = Mock(side_effect=RuntimeError("loop blew up"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        engine.start("BTCUSDT", "1h", exit_on_crash=True)
+
+    assert exc_info.value.code == 1
+    assert engine._loop_crashed is True
+
+
+@pytest.mark.fast
+def test_start_returns_on_loop_crash_when_not_opted_in() -> None:
+    """End-to-end wiring: without opt-in, start() returns even if the loop crashes."""
+    engine = _make_engine()
+    engine.resume_from_last_balance = False
+    engine._start_websocket_streams = Mock()
+    engine._trading_loop = Mock(side_effect=RuntimeError("loop blew up"))
+
+    engine.start("BTCUSDT", "1h")  # exit_on_crash defaults False
+
+    # Recorded the crash but did not exit the process.
+    assert engine._loop_crashed is True

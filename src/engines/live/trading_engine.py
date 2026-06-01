@@ -532,6 +532,9 @@ class LiveTradingEngine:
 
         # Threading
         self.main_thread = None
+        # Set when the trading loop dies abnormally (unhandled crash or error
+        # exhaustion) so start() can exit non-zero for an orchestrator restart (#630).
+        self._loop_crashed = False
         self.stop_event = threading.Event()
 
         # Optional regime detector (feature-gated)
@@ -1156,8 +1159,20 @@ class LiveTradingEngine:
                 self._runtime_dataset = None
                 self._runtime_warmup = 0
 
-    def start(self, symbol: str, timeframe: str = "1h", max_steps: int | None = None) -> None:
-        """Start the live trading engine"""
+    def start(
+        self,
+        symbol: str,
+        timeframe: str = "1h",
+        max_steps: int | None = None,
+        exit_on_crash: bool = False,
+    ) -> None:
+        """Start the live trading engine.
+
+        ``exit_on_crash`` makes an abnormal loop death exit the process non-zero
+        so an orchestrator restarts it (#630). It defaults to False so start()
+        stays a well-behaved library call for callers that read results after it
+        returns (e.g. the migration baseline tool); the production runner opts in.
+        """
         if self.is_running:
             logger.warning("Trading engine is already running")
             return
@@ -1338,7 +1353,7 @@ class LiveTradingEngine:
 
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(
-            target=self._trading_loop, args=(symbol, timeframe, max_steps)
+            target=self._run_trading_loop, args=(symbol, timeframe, max_steps)
         )
         self.main_thread.daemon = True
         self.main_thread.start()
@@ -1351,6 +1366,11 @@ class LiveTradingEngine:
             logger.info("Received interrupt signal")
         finally:
             self.stop()
+
+        # After a clean stop this is a no-op; after an abnormal loop death it
+        # exits the process non-zero (when opted in) so the orchestrator
+        # restarts it (#630).
+        self._exit_if_loop_crashed(exit_on_crash)
 
     def _enter_close_only_mode(self) -> None:
         """Enter close-only mode: no new entries, exits/stops/trailing still active."""
@@ -1656,6 +1676,48 @@ class LiveTradingEngine:
         logger.info("Received signal %s", signum)
         self.stop()
         sys.exit(0)
+
+    def _run_trading_loop(self, symbol: str, timeframe: str, max_steps: int | None = None) -> None:
+        """Thread target so an unhandled exception can't kill the loop *silently*.
+
+        A bare daemon thread that raises just vanishes, leaving the process alive
+        but brain-dead (HTTP server up, loop gone) — the zombie that hid the
+        2026-05-19 outage for 12 days. Catch any unhandled exception, record it,
+        and let start() turn it into a non-zero exit for an orchestrator restart (#630).
+        """
+        try:
+            self._trading_loop(symbol, timeframe, max_steps)
+        except Exception as e:
+            self._loop_crashed = True
+            logger.critical("Trading loop terminated unexpectedly: %s", e, exc_info=True)
+
+    def _exit_if_loop_crashed(self, exit_on_crash: bool) -> None:
+        """Exit the process non-zero if the trading loop died abnormally (#630).
+
+        A clean stop (signal, explicit stop, or max_steps) leaves this a no-op.
+        On an abnormal death (unhandled crash or consecutive-error exhaustion):
+        when *exit_on_crash* (the production runner), exit 1 so the orchestrator
+        restarts the process instead of leaving the bot silently dead; otherwise
+        return so library callers that read results after start() keep working.
+        """
+        if not (self._loop_crashed and exit_on_crash):
+            return
+        # The loop thread may still be unwinding its own shutdown (e.g. closing
+        # positions); wait so a daemon thread isn't killed mid-cleanup. We exit
+        # regardless of the join result (the daemon dies with the process), but
+        # surface a wedged cleanup so it's visible rather than silent.
+        if self.main_thread is not None and self.main_thread != threading.current_thread():
+            self.main_thread.join(timeout=30)
+            if self.main_thread.is_alive():
+                logger.error(
+                    "Loop thread still alive after 30s join; exiting anyway — "
+                    "shutdown cleanup may be incomplete."
+                )
+        logger.critical(
+            "Trading loop ended abnormally; exiting with code 1 to trigger an "
+            "orchestrator restart instead of running dead."
+        )
+        sys.exit(1)
 
     def _trading_loop(self, symbol: str, timeframe: str, max_steps: int | None = None) -> None:
         """Main trading loop"""
@@ -2020,6 +2082,8 @@ class LiveTradingEngine:
                         f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.",
                         exc_info=True,
                     )
+                    # Abnormal stop: signal start() to exit non-zero for a restart (#630).
+                    self._loop_crashed = True
                     self.stop()
                     break
                 # Exponential backoff with adaptive intervals
