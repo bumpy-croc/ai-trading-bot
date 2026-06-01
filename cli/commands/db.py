@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import os
+import re
 import subprocess
 import sys
 import traceback
@@ -227,9 +228,16 @@ def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
             results["alembic_version_present"] = "alembic_version" in actual_tables
             for t in expected_tables:
                 if t in actual_tables:
+                    # Table names originate from SQLAlchemy ORM metadata (trusted),
+                    # but validate as a plain identifier and quote it before
+                    # interpolation so this can never become a SQL-injection sink.
+                    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", t):
+                        results["row_counts"][t] = None
+                        continue
                     try:
-                        count_q = text(f"SELECT COUNT(*) FROM {t}")
-                        results["row_counts"][t] = int(conn.execute(count_q).scalar() or 0)
+                        quoted = conn.engine.dialect.identifier_preparer.quote(t)
+                        sql = f"SELECT COUNT(*) FROM {quoted}"  # nosec B608 - identifier validated and quoted
+                        results["row_counts"][t] = int(conn.execute(text(sql)).scalar() or 0)
                     except SQLAlchemyError:
                         results["row_counts"][t] = None
     except Exception as exc:  # noqa: BLE001

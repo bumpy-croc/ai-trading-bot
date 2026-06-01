@@ -1,0 +1,46 @@
+name: Heartbeat Monitor
+
+# Periodically verifies the live trading bots are still writing account_history
+# snapshots. If a bot's heartbeat goes stale, this job fails and GitHub notifies
+# maintainers — catching a silent outage within ~2.5h (30-min cron + 120-min
+# staleness threshold) instead of the ~12 days it took on 2026-05-19.
+#
+# Requires repository secrets:
+#   RAILWAY_STAGING_DATABASE_URL
+#   RAILWAY_PRODUCTION_DATABASE_URL
+# A target is simply skipped if its secret is absent.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every 30 minutes
+  workflow_dispatch:
+    inputs:
+      threshold_minutes:
+        description: "Staleness threshold in minutes"
+        required: false
+        default: "120"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: heartbeat-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install client
+        run: pip install --no-input psycopg2-binary
+      - name: Check live-bot heartbeats
+        env:
+          RAILWAY_STAGING_DATABASE_URL: ${{ secrets.RAILWAY_STAGING_DATABASE_URL }}
+          RAILWAY_PRODUCTION_DATABASE_URL: ${{ secrets.RAILWAY_PRODUCTION_DATABASE_URL }}
+          HEARTBEAT_THRESHOLD_MINUTES: ${{ github.event.inputs.threshold_minutes || '120' }}
+        run: python scripts/check_heartbeat.py
