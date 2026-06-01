@@ -330,6 +330,11 @@ DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT = 0.05  # 5% balance discrepancy tr
 DEFAULT_RECONCILIATION_DUST_THRESHOLD = 0.00001  # Ignore dust-level asset discrepancies
 DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT = 0.01  # 1% qty tolerance for order matching
 DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN = 10  # Minutes for timestamp matching
+# Bound startup order reconciliation so a large stale-order backlog cannot block
+# the trading loop for hours (#628). Each unresolved order costs a REST round-trip;
+# excess beyond the cap / time budget is deferred to the next startup run.
+DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE = 200
+DEFAULT_RECONCILE_TIME_BUDGET_SECONDS = 120
 
 # WebSocket Stream Constants
 DEFAULT_WS_KLINE_STALENESS_THRESHOLD = 120  # Seconds before kline stream considered stale
