@@ -69,6 +69,10 @@ DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS = 1800  # 30 minutes
 
 # Health Monitor Constants (distinct from CPU optimization intervals)
 DEFAULT_HEALTH_BASE_CHECK_INTERVAL = 60  # Base health check interval in seconds
+# /health reports unhealthy (503) if the trading loop has not iterated within this
+# many seconds, so a zombie (HTTP server up, loop dead) is detectable (#627).
+# Must exceed DEFAULT_MAX_CHECK_INTERVAL (300) with margin.
+DEFAULT_HEALTH_LOOP_MAX_SILENCE_SECONDS = 900  # 15 minutes
 DEFAULT_HEALTH_MIN_CHECK_INTERVAL = 10  # Minimum health check interval (aggressive recovery)
 DEFAULT_HEALTH_MAX_CHECK_INTERVAL = 300  # Maximum health check interval
 
