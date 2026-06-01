@@ -13,12 +13,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
 from src.config import get_config
 from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
+    DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_ERROR_COOLDOWN,
@@ -54,13 +56,13 @@ from src.engines.live.data.market_data_handler import MarketDataHandler
 from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
-from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
 )
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
@@ -477,6 +479,12 @@ class LiveTradingEngine:
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
         self.consecutive_errors = 0
+        # Monotonic timestamp marking when the database first became unreachable
+        # inside the trading loop (None while reachable). Lets the engine ride
+        # out transient DB outages instead of counting them toward
+        # max_consecutive_errors (incident 2026-05-19: a Railway internal-DNS
+        # outage made Postgres unresolvable and shut the live bot down).
+        self.db_unreachable_since: float | None = None
         self.error_cooldown = DEFAULT_ERROR_COOLDOWN
 
         # Time exit policy (construct from overrides if not provided)
@@ -1957,12 +1965,49 @@ class LiveTradingEngine:
                     self._log_status(symbol, current_price)
                 # Reset error counter on successful iteration
                 self.consecutive_errors = 0
+                self.db_unreachable_since = None
 
                 # Calculate and use adaptive interval for next iteration
                 current_price = df.iloc[-1]["close"] if df is not None and not df.empty else None
                 self.check_interval = self._calculate_adaptive_interval(current_price)
 
             except Exception as e:
+                # Transient database-connectivity errors (a brief Postgres
+                # outage or DNS hiccup) must NOT shut the engine down: ride them
+                # out with a bounded backoff and keep the process alive so it
+                # reconnects when the database returns. Counting them toward
+                # max_consecutive_errors killed the live bot during a multi-hour
+                # Railway internal-DNS outage on 2026-05-19.
+                if self._is_transient_db_error(e):
+                    if self.db_unreachable_since is None:
+                        self.db_unreachable_since = time.monotonic()
+                    unreachable_for = time.monotonic() - self.db_unreachable_since
+                    # Prolonged outage: stop opening new positions (exits and
+                    # server-side stop-losses still run) to avoid order churn
+                    # while DB writes keep failing. Stays close-only until a
+                    # manual resume_trading() after review.
+                    if (
+                        unreachable_for >= DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS
+                        and not self._close_only_mode
+                    ):
+                        logger.critical(
+                            "Database unreachable for %.0fs (>= %ds) — entering "
+                            "close-only mode (new entries suspended).",
+                            unreachable_for,
+                            DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS,
+                        )
+                        self._enter_close_only_mode()
+                    logger.warning(
+                        "Database temporarily unreachable in trading loop (%s); "
+                        "backing off %.0fs and retrying — not counted toward "
+                        "shutdown (unreachable for %.0fs).",
+                        type(e).__name__,
+                        self.error_cooldown,
+                        unreachable_for,
+                    )
+                    self._sleep_with_interrupt(self.error_cooldown)
+                    continue
+
                 self.consecutive_errors += 1
                 logger.error(
                     f"Error in trading loop (#{self.consecutive_errors}): {e}", exc_info=True
@@ -1984,6 +2029,64 @@ class LiveTradingEngine:
 
         logger.info("Trading loop ended")
         self._finalize_runtime()
+
+    @staticmethod
+    def _is_transient_db_error(exc: BaseException) -> bool:
+        """Return True if *exc* is a transient database-connectivity error.
+
+        Brief Postgres unavailability, dropped connections, or DNS hiccups
+        should be ridden out with a backoff rather than counted toward
+        ``max_consecutive_errors``. Otherwise a short infrastructure blip
+        shuts the live engine down — which is exactly what happened on
+        2026-05-19 when Railway's internal DNS failed to resolve
+        ``postgres.railway.internal`` for several hours. ``pool_pre_ping``
+        reconnects automatically once the database returns.
+
+        Permanent faults (bad credentials, missing role/database, permission
+        denied) are deliberately NOT treated as transient: retrying them
+        forever would keep the bot alive but brain-dead, so they fall through
+        to the normal consecutive-error path and fail fast.
+        """
+        # Permanent misconfiguration — never retry. These are psycopg2
+        # OperationalError subclasses too, so they must be matched BEFORE the
+        # broad isinstance() net below.
+        permanent_markers = (
+            "password authentication failed",
+            "authentication failed",
+            "no password supplied",
+            "permission denied",
+            "does not exist",  # role/database missing — will not self-heal
+        )
+        transient_markers = (
+            "could not translate host name",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "could not connect",
+            "connection refused",
+            "server closed the connection",
+            "connection already closed",
+            "ssl connection has been closed",
+            "terminating connection",
+            "the database system is starting up",
+            "connection timed out",
+            "could not receive data from server",
+            "no route to host",
+        )
+        seen: set[int] = set()
+        cur: BaseException | None = exc
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            text = str(cur).lower()
+            if any(marker in text for marker in permanent_markers):
+                return False
+            if any(marker in text for marker in transient_markers):
+                return True
+            if isinstance(cur, OperationalError | InterfaceError):
+                return True
+            if isinstance(cur, DBAPIError) and getattr(cur, "connection_invalidated", False):
+                return True
+            cur = getattr(cur, "orig", None) or cur.__cause__ or cur.__context__
+        return False
 
     def _is_context_ready(self, df: pd.DataFrame) -> tuple[bool, str]:
         """Check if the current frame has enough context for strategy-driven decisions.
