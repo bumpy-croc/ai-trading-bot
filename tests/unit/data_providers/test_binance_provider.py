@@ -371,7 +371,9 @@ class TestPlaceStopLossOrder:
         mock_client_class.return_value = mock_client
         mock_client.create_order.return_value = {"orderId": "sl1"}
         provider = BinanceProvider()
-        provider.get_symbol_info = Mock(return_value={"step_size": 0.0001, "tick_size": 0.01})
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "ETH"}
+        )
         # Free ETH is slightly under the tracked position (fee taken from the buy fill).
         provider.get_balance = Mock(return_value=Mock(free=0.004995))
 
@@ -426,6 +428,119 @@ class TestPlaceStopLossOrder:
 
         assert result == "sl2"
         provider.get_balance.assert_not_called()
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_sell_stop_loss_caps_without_symbol_info(self, mock_config, mock_client_class):
+        """A transient get_symbol_info failure must NOT disable the free-balance cap.
+
+        With no symbol_info there is no step size, so the capped quantity is sent
+        without lot-rounding — but it is still capped to holdings, so no -2010.
+        The base asset is derived via the fallback suffix-strip.
+        """
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {"orderId": "sl3"}
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(return_value=None)  # transient API failure
+        provider.get_balance = Mock(return_value=Mock(free=0.004))
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.SELL, quantity=0.005, stop_price=1900.0
+        )
+
+        assert result == "sl3"
+        provider.get_balance.assert_called_once_with("ETH")
+        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
+            0.004, abs=1e-9
+        )
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_sell_stop_loss_places_uncapped_when_balance_unreadable(
+        self, mock_config, mock_client_class
+    ):
+        """If the free balance can't be read, don't block the SL — place it uncapped.
+
+        A failed balance read must not leave the position unprotected; fall back to
+        the (lot-rounded) requested quantity rather than skipping the order.
+        """
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {"orderId": "sl4"}
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "ETH"}
+        )
+        provider.get_balance = Mock(side_effect=RuntimeError("balance read failed"))
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.SELL, quantity=0.005, stop_price=1900.0
+        )
+
+        assert result == "sl4"
+        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
+            0.005, abs=1e-9
+        )
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_sell_stop_loss_not_capped_when_balance_sufficient(
+        self, mock_config, mock_client_class
+    ):
+        """When free balance comfortably covers the position, no cap is applied."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {"orderId": "sl5"}
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "ETH"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.SELL, quantity=0.005, stop_price=1900.0
+        )
+
+        assert result == "sl5"
+        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
+            0.005, abs=1e-9
+        )
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_sell_stop_loss_floor_preserves_exact_lot(self, mock_config, mock_client_class):
+        """floor(qty/step) must not shed a whole lot to float noise (0.29, not 0.28)."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {"orderId": "sl6"}
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.01, "tick_size": 0.01, "base_asset": "ETH"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.SELL, quantity=0.29, stop_price=1900.0
+        )
+
+        assert result == "sl6"
+        # 0.29 / 0.01 = 28.9999996 in float; a naive floor -> 0.28. Epsilon keeps 0.29.
+        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
+            0.29, abs=1e-9
+        )
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
