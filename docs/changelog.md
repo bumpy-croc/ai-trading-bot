@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing role/database, permission denied) are excluded and still fail fast,
   and an outage lasting more than 30 minutes drops the engine into close-only
   mode (new entries suspended; exits and server-side stop-losses continue).
+- Prediction-cache performance test (`test_cache_performance_characteristics`)
+  is no longer timing-flaky on loaded CI runners. It previously took the *mean*
+  of `time.time()` over 100 cold, fully-mocked operations and asserted cache-hit
+  was within 5× a tiny (~0.13ms/op) noise-dominated cache-miss baseline, so a
+  single GC/scheduler pause inflating the mean would trip it (it failed twice on
+  PR #637). It now warms up, samples many ops with `perf_counter`, and asserts
+  the *median* (immune to those outliers) against a generous absolute budget. It
+  is also marked `@pytest.mark.performance` so it runs in the nightly performance
+  workflow rather than the blocking PR integration gate.
 
 ### Added
 - Heartbeat staleness monitor (`scripts/check_heartbeat.py` +
