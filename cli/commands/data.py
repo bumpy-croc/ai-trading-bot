@@ -19,6 +19,91 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 from src.infrastructure.logging.config import configure_logging
 from src.trading.symbols.factory import SymbolFactory
 
+# Exact ``(module, name)`` allowlist for the restricted cache unpickler.
+#
+# This MUST be an exact allowlist, NOT a ``pandas.*``/``numpy.*`` module-prefix
+# match. Those namespaces export callables that re-enter unrestricted unpickling
+# or execute code — most notably ``pandas.read_pickle`` (performs a fresh,
+# unrestricted ``pickle.load`` on an attacker-controlled path -> full RCE), plus
+# ``numpy.load`` / ``numpy.lib.npyio.load``, ``numpy.DataSource`` and
+# ``numpy.vectorize``. A prefix match would expose those and defeat the control.
+# Every entry below is an inert data class or a pure reconstruction helper that
+# only rebuilds DataFrame/Series/Index/ndarray state; object-dtype contents are
+# themselves re-resolved through this same ``find_class`` and so cannot smuggle
+# in a disallowed target.
+_PICKLE_ALLOWED: frozenset[tuple[str, str]] = frozenset(
+    {
+        # inert stdlib data types referenced during reconstruction
+        ("builtins", "slice"),
+        ("builtins", "complex"),
+        ("datetime", "datetime"),
+        ("datetime", "date"),
+        ("datetime", "time"),
+        ("datetime", "timedelta"),
+        ("datetime", "timezone"),
+        # numpy core reconstruction (1.x and 2.x module paths)
+        ("numpy", "ndarray"),
+        ("numpy", "dtype"),
+        ("numpy.core.multiarray", "_reconstruct"),
+        ("numpy.core.multiarray", "scalar"),
+        ("numpy.core.numeric", "_frombuffer"),
+        ("numpy._core.multiarray", "_reconstruct"),
+        ("numpy._core.multiarray", "scalar"),
+        ("numpy._core.numeric", "_frombuffer"),
+        # pandas frame/series/index/block reconstruction
+        ("pandas.core.frame", "DataFrame"),
+        ("pandas.core.series", "Series"),
+        ("pandas.core.indexes.base", "Index"),
+        ("pandas.core.indexes.base", "_new_Index"),
+        ("pandas.core.indexes.range", "RangeIndex"),
+        ("pandas.core.indexes.datetimes", "DatetimeIndex"),
+        ("pandas.core.indexes.datetimes", "_new_DatetimeIndex"),
+        # legacy numeric index classes (removed in newer pandas; for old caches)
+        ("pandas.core.indexes.numeric", "Int64Index"),
+        ("pandas.core.indexes.numeric", "Float64Index"),
+        ("pandas.core.indexes.numeric", "UInt64Index"),
+        ("pandas.core.internals.managers", "BlockManager"),
+        ("pandas.core.internals.managers", "SingleBlockManager"),
+        ("pandas.core.internals.blocks", "new_block"),
+        ("pandas._libs.internals", "_unpickle_block"),
+        ("pandas._libs.arrays", "__pyx_unpickle_NDArrayBacked"),
+        ("pandas.core.arrays.datetimes", "DatetimeArray"),
+        ("pandas.core.dtypes.dtypes", "DatetimeTZDtype"),
+        # frequency offset classes for the stored timeframes
+        ("pandas._libs.tslibs.offsets", "Minute"),
+        ("pandas._libs.tslibs.offsets", "Hour"),
+        ("pandas._libs.tslibs.offsets", "Day"),
+        ("pandas._libs.tslibs.offsets", "Week"),
+        ("pandas._libs.tslibs.timezones", "maybe_get_tz"),
+    }
+)
+
+
+def _safe_pickle_load(file_obj):
+    """Load a pickle restricted to an exact allowlist of inert pandas/numpy types.
+
+    Legacy ``.pkl`` cache files are inspected by the cache-manager CLI. A crafted
+    pickle can execute arbitrary code on load (``pickle`` is a known RCE sink),
+    so this restricted ``Unpickler`` only resolves the specific reconstruction
+    symbols in ``_PICKLE_ALLOWED`` and rejects everything else.
+
+    See ``_PICKLE_ALLOWED`` for why an exact allowlist (not a ``pandas.*``/
+    ``numpy.*`` prefix) is required: those namespaces contain RCE gadgets such as
+    ``pandas.read_pickle``. If a future pandas/numpy version emits a new
+    reconstruction helper, loading fails safe (clear ``UnpicklingError``) rather
+    than opening a hole. Cache files are written at the highest pickle protocol,
+    which is what this supports.
+    """
+    import pickle
+
+    class _RestrictedUnpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if (module, name) in _PICKLE_ALLOWED:
+                return super().find_class(module, name)
+            raise pickle.UnpicklingError(f"Blocked unpickling of disallowed type {module}.{name}")
+
+    return _RestrictedUnpickler(file_obj).load()
+
 
 def _normalize_symbols(raw: list[str]) -> list[str]:
     """Normalize symbol names to exchange format (e.g. BTC-USD -> BTCUSDT)."""
@@ -332,8 +417,6 @@ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str
 
 
 def _cache_manager(ns: argparse.Namespace) -> int:
-    import pickle
-
     from src.config.paths import get_cache_dir
     from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
@@ -380,7 +463,7 @@ def _cache_manager(ns: argparse.Namespace) -> int:
             if ns.detailed:
                 try:
                     with open(info["path"], "rb") as f:
-                        data = pickle.load(f)
+                        data = _safe_pickle_load(f)
                     data_info = ""
                     if hasattr(data, "shape"):
                         data_info = f" - {data.shape[0]} rows"

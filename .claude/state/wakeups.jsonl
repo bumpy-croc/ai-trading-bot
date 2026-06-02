@@ -1,0 +1,1 @@
+{"_schema": "one JSON object per line: {card, wake_at, reason}. See .claude/state/board.md § Wakeups.", "_comment": "This first line is documentation; the daemon skips lines beginning with an underscore key."}

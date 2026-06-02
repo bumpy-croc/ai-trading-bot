@@ -127,6 +127,29 @@ class Backtester:
     - ExecutionEngine: Handles fees, slippage, next-bar execution
     - PositionTracker: Manages active trade state and MFE/MAE
     - EntryHandler: Processes entry signals and execution
+
+    Known parity caveats vs the live engine
+    ---------------------------------------
+    - **Exchange tick-size / step-size rounding.** The live engine rounds
+      asset quantities to the exchange's ``step_size`` (see
+      :py:meth:`src.engines.live.execution.execution_engine.ExecutionEngine._normalize_quantity`)
+      while the backtest engine uses raw float quantities. For strategies
+      sizing 1%+ of balance on liquid pairs the difference is sub-cent, but
+      micro-cap strategies or very small accounts may see a small fill-size
+      drift. Treat backtest results as an upper bound on the achievable fill
+      precision; live execution will round down to step_size.
+    - **Margin/borrow interest.** Modeled in backtest only when
+      ``annual_margin_interest_rate`` is set (default 0.0 = spot). See that
+      parameter's docstring for parity guidance.
+    - **Concurrent positions.** The backtest engine is single-position by
+      design — its ``PositionTracker`` holds at most one ``ActiveTrade`` at a
+      time (``current_trade``). The live engine's ``LivePositionTracker``
+      holds a dict keyed by ``order_id`` and respects
+      ``risk_manager.get_max_concurrent_positions()`` for multi-symbol
+      portfolios. A backtest of a multi-symbol strategy will only model the
+      first symbol that signals; live can hold N. If your strategy depends
+      on simultaneous positions, validate live behaviour separately rather
+      than inferring it from backtest.
     - ExitHandler: Processes exit signals and execution
     - CorrelationHandler: Applies correlation-based sizing
     - RegimeHandler: Manages regime-based strategy switching
@@ -160,6 +183,7 @@ class Backtester:
         use_next_bar_execution: bool = False,
         use_high_low_for_stops: bool = True,
         max_position_size: float | None = None,
+        annual_margin_interest_rate: float = 0.0,
         _regime_switcher_class: type | None = None,
         _strategy_manager: Any | None = None,
     ) -> None:
@@ -191,11 +215,26 @@ class Backtester:
             use_next_bar_execution: Execute entries on next bar's open.
             use_high_low_for_stops: Use high/low for SL/TP detection.
             max_position_size: Maximum position size as fraction of balance (backward compatibility).
+            annual_margin_interest_rate: Annual borrow/funding rate for margin
+                positions, as a decimal (e.g. ``0.05`` for 5% APR). Defaults
+                to ``0.0`` (spot trading, no carry cost). When > 0, interest
+                accrues on each position's notional for the holding period and
+                is deducted from realized PnL on close — mirroring the live
+                engine's ``MarginInterestTracker``. Leaving this at 0 while
+                running a margin-mode strategy will silently overstate
+                returns; set it to your venue's effective borrow rate to
+                preserve backtest-live parity.
             _regime_switcher_class: Optional regime switcher class for testing (internal).
             _strategy_manager: Optional strategy manager class or instance for testing (internal).
         """
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
+        if annual_margin_interest_rate < 0 or not math.isfinite(annual_margin_interest_rate):
+            raise ValueError(
+                f"annual_margin_interest_rate must be non-negative and finite, "
+                f"got {annual_margin_interest_rate}"
+            )
+        self.annual_margin_interest_rate = float(annual_margin_interest_rate)
 
         # Validate max_position_size if provided
         if max_position_size is not None:
@@ -390,6 +429,7 @@ class Backtester:
             partial_manager=partial_ops_manager,
             enable_engine_risk_exits=enable_engine_risk_exits,
             use_high_low_for_stops=use_high_low_for_stops,
+            annual_margin_interest_rate=annual_margin_interest_rate,
         )
 
         # For backward compatibility - expose current_trade through position_tracker
@@ -919,7 +959,18 @@ class Backtester:
         start: datetime,
         end: datetime | None,
     ) -> pd.DataFrame:
-        """Merge sentiment data into price DataFrame."""
+        """Merge sentiment data into price DataFrame.
+
+        Also emits the ``sentiment_freshness`` column so feature schemas
+        line up with the live engine, which sets it to 1 for the most
+        recent 4 hours of candles and 0 elsewhere
+        (src/engines/live/trading_engine.py:_add_sentiment_data, and
+        src/tech/adapters/row_extractors.py lists the column as expected).
+        Historical sentiment is by definition stale, so backtest sets the
+        flag to 0 across the entire dataframe — ML features that key off
+        ``sentiment_freshness`` will then see the same column shape in
+        both engines, even if the runtime distribution differs by design.
+        """
         if not self.sentiment_provider:
             return df
 
@@ -931,6 +982,13 @@ class Backtester:
             df = df.join(sentiment_df, how="left")
             if "sentiment_score" in df.columns:
                 df["sentiment_score"] = df["sentiment_score"].ffill().fillna(0)
+
+        # Emit the freshness flag unconditionally so the column is always
+        # present for downstream feature builders. Historical sentiment is
+        # always treated as stale (==0); the live engine flips this to 1
+        # only for the most recent 4-hour window.
+        if "sentiment_freshness" not in df.columns:
+            df["sentiment_freshness"] = 0
 
         return df
 
@@ -1212,9 +1270,20 @@ class Backtester:
             self.balance += net_pnl
             self.trades.append(completed_trade)
 
+            # Sum entry + exit fees / slippage for record_trade so the
+            # PerformanceTracker total_fees_paid metric matches live's
+            # `record_trade(fee=total_fee + interest_cost, ...)` semantics
+            # (src/engines/live/trading_engine.py:3361-3390). Previously
+            # backtest passed only the exit-side fee, so total_fees_paid
+            # silently undercounted the entry leg by ~50%.
+            entry_meta = getattr(completed_trade, "metadata", None) or {}
+            entry_fee_logged = float(entry_meta.get("entry_fee", 0.0) or 0.0)
+            entry_slippage_logged = float(entry_meta.get("entry_slippage_cost", 0.0) or 0.0)
+            total_fee = entry_fee_logged + float(exit_fee)
+            total_slippage = entry_slippage_logged + float(slippage)
             # Update performance tracking
             self.performance_tracker.record_trade(
-                trade=completed_trade, fee=exit_fee, slippage=slippage
+                trade=completed_trade, fee=total_fee, slippage=total_slippage
             )
             self.performance_tracker.update_balance(self.balance, timestamp=current_time)
 

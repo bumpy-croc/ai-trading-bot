@@ -429,20 +429,31 @@ class TestHandleOrderFill:
             assert mock_log.call_args.args[0] == "order_filled"
 
     def test_handle_fill_detects_stop_loss_fill(self, engine_with_exchange, sample_position):
-        """Fill callback detects and handles stop-loss fills."""
+        """A stop-loss fill is queued for the trading loop, which then closes it (#631).
+
+        The OrderTracker poll thread must not run the close inline (it blocked all
+        polling and could force-remove the filled order); it only enqueues, and
+        the loop's drain performs the actual close.
+        """
         sample_position.stop_loss_order_id = "sl_order_456"
         engine_with_exchange.live_position_tracker.track_recovered_position(
             sample_position, db_id=None
         )
 
         with patch.object(engine_with_exchange, "_execute_exit") as mock_close:
+            # Poll-thread callback: enqueue only, no inline close.
             engine_with_exchange._handle_order_fill("sl_order_456", "BTCUSDT", 0.02, 48000.0)
+            mock_close.assert_not_called()
+
+            # Trading-loop drain: perform the deferred close.
+            engine_with_exchange._drain_pending_fill_exits()
 
             mock_close.assert_called_once()
             call_args = mock_close.call_args
             assert call_args.args[0] == sample_position
             assert call_args.kwargs["reason"] == "stop_loss"
             assert call_args.kwargs["limit_price"] == 48000.0
+            assert call_args.kwargs["skip_live_close"] is True
 
     def test_handle_fill_skips_if_position_already_closed(
         self, engine_with_exchange, sample_position
