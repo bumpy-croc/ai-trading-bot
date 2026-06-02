@@ -23,6 +23,22 @@ except ImportError:
     OrderSide = Mock
 
 
+@pytest.mark.unit
+def test_binance_provider_does_not_apply_nest_asyncio():
+    """Importing binance_provider must NOT monkey-patch asyncio via nest_asyncio.
+
+    nest_asyncio.apply() made the shared TWM event loop reentrant but did not
+    restore the contextvars Context, so the always-active kline socket's
+    _read_ready spewed ~2,100/hr 'cannot enter context' errors. It was vestigial
+    (left over from a removed custom-loop design) and was removed (#616).
+    """
+    import asyncio
+
+    import src.data_providers.binance_provider  # noqa: F401 — import runs any apply()
+
+    assert getattr(asyncio, "_nest_patched", False) is False
+
+
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 class TestBinanceDataProvider:
     @pytest.mark.data_provider
@@ -33,6 +49,25 @@ class TestBinanceDataProvider:
             mock_config.return_value = mock_config_obj
             provider = BinanceProvider()
             assert provider is not None
+
+    @pytest.mark.data_provider
+    @patch("src.data_providers.binance_provider.Client")
+    def test_client_constructed_with_rest_timeout(self, mock_client_class):
+        """Every Binance REST call gets a socket timeout via requests_params (#631).
+
+        A timeout-less client lets a half-open TCP socket hang order polling,
+        reconciliation, and the WS disconnect-recovery path indefinitely.
+        """
+        mock_client_class.return_value = Mock()
+        with patch("src.data_providers.binance_provider.get_config") as mock_config:
+            mock_config_obj = Mock()
+            mock_config_obj.get_required.return_value = "fake_key"
+            mock_config_obj.get_float.return_value = 15.0
+            mock_config.return_value = mock_config_obj
+            BinanceProvider()
+
+        assert mock_client_class.called
+        assert mock_client_class.call_args.kwargs.get("requests_params") == {"timeout": 15.0}
 
     @pytest.mark.data_provider
     @patch("src.data_providers.binance_provider.Client")

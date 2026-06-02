@@ -19,6 +19,9 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from src.config.constants import (
+    DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE,
+    DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES,
+    DEFAULT_RECONCILE_TIME_BUDGET_SECONDS,
     DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT,
     DEFAULT_RECONCILIATION_DUST_THRESHOLD,
     DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
@@ -163,7 +166,26 @@ class PositionReconciler:
         return results
 
     def resolve_pending_orders(self) -> list[ReconciliationResult]:
-        """Resolve orders stuck in PENDING_SUBMIT/SUBMITTED/UNKNOWN."""
+        """Resolve orders stuck in PENDING_SUBMIT/SUBMITTED/UNKNOWN.
+
+        Bounded by a count cap and a time budget so a large stale-order backlog
+        cannot block startup (#628): each unresolved order costs a REST round-trip,
+        so an unbounded backlog could hang the trading loop for hours. Orders are
+        processed most-recent first; any excess is deferred (and logged, never
+        silently) and retried on the next startup run. Never-sent rows are bulk-failed
+        first (spot mode only) to collapse the stale backlog (#629).
+        """
+        # Drain never-sent PENDING_SUBMIT rows (no exchange id) that can never resolve
+        # here. ONLY safe in spot mode: account synchronization independently re-adopts
+        # any exchange holding that has no DB position, so wrongly failing a row that did
+        # fill is still recovered. In margin mode that backstop is skipped, so leave those
+        # rows to the bounded per-order loop below, which confirms absence on the exchange
+        # before failing (#629).
+        if not self._use_margin:
+            self.db_manager.expire_stale_pending_orders(
+                self.session_id, older_than_minutes=DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES
+            )
+
         results: list[ReconciliationResult] = []
         unresolved = self.db_manager.get_unresolved_orders(self.session_id)
 
@@ -171,11 +193,32 @@ class PositionReconciler:
             logger.info("No pending orders to resolve")
             return results
 
-        logger.info("Resolving %d pending orders...", len(unresolved))
+        total = len(unresolved)
+        deadline = time.monotonic() + DEFAULT_RECONCILE_TIME_BUDGET_SECONDS
+        processed = 0
+        # get_unresolved_orders returns oldest-first; process newest-first so recent,
+        # relevant orders are resolved before any old backlog gets deferred.
+        for order_data in reversed(unresolved):
+            if (
+                processed >= DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE
+                or time.monotonic() >= deadline
+            ):
+                break
+            results.append(self._resolve_single_order(order_data))
+            processed += 1
 
-        for order_data in unresolved:
-            result = self._resolve_single_order(order_data)
-            results.append(result)
+        if processed < total:
+            logger.warning(
+                "Reconciled %d of %d pending orders this run (cap=%d, budget=%ds); "
+                "deferred %d to the next startup run so the trading loop is not blocked.",
+                processed,
+                total,
+                DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE,
+                DEFAULT_RECONCILE_TIME_BUDGET_SECONDS,
+                total - processed,
+            )
+        else:
+            logger.info("Resolved %d pending orders", processed)
 
         return results
 

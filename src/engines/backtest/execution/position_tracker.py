@@ -310,7 +310,11 @@ class PositionTracker:
         # Get MFE/MAE metrics before clearing
         metrics = self.mfe_mae_tracker.get_position_metrics(self.POSITION_KEY)
 
-        # Create completed trade record
+        # Create completed trade record. Carry forward entry_fee /
+        # entry_slippage_cost from the ActiveTrade metadata so the exit
+        # path can pass total fees (entry + exit) to PerformanceTracker.record_trade,
+        # parity with live (src/engines/live/trading_engine.py:3359-3390 reads
+        # entry_fee/entry_slippage_cost from position.metadata at exit).
         completed_trade = Trade(
             symbol=trade.symbol,
             side=trade.side,
@@ -331,6 +335,16 @@ class PositionTracker:
             mfe_time=metrics.mfe_time if metrics else None,
             mae_time=metrics.mae_time if metrics else None,
         )
+        try:
+            entry_meta = getattr(trade, "metadata", None) or {}
+            if "entry_fee" in entry_meta:
+                completed_trade.metadata["entry_fee"] = float(entry_meta["entry_fee"])
+            if "entry_slippage_cost" in entry_meta:
+                completed_trade.metadata["entry_slippage_cost"] = float(
+                    entry_meta["entry_slippage_cost"]
+                )
+        except (TypeError, ValueError) as exc:
+            logger.debug("Failed to carry entry-fee metadata onto completed trade: %s", exc)
 
         # Clear tracker
         self.mfe_mae_tracker.clear(self.POSITION_KEY)

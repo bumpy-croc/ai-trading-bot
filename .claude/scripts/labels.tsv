@@ -1,0 +1,50 @@
+state:idea	BFD4E6	In hopper; not yet researched.
+state:researching	8AB6D8	Active investigation / backtest.
+state:proposed	5A91C4	Proposal written; awaiting reviews / approval.
+state:building	2E75B6	Approved; implementation in flight.
+state:paper	FFB347	Running in paper mode; observation window.
+state:shipped	2DB82D	Merged / deployed.
+state:monitoring	6BCB77	Post-ship observation: did the KPI move?
+state:closed	CCCCCC	Done (success or acknowledged failure).
+state:icebox	E0E0E0	Archived without shipping.
+priority:p0	B60205	Drop everything; live capital or incident.
+priority:p1	D93F0B	Ship this week.
+priority:p2	FBCA04	Ship when bandwidth allows.
+priority:p3	C5DEF5	Someday / nice to have.
+type:research	B19CD9	Output is a document, not code.
+type:feature	9370DB	Net-new capability.
+type:fix	7B52AB	Bug fix.
+type:experiment	6A0DAD	Run-and-measure; backtest or paper.
+type:model-promotion	5D3FD3	ML model lifecycle change (train/eval/promote/retire).
+type:strategy-change	8A2BE2	Modify an existing strategy.
+type:infra	663399	Ops / deployment / CI.
+type:incident	8B0000	Active or recent operational issue.
+type:post-mortem-action	4B0082	Action item from a post-mortem.
+area:strategy	1FC778	Strategies and signal generators.
+area:ml-model	2DB87A	ML models and prediction.
+area:risk	4FC38A	Risk management.
+area:live-ops	75E0FC	Live engine / SRE.
+area:data	82A2C9	Data providers / caching.
+area:infra	6BA4B8	Deployment / CI / Railway.
+area:backtest	5FB1E5	Backtest engine and tooling.
+area:sentiment	B0DC82	Sentiment adapters.
+owned-by:pm	FFD700	Project Manager (CEO daemon).
+owned-by:quant-researcher	90EE90	Quant research desk.
+owned-by:ml-engineer	DDA0DD	ML engineer.
+owned-by:risk-officer	FF6B6B	Risk officer (independent).
+owned-by:live-ops	FFA07A	Live-ops / SRE.
+owned-by:market-analyst	87CEEB	Market analyst.
+owned-by:code-reviewer	F0E68C	Code reviewer.
+owned-by:architecture-reviewer	D8BFD8	Architecture reviewer.
+owned-by:human	F4A460	Human Board.
+needs:risk-review	FF4444	Blocked on independent risk review.
+needs:code-review	FF6666	Blocked on code review.
+needs:human-approval	FF1A1A	Blocked on human Board approval.
+needs:human-input	FF8888	Question for the human (not an approval).
+needs:data	FFAAAA	Blocked on data / cache prefill.
+source:ideation	E8E8E8	From a scheduled ideation pass.
+source:forensics	D0D0D0	Spawned by loss / drawdown forensics.
+source:human	C8C8C8	Dropped by the human Board.
+source:market-anomaly	B8B8B8	Surfaced by the market-analyst.
+source:parity-gap	A8A8A8	From backtest/live divergence.
+source:incident	988888	Action item from a post-mortem.

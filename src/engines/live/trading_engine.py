@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import queue
 import signal
 import sys
 import threading
@@ -13,12 +14,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
 from src.config import get_config
 from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
+    DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_ERROR_COOLDOWN,
@@ -54,14 +57,15 @@ from src.engines.live.data.market_data_handler import MarketDataHandler
 from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
-from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
 )
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.strategy_manager import StrategyManager
+from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
@@ -347,6 +351,27 @@ class LiveTradingEngine:
         except Exception:
             self.correlation_engine = None
 
+        # Correlation handler — applies correlation-based size reduction at
+        # entry. Mirrors backtest engine wiring (src/engines/backtest/engine.py:343-350)
+        # so live entries reduce size for correlated exposure the same way
+        # backtest does. Without this, live silently over-concentrates in
+        # correlated pairs that backtest would have de-risked.
+        self.correlation_handler: CorrelationHandler | None = None
+        if self.correlation_engine is not None:
+            try:
+                self.correlation_handler = CorrelationHandler(
+                    correlation_engine=self.correlation_engine,
+                    risk_manager=self.risk_manager,
+                    data_provider=data_provider,
+                    strategy=self.strategy,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to initialize live correlation handler: %s — "
+                    "live entries will run without correlation controls.",
+                    e,
+                )
+
         # Initialize database manager
         try:
             self.db_manager = DatabaseManager(database_url)
@@ -385,9 +410,11 @@ class LiveTradingEngine:
                     provider, config, testnet
                 )
                 if self.exchange_interface:
-                    use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                    use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                     self.account_synchronizer = AccountSynchronizer(
-                        self.exchange_interface, self.db_manager, self.trading_session_id,
+                        self.exchange_interface,
+                        self.db_manager,
+                        self.trading_session_id,
                         use_margin=use_margin,
                     )
                     # Initialize order tracker for monitoring order fills
@@ -468,6 +495,13 @@ class LiveTradingEngine:
         self._ws_kline_active = False
         self._ws_kline_provider = None
         self._ws_health_thread = None
+        # Consecutive unproductive user-stream reconnects; trips a circuit breaker
+        # that stops the futile reconnect loop and runs REST-only (#616).
+        self._user_reconnect_failures = 0
+        # Stop-loss fills are detected on the OrderTracker poll thread but their
+        # bookkeeping exit is deferred to the trading loop so a slow/failing close
+        # can't block order polling or force-remove a filled order (#631).
+        self._pending_fill_exits: queue.SimpleQueue = queue.SimpleQueue()
 
         # Performance tracker (unified with backtest engine)
         from src.performance.tracker import PerformanceTracker
@@ -477,6 +511,12 @@ class LiveTradingEngine:
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
         self.consecutive_errors = 0
+        # Monotonic timestamp marking when the database first became unreachable
+        # inside the trading loop (None while reachable). Lets the engine ride
+        # out transient DB outages instead of counting them toward
+        # max_consecutive_errors (incident 2026-05-19: a Railway internal-DNS
+        # outage made Postgres unresolvable and shut the live bot down).
+        self.db_unreachable_since: float | None = None
         self.error_cooldown = DEFAULT_ERROR_COOLDOWN
 
         # Time exit policy (construct from overrides if not provided)
@@ -524,6 +564,9 @@ class LiveTradingEngine:
 
         # Threading
         self.main_thread = None
+        # Set when the trading loop dies abnormally (unhandled crash or error
+        # exhaustion) so start() can exit non-zero for an orchestrator restart (#630).
+        self._loop_crashed = False
         self.stop_event = threading.Event()
 
         # Optional regime detector (feature-gated)
@@ -646,7 +689,9 @@ class LiveTradingEngine:
         # Wire db_manager for order journaling (session_id set during start())
         self.live_execution_engine.db_manager = self.db_manager
 
-        # Entry handler
+        # Entry handler. correlation_handler matches backtest engine wiring
+        # so live and backtest both reduce position size for correlated
+        # exposure at entry.
         self.live_entry_handler = entry_handler or LiveEntryHandler(
             execution_engine=self.live_execution_engine,
             execution_model=self.execution_model,
@@ -655,6 +700,7 @@ class LiveTradingEngine:
                 self.strategy if isinstance(self.strategy, ComponentStrategy) else None
             ),
             dynamic_risk_manager=self.dynamic_risk_manager,
+            correlation_handler=self.correlation_handler,
             max_position_size=self.max_position_size,
             default_take_profit_pct=self._resolve_take_profit_pct(),
         )
@@ -1073,12 +1119,18 @@ class LiveTradingEngine:
         self._runtime_warmup = max(0, int(dataset.warmup_period or 0))
         return dataset.data
 
-    def _build_runtime_context(
+    def _build_component_positions(
         self,
-        balance: float,
         current_price: float,
-        current_time: datetime,
-    ) -> RuntimeContext:
+    ) -> list[ComponentPosition]:
+        """Translate live positions into the strategy-side ComponentPosition list.
+
+        Used by both the StrategyRuntime context and the direct
+        ComponentStrategy.process_candle call so a strategy that consults
+        ``current_positions`` (e.g. for anti-pyramiding or correlation-aware
+        sizing) gets the same view in both code paths — and matching the
+        backtest path where positions always flow through.
+        """
         positions: list[ComponentPosition] = []
         for position in self.live_position_tracker.positions.values():
             try:
@@ -1094,7 +1146,22 @@ class LiveTradingEngine:
                 positions.append(component_position)
             except Exception as exc:
                 logger.debug("Failed to translate live position for runtime: %s", exc)
+        return positions
 
+    def _build_runtime_context(
+        self,
+        balance: float,
+        current_price: float,
+        current_time: datetime,
+    ) -> RuntimeContext:
+        """Build the StrategyRuntime context with current balance and live positions.
+
+        Delegates the position-translation step to ``_build_component_positions``
+        so the runtime path and the direct ``ComponentStrategy.process_candle``
+        path present an identical position view to the strategy — matching the
+        backtest engine's runtime context construction.
+        """
+        positions = self._build_component_positions(current_price)
         return RuntimeContext(balance=float(balance), current_positions=positions or None)
 
     def _compute_component_quantity(
@@ -1148,8 +1215,20 @@ class LiveTradingEngine:
                 self._runtime_dataset = None
                 self._runtime_warmup = 0
 
-    def start(self, symbol: str, timeframe: str = "1h", max_steps: int | None = None) -> None:
-        """Start the live trading engine"""
+    def start(
+        self,
+        symbol: str,
+        timeframe: str = "1h",
+        max_steps: int | None = None,
+        exit_on_crash: bool = False,
+    ) -> None:
+        """Start the live trading engine.
+
+        ``exit_on_crash`` makes an abnormal loop death exit the process non-zero
+        so an orchestrator restarts it (#630). It defaults to False so start()
+        stays a well-behaved library call for callers that read results after it
+        returns (e.g. the migration baseline tool); the production runner opts in.
+        """
         if self.is_running:
             logger.warning("Trading engine is already running")
             return
@@ -1272,6 +1351,17 @@ class LiveTradingEngine:
                 # Reconcile positions with exchange (detect offline stop-loss triggers)
                 self._reconcile_positions_with_exchange()
 
+                # Reconciliation paths (e.g. PositionReconciler._reconcile_filled_entry)
+                # may create LivePositions via track_recovered_position without
+                # registering them with risk_manager. The DB-recovery path in
+                # _recover_active_positions does register; the reconciler path
+                # currently does not. Sweep the tracker after reconciliation so
+                # every tracked position is known to the risk manager — this
+                # restores the parity invariant (also enforced on every
+                # backtest entry) that risk_manager has visibility into all
+                # active positions for per-symbol caps and correlation gating.
+                self._ensure_positions_registered_with_risk_manager()
+
             except Exception as e:
                 logger.error("❌ Account synchronization error: %s", e, exc_info=True)
 
@@ -1311,7 +1401,7 @@ class LiveTradingEngine:
             try:
                 from src.engines.live.reconciliation import PeriodicReconciler
 
-                use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                 self._periodic_reconciler = PeriodicReconciler(
                     exchange_interface=self.exchange_interface,
                     position_tracker=self.live_position_tracker,
@@ -1330,7 +1420,7 @@ class LiveTradingEngine:
 
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(
-            target=self._trading_loop, args=(symbol, timeframe, max_steps)
+            target=self._run_trading_loop, args=(symbol, timeframe, max_steps)
         )
         self.main_thread.daemon = True
         self.main_thread.start()
@@ -1344,13 +1434,16 @@ class LiveTradingEngine:
         finally:
             self.stop()
 
+        # After a clean stop this is a no-op; after an abnormal loop death it
+        # exits the process non-zero (when opted in) so the orchestrator
+        # restarts it (#630).
+        self._exit_if_loop_crashed(exit_on_crash)
+
     def _enter_close_only_mode(self) -> None:
         """Enter close-only mode: no new entries, exits/stops/trailing still active."""
         if not self._close_only_mode:
             self._close_only_mode = True
-            logger.critical(
-                "🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review"
-            )
+            logger.critical("🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review")
 
     def resume_trading(self) -> None:
         """Resume normal trading after close-only mode review."""
@@ -1426,6 +1519,80 @@ class LiveTradingEngine:
         self._ws_health_thread.start()
         logger.info("WebSocket health monitor started")
 
+    def _ensure_ws_health_monitor_alive(self) -> None:
+        """Watchdog-on-watchdog: restart the WS health monitor if its thread died.
+
+        The monitor is the lone WS-staleness watchdog; if its thread dies, stale
+        streams go unnoticed and never reconnect. The main trading loop — itself
+        liveness-tracked (#627) and crash-exiting (#630) — supervises it here (#631).
+        The initial ``self._ws_health_thread`` write happens-before the loop thread
+        is started, and thereafter only the loop thread writes it, so the two
+        writers never overlap and no lock is needed. Respawns are naturally spaced
+        (the monitor's grace-period wait) so a thread that re-dies immediately
+        can't busy-respawn.
+        """
+        # Only relevant once a stream the monitor watches has been started.
+        if not (self._ws_kline_active or self._user_data_processor):
+            return
+        if not self.is_running or self.stop_event.is_set():
+            return
+        t = self._ws_health_thread
+        if t is not None and t.is_alive():
+            return
+        logger.critical("WS health monitor thread is dead — restarting it (watchdog).")
+        try:
+            self._start_ws_health_monitor()
+        except Exception as e:
+            logger.error("Failed to restart WS health monitor: %s", e)
+
+    def _drain_pending_fill_exits(self) -> None:
+        """Execute stop-loss-fill exits deferred from the OrderTracker poll thread.
+
+        The poll thread enqueues only identifiers (it must stay fast and unblocked);
+        the actual close runs here, on the trading loop, where exits already happen.
+        Each item is isolated so one bad item can't abort the rest of the queue. A
+        close that fails is logged and absorbed by ``_execute_exit`` itself, and the
+        periodic/startup reconcilers (#628/#629) recover an unclosed position (they
+        detect one whose stop-loss has filled on the exchange). The stop-loss has
+        already executed on-exchange, so this is purely local bookkeeping and a
+        small latency here is harmless (#631).
+        """
+        while True:
+            try:
+                position_order_id, fill_price = self._pending_fill_exits.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                position = self.live_position_tracker.get_position(position_order_id)
+                if position is None:
+                    logger.info(
+                        "Deferred stop-loss exit skipped — position %s already closed",
+                        position_order_id,
+                    )
+                    continue
+                self._execute_exit(
+                    position,
+                    reason="stop_loss",
+                    limit_price=fill_price,
+                    current_price=float(fill_price),
+                    candle_high=None,
+                    candle_low=None,
+                    candle=None,
+                    skip_live_close=True,
+                )
+            except Exception as e:
+                # _execute_exit logs and absorbs its own close failures (reconciliation
+                # then recovers an unclosed position); reaching here means an unexpected
+                # error in the drain itself (e.g. the position lookup). Isolate it so
+                # one bad item can't abort the rest of the queue.
+                logger.critical(
+                    "CRITICAL: unexpected error draining deferred stop-loss exit for "
+                    "position %s: %s. Left for reconciliation to recover.",
+                    position_order_id,
+                    e,
+                    exc_info=True,
+                )
+
     def _ws_health_loop(self) -> None:
         """Monitor WebSocket streams and trigger reconnection on failure."""
         from src.config.constants import DEFAULT_WS_HEALTH_CHECK_INTERVAL
@@ -1464,18 +1631,62 @@ class LiveTradingEngine:
         if not self.order_tracker or self.order_tracker.get_tracked_count() == 0:
             return
 
-        from src.config.constants import DEFAULT_WS_USER_STALENESS_THRESHOLD
+        # A genuinely healthy stream (a real user event arrived since the last
+        # reconnect — user_ws_healthy requires _user_event_received) clears the
+        # reconnect circuit breaker.
+        if getattr(exchange, "user_ws_healthy", False):
+            self._user_reconnect_failures = 0
+
+        from src.config.constants import (
+            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
+            DEFAULT_WS_USER_STALENESS_THRESHOLD,
+        )
 
         last_event = getattr(exchange, "_last_user_event_time", None)
         if not last_event:
             return
         age = (datetime.now(UTC) - last_event).total_seconds()
-        if age > DEFAULT_WS_USER_STALENESS_THRESHOLD:
+        if age <= DEFAULT_WS_USER_STALENESS_THRESHOLD:
+            return
+
+        # Stale while PRIMARY with tracked orders means the previous reconnect
+        # produced no real events. python-binance's start_margin_socket is
+        # fire-and-forget and reports success even on a dead multiplexed ws_api
+        # socket, so reconnect_user returns True and this watchdog would otherwise
+        # reconnect every ~2 min forever (spewing asyncio re-entrancy errors).
+        # After a few unproductive reconnects, open the circuit: stop reconnecting
+        # and run REST-polling-only, which the engine already falls back to
+        # (OrderTracker polls every 10s; the periodic reconciler backstops at 120s).
+        # mark_user_degraded() sets REST_DEGRADED, so the != PRIMARY guard above
+        # then short-circuits this check — the warning below logs exactly once (#616).
+        if self._user_reconnect_failures >= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
             logger.warning(
-                "User data stream stale (%ds) with tracked orders — reconnecting",
-                int(age),
+                "User data stream did not recover after %d reconnects — circuit open, "
+                "staying on REST polling until the next restart (#616).",
+                self._user_reconnect_failures,
             )
-            self._handle_user_stream_disconnect()
+            # Tear down the dead user socket so its asyncio _read_ready callback stops
+            # firing on the shared event loop. Marking degraded alone stops reconnects
+            # but leaves the orphaned socket attached, which keeps spewing
+            # "cannot enter context" errors (~2,100/hr) indefinitely. stop_user_stream
+            # closes only the user socket (not kline), correct here since we are
+            # dropping to REST polling (#616).
+            if hasattr(exchange, "stop_user_stream"):
+                exchange.stop_user_stream()
+            if hasattr(exchange, "mark_user_degraded"):
+                exchange.mark_user_degraded()
+            if self.order_tracker:
+                self.order_tracker.enable_polling()
+            return
+
+        self._user_reconnect_failures += 1
+        logger.warning(
+            "User data stream stale (%ds) with tracked orders — reconnecting (attempt %d/%d)",
+            int(age),
+            self._user_reconnect_failures,
+            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
+        )
+        self._handle_user_stream_disconnect()
 
     def _handle_kline_disconnect(self) -> None:
         """Handle kline stream failure. Resync from REST and attempt reconnect."""
@@ -1489,11 +1700,18 @@ class LiveTradingEngine:
                 )
             except Exception as e:
                 logger.error("Kline REST resync failed: %s", e)
-        # Attempt reconnect
-        if (
-            hasattr(self._ws_kline_provider, "reconnect_kline")
-            and self._ws_kline_provider.reconnect_kline()
-        ):
+        # Attempt reconnect. The call is bounded by the REST socket timeout
+        # (#631); treat any failure as "stay on REST polling" rather than letting
+        # it abort recovery / propagate into the WS health thread.
+        reconnected = False
+        try:
+            reconnected = bool(
+                hasattr(self._ws_kline_provider, "reconnect_kline")
+                and self._ws_kline_provider.reconnect_kline()
+            )
+        except Exception as e:
+            logger.error("Kline reconnect attempt failed: %s", e)
+        if reconnected:
             self._ws_kline_active = True
             logger.info("Kline WebSocket reconnected")
         else:
@@ -1518,40 +1736,53 @@ class LiveTradingEngine:
         # 3. Enable REST polling as fallback
         if self.order_tracker:
             self.order_tracker.enable_polling()
-        # 4. Resync order and position state from REST
-        if self.order_tracker:
-            self.order_tracker.poll_once()
-        if self._periodic_reconciler:
-            self._periodic_reconciler.reconcile_once()
+        # 4. Resync order and position state from REST. Bounded by the REST
+        #    socket timeout (#631); a failed resync must not abort the rest of
+        #    recovery — REST polling (step 3) keeps orders tracked meanwhile.
+        try:
+            if self.order_tracker:
+                self.order_tracker.poll_once()
+            if self._periodic_reconciler:
+                self._periodic_reconciler.reconcile_once()
+        except Exception as e:
+            logger.error("User-stream REST resync failed: %s", e)
         # 5. If processor didn't stop cleanly, stay degraded — don't reconnect
         #    while the old thread may still be mutating order state
         if not processor_clean:
             self.exchange_interface.mark_user_degraded()
-            logger.critical(
-                "UserDataProcessor did not stop cleanly — staying in REST_DEGRADED"
-            )
+            logger.critical("UserDataProcessor did not stop cleanly — staying in REST_DEGRADED")
             return
         # 6. Attempt user stream reconnect with fresh callback
         reconnected = False
         if hasattr(self.exchange_interface, "reconnect_user"):
-            new_processor = UserDataProcessor(
-                order_tracker=self.order_tracker,
-            )
-            if self.exchange_interface.reconnect_user(
-                on_user_event=new_processor.enqueue,
-            ):
-                self._user_data_processor = new_processor
-                self._user_data_processor.start()
-                # Post-reconnect catch-up: reconcile events from the handoff gap
-                # before disabling polling, so nothing is lost
-                if self.order_tracker:
-                    self.order_tracker.poll_once()
-                if self._periodic_reconciler:
-                    self._periodic_reconciler.reconcile_once()
-                if self.order_tracker:
-                    self.order_tracker.disable_polling()
-                logger.info("User data WebSocket reconnected")
-                reconnected = True
+            try:
+                new_processor = UserDataProcessor(
+                    order_tracker=self.order_tracker,
+                )
+                if self.exchange_interface.reconnect_user(
+                    on_user_event=new_processor.enqueue,
+                ):
+                    self._user_data_processor = new_processor
+                    self._user_data_processor.start()
+                    reconnected = True
+                    logger.info("User data WebSocket reconnected")
+                    # Post-reconnect catch-up: reconcile events from the handoff
+                    # gap before disabling polling, so nothing is lost. A catch-up
+                    # failure leaves REST polling on as a safe fallback rather than
+                    # undoing the reconnect.
+                    try:
+                        if self.order_tracker:
+                            self.order_tracker.poll_once()
+                        if self._periodic_reconciler:
+                            self._periodic_reconciler.reconcile_once()
+                        if self.order_tracker:
+                            self.order_tracker.disable_polling()
+                    except Exception as e:
+                        logger.error(
+                            "Post-reconnect catch-up failed (staying on REST polling): %s", e
+                        )
+            except Exception as e:
+                logger.error("User stream reconnect attempt failed: %s", e)
         if not reconnected:
             self.exchange_interface.mark_user_degraded()
             logger.warning("User stream reconnect failed — order polling resumed")
@@ -1649,8 +1880,52 @@ class LiveTradingEngine:
         self.stop()
         sys.exit(0)
 
+    def _run_trading_loop(self, symbol: str, timeframe: str, max_steps: int | None = None) -> None:
+        """Thread target so an unhandled exception can't kill the loop *silently*.
+
+        A bare daemon thread that raises just vanishes, leaving the process alive
+        but brain-dead (HTTP server up, loop gone) — the zombie that hid the
+        2026-05-19 outage for 12 days. Catch any unhandled exception, record it,
+        and let start() turn it into a non-zero exit for an orchestrator restart (#630).
+        """
+        try:
+            self._trading_loop(symbol, timeframe, max_steps)
+        except Exception as e:
+            self._loop_crashed = True
+            logger.critical("Trading loop terminated unexpectedly: %s", e, exc_info=True)
+
+    def _exit_if_loop_crashed(self, exit_on_crash: bool) -> None:
+        """Exit the process non-zero if the trading loop died abnormally (#630).
+
+        A clean stop (signal, explicit stop, or max_steps) leaves this a no-op.
+        On an abnormal death (unhandled crash or consecutive-error exhaustion):
+        when *exit_on_crash* (the production runner), exit 1 so the orchestrator
+        restarts the process instead of leaving the bot silently dead; otherwise
+        return so library callers that read results after start() keep working.
+        """
+        if not (self._loop_crashed and exit_on_crash):
+            return
+        # The loop thread may still be unwinding its own shutdown (e.g. closing
+        # positions); wait so a daemon thread isn't killed mid-cleanup. We exit
+        # regardless of the join result (the daemon dies with the process), but
+        # surface a wedged cleanup so it's visible rather than silent.
+        if self.main_thread is not None and self.main_thread != threading.current_thread():
+            self.main_thread.join(timeout=30)
+            if self.main_thread.is_alive():
+                logger.error(
+                    "Loop thread still alive after 30s join; exiting anyway — "
+                    "shutdown cleanup may be incomplete."
+                )
+        logger.critical(
+            "Trading loop ended abnormally; exiting with code 1 to trigger an "
+            "orchestrator restart instead of running dead."
+        )
+        sys.exit(1)
+
     def _trading_loop(self, symbol: str, timeframe: str, max_steps: int | None = None) -> None:
         """Main trading loop"""
+        from src.infrastructure import liveness  # shared loop-liveness for /health (#627)
+
         logger.info("Trading loop started")
         steps = 0
         cfg = get_config()
@@ -1665,7 +1940,13 @@ class LiveTradingEngine:
                 self.stop()
                 break
             steps += 1
+            liveness.beat()  # record loop liveness for the /health endpoint (#627)
             try:
+                # Supervise the WS health monitor and drain deferred stop-loss
+                # exits first, so both run every iteration even when a data outage
+                # would `continue` below before reaching them (#631).
+                self._ensure_ws_health_monitor_alive()
+                self._drain_pending_fill_exits()
                 # For mock and real providers, update live data if supported.
                 # Skip when WS kline cache is active (no REST needed).
                 if not self._ws_kline_active and hasattr(self.data_provider, "update_live_data"):
@@ -1957,12 +2238,49 @@ class LiveTradingEngine:
                     self._log_status(symbol, current_price)
                 # Reset error counter on successful iteration
                 self.consecutive_errors = 0
+                self.db_unreachable_since = None
 
                 # Calculate and use adaptive interval for next iteration
                 current_price = df.iloc[-1]["close"] if df is not None and not df.empty else None
                 self.check_interval = self._calculate_adaptive_interval(current_price)
 
             except Exception as e:
+                # Transient database-connectivity errors (a brief Postgres
+                # outage or DNS hiccup) must NOT shut the engine down: ride them
+                # out with a bounded backoff and keep the process alive so it
+                # reconnects when the database returns. Counting them toward
+                # max_consecutive_errors killed the live bot during a multi-hour
+                # Railway internal-DNS outage on 2026-05-19.
+                if self._is_transient_db_error(e):
+                    if self.db_unreachable_since is None:
+                        self.db_unreachable_since = time.monotonic()
+                    unreachable_for = time.monotonic() - self.db_unreachable_since
+                    # Prolonged outage: stop opening new positions (exits and
+                    # server-side stop-losses still run) to avoid order churn
+                    # while DB writes keep failing. Stays close-only until a
+                    # manual resume_trading() after review.
+                    if (
+                        unreachable_for >= DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS
+                        and not self._close_only_mode
+                    ):
+                        logger.critical(
+                            "Database unreachable for %.0fs (>= %ds) — entering "
+                            "close-only mode (new entries suspended).",
+                            unreachable_for,
+                            DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS,
+                        )
+                        self._enter_close_only_mode()
+                    logger.warning(
+                        "Database temporarily unreachable in trading loop (%s); "
+                        "backing off %.0fs and retrying — not counted toward "
+                        "shutdown (unreachable for %.0fs).",
+                        type(e).__name__,
+                        self.error_cooldown,
+                        unreachable_for,
+                    )
+                    self._sleep_with_interrupt(self.error_cooldown)
+                    continue
+
                 self.consecutive_errors += 1
                 logger.error(
                     f"Error in trading loop (#{self.consecutive_errors}): {e}", exc_info=True
@@ -1972,6 +2290,8 @@ class LiveTradingEngine:
                         f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.",
                         exc_info=True,
                     )
+                    # Abnormal stop: signal start() to exit non-zero for a restart (#630).
+                    self._loop_crashed = True
                     self.stop()
                     break
                 # Exponential backoff with adaptive intervals
@@ -1984,6 +2304,64 @@ class LiveTradingEngine:
 
         logger.info("Trading loop ended")
         self._finalize_runtime()
+
+    @staticmethod
+    def _is_transient_db_error(exc: BaseException) -> bool:
+        """Return True if *exc* is a transient database-connectivity error.
+
+        Brief Postgres unavailability, dropped connections, or DNS hiccups
+        should be ridden out with a backoff rather than counted toward
+        ``max_consecutive_errors``. Otherwise a short infrastructure blip
+        shuts the live engine down — which is exactly what happened on
+        2026-05-19 when Railway's internal DNS failed to resolve
+        ``postgres.railway.internal`` for several hours. ``pool_pre_ping``
+        reconnects automatically once the database returns.
+
+        Permanent faults (bad credentials, missing role/database, permission
+        denied) are deliberately NOT treated as transient: retrying them
+        forever would keep the bot alive but brain-dead, so they fall through
+        to the normal consecutive-error path and fail fast.
+        """
+        # Permanent misconfiguration — never retry. These are psycopg2
+        # OperationalError subclasses too, so they must be matched BEFORE the
+        # broad isinstance() net below.
+        permanent_markers = (
+            "password authentication failed",
+            "authentication failed",
+            "no password supplied",
+            "permission denied",
+            "does not exist",  # role/database missing — will not self-heal
+        )
+        transient_markers = (
+            "could not translate host name",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "could not connect",
+            "connection refused",
+            "server closed the connection",
+            "connection already closed",
+            "ssl connection has been closed",
+            "terminating connection",
+            "the database system is starting up",
+            "connection timed out",
+            "could not receive data from server",
+            "no route to host",
+        )
+        seen: set[int] = set()
+        cur: BaseException | None = exc
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            text = str(cur).lower()
+            if any(marker in text for marker in permanent_markers):
+                return False
+            if any(marker in text for marker in transient_markers):
+                return True
+            if isinstance(cur, OperationalError | InterfaceError):
+                return True
+            if isinstance(cur, DBAPIError) and getattr(cur, "connection_invalidated", False):
+                return True
+            cur = getattr(cur, "orig", None) or cur.__cause__ or cur.__context__
+        return False
 
     def _is_context_ready(self, df: pd.DataFrame) -> tuple[bool, str]:
         """Check if the current frame has enough context for strategy-driven decisions.
@@ -2059,7 +2437,9 @@ class LiveTradingEngine:
             if self._kline_buffer and self._kline_buffer.needs_resync:
                 logger.info("KlineBuffer gap detected — resyncing from REST")
                 self._kline_buffer.resync_from_rest(
-                    self.data_provider, self._active_symbol or symbol, self.timeframe or timeframe,
+                    self.data_provider,
+                    self._active_symbol or symbol,
+                    self.timeframe or timeframe,
                 )
 
             # Use WS cache if available and healthy
@@ -2080,27 +2460,102 @@ class LiveTradingEngine:
             return None
 
     def _add_sentiment_data(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        """Add sentiment data to price data"""
+        """Add sentiment data to price data.
+
+        Backfills the entire buffer with historical sentiment first
+        (parity with backtest's full-history merge at
+        src/engines/backtest/engine.py:957-964), then layers the live
+        snapshot on top of recent candles. Without the historical pass,
+        bars older than 4 hours in the live buffer carried 0.0 sentiment
+        while backtest had populated values — so ML strategies that
+        consume a sequence_length window saw materially different inputs
+        between the two engines.
+        """
         try:
+            # Step 1: backfill historical sentiment over the buffer if the
+            # provider supports it. Mirrors backtest's `_merge_sentiment_data`
+            # join + ffill so older candles carry real sentiment values.
+            if hasattr(self.sentiment_provider, "get_historical_sentiment") and not df.empty:
+                try:
+                    start = df.index.min().to_pydatetime()
+                    end = df.index.max().to_pydatetime()
+                    sentiment_df = self.sentiment_provider.get_historical_sentiment(
+                        symbol, start, end
+                    )
+                    if sentiment_df is not None and not sentiment_df.empty:
+                        # Aggregate when the provider supports it. Fall back
+                        # to "1h" when self.timeframe is not yet set (e.g.
+                        # warmup paths) so the join shape is well-defined
+                        # rather than producing NaN-padded raw rows that
+                        # silently diverge from backtest.
+                        if hasattr(self.sentiment_provider, "aggregate_sentiment"):
+                            sentiment_df = self.sentiment_provider.aggregate_sentiment(
+                                sentiment_df, window=self.timeframe or "1h"
+                            )
+                        # Restrict the merge to the sentiment namespace and
+                        # drop any pre-existing sentiment columns from the
+                        # local df so we never produce ``sentiment_score_x``/
+                        # ``_y`` collisions when the buffer was already
+                        # enriched on a prior call (e.g. retained
+                        # ``_kline_buffer``). Filtering BOTH sides on the
+                        # ``sentiment*`` prefix means: (a) OHLCV / indicator
+                        # columns on ``df`` survive even if a future
+                        # provider's frame happens to expose a same-named
+                        # column like ``volume`` or ``close``; (b) the join
+                        # never raises pandas' default-overlap error.
+                        sentiment_only_cols = [
+                            c for c in sentiment_df.columns if c.startswith("sentiment_")
+                        ]
+                        if not sentiment_only_cols:
+                            # Provider returned no ``sentiment_*`` columns
+                            # at all (e.g. misconfigured aggregator that
+                            # emits only OHLCV-style columns). Skip the
+                            # merge entirely rather than letting the
+                            # provider's residual column names leak into
+                            # ``collision_cols`` and silently strip OHLCV
+                            # from ``df``.
+                            logger.debug(
+                                "Historical sentiment provider returned no "
+                                "sentiment_* columns for %s — skipping merge",
+                                symbol,
+                            )
+                        else:
+                            sentiment_df = sentiment_df[sentiment_only_cols]
+                            collision_cols = [c for c in df.columns if c in sentiment_df.columns]
+                            if collision_cols:
+                                df = df.drop(columns=collision_cols)
+                            df = df.join(sentiment_df, how="left")
+                            if "sentiment_score" in df.columns:
+                                df["sentiment_score"] = df["sentiment_score"].ffill().fillna(0)
+                except Exception as e:
+                    logger.warning(
+                        "Historical sentiment backfill failed for %s: %s — "
+                        "continuing with live-only sentiment which may differ from backtest",
+                        symbol,
+                        e,
+                    )
+
+            # Step 2: overlay the latest real-time sentiment snapshot on
+            # the most recent 4 hours of candles. The historical backfill
+            # has already populated older rows with the right values.
+            # The 4h window matches the live sentiment provider's
+            # freshness contract — bars older than that rely on the
+            # historical backfill above.
             if hasattr(self.sentiment_provider, "get_live_sentiment"):
-                # Get live sentiment for recent data
                 live_sentiment = self.sentiment_provider.get_live_sentiment()
-
-                # Apply to recent candles (last 4 hours)
-                recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
-                for feature, value in live_sentiment.items():
-                    if feature not in df.columns:
-                        df[feature] = 0.0
-                    df.loc[recent_mask, feature] = value
-
-                # Mark sentiment freshness
-                df["sentiment_freshness"] = 0
-                df.loc[recent_mask, "sentiment_freshness"] = 1
-
-                logger.debug("Applied live sentiment to %s recent candles", recent_mask.sum())
+                if live_sentiment and not df.empty:
+                    # 4h: live sentiment freshness window (see step-2 comment).
+                    recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
+                    for feature, value in live_sentiment.items():
+                        if feature not in df.columns:
+                            df[feature] = 0.0
+                        df.loc[recent_mask, feature] = value
+                    if "sentiment_freshness" not in df.columns:
+                        df["sentiment_freshness"] = 0
+                    df.loc[recent_mask, "sentiment_freshness"] = 1
+                    logger.debug("Applied live sentiment to %s recent candles", recent_mask.sum())
             else:
-                # Fallback to historical sentiment
-                logger.debug("Using historical sentiment data")
+                logger.debug("Using historical sentiment data only (no live provider)")
 
         except Exception as e:
             logger.error("Failed to add sentiment data: %s", e, exc_info=True)
@@ -2353,11 +2808,22 @@ class LiveTradingEngine:
 
         if use_runtime:
             perf_metrics = self.performance_tracker.get_metrics()
+            # Pass symbol/timeframe/df/index so LiveEntryHandler can run
+            # correlation control. These are required keyword args of the
+            # handler's correlation guard (see LiveEntryHandler.process_runtime_decision
+            # at src/engines/live/execution/entry_handler.py:208-222) — without
+            # them, correlation_handler.apply_correlation_control is silently
+            # skipped, so the live engine over-concentrates in correlated pairs
+            # that the backtest engine de-risks.
             entry_signal_result = self.live_entry_handler.process_runtime_decision(
                 runtime_decision=runtime_decision,
                 balance=self.current_balance,
                 current_price=float(current_price),
                 current_time=datetime.now(UTC),
+                symbol=symbol,
+                timeframe=self.timeframe,
+                df=df,
+                index=current_index,
                 peak_balance=perf_metrics.peak_balance or self.current_balance,
                 trading_session_id=self.trading_session_id,
             )
@@ -2372,10 +2838,30 @@ class LiveTradingEngine:
         elif isinstance(self.strategy, ComponentStrategy):
             # Component-based strategy: use process_candle() for decision
             # Note: runtime_decision should already be populated if this is a component strategy
-            # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper
+            # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper.
+            # Pass the live positions list so strategies that consult
+            # current_positions (anti-pyramiding, correlation-aware sizing,
+            # etc.) see the same view they would in the StrategyRuntime path
+            # and in backtest. Previously this hardcoded ``None`` and silently
+            # diverged from backtest.
             try:
+                # Fall back to the most recent close (df[-1]) when
+                # current_index is past the end — never to 0.0, which would
+                # produce a -100% pnl_percent in ComponentPosition and could
+                # trigger forced-exit logic in strategies that consult
+                # current_positions.
+                if len(df) == 0:
+                    fallback_price = 0.0
+                elif current_index < len(df):
+                    fallback_price = float(df["close"].iloc[current_index])
+                else:
+                    fallback_price = float(df["close"].iloc[-1])
+                current_positions = self._build_component_positions(fallback_price)
                 decision = self.strategy.process_candle(
-                    df, current_index, self.current_balance, None
+                    df,
+                    current_index,
+                    self.current_balance,
+                    current_positions or None,
                 )
                 self._apply_policies_from_decision(decision)
 
@@ -3036,34 +3522,25 @@ class LiveTradingEngine:
             average_price=avg_price,
         )
 
-        # Check if this is a stop-loss order fill - need to close the position.
-        # positions property returns a thread-safe copy. _execute_exit has its
-        # own defensive has_position() check to handle the race where another
-        # thread closes the position between our lookup and the exit call.
-        position_to_close: Position | None = None
+        # If this is a stop-loss order fill, the position must be closed — but the
+        # close (DB writes, P&L bookkeeping) is DEFERRED to the trading loop via a
+        # queue rather than run here on the OrderTracker poll thread. Running it
+        # inline blocked all order polling on a slow close and, on failure, drove
+        # the order toward force-removal (orphaning the position). The stop-loss
+        # has already executed on-exchange, so the loop drains and runs the exit
+        # with skip_live_close=True; a drain failure is backstopped by the
+        # periodic/startup reconcilers (#631). positions returns a thread-safe copy.
         for pos_order_id, position in self.live_position_tracker.positions.items():
             if position.stop_loss_order_id == order_id:
-                position_to_close = position
                 logger.warning(
-                    "Stop-loss order %s filled for position %s at $%.2f - closing position",
+                    "Stop-loss order %s filled for position %s at $%.2f - "
+                    "queuing position close for the trading loop",
                     order_id,
                     pos_order_id,
                     avg_price,
                 )
+                self._pending_fill_exits.put((pos_order_id, float(avg_price)))
                 break
-        if position_to_close:
-            # _execute_exit re-verifies the position still exists under the
-            # tracker lock before proceeding, preventing double-close races.
-            self._execute_exit(
-                position_to_close,
-                reason="stop_loss",
-                limit_price=avg_price,
-                current_price=float(avg_price),
-                candle_high=None,
-                candle_low=None,
-                candle=None,
-                skip_live_close=True,
-            )
 
     def _handle_partial_fill(
         self, order_id: str, symbol: str, new_filled_qty: float, avg_price: float
@@ -3290,9 +3767,7 @@ class LiveTradingEngine:
                     from src.engines.live.reconciliation import PositionReconciler
 
                     tracker = MarginInterestTracker(self.exchange_interface)
-                    base_asset = PositionReconciler._extract_base_asset(
-                        position.symbol
-                    )
+                    base_asset = PositionReconciler._extract_base_asset(position.symbol)
                     if base_asset == position.symbol:
                         logger.warning(
                             "Could not extract base asset from %s — margin interest may not be queried correctly",
@@ -3934,6 +4409,77 @@ class LiveTradingEngine:
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
             return None
 
+    def _ensure_positions_registered_with_risk_manager(self) -> None:
+        """Register every tracked position with the risk manager.
+
+        Idempotent. Re-registering a known position is a no-op for risk
+        managers that key on (symbol, side); for the few that count entries,
+        registering twice still leaves the position visible — strictly
+        better than the recovered-but-invisible state we are guarding
+        against.
+
+        Parity rationale:
+        - Backtest registers every position at entry
+          (src/engines/backtest/execution/entry_handler.py:407-421).
+        - Live's DB-recovery path registers
+          (src/engines/live/trading_engine.py:_recover_active_positions).
+        - Live's reconciler path (PositionReconciler._reconcile_filled_entry)
+          can also create positions via track_recovered_position but does
+          not register. This sweep closes that gap so per-symbol caps and
+          correlation gating see all active positions, matching the
+          invariant backtest assumes always holds.
+        """
+        if self.risk_manager is None:
+            return
+        try:
+            positions_snapshot = self.live_position_tracker.positions
+        except Exception as e:
+            logger.warning("Failed to snapshot positions for risk-manager sync: %s", e)
+            return
+
+        for position in positions_snapshot.values():
+            try:
+                # Use current_size (post-partial-exit) — passing the original
+                # ``size`` would silently re-inflate risk_manager.daily_risk_used
+                # on every re-registration, undoing the prior
+                # adjust_position_after_partial_exit. CODE.md "Position Fields"
+                # rules: ``current_size`` is the source of truth for capital
+                # currently deployed.
+                effective_size = (
+                    float(position.current_size)
+                    if position.current_size is not None
+                    else float(position.size)
+                )
+                if effective_size <= 0:
+                    # 100% partial-exit drained the position but the close
+                    # ack has not popped it from the tracker yet. Calling
+                    # ``update_position(size=0.0)`` would fail the size>0
+                    # validator and leave ``daily_risk_used`` inflated at
+                    # the original allocation. Drain the slot via
+                    # ``close_position`` so the next entry sees the right
+                    # remaining budget, then skip re-registration.
+                    try:
+                        self.risk_manager.close_position(position.symbol)
+                    except (KeyError, ValueError, AttributeError) as drain_err:
+                        logger.debug(
+                            "Risk manager close_position drain skipped for %s: %s",
+                            position.symbol,
+                            drain_err,
+                        )
+                    continue
+                self.risk_manager.update_position(
+                    symbol=position.symbol,
+                    side=position.side.value,
+                    size=effective_size,
+                    entry_price=position.entry_price,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to register recovered position %s with risk manager: %s",
+                    position.symbol,
+                    e,
+                )
+
     def _recover_active_positions(self) -> None:
         """Recover active positions from database"""
         try:
@@ -4001,10 +4547,7 @@ class LiveTradingEngine:
                 # Validate recovered entry_price before tracking. Positions
                 # with invalid entry_price cannot be closed properly and would
                 # become orphaned in the tracker.
-                if (
-                    position.entry_price <= 0
-                    or not math.isfinite(position.entry_price)
-                ):
+                if position.entry_price <= 0 or not math.isfinite(position.entry_price):
                     logger.critical(
                         "SKIPPING recovery of position %s (%s): invalid entry_price %.8f. "
                         "MANUAL RECONCILIATION REQUIRED.",
@@ -4077,7 +4620,7 @@ class LiveTradingEngine:
                     Severity,
                 )
 
-                use_margin = getattr(self.exchange_interface, 'is_margin_mode', False)
+                use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
                 reconciler = PositionReconciler(
                     exchange_interface=self.exchange_interface,
                     position_tracker=self.live_position_tracker,
@@ -4094,9 +4637,7 @@ class LiveTradingEngine:
                     # Process results even with no positions — a filled entry
                     # order may create a position, and critical issues must
                     # still trigger close-only mode.
-                    critical_count = sum(
-                        1 for r in results if r.severity == Severity.CRITICAL
-                    )
+                    critical_count = sum(1 for r in results if r.severity == Severity.CRITICAL)
                     if critical_count > 0:
                         logger.critical(
                             "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
@@ -4128,9 +4669,7 @@ class LiveTradingEngine:
                 results = reconciler.reconcile_startup(positions_snapshot)
 
                 # Check for critical issues
-                critical_count = sum(
-                    1 for r in results if r.severity == Severity.CRITICAL
-                )
+                critical_count = sum(1 for r in results if r.severity == Severity.CRITICAL)
                 if critical_count > 0:
                     logger.critical(
                         "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
@@ -4257,9 +4796,7 @@ class LiveTradingEngine:
                             from src.engines.live.reconciliation import PositionReconciler
 
                             tracker = MarginInterestTracker(self.exchange_interface)
-                            base_asset = PositionReconciler._extract_base_asset(
-                                position.symbol
-                            )
+                            base_asset = PositionReconciler._extract_base_asset(position.symbol)
                             interest_base = tracker.get_position_interest_cost(
                                 base_asset, position.entry_time
                             )

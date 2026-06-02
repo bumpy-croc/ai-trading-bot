@@ -51,6 +51,21 @@ MAX_JOB_SUFFIX_LENGTH = 100
 MAX_METADATA_SEARCH_DEPTH = 100
 
 
+def _validate_registry_component(value: str, field: str) -> str:
+    """Validate a path component used to build local model-registry paths.
+
+    ``version_id``/``model_type`` originate from a downloaded ``metadata.json``
+    (outside this process) and are used to build registry paths that are later
+    targets of rmtree/copytree/symlink. A value containing ``..`` or a path
+    separator would allow writing or deleting files outside the registry, so we
+    only accept simple identifiers.
+    """
+    text = str(value)
+    if text in (".", "..") or not re.match(r"^[\w\-.]+$", text):
+        raise ArtifactSyncError(f"Refusing to use unsafe {field} from metadata: {value!r}")
+    return text
+
+
 class CloudTrainingOrchestrator:
     """Orchestrates cloud training workflow.
 
@@ -411,6 +426,10 @@ class CloudTrainingOrchestrator:
                 version_id = datetime.now(UTC).strftime("%Y-%m-%d_%Hh_v1")
                 model_type = "basic"
 
+            # Validate metadata-supplied path components (see helper docstring).
+            version_id = _validate_registry_component(version_id, "version_id")
+            model_type = _validate_registry_component(model_type, "model_type")
+
             # Sync to local registry
             local_registry = get_project_root() / "src" / "ml" / "models"
             symbol = self.config.training_config.symbol.upper()
@@ -489,6 +508,12 @@ class CloudTrainingOrchestrator:
         """
         # Create expected registry directory path
         version_dir = local_registry / symbol / model_type / version_id
+
+        # Defense in depth: ensure the resolved target never escapes the registry
+        # before any destructive rmtree/copytree/symlink operation runs.
+        registry_root = local_registry.resolve()
+        if not version_dir.resolve().is_relative_to(registry_root):
+            raise ArtifactSyncError(f"Computed model path escapes registry root: {version_dir}")
 
         # If artifact is already in the registry at the correct location, just update the symlink
         if artifact_path.resolve() == version_dir.resolve():

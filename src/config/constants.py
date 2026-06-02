@@ -62,9 +62,17 @@ DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 # Error Handling Constants
 DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 10  # Maximum errors before shutdown
+# After the database has been continuously unreachable for this long, the live
+# loop stops opening new positions (close-only) while it keeps retrying, to
+# avoid order churn during a prolonged outage. Exits and server-side stops still run.
+DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS = 1800  # 30 minutes
 
 # Health Monitor Constants (distinct from CPU optimization intervals)
 DEFAULT_HEALTH_BASE_CHECK_INTERVAL = 60  # Base health check interval in seconds
+# /health reports unhealthy (503) if the trading loop has not iterated within this
+# many seconds, so a zombie (HTTP server up, loop dead) is detectable (#627).
+# Must exceed DEFAULT_MAX_CHECK_INTERVAL (300) with margin.
+DEFAULT_HEALTH_LOOP_MAX_SILENCE_SECONDS = 900  # 15 minutes
 DEFAULT_HEALTH_MIN_CHECK_INTERVAL = 10  # Minimum health check interval (aggressive recovery)
 DEFAULT_HEALTH_MAX_CHECK_INTERVAL = 300  # Maximum health check interval
 
@@ -271,10 +279,16 @@ DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"
 # - INFERENCE_TIMEOUT_SECONDS
 # - API_REQUEST_TIMEOUT_SECONDS
 # - DATA_FETCH_TIMEOUT_SECONDS
+# - BINANCE_REST_TIMEOUT_SECONDS
 DEFAULT_MODEL_LOAD_TIMEOUT = 60.0  # Timeout for loading ML models (ONNX, Keras)
 DEFAULT_INFERENCE_TIMEOUT = 30.0  # Timeout for model inference
 DEFAULT_API_REQUEST_TIMEOUT = 30.0  # Timeout for external API requests
 DEFAULT_DATA_FETCH_TIMEOUT = 60.0  # Timeout for historical data fetches
+# Socket timeout (seconds) applied to every Binance REST call via the client's
+# requests_params. Bounds disconnect-path resync/reconnect and order polling so
+# a half-open TCP socket can't hang the WS health thread or loop (#631). Kept
+# below the WS health check interval so a stuck call returns before stalling.
+DEFAULT_BINANCE_REST_TIMEOUT = 15.0
 
 # Numeric Precision Constants
 DEFAULT_EPSILON = 1e-9  # Small value for floating point comparisons
@@ -326,12 +340,26 @@ DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT = 0.05  # 5% balance discrepancy tr
 DEFAULT_RECONCILIATION_DUST_THRESHOLD = 0.00001  # Ignore dust-level asset discrepancies
 DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT = 0.01  # 1% qty tolerance for order matching
 DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN = 10  # Minutes for timestamp matching
+# Bound startup order reconciliation so a large stale-order backlog cannot block
+# the trading loop for hours (#628). Each unresolved order costs a REST round-trip;
+# excess beyond the cap / time budget is deferred to the next startup run.
+DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE = 200
+DEFAULT_RECONCILE_TIME_BUDGET_SECONDS = 120
+# Age (minutes) past which a never-sent PENDING_SUBMIT order (no exchange id) is
+# bulk-failed by the startup cleanup, draining stale-order backlogs (#629).
+DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES = 60
 
 # WebSocket Stream Constants
 DEFAULT_WS_KLINE_STALENESS_THRESHOLD = 120  # Seconds before kline stream considered stale
 DEFAULT_WS_USER_STALENESS_THRESHOLD = 120  # Seconds before user stream considered stale (only when orders tracked)
 DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
 DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
+# Consecutive unproductive user-stream reconnects (stale again with no real event)
+# before the watchdog opens a circuit breaker: stop the futile ~2-min reconnect loop
+# and run REST-polling-only. python-binance's start_margin_socket is fire-and-forget
+# and reports success even on a dead multiplexed ws_api socket, so reconnects never
+# self-terminate and churn forever (#616).
+DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT = 3
 DEFAULT_STARTUP_BAN_MAX_WAIT = 600  # Max seconds to wait for an IP ban to lift during startup
 DEFAULT_STARTUP_BAN_MAX_RETRIES = 3  # Max retry attempts for ban-related startup failures
 

@@ -18,7 +18,11 @@ def get_secret_key(env_var: str = "FLASK_SECRET_KEY", *, allow_default_in_dev: b
         RuntimeError: If secret is missing in non-development environments.
     """
     value = os.getenv(env_var)
-    env = os.getenv("ENV", os.getenv("FLASK_ENV", "development")).lower()
+    # Fail closed: when neither ENV nor FLASK_ENV is set we must NOT assume
+    # development, otherwise a misconfigured production deployment would silently
+    # sign sessions with the publicly known dev key (session-forgery risk). Only
+    # an explicit dev/test marker unlocks the default fallback.
+    env = os.getenv("ENV", os.getenv("FLASK_ENV", "production")).lower()
     if value:
         return value
     if allow_default_in_dev and env in {"dev", "development", "test", "testing"}:
