@@ -2214,6 +2214,21 @@ class LiveTradingEngine:
                             )
                             if sync_result.success:
                                 logger.debug("Periodic account sync completed")
+                                # Apply any balance correction to the in-memory balance
+                                # that drives sizing (the DB is already updated inside the
+                                # sync). Without this a mid-session margin-equity
+                                # correction would not reach live sizing until restart.
+                                balance_sync = sync_result.data.get("balance_sync", {})
+                                if balance_sync.get("corrected", False):
+                                    corrected = balance_sync.get("new_balance")
+                                    if corrected is not None:
+                                        with self._balance_lock:
+                                            self.current_balance = corrected
+                                        logger.info(
+                                            "💰 Balance corrected mid-session from "
+                                            "exchange: $%.2f",
+                                            corrected,
+                                        )
                             else:
                                 logger.warning(
                                     "Periodic account sync failed: %s",
