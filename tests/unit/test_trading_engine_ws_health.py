@@ -215,6 +215,42 @@ class TestCheckUserStreamHealth:
         assert disc.call_count == LIMIT  # bounded, not 20
         ex.mark_user_degraded.assert_called_once()  # degraded exactly once
 
+    @pytest.mark.fast
+    def test_breaker_survives_post_reconnect_fresh_timestamp(self, mock_engine):
+        """Real-timing regression: each reconnect refreshes _last_user_event_time to
+        now (as start_user_stream does), so the next health checks see age<threshold
+        and skip. The breaker must still accumulate across stale cycles — only a real
+        event (user_ws_healthy) may reset it, never the fresh post-reconnect timestamp.
+        """
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+
+        ex, _tracker = self._dead_socket_engine(mock_engine)
+
+        # Faithful reconnect: refresh the timestamp but leave the socket dead — no
+        # real event arrives, so user_ws_healthy stays False.
+        def _reconnect():
+            ex._last_user_event_time = datetime.now(UTC)
+
+        with patch.object(
+            mock_engine, "_handle_user_stream_disconnect", side_effect=_reconnect
+        ) as disc:
+            for cycle in range(1, LIMIT + 1):
+                # Stale again (simulate ~150s elapsed since the last reconnect refresh).
+                ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+                mock_engine._check_user_stream_health()  # increment + reconnect (refreshes ts)
+                assert mock_engine._user_reconnect_failures == cycle
+                # Immediately after: fresh timestamp → NOT stale → no-op; the counter
+                # must be PRESERVED (the fresh timestamp must not reset it).
+                mock_engine._check_user_stream_health()
+                assert mock_engine._user_reconnect_failures == cycle
+                assert disc.call_count == cycle
+
+            # Next stale cycle: circuit trips → degrade, no further reconnect.
+            ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+            mock_engine._check_user_stream_health()
+            ex.mark_user_degraded.assert_called_once()
+            assert disc.call_count == LIMIT
+
 
 class TestHandleKlineDisconnect:
     """Tests for _handle_kline_disconnect()."""

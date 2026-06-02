@@ -1604,8 +1604,8 @@ class LiveTradingEngine:
         # then short-circuits this check — the warning below logs exactly once (#616).
         if self._user_reconnect_failures >= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
             logger.warning(
-                "User data stream did not recover after %d reconnects — staying on "
-                "REST polling until a real event or restart (circuit open) (#616).",
+                "User data stream did not recover after %d reconnects — circuit open, "
+                "staying on REST polling until the next restart (#616).",
                 self._user_reconnect_failures,
             )
             if hasattr(exchange, "mark_user_degraded"):
