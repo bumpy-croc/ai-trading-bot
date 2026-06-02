@@ -344,9 +344,31 @@ class StrategyManager:
                 self.current_version = new_version
                 self.version_history[new_version.version_id] = new_version
 
+            # Audit-log the new strategy's risk overrides so operators have a
+            # paper trail of the active SL/TP/trailing/partial config after a
+            # mid-run regime swap. Engine-side rebinding lives in
+            # ``LiveTradingEngine._refresh_strategy_dependencies``.
+            new_overrides: dict[str, Any] | None = None
+            if hasattr(new_strategy, "get_risk_overrides"):
+                try:
+                    fetched = new_strategy.get_risk_overrides()
+                    if isinstance(fetched, dict):
+                        new_overrides = fetched
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.debug("Failed to read get_risk_overrides() on swap: %s", exc)
+            adapter = getattr(new_strategy, "risk_manager", None)
+            adapter_overrides = getattr(adapter, "_strategy_overrides", None)
+            if isinstance(adapter_overrides, dict):
+                merged = dict(adapter_overrides)
+                if new_overrides:
+                    merged.update(new_overrides)
+                new_overrides = merged
+
             logger.info(
-                f"✅ Strategy swapped: {self._display_name(old_strategy)} "
-                f"→ {self._display_name(new_strategy)}"
+                "✅ Strategy swapped: %s → %s | new risk overrides: %s",
+                self._display_name(old_strategy),
+                self._display_name(new_strategy),
+                new_overrides if new_overrides else "<none>",
             )
             return True
 
