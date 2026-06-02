@@ -471,6 +471,9 @@ class LiveTradingEngine:
         self._ws_kline_active = False
         self._ws_kline_provider = None
         self._ws_health_thread = None
+        # Consecutive unproductive user-stream reconnects; trips a circuit breaker
+        # that stops the futile reconnect loop and runs REST-only (#616).
+        self._user_reconnect_failures = 0
         # Stop-loss fills are detected on the OrderTracker poll thread but their
         # bookkeeping exit is deferred to the trading loop so a slow/failing close
         # can't block order polling or force-remove a filled order (#631).
@@ -1571,18 +1574,54 @@ class LiveTradingEngine:
         if not self.order_tracker or self.order_tracker.get_tracked_count() == 0:
             return
 
-        from src.config.constants import DEFAULT_WS_USER_STALENESS_THRESHOLD
+        # A genuinely healthy stream (a real user event arrived since the last
+        # reconnect — user_ws_healthy requires _user_event_received) clears the
+        # reconnect circuit breaker.
+        if getattr(exchange, "user_ws_healthy", False):
+            self._user_reconnect_failures = 0
+
+        from src.config.constants import (
+            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
+            DEFAULT_WS_USER_STALENESS_THRESHOLD,
+        )
 
         last_event = getattr(exchange, "_last_user_event_time", None)
         if not last_event:
             return
         age = (datetime.now(UTC) - last_event).total_seconds()
-        if age > DEFAULT_WS_USER_STALENESS_THRESHOLD:
+        if age <= DEFAULT_WS_USER_STALENESS_THRESHOLD:
+            return
+
+        # Stale while PRIMARY with tracked orders means the previous reconnect
+        # produced no real events. python-binance's start_margin_socket is
+        # fire-and-forget and reports success even on a dead multiplexed ws_api
+        # socket, so reconnect_user returns True and this watchdog would otherwise
+        # reconnect every ~2 min forever (spewing asyncio re-entrancy errors).
+        # After a few unproductive reconnects, open the circuit: stop reconnecting
+        # and run REST-polling-only, which the engine already falls back to
+        # (OrderTracker polls every 10s; the periodic reconciler backstops at 120s).
+        # mark_user_degraded() sets REST_DEGRADED, so the != PRIMARY guard above
+        # then short-circuits this check — the warning below logs exactly once (#616).
+        if self._user_reconnect_failures >= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
             logger.warning(
-                "User data stream stale (%ds) with tracked orders — reconnecting",
-                int(age),
+                "User data stream did not recover after %d reconnects — circuit open, "
+                "staying on REST polling until the next restart (#616).",
+                self._user_reconnect_failures,
             )
-            self._handle_user_stream_disconnect()
+            if hasattr(exchange, "mark_user_degraded"):
+                exchange.mark_user_degraded()
+            if self.order_tracker:
+                self.order_tracker.enable_polling()
+            return
+
+        self._user_reconnect_failures += 1
+        logger.warning(
+            "User data stream stale (%ds) with tracked orders — reconnecting (attempt %d/%d)",
+            int(age),
+            self._user_reconnect_failures,
+            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
+        )
+        self._handle_user_stream_disconnect()
 
     def _handle_kline_disconnect(self) -> None:
         """Handle kline stream failure. Resync from REST and attempt reconnect."""
