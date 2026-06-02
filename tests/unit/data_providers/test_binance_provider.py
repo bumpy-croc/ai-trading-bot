@@ -74,6 +74,29 @@ def test_each_twm_gets_its_own_event_loop(mock_config, mock_client, mock_twm, mo
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.Client")
+@patch("src.data_providers.binance_provider.get_config")
+def test_stop_streams_closes_twm_event_loop(mock_config, mock_client):
+    """stop_streams() must close the per-TWM event loop so its FDs aren't leaked."""
+    import asyncio
+
+    mock_config_obj = Mock()
+    mock_config_obj.get_required.return_value = "fake_key"
+    mock_config.return_value = mock_config_obj
+
+    provider = BinanceProvider()
+    loop = asyncio.new_event_loop()
+    provider._twm = Mock()
+    provider._twm_loop = loop
+
+    provider.stop_streams()
+
+    assert loop.is_closed()
+    assert provider._twm is None
+    assert provider._twm_loop is None
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 class TestBinanceDataProvider:
     @pytest.mark.data_provider
     def test_binance_provider_initialization(self):
