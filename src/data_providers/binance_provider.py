@@ -1637,6 +1637,18 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.warning("Binance not available - cannot place stop-loss order")
             return None
 
+        # Callers may pass Decimal values (SQLAlchemy Numeric columns from a DB-loaded
+        # position); coerce to float so the price/lot arithmetic below never raises
+        # "unsupported operand type(s) for *: 'decimal.Decimal' and 'float'".
+        try:
+            stop_price = float(stop_price)
+            quantity = float(quantity)
+            if limit_price is not None:
+                limit_price = float(limit_price)
+        except (TypeError, ValueError) as e:
+            logger.error("Invalid numeric input to stop-loss order for %s: %s", symbol, e)
+            return None
+
         # Validate stop_price is positive and finite
         if not (stop_price > 0 and math.isfinite(stop_price)):
             logger.error("Invalid stop_price: %s", stop_price)
