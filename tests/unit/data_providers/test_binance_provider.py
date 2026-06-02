@@ -40,6 +40,63 @@ def test_binance_provider_does_not_apply_nest_asyncio():
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.get_binance_api_endpoint", return_value="binance")
+@patch("src.data_providers.binance_provider.ThreadedWebsocketManager")
+@patch("src.data_providers.binance_provider.Client")
+@patch("src.data_providers.binance_provider.get_config")
+def test_each_twm_gets_its_own_event_loop(mock_config, mock_client, mock_twm, mock_endpoint):
+    """Two providers (kline + user streams) must not share an event loop.
+
+    python-binance's ThreadedApiManager captures the current loop at construction.
+    Two TWMs sharing the main-thread loop make the second stream's
+    run_until_complete() raise 'This event loop is already running' — which stopped
+    the margin user-stream from starting after nest_asyncio was removed (#646). Each
+    TWM must therefore receive a distinct, freshly-created loop, with no nest_asyncio.
+    """
+    import asyncio
+
+    mock_config_obj = Mock()
+    mock_config_obj.get_required.return_value = "fake_key"
+    mock_config.return_value = mock_config_obj
+
+    loops = []
+    try:
+        for _ in range(2):
+            BinanceProvider()._ensure_twm()
+        assert mock_twm.call_count == 2
+        loops = [call.kwargs["loop"] for call in mock_twm.call_args_list]
+        assert all(isinstance(loop, asyncio.AbstractEventLoop) for loop in loops)
+        assert loops[0] is not loops[1]  # distinct loops — not the shared main-thread loop
+        assert getattr(asyncio, "_nest_patched", False) is False  # no nest_asyncio
+    finally:
+        for loop in loops:
+            loop.close()
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.Client")
+@patch("src.data_providers.binance_provider.get_config")
+def test_stop_streams_closes_twm_event_loop(mock_config, mock_client):
+    """stop_streams() must close the per-TWM event loop so its FDs aren't leaked."""
+    import asyncio
+
+    mock_config_obj = Mock()
+    mock_config_obj.get_required.return_value = "fake_key"
+    mock_config.return_value = mock_config_obj
+
+    provider = BinanceProvider()
+    loop = asyncio.new_event_loop()
+    provider._twm = Mock()
+    provider._twm_loop = loop
+
+    provider.stop_streams()
+
+    assert loop.is_closed()
+    assert provider._twm is None
+    assert provider._twm_loop is None
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 class TestBinanceDataProvider:
     @pytest.mark.data_provider
     def test_binance_provider_initialization(self):
