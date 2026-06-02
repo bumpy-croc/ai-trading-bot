@@ -601,6 +601,41 @@ class TestPlaceStopLossOrder:
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
+    def test_stop_loss_accepts_decimal_inputs(self, mock_config, mock_client_class):
+        """Decimal stop_price/quantity (DB Numeric columns) must not raise Decimal*float.
+
+        A DB-loaded position carries Decimal fields; without coercion the limit-price
+        and lot arithmetic raised 'unsupported operand type(s) for *' and left the
+        position unprotected (periodic reconciler).
+        """
+        from decimal import Decimal
+
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {"orderId": "sl7"}
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "ETH"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            quantity=Decimal("0.005"),
+            stop_price=Decimal("1900.0"),
+        )
+
+        assert result == "sl7"
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert isinstance(sent_qty, float)
+        assert sent_qty == pytest.approx(0.005, abs=1e-9)
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
     def test_auto_limit_price_calculation_sell(self, mock_config, mock_client_class):
         """Verify limit price is calculated below stop for sell orders."""
         # Arrange
