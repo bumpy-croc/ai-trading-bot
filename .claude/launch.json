@@ -1,0 +1,41 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "monitoring-dashboard",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "source /Users/alex/Sites/ai-trading-bot/.venv/bin/activate && export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot && export PYTHONPATH=/Users/alex/Sites/ai-trading-bot/.claude/worktrees/brave-jackson-d9e7ee && exec atb dashboards run monitoring --port 8000"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "backtesting-dashboard",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "source /Users/alex/Sites/ai-trading-bot/.venv/bin/activate && export PYTHONPATH=/Users/alex/Sites/ai-trading-bot/.claude/worktrees/brave-jackson-d9e7ee && exec atb dashboards run backtesting --port 8001"
+      ],
+      "port": 8001
+    },
+    {
+      "name": "market-prediction-dashboard",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "source /Users/alex/Sites/ai-trading-bot/.venv/bin/activate && export PYTHONPATH=/Users/alex/Sites/ai-trading-bot/.claude/worktrees/brave-jackson-d9e7ee && exec atb dashboards run market_prediction --port 8002"
+      ],
+      "port": 8002
+    },
+    {
+      "name": "live-health-paper",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "source /Users/alex/Sites/ai-trading-bot/.venv/bin/activate && export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot && export PYTHONPATH=/Users/alex/Sites/ai-trading-bot/.claude/worktrees/brave-jackson-d9e7ee && export PORT=8000 && exec atb live-health -- ml_basic --paper-trading"
+      ],
+      "port": 8000
+    }
+  ]
+}

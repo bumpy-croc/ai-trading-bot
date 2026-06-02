@@ -445,6 +445,19 @@ LOG_LEVEL=INFO
 
 ## Recent Architectural Changes
 
+### April 2026
+- **Monitoring dashboard V2 redesign**: front-end stack swap from
+  Bootstrap + Chart.js to **React 18 (UMD) + Babel-standalone +
+  socket.io-client**, served from `src/dashboards/monitoring/`. New chart-led
+  layout with left-rail nav, swappable right inspector, and light/dark
+  themes. CDN scripts pinned with SRI hashes. See `docs/monitoring.md` for
+  the layout, the Babel-standalone caveat, and the new
+  `GET /api/dashboard/state` bundled endpoint.
+- **`/api/dashboard/state`** bundles `bot` + `metrics` + `positions` +
+  `trades` in a single response so the dashboard's first paint is one
+  round-trip; backend reuses the API connection probe across the request to
+  avoid double-hitting the data provider.
+
 ### January-February 2026
 - **Claude Code CI Workflow** (#551): Added GitHub Actions workflow with test execution
 - **Cloud Training Automation** (#532): Auto data download/upload for cloud-based model training
