@@ -132,12 +132,11 @@ class AccountSynchronizer:
                     exchange_data.get("positions", [])
                 )
             else:
-                balance_sync_result = {"synced": False, "reason": "skipped in margin mode"}
+                # Margin: reconcile the tracked balance against true net equity
+                # (assets minus liabilities), not USDT alone. Position sync stays
+                # skipped; only the balance safety-net is added here.
+                balance_sync_result = self._sync_margin_equity()
                 position_sync_result = {"synced": False, "reason": "skipped in margin mode"}
-                logger.info(
-                    "Skipping balance/position sync in margin mode — "
-                    "USDT netAsset excludes cross-asset liabilities"
-                )
 
             # Sync orders
             order_sync_result = self._sync_orders(exchange_data.get("open_orders", []))
@@ -170,6 +169,83 @@ class AccountSynchronizer:
                 data={},
                 timestamp=datetime.now(UTC),
             )
+
+    def _sync_margin_equity(self) -> dict[str, Any]:
+        """Reconcile the tracked balance against true cross-margin equity.
+
+        Margin USDT alone overstates equity (sale proceeds inflate USDT while a
+        borrowed-asset liability sits on a separate asset row), so the bot
+        historically skipped balance sync in margin mode. That let realized
+        losses which were never booked to the tracked balance accumulate
+        silently, and the bot then over-sized on a phantom balance. Here we use
+        the exchange's account-level net equity (``get_account_equity``).
+
+        Only *corrected* while FLAT — and flatness is checked against the
+        EXCHANGE, not the DB: net equity equals USDT cash only when no base-asset
+        position (long) or borrowed liability (short) is held, so comparing
+        equity to the live USDT balance detects an open — or not-yet-reconciled —
+        position regardless of DB state. This prevents a phantom/unpersisted
+        position's market value from leaking into cash (which would over-size).
+        A material divergence is always logged.
+        """
+        try:
+            equity = self.exchange.get_account_equity()
+        except Exception as e:
+            logger.warning("Margin equity read failed: %s", e)
+            return {"synced": False, "reason": f"equity unavailable: {e}"}
+        if equity is None or equity <= 0:
+            return {"synced": False, "reason": "equity unavailable"}
+
+        current_db_balance = self.db_manager.get_current_balance(self.session_id)
+        diff_pct = (
+            abs(equity - current_db_balance) / current_db_balance * 100
+            if current_db_balance > 0
+            else 0.0
+        )
+
+        # Flat iff net equity matches USDT cash (no position value or liability).
+        usdt_bal = self.exchange.get_balance("USDT")
+        usdt_total = (
+            float(usdt_bal.total)
+            if usdt_bal is not None and usdt_bal.total is not None
+            else None
+        )
+        flat_tolerance = max(1.0, equity * 0.01)
+        if usdt_total is None or abs(equity - usdt_total) > flat_tolerance:
+            # A position is held (equity diverges from USDT cash) — correcting
+            # would fold position value into cash. Surface divergence, defer.
+            if diff_pct > DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT:
+                logger.warning(
+                    "Margin equity divergence: tracked $%.2f vs true equity $%.2f "
+                    "(%.2f%%), but a position is held (equity $%.2f vs USDT $%s) — "
+                    "deferring correction until flat",
+                    current_db_balance,
+                    equity,
+                    diff_pct,
+                    equity,
+                    usdt_total,
+                )
+            return {"synced": False, "reason": "position held"}
+
+        if diff_pct <= DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT:
+            return {"synced": True, "corrected": False, "balance": current_db_balance}
+
+        logger.warning(
+            "Margin equity reconcile: tracked balance $%.2f vs true equity $%.2f "
+            "(%.2f%%) — account is flat (all-USDT), correcting to true equity",
+            current_db_balance,
+            equity,
+            diff_pct,
+        )
+        self.db_manager.update_balance(
+            equity, "margin_equity_sync_correction", "system", self.session_id
+        )
+        return {
+            "synced": True,
+            "corrected": True,
+            "old_balance": current_db_balance,
+            "new_balance": equity,
+        }
 
     def _sync_balances(self, exchange_balances: list[AccountBalance]) -> dict[str, Any]:
         """Synchronize account balances"""

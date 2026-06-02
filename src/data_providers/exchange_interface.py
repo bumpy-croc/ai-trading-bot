@@ -163,6 +163,17 @@ class ExchangeInterface(ABC):
         """Get balance for a specific asset"""
         pass
 
+    def get_account_equity(self) -> float | None:
+        """True account equity in the quote currency (USDT), net of liabilities.
+
+        Default ``None`` when the exchange can't report it. Margin implementations
+        should return account-level net equity (assets minus borrowed liabilities,
+        e.g. ``totalNetAssetOfBtc`` valued in USDT) so callers can reconcile a
+        tracked balance against reality. Not abstract — implementers may rely on
+        the default.
+        """
+        return None
+
     @abstractmethod
     def get_positions(self, symbol: str | None = None) -> list[Position]:
         """Get open positions (for futures/margin trading)"""

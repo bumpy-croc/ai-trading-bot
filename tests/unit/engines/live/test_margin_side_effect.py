@@ -162,11 +162,9 @@ def test_trading_engine_stop_loss_auto_repay():
 
 
 @pytest.mark.fast
-def test_account_sync_skips_balance_and_position_in_margin_mode():
-    """AccountSynchronizer skips both balance and position sync in margin mode.
-
-    USDT netAsset excludes cross-asset liabilities (borrowed ETH from shorts),
-    so syncing USDT alone would inflate capital and oversize the next trade.
+def test_account_sync_reconciles_balance_skips_position_in_margin_mode():
+    """In margin mode, balance is reconciled against true equity (prevention
+    layer 2); position sync stays skipped (USDT netAsset excludes liabilities).
     """
     from src.engines.live.account_sync import AccountSynchronizer
 
@@ -177,7 +175,11 @@ def test_account_sync_skips_balance_and_position_in_margin_mode():
         "positions": [],
         "open_orders": [],
     }
+    # Equity == tracked balance == USDT cash (flat) -> reconcile runs, no correction.
+    mock_exchange.get_account_equity.return_value = 100.0
+    mock_exchange.get_balance.return_value = MagicMock(total=100.0)
     mock_db = MagicMock()
+    mock_db.get_current_balance.return_value = 100.0
 
     syncer = AccountSynchronizer(
         exchange=mock_exchange,
@@ -189,8 +191,10 @@ def test_account_sync_skips_balance_and_position_in_margin_mode():
     result = syncer.sync_account_data(force=True)
 
     assert result.success is True
-    assert result.data["balance_sync"]["synced"] is False
-    assert "margin" in result.data["balance_sync"]["reason"]
+    # Balance is now reconciled (not skipped) in margin mode.
+    assert result.data["balance_sync"]["synced"] is True
+    assert result.data["balance_sync"]["corrected"] is False
+    # Position sync remains skipped in margin mode.
     assert result.data["position_sync"]["synced"] is False
     assert "margin" in result.data["position_sync"]["reason"]
 

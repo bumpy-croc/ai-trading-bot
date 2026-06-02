@@ -1004,6 +1004,31 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get account info: {e}")
             return {}
 
+    def get_account_equity(self) -> float | None:
+        """True account equity in USDT, net of liabilities.
+
+        Margin: account-level ``totalNetAssetOfBtc`` valued in USDT — the
+        authoritative cross-margin equity (assets minus borrowed liabilities).
+        Unlike free USDT alone, it reflects realized losses and open shorts, so
+        the bot can reconcile its tracked balance against reality. Spot: total
+        USDT balance. Returns None if unavailable.
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            return None
+        try:
+            if self._use_margin:
+                acc = self._client.get_margin_account()
+                net_btc = float(acc.get("totalNetAssetOfBtc", 0) or 0)
+                if net_btc <= 0:
+                    return 0.0
+                btc_price = float(self._client.get_symbol_ticker(symbol="BTCUSDT")["price"])
+                return net_btc * btc_price
+            bal = self.get_balance("USDT")
+            return float(bal.total) if bal is not None else None
+        except Exception as e:
+            logger.warning("Could not read account equity: %s", e)
+            return None
+
     def get_balances(self) -> list[AccountBalance]:
         """Get all account balances"""
         if not BINANCE_AVAILABLE or not self._client:
