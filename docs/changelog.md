@@ -65,6 +65,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `railway.json`: raised the Trading Bot `restartPolicyMaxRetries` from 3 to 10
   so Railway keeps retrying through longer transient infrastructure failures.
+- `/deploy-staging` and `/deploy-prod` slash-command skills rewritten to match
+  the actual promotion workflow. `/deploy-prod` no longer does
+  `git reset --hard origin/staging` + force-push to `main` (which would rewrite
+  production history and drop the "Promote to production" commits that live only
+  on `main`); it now opens an additive **"Promote to production" PR**
+  (`develop`→`main`), reconciles changelog conflicts by merging `main` into the
+  head branch, waits for green CI, and merges with a merge commit.
+  `/deploy-staging` documents that `staging` is a disposable env branch safely
+  recreatable from `develop`.
 
 ### Security
 - Hardened a batch of security findings from a repo-wide scan (bandit + manual
