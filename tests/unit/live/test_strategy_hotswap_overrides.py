@@ -283,11 +283,18 @@ def test_hot_swap_rejects_invalid_min_confidence_floor(monkeypatch):
 
 
 def test_hot_swap_succeeds_when_no_correlation_handler_wired(monkeypatch):
-    """The swap path must not fail when no correlation_handler is wired
-    (default for live engine today).
+    """The swap path must not fail when no correlation_handler is wired.
+
+    The live engine wires a CorrelationHandler by default (see PR #610), but
+    a deployment may run without one. This test explicitly clears the handler
+    to exercise the defensive ``getattr``/``hasattr``-guarded branch in
+    ``_refresh_strategy_dependencies``.
     """
     initial = create_ml_basic_strategy(fast_mode=True)
     engine = _build_engine(monkeypatch, strategy=initial)
+    # Simulate a deployment with no correlation handler wired.
+    engine.correlation_handler = None
+    engine.live_entry_handler.correlation_handler = None
     assert engine.live_entry_handler.correlation_handler is None
 
     success = _drive_swap(engine, "ml_basic", {"stop_loss_pct": 0.02})
