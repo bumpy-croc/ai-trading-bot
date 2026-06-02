@@ -9,6 +9,7 @@ providing a single interface for all Binance operations including:
 - Position management
 """
 
+import asyncio
 import logging
 import math
 import re
@@ -290,6 +291,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         # WebSocket stream state (initialized regardless of credentials)
         self._twm: ThreadedWebsocketManager | None = None
+        # Each TWM owns a private event loop (created in _ensure_twm); closed in
+        # stop_streams so its selector/self-pipe FDs aren't leaked (CODE.md §241).
+        self._twm_loop: asyncio.AbstractEventLoop | None = None
         self._twm_lock = threading.Lock()  # Guards _ensure_twm() check-then-set
         self._kline_ws_state = WebSocketState.DISCONNECTED
         self._user_ws_state = WebSocketState.DISCONNECTED
@@ -1934,6 +1938,18 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             api_endpoint = get_binance_api_endpoint()
             if api_endpoint == "binanceus":
                 twm_kwargs["tld"] = "us"
+            # Each ThreadedWebsocketManager must own a DISTINCT event loop. The engine
+            # runs the kline and user/margin streams on two separate BinanceProvider
+            # instances; python-binance's ThreadedApiManager captures the *current* loop
+            # at construction time, so without an explicit loop both managers would grab
+            # the same (main-thread) loop. Whichever stream starts second then calls
+            # run_until_complete() on the already-running loop and dies with
+            # "This event loop is already running" — which is why the margin user-stream
+            # stopped starting after nest_asyncio was removed (#646). A fresh per-manager
+            # loop has no run_until_complete nesting, so it does NOT reintroduce the
+            # "cannot enter context" re-entrancy spam that #646 fixed.
+            self._twm_loop = asyncio.new_event_loop()
+            twm_kwargs["loop"] = self._twm_loop
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
             self._twm.start()
 
@@ -2025,8 +2041,19 @@ class BinanceProvider(DataProvider, ExchangeInterface):
     def stop_streams(self) -> None:
         """Stop all WebSocket streams. Recreates TWM on reconnect."""
         if self._twm:
-            self._twm.stop()
+            twm, loop = self._twm, self._twm_loop
+            twm.stop()
+            # The TWM runs its loop on its own thread; wait for that thread to leave
+            # run_until_complete before closing the loop, so we neither close a running
+            # loop nor leak its selector/self-pipe FDs (CODE.md §241).
+            twm.join(timeout=5)
+            if loop is not None and not loop.is_closed() and not loop.is_running():
+                try:
+                    loop.close()
+                except Exception as e:
+                    logger.debug("Could not close TWM event loop on stop: %s", e)
             self._twm = None
+            self._twm_loop = None
             self._kline_socket_key = None
             self._user_socket_key = None
             self._kline_ws_state = WebSocketState.DISCONNECTED
