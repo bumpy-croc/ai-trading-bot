@@ -1579,6 +1579,26 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             client_order_id=client_oid,
         )
 
+    def _free_base_balance(self, symbol: str) -> float | None:
+        """Free balance of ``symbol``'s base asset (e.g. ETH for ETHUSDT), or None.
+
+        Used to cap a SELL stop-loss so we never order more than we actually hold.
+        Margin-aware via get_balance (it reads the cross-margin free balance).
+        """
+        base_asset = symbol
+        for quote in ("USDT", "BUSD", "USD", "USDC"):
+            if symbol.endswith(quote) and len(symbol) > len(quote):
+                base_asset = symbol[: -len(quote)]
+                break
+        try:
+            bal = self.get_balance(base_asset)
+            return float(bal.free) if bal is not None else None
+        except Exception as e:
+            logger.warning(
+                "Could not read free %s balance for stop-loss sizing: %s", base_asset, e
+            )
+            return None
+
     # Only retry transient -1015 (too many orders), NOT -1003 (IP ban).
     # IP bans last minutes — sleeping blocks SL placement and leaves the
     # position unprotected. The caller handles -1003 by entering close-only mode.
@@ -1636,7 +1656,36 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     float(step_size_raw) if isinstance(step_size_raw, int | float) else 0.00001
                 )
                 if step_size > 0:
-                    quantity = round(quantity / step_size) * step_size
+                    # A SELL stop-loss can never order more of the base asset than is
+                    # actually free: Binance deducts the trade fee from a buy's fill and
+                    # round-to-nearest can round UP, so the tracked position quantity can
+                    # exceed holdings and Binance rejects with -2010 (insufficient
+                    # balance), leaving the position unprotected. Cap at the free balance
+                    # and round DOWN so the order is always coverable. A BUY (short cover)
+                    # is funded from quote, so it isn't constrained by base holdings.
+                    if side == OrderSide.SELL:
+                        free_base = self._free_base_balance(symbol)
+                        if free_base is not None and free_base < quantity:
+                            logger.warning(
+                                "Stop-loss sell qty %.8f for %s exceeds free base balance "
+                                "%.8f — capping to holdings to avoid -2010.",
+                                quantity,
+                                symbol,
+                                free_base,
+                            )
+                            quantity = free_base
+                        quantity = math.floor(quantity / step_size) * step_size
+                    else:
+                        quantity = round(quantity / step_size) * step_size
+
+            if quantity <= 0:
+                logger.error(
+                    "Stop-loss quantity is %s after sizing for %s — no free base asset to "
+                    "protect; skipping order.",
+                    quantity,
+                    symbol,
+                )
+                return None
 
             sl_params = {
                 "symbol": symbol,
