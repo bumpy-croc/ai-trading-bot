@@ -126,7 +126,9 @@ def _ensure_python_on_path(python_bin: str, env: dict[str, str]) -> TemporaryDir
     shim_dir = TemporaryDirectory(prefix="codex-python-shim-")
     shim_path = Path(shim_dir.name) / "python"
     shim_path.write_text(f'#!/bin/sh\n"{resolved_python}" "$@"\n', encoding="utf-8")
-    os.chmod(shim_path, 0o755)
+    # Only the current user needs to execute this throwaway shim; avoid the
+    # group/other-executable bits flagged by static analysis (B103).
+    os.chmod(shim_path, 0o700)
     env["PATH"] = f"{shim_dir.name}{os.pathsep}{env.get('PATH', '')}"
     return shim_dir
 

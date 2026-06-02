@@ -645,32 +645,10 @@ class LiveExecutionEngine:
             if quantity <= 0:
                 return None, None
 
-            # Generate deterministic client order ID for idempotency
-            # Format: atb_{timestamp_hex}_{uuid8} (~24 chars, within Binance 36-char limit)
-            # Symbol and side are already in the order params, so omitted from the ID
-            timestamp_ms = int(time.time() * 1000)
-            unique_suffix = uuid.uuid4().hex[:8]
-            client_order_id = f"atb_{timestamp_ms:x}_{unique_suffix}"
-
-            # Journal the order BEFORE submission (crash recovery anchor)
-            if self.db_manager and self.session_id:
-                try:
-                    self.db_manager.create_order_journal_entry(
-                        session_id=self.session_id,
-                        client_order_id=client_order_id,
-                        symbol=symbol,
-                        side=side.value,
-                        order_type="ENTRY",
-                        quantity=quantity,
-                        strategy_name=self.strategy_name,
-                    )
-                except Exception as e:
-                    logger.warning("Failed to journal entry order: %s", e)
-                    # Journal failure means no crash-recovery anchor exists.
-                    # Proceeding would risk a phantom position on restart.
-                    return None, None
-
-            # Determine margin side_effect_type based on position side:
+            # Determine margin side_effect_type and run the SHORT inventory guard
+            # BEFORE journaling, so an order rejected here never leaks an orphan
+            # PENDING_SUBMIT journal row (#626). The guard uses only symbol/side/
+            # price — never client_order_id — so it is safe to run first.
             # - Long entry (BUY): None — use existing USDT, no borrow needed
             # - Short entry (SELL): "MARGIN_BUY" — auto-borrow base asset to sell.
             #   NOTE: MARGIN_BUY only borrows when free base inventory is insufficient.
@@ -720,6 +698,32 @@ class LiveExecutionEngine:
                                 base_asset,
                             )
                             return None, None
+
+            # Generate deterministic client order ID for idempotency
+            # Format: atb_{timestamp_hex}_{uuid8} (~24 chars, within Binance 36-char limit)
+            timestamp_ms = int(time.time() * 1000)
+            unique_suffix = uuid.uuid4().hex[:8]
+            client_order_id = f"atb_{timestamp_ms:x}_{unique_suffix}"
+
+            # Journal the order BEFORE submission (crash recovery anchor). Reached
+            # only after the SHORT guard above accepts the order, so a rejected
+            # short never creates an orphan PENDING_SUBMIT journal row (#626).
+            if self.db_manager and self.session_id:
+                try:
+                    self.db_manager.create_order_journal_entry(
+                        session_id=self.session_id,
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=side.value,
+                        order_type="ENTRY",
+                        quantity=quantity,
+                        strategy_name=self.strategy_name,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to journal entry order: %s", e)
+                    # Journal failure means no crash-recovery anchor exists.
+                    # Proceeding would risk a phantom position on restart.
+                    return None, None
 
             try:
                 order_result = self.exchange_interface.place_order(

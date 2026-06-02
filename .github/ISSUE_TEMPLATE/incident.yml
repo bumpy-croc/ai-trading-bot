@@ -1,0 +1,64 @@
+name: Incident
+description: Operational issue requiring triage (P0–P3).
+title: "[incident] "
+labels: ["type:incident", "state:researching", "owned-by:live-ops"]
+body:
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: |
+        P0 = Live capital at risk right now. P1 = Trading degraded, not bleeding.
+        P2 = Slow / non-critical. P3 = Observation worth logging.
+      options:
+        - P0 — Live capital at risk
+        - P1 — Trading degraded
+        - P2 — Slow / non-critical
+        - P3 — Observation
+    validations:
+      required: true
+
+  - type: textarea
+    id: detection
+    attributes:
+      label: Detection — what signal, when?
+      placeholder: "Heartbeat flagged drawdown=0.22 at 2026-04-21T14:30 UTC; limit is 0.20."
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Real money or paper only? Positions affected? Estimated $ impact if known.
+    validations:
+      required: true
+
+  - type: textarea
+    id: timeline
+    attributes:
+      label: Timeline (UTC)
+      description: Factual events with timestamps. No speculation here.
+      placeholder: |
+        14:30 UTC — detection
+        14:32 UTC — human paged via Slack
+        14:35 UTC — new entries halted via `atb live-control pause`
+
+  - type: textarea
+    id: actions
+    attributes:
+      label: Actions taken
+      description: Concrete steps, with commands run verbatim.
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current state
+      description: Is the bleeding stopped? What is the system doing right now?
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **After close:** fill in the post-mortem sections (root cause, contributing factors, what went well/poorly, action items) in the companion incident file at `.claude/state/incidents/*.md`. Link it here.

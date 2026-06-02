@@ -1,0 +1,48 @@
+name: Backlog card
+description: Generic work card (idea, feature, fix, experiment, refactor).
+title: "[card] "
+labels: ["state:idea", "owned-by:pm"]
+body:
+  - type: textarea
+    id: ask
+    attributes:
+      label: One-line ask
+      description: What, in a sentence? (Imperative, specific.)
+      placeholder: e.g., "Add ATR-based trailing stop to ml_basic"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context — why now?
+      description: What problem does this solve? What triggered it? Link any incident or loss that motivated it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How will we know it's done? Bullet list of verifiable outcomes.
+      placeholder: |
+        - Backtest on BTC 1h, 2y: Sharpe ≥ current + 0.1
+        - Paper test 48h: no drawdown breach
+        - Code-reviewer + risk-officer both approve
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Linked PRs, docs, experiments, data, prior issues.
+      placeholder: |
+        - Experiment: docs/research/experiments/2026-04-21_atr-trail.md
+        - Related issue: #42
+
+  - type: markdown
+    attributes:
+      value: |
+        **After creating:** set appropriate `type:*`, `area:*`, `priority:*`, and `state:*` labels.
+        Leave the defaults if you're unsure — PM will re-label on next triage.

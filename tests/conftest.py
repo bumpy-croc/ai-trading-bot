@@ -15,6 +15,13 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
+# Tests run in a test environment. Pin ENV early (before any test constructs a
+# Flask app) so get_secret_key() stays deterministic: without an explicit
+# dev/test marker it now fails closed (production behavior), which would make
+# admin-UI and monitoring-dashboard construction raise RuntimeError on CI
+# runners that don't set ENV.
+os.environ.setdefault("ENV", "test")
+
 if sys.version_info < (3, 10):
     try:
         import src.prediction  # noqa: F401  # ensure real package is loaded

@@ -1,6 +1,5 @@
 # Use locally - includes heavy libraries for training models
 python-binance==1.0.36
-nest_asyncio==1.6.0
 pandas==2.2.0
 python-dotenv==1.0.0
 numpy==1.26.4
@@ -12,6 +11,7 @@ requests==2.31.0
 nltk==3.9.1
 ccxt==4.4.85
 tqdm==4.66.3
+defusedxml==0.7.1
 tensorflow==2.19.0
 tf2onnx==1.16.1
 sqlalchemy==2.0.23
