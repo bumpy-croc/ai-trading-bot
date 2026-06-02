@@ -835,6 +835,17 @@ class LiveExitHandler:
                     # targets could push total exposure above
                     # ``risk_manager.params.max_daily_risk`` while
                     # backtest results would have it capped.
+                    #
+                    # NOTE on units: in the live engine, ``scale_fraction`` is
+                    # applied as a fraction-of-balance delta — ``apply_scale_in``
+                    # adds it straight onto ``position.size`` and
+                    # ``risk_manager.adjust_position_after_scale_in`` adds it
+                    # straight onto ``daily_risk_used`` (same unit as
+                    # ``max_daily_risk``). So we compare against ``remaining_daily``
+                    # directly and must NOT multiply by ``original_size`` here.
+                    # Backtest multiplies by ``original_size`` only because its
+                    # tracker stores size in a different unit; replicating that
+                    # multiplication in live would under-size the scale-in.
                     add_effective = add_size_of_original
                     if self.risk_manager is not None and add_effective > 0:
                         try:
