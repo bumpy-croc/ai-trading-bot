@@ -49,12 +49,14 @@ def test_get_account_equity_spot_uses_usdt_total(mock_config, mock_client_class)
     assert provider.get_account_equity() == pytest.approx(84.5)
 
 
-def _make_sync(equity, db_balance, open_positions):
+def _make_sync(equity, db_balance, usdt_total):
     exchange = Mock()
     exchange.get_account_equity.return_value = equity
+    exchange.get_balance.return_value = (
+        Mock(total=usdt_total) if usdt_total is not None else None
+    )
     db = Mock()
     db.get_current_balance.return_value = db_balance
-    db.get_active_positions.return_value = open_positions
     sync = AccountSynchronizer(
         exchange=exchange, db_manager=db, session_id=1, use_margin=True
     )
@@ -62,8 +64,8 @@ def _make_sync(equity, db_balance, open_positions):
 
 
 def test_margin_equity_corrects_when_flat_and_divergent():
-    """Flat + >1% divergence -> correct tracked balance down to true equity."""
-    sync, db = _make_sync(equity=84.22, db_balance=99.89, open_positions=[])
+    """Flat (equity == USDT cash) + >1% divergence -> correct down to true equity."""
+    sync, db = _make_sync(equity=84.22, db_balance=99.89, usdt_total=84.22)
 
     res = sync._sync_margin_equity()
 
@@ -74,8 +76,8 @@ def test_margin_equity_corrects_when_flat_and_divergent():
 
 
 def test_margin_equity_no_correct_within_threshold():
-    """Divergence under the 1% threshold -> no correction."""
-    sync, db = _make_sync(equity=99.50, db_balance=99.89, open_positions=[])
+    """Flat but divergence under the 1% threshold -> no correction."""
+    sync, db = _make_sync(equity=99.50, db_balance=99.89, usdt_total=99.50)
 
     res = sync._sync_margin_equity()
 
@@ -83,20 +85,33 @@ def test_margin_equity_no_correct_within_threshold():
     db.update_balance.assert_not_called()
 
 
-def test_margin_equity_no_correct_when_positions_open():
-    """Divergent but a position is open -> warn, do NOT correct (avoids double-count)."""
-    sync, db = _make_sync(equity=84.22, db_balance=99.89, open_positions=[{"id": 1}])
+def test_margin_equity_no_correct_when_position_held():
+    """Divergent AND a position is held (equity != USDT) -> warn, do NOT correct.
+
+    Guards against an open/unreconciled position folding its value into cash.
+    """
+    sync, db = _make_sync(equity=84.22, db_balance=99.89, usdt_total=65.41)
 
     res = sync._sync_margin_equity()
 
     assert res.get("corrected") is not True
-    assert res["reason"] == "positions open"
+    assert res["reason"] == "position held"
     db.update_balance.assert_not_called()
 
 
 def test_margin_equity_no_sync_when_equity_unavailable():
     """Equity unreadable -> no sync, no correction (fail safe)."""
-    sync, db = _make_sync(equity=None, db_balance=99.89, open_positions=[])
+    sync, db = _make_sync(equity=None, db_balance=99.89, usdt_total=99.89)
+
+    res = sync._sync_margin_equity()
+
+    assert res["synced"] is False
+    db.update_balance.assert_not_called()
+
+
+def test_margin_equity_no_correct_when_equity_zero_or_negative():
+    """Non-positive equity is treated as unavailable -> no correction."""
+    sync, db = _make_sync(equity=0.0, db_balance=99.89, usdt_total=99.89)
 
     res = sync._sync_margin_equity()
 

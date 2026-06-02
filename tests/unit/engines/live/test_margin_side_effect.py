@@ -175,11 +175,11 @@ def test_account_sync_reconciles_balance_skips_position_in_margin_mode():
         "positions": [],
         "open_orders": [],
     }
-    # True equity equals tracked balance -> reconcile runs but makes no correction.
+    # Equity == tracked balance == USDT cash (flat) -> reconcile runs, no correction.
     mock_exchange.get_account_equity.return_value = 100.0
+    mock_exchange.get_balance.return_value = MagicMock(total=100.0)
     mock_db = MagicMock()
     mock_db.get_current_balance.return_value = 100.0
-    mock_db.get_active_positions.return_value = []
 
     syncer = AccountSynchronizer(
         exchange=mock_exchange,

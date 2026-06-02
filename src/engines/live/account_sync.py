@@ -180,10 +180,13 @@ class AccountSynchronizer:
         silently, and the bot then over-sized on a phantom balance. Here we use
         the exchange's account-level net equity (``get_account_equity``).
 
-        Only *corrected* while FLAT: total equity equals cash only when no open
-        position value is held; with a position open, equity includes the
-        position's value (tracked separately), so equating it to current_balance
-        would double-count. A material divergence is always logged.
+        Only *corrected* while FLAT — and flatness is checked against the
+        EXCHANGE, not the DB: net equity equals USDT cash only when no base-asset
+        position (long) or borrowed liability (short) is held, so comparing
+        equity to the live USDT balance detects an open — or not-yet-reconciled —
+        position regardless of DB state. This prevents a phantom/unpersisted
+        position's market value from leaking into cash (which would over-size).
+        A material divergence is always logged.
         """
         try:
             equity = self.exchange.get_account_equity()
@@ -199,26 +202,37 @@ class AccountSynchronizer:
             if current_db_balance > 0
             else 0.0
         )
+
+        # Flat iff net equity matches USDT cash (no position value or liability).
+        usdt_bal = self.exchange.get_balance("USDT")
+        usdt_total = (
+            float(usdt_bal.total)
+            if usdt_bal is not None and usdt_bal.total is not None
+            else None
+        )
+        flat_tolerance = max(1.0, equity * 0.01)
+        if usdt_total is None or abs(equity - usdt_total) > flat_tolerance:
+            # A position is held (equity diverges from USDT cash) — correcting
+            # would fold position value into cash. Surface divergence, defer.
+            if diff_pct > DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT:
+                logger.warning(
+                    "Margin equity divergence: tracked $%.2f vs true equity $%.2f "
+                    "(%.2f%%), but a position is held (equity $%.2f vs USDT $%s) — "
+                    "deferring correction until flat",
+                    current_db_balance,
+                    equity,
+                    diff_pct,
+                    equity,
+                    usdt_total,
+                )
+            return {"synced": False, "reason": "position held"}
+
         if diff_pct <= DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT:
             return {"synced": True, "corrected": False, "balance": current_db_balance}
 
-        open_positions = self.db_manager.get_active_positions(self.session_id)
-        if open_positions:
-            # Can't safely correct while a position is open (equity includes the
-            # position's value), but surface the divergence loudly.
-            logger.warning(
-                "Margin equity divergence: tracked $%.2f vs true equity $%.2f "
-                "(%.2f%%) with %d open position(s) — not correcting until flat",
-                current_db_balance,
-                equity,
-                diff_pct,
-                len(open_positions),
-            )
-            return {"synced": False, "reason": "positions open", "diff_pct": diff_pct}
-
         logger.warning(
             "Margin equity reconcile: tracked balance $%.2f vs true equity $%.2f "
-            "(%.2f%%) — correcting to true equity",
+            "(%.2f%%) — account is flat (all-USDT), correcting to true equity",
             current_db_balance,
             equity,
             diff_pct,
