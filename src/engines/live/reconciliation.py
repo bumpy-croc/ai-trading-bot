@@ -1165,12 +1165,14 @@ class PositionReconciler:
                     side = getattr(position, "side", "long")
                     side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                     sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                    # Scale quantity by remaining size after partial exits
-                    qty = getattr(position, "quantity", 0) or 0.0
+                    # Scale quantity by remaining size after partial exits. Coerce to
+                    # float — DB-loaded positions carry Decimal (Numeric) fields, and
+                    # mixing Decimal with float raises "unsupported operand type(s)".
+                    qty = float(getattr(position, "quantity", 0) or 0.0)
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    if current is not None and original is not None and original > 0:
-                        qty = qty * (current / original)
+                    if current is not None and original is not None and float(original) > 0:
+                        qty = qty * (float(current) / float(original))
                     new_sl_id = self.exchange.place_stop_loss_order(
                         symbol=position.symbol,
                         side=sl_side,
