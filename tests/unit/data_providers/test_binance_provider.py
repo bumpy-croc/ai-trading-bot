@@ -23,6 +23,22 @@ except ImportError:
     OrderSide = Mock
 
 
+@pytest.mark.unit
+def test_binance_provider_does_not_apply_nest_asyncio():
+    """Importing binance_provider must NOT monkey-patch asyncio via nest_asyncio.
+
+    nest_asyncio.apply() made the shared TWM event loop reentrant but did not
+    restore the contextvars Context, so the always-active kline socket's
+    _read_ready spewed ~2,100/hr 'cannot enter context' errors. It was vestigial
+    (left over from a removed custom-loop design) and was removed (#616).
+    """
+    import asyncio
+
+    import src.data_providers.binance_provider  # noqa: F401 — import runs any apply()
+
+    assert getattr(asyncio, "_nest_patched", False) is False
+
+
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 class TestBinanceDataProvider:
     @pytest.mark.data_provider
