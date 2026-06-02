@@ -1608,6 +1608,14 @@ class LiveTradingEngine:
                 "staying on REST polling until the next restart (#616).",
                 self._user_reconnect_failures,
             )
+            # Tear down the dead user socket so its asyncio _read_ready callback stops
+            # firing on the shared event loop. Marking degraded alone stops reconnects
+            # but leaves the orphaned socket attached, which keeps spewing
+            # "cannot enter context" errors (~2,100/hr) indefinitely. stop_user_stream
+            # closes only the user socket (not kline), correct here since we are
+            # dropping to REST polling (#616).
+            if hasattr(exchange, "stop_user_stream"):
+                exchange.stop_user_stream()
             if hasattr(exchange, "mark_user_degraded"):
                 exchange.mark_user_degraded()
             if self.order_tracker:

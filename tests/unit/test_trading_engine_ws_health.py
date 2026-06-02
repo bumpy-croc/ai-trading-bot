@@ -160,7 +160,13 @@ class TestCheckUserStreamHealth:
             mock_engine._check_user_stream_health()
             assert disc.call_count == LIMIT  # unchanged
             ex.mark_user_degraded.assert_called_once()
+            # The dead socket is torn down so its asyncio _read_ready spam stops.
+            ex.stop_user_stream.assert_called_once()
             tracker.enable_polling.assert_called()
+            # Teardown must happen BEFORE degrade, else the terminal state is
+            # DISCONNECTED instead of REST_DEGRADED and the one-shot guard breaks.
+            ordered = [c[0] for c in ex.mock_calls if c[0] in ("stop_user_stream", "mark_user_degraded")]
+            assert ordered == ["stop_user_stream", "mark_user_degraded"]
 
     @pytest.mark.fast
     def test_breaker_resets_on_real_event(self, mock_engine):
@@ -214,6 +220,7 @@ class TestCheckUserStreamHealth:
 
         assert disc.call_count == LIMIT  # bounded, not 20
         ex.mark_user_degraded.assert_called_once()  # degraded exactly once
+        ex.stop_user_stream.assert_called_once()  # dead socket torn down (asyncio spam stops)
 
     @pytest.mark.fast
     def test_breaker_survives_post_reconnect_fresh_timestamp(self, mock_engine):
