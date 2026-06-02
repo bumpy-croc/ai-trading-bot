@@ -128,6 +128,93 @@ class TestCheckUserStreamHealth:
             mock_engine._check_user_stream_health()
             mock_disconnect.assert_not_called()
 
+    @staticmethod
+    def _dead_socket_engine(mock_engine):
+        """Engine whose user stream is PRIMARY+stale and never gets a real event
+        (user_ws_healthy False) — the #616 dead multiplexed ws_api socket."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+        ex.user_ws_healthy = False
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        return ex, tracker
+
+    @pytest.mark.fast
+    def test_breaker_trips_after_limit_unproductive_reconnects(self, mock_engine):
+        """After LIMIT dead reconnects, stop reconnecting and degrade to REST (#616)."""
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+
+        ex, tracker = self._dead_socket_engine(mock_engine)
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+            for _ in range(LIMIT):
+                mock_engine._check_user_stream_health()
+            assert disc.call_count == LIMIT
+            assert mock_engine._user_reconnect_failures == LIMIT
+            ex.mark_user_degraded.assert_not_called()
+
+            # Next cycle: circuit open — degrade to REST, no further reconnect.
+            mock_engine._check_user_stream_health()
+            assert disc.call_count == LIMIT  # unchanged
+            ex.mark_user_degraded.assert_called_once()
+            tracker.enable_polling.assert_called()
+
+    @pytest.mark.fast
+    def test_breaker_resets_on_real_event(self, mock_engine):
+        """A genuinely healthy stream (real event) clears the failure counter."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = True  # a real user event arrived
+        ex._last_user_event_time = datetime.now(UTC)  # fresh
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        mock_engine._user_reconnect_failures = 2  # had prior failures
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+            mock_engine._check_user_stream_health()
+            assert mock_engine._user_reconnect_failures == 0  # reset by healthy stream
+            disc.assert_not_called()  # not stale → no reconnect
+
+    @pytest.mark.fast
+    def test_degraded_state_short_circuits(self, mock_engine):
+        """Once REST_DEGRADED, the check returns early (warning logged only once)."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.REST_DEGRADED
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+            mock_engine._check_user_stream_health()
+            disc.assert_not_called()
+            ex.mark_user_degraded.assert_not_called()
+
+    @pytest.mark.fast
+    def test_reconnect_calls_bounded_over_many_cycles(self, mock_engine):
+        """Regression for the #616 churn: a dead socket yields BOUNDED reconnects,
+        not an unbounded ~2-min loop."""
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+
+        ex, tracker = self._dead_socket_engine(mock_engine)
+        # mark_user_degraded flips state to REST_DEGRADED, as the real method does.
+        ex.mark_user_degraded.side_effect = lambda: setattr(
+            ex, "_user_ws_state", WebSocketState.REST_DEGRADED
+        )
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+            for _ in range(20):
+                mock_engine._check_user_stream_health()
+
+        assert disc.call_count == LIMIT  # bounded, not 20
+        ex.mark_user_degraded.assert_called_once()  # degraded exactly once
+
 
 class TestHandleKlineDisconnect:
     """Tests for _handle_kline_disconnect()."""
