@@ -354,6 +354,12 @@ DEFAULT_WS_KLINE_STALENESS_THRESHOLD = 120  # Seconds before kline stream consid
 DEFAULT_WS_USER_STALENESS_THRESHOLD = 120  # Seconds before user stream considered stale (only when orders tracked)
 DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
 DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
+# Consecutive unproductive user-stream reconnects (stale again with no real event)
+# before the watchdog opens a circuit breaker: stop the futile ~2-min reconnect loop
+# and run REST-polling-only. python-binance's start_margin_socket is fire-and-forget
+# and reports success even on a dead multiplexed ws_api socket, so reconnects never
+# self-terminate and churn forever (#616).
+DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT = 3
 DEFAULT_STARTUP_BAN_MAX_WAIT = 600  # Max seconds to wait for an IP ban to lift during startup
 DEFAULT_STARTUP_BAN_MAX_RETRIES = 3  # Max retry attempts for ban-related startup failures
 
