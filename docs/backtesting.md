@@ -131,6 +131,16 @@ print(f"Consecutive Wins: {results['consecutive_wins']}")
 
 All core metrics calculated in backtesting use identical calculation logic as the live trading engine, ensuring accurate validation of backtest results against live performance. The shared `PerformanceTracker` guarantees metric consistency across both engines.
 
+#### Known parity caveats
+
+The shared modules under `src/engines/shared/` keep the bulk of the financial math identical between engines, but a small number of behaviors remain intentionally divergent. Treat backtest results as a strong predictor, not a perfect simulator, in these areas:
+
+- **Tick-size / step-size rounding.** The live engine rounds asset quantities down to the exchange's `step_size` (`src/engines/live/execution/execution_engine.py:_normalize_quantity`). Backtest uses raw float quantities. For strategies sizing 1%+ of balance on liquid pairs the gap is sub-cent, but micro-cap strategies or very small accounts may see a small fill-size drift; treat backtest fill precision as an upper bound.
+- **Margin / borrow interest.** Live deducts realized margin interest via `MarginInterestTracker`. Backtest models interest only when `Backtester(..., annual_margin_interest_rate=0.05)` is set; the default `0.0` preserves spot-mode behaviour. A margin-mode strategy backtested without setting the rate will silently overstate returns by the carry cost — set the parameter to your venue's effective borrow APR.
+- **Concurrent positions.** The backtest engine is single-position by design — its `PositionTracker` holds at most one `ActiveTrade`. The live engine tracks N positions keyed by `order_id` and respects `risk_manager.get_max_concurrent_positions()`. A multi-symbol strategy will only model the first symbol that signals in backtest; validate live behaviour separately rather than inferring it from backtest.
+
+The `Backtester` class docstring (`src/engines/backtest/engine.py`) carries the canonical version of this list — keep the two in sync when adjusting parity guidance.
+
 ## CLI usage
 
 The `atb backtest` command (`cli/commands/backtest.py`) is the fastest way to run a simulation:

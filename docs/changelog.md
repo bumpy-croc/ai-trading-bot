@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Backtest-live engine parity: closed nine silent divergences. Backtest now
+  propagates `TimeExitPolicy`-specific exit reasons (`"Max holding period"`,
+  `"Weekend flat"`, etc.) instead of hardcoding `"Time limit"`; gained an
+  optional `annual_margin_interest_rate` parameter on `Backtester` mirroring
+  live's `MarginInterestTracker` (default `0.0` preserves spot-mode
+  behaviour); now sums `entry_fee + exit_fee + margin_interest_cost` into
+  `PerformanceTracker.record_trade` matching live's total-fee semantics;
+  persists `margin_interest_cost` to the `trades` DB column via
+  `EventLogger.log_completed_trade`. Live now wires `CorrelationHandler`
+  into `LiveEntryHandler` and threads the full `symbol/timeframe/df/index`
+  context through `_check_entry_conditions` so correlation-driven sizing
+  reduction actually fires; backfills historical sentiment over the full
+  buffer before overlaying the live snapshot so ML strategies get
+  equivalent inputs; sweeps the position tracker after reconciliation to
+  register reconciler-created positions with the risk manager (using
+  `current_size` to preserve partial-exit accounting); passes the live
+  positions list to the direct `ComponentStrategy.process_candle` path.
+  Documented tick-size rounding, margin interest, and single-vs-multi-position
+  as known parity caveats on the `Backtester` docstring.
 - Live trading engine no longer shuts itself down during transient database
   outages. Transient DB-connectivity errors (DNS resolution failures, dropped
   connections, brief Postgres unavailability) are now classified and *ridden
@@ -106,6 +125,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured but stale or non-PRIMARY (was previously kline-only, masking a
   permanently-dark user stream). New `user_ws_healthy` property exposes the
   user-stream status directly.
+- `BinanceWSKeepaliveFilter` now also matches the ws_api subscribe-timeout
+  signature (GH #608 follow-up). #609's filter only matched the 1011
+  'keepalive ping timeout' close code, which never fires on prod — the
+  actual ~2-min churn is the margin `userDataStream.subscribe` request
+  timing out after 10s (`BinanceWebsocketUnableToConnect: Request timed
+  out`), which carries no 'keepalive ping timeout' text and so was never
+  suppressed. Replaced the single fingerprint with `KEEPALIVE_MARKER_GROUPS`
+  (match all markers in any group); a `binance/ws/` anchor prevents
+  swallowing connection errors raised by our own code.
 - Add ban-aware retry to Binance client startup — parses `-1003` ban expiry and sleeps until lifted instead of crashing (#590)
 - `hyper_growth`: fix silent-SELL bug caused by feature-shape mismatch
   (#603). The factory wired `MLBasicSignalGenerator(model_type="sentiment")`

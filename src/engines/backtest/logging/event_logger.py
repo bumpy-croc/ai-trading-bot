@@ -202,6 +202,21 @@ class EventLogger:
         if not self.enabled:
             return
 
+        # Persist margin interest cost when the backtest is configured with
+        # ``annual_margin_interest_rate > 0``. Without this, margin-mode
+        # backtest trades would silently drop the carry cost from the DB
+        # audit trail while live trades persist it (parity with
+        # src/engines/live/trading_engine.py:3397-3420 which passes
+        # ``margin_interest_cost=interest_cost``). Stashed on the trade
+        # metadata at exit time and read back here.
+        margin_interest_cost = None
+        try:
+            meta = getattr(trade, "metadata", None) or {}
+            if "margin_interest_cost" in meta:
+                margin_interest_cost = float(meta["margin_interest_cost"])
+        except (TypeError, ValueError):
+            margin_interest_cost = None
+
         try:
             self.db_manager.log_trade(
                 symbol=symbol,
@@ -224,6 +239,7 @@ class EventLogger:
                 mae_price=trade.mae_price,
                 mfe_time=trade.mfe_time,
                 mae_time=trade.mae_time,
+                margin_interest_cost=margin_interest_cost,
             )
         except Exception as e:
             if not self._logging_error_warned:
