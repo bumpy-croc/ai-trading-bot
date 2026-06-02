@@ -287,6 +287,9 @@ def build_logging_config(level_name: str | None = None, use_json: bool = False) 
             "ctx": {"()": "src.infrastructure.logging.config.ContextInjectorFilter"},
             "sample": {"()": "src.infrastructure.logging.config.SamplingFilter"},
             "truncate": {"()": "src.infrastructure.logging.config.MaxMessageLengthFilter"},
+            "binance_ws_keepalive": {
+                "()": "src.infrastructure.logging.binance_ws_filter.BinanceWSKeepaliveFilter",
+            },
         },
         "formatters": {
             "default": formatter,
@@ -296,7 +299,16 @@ def build_logging_config(level_name: str | None = None, use_json: bool = False) 
                 "class": "logging.StreamHandler",
                 "formatter": "default",
                 "level": level,
-                "filters": ["redact", "ns", "ctx", "sample", "truncate"],
+                # binance_ws_keepalive runs first to suppress noise before any
+                # other filter does work on the (often large) traceback text.
+                "filters": [
+                    "binance_ws_keepalive",
+                    "redact",
+                    "ns",
+                    "ctx",
+                    "sample",
+                    "truncate",
+                ],
             }
         },
         "loggers": {

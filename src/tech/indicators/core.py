@@ -34,7 +34,8 @@ def _make_cache_key(df: pd.DataFrame, func_name: str, *args, **kwargs) -> str | 
     # the last row). All indicator functions depend on prior rows, so a full content hash
     # is required for correctness. pd.util.hash_pandas_object is efficient (vectorized).
     data_hash = hashlib.md5(
-        pd.util.hash_pandas_object(df, index=True).values.tobytes()
+        pd.util.hash_pandas_object(df, index=True).values.tobytes(),
+        usedforsecurity=False,
     ).hexdigest()[:12]
 
     # Include positional arguments in cache key
@@ -44,7 +45,7 @@ def _make_cache_key(df: pd.DataFrame, func_name: str, *args, **kwargs) -> str | 
 
     # Create composite key and hash for shorter keys
     key_str = "|".join([func_name, last_ts, str(num_rows), data_hash, args_str, param_str])
-    return hashlib.md5(key_str.encode()).hexdigest()
+    return hashlib.md5(key_str.encode(), usedforsecurity=False).hexdigest()
 
 
 def cached_indicator(func: Callable) -> Callable:
@@ -201,12 +202,8 @@ def calculate_rsi(
 
             # Recursive Wilder's smoothing for remaining values
             for i in range(period + 1, len(close)):
-                avg_gain.iloc[i] = (
-                    avg_gain.iloc[i - 1] * (period - 1) + gains.iloc[i]
-                ) / period
-                avg_loss.iloc[i] = (
-                    avg_loss.iloc[i - 1] * (period - 1) + losses.iloc[i]
-                ) / period
+                avg_gain.iloc[i] = (avg_gain.iloc[i - 1] * (period - 1) + gains.iloc[i]) / period
+                avg_loss.iloc[i] = (avg_loss.iloc[i - 1] * (period - 1) + losses.iloc[i]) / period
 
     # Prevent division by zero by adding epsilon to loss
     # When loss is 0, RS approaches infinity and RSI approaches 100

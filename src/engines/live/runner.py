@@ -287,7 +287,10 @@ def main():
 
         # Start trading
         logger.info(f"Starting trading engine for {args.symbol} on {args.timeframe}")
-        engine.start(args.symbol, args.timeframe)
+        # Production entry point: exit non-zero on abnormal loop death so the
+        # orchestrator (Railway ON_FAILURE) restarts the process instead of
+        # leaving the bot silently dead (#630).
+        engine.start(args.symbol, args.timeframe, exit_on_crash=True)
 
     except KeyboardInterrupt:
         logger.info("🛑 Trading stopped by user")

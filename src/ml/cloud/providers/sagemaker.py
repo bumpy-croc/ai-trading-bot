@@ -32,6 +32,31 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _safe_extract_tar(tar: tarfile.TarFile, dest: Path) -> None:
+    """Extract ``tar`` into ``dest`` while rejecting unsafe members.
+
+    Protects against path-traversal ("zip-slip") and symlink/hardlink members
+    that could write or point outside ``dest``. Any member whose resolved
+    destination escapes ``dest`` raises :class:`ArtifactSyncError`.
+    """
+    dest_root = dest.resolve()
+    for member in tar.getmembers():
+        # Reject absolute paths and ".." traversal before touching the disk.
+        member_path = (dest_root / member.name).resolve()
+        if not (member_path == dest_root or dest_root in member_path.parents):
+            raise ArtifactSyncError(
+                f"Refusing to extract unsafe tar member outside target dir: {member.name!r}"
+            )
+        # Reject link members that could redirect writes/reads outside dest.
+        if member.islnk() or member.issym():
+            link_target = (member_path.parent / member.linkname).resolve()
+            if not (link_target == dest_root or dest_root in link_target.parents):
+                raise ArtifactSyncError(
+                    f"Refusing to extract unsafe link member in tar: {member.name!r}"
+                )
+    tar.extractall(path=dest)  # nosec B202 - members validated above
+
+
 class SageMakerProvider(CloudTrainingProvider):
     """AWS SageMaker training provider with spot instance support.
 
@@ -245,9 +270,10 @@ class SageMakerProvider(CloudTrainingProvider):
             self._s3_client.download_file(bucket, key, str(tmp_path))
             logger.info(f"Downloaded artifacts from s3://{bucket}/{key}")
 
-            # Extract tarball
+            # Extract tarball safely (guard against path traversal / zip-slip and
+            # symlink members that could write outside ``local_path``).
             with tarfile.open(tmp_path, "r:gz") as tar:
-                tar.extractall(path=local_path)
+                _safe_extract_tar(tar, local_path)
 
             # Clean up temp file
             tmp_path.unlink()

@@ -2,12 +2,48 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import threading
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from cli.core.forward import forward_to_module_main
+
+logger = logging.getLogger(__name__)
+
+
+def _health_payload() -> tuple[int, dict]:
+    """Build the (http_status, body) for /health from trading-loop liveness.
+
+    Returns 503 when the trading loop has gone silent (a zombie: HTTP server up but
+    loop dead) so the process is no longer always reported healthy — the failure
+    mode that hid the 2026-05-19 outage (#627). Returns 200 while the loop is
+    running or still starting up.
+    """
+    body: dict = {
+        "status": "healthy",
+        "timestamp": datetime.now(UTC).isoformat(),
+        "service": "ai-trading-bot",
+    }
+    try:
+        from src.config.constants import DEFAULT_HEALTH_LOOP_MAX_SILENCE_SECONDS
+        from src.infrastructure import liveness
+
+        age = liveness.seconds_since_beat()
+    except ImportError as e:  # liveness/constants unavailable — don't fail the healthcheck
+        logger.warning("Health liveness probe unavailable, reporting healthy: %s", e)
+        return 200, body
+
+    if age is None:
+        body["loop"] = "starting"
+        return 200, body
+    body["loop_heartbeat_age_seconds"] = round(age, 1)
+    if age > DEFAULT_HEALTH_LOOP_MAX_SILENCE_SECONDS:
+        body["status"] = "unhealthy"
+        body["reason"] = f"trading loop stalled: no heartbeat for {age:.0f}s"
+        return 503, body
+    return 200, body
 
 
 class _HealthCheckHandler(BaseHTTPRequestHandler):
@@ -21,12 +57,8 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
 
     def _handle_health(self):
         try:
-            response = {
-                "status": "healthy",
-                "timestamp": datetime.now(UTC).isoformat(),
-                "service": "ai-trading-bot",
-            }
-            self.send_response(200)
+            code, response = _health_payload()
+            self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(response).encode())

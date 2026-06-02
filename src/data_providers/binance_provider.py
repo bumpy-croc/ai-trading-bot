@@ -24,11 +24,13 @@ import pandas as pd
 
 from src.config import get_config
 from src.config.constants import (
+    DEFAULT_BINANCE_REST_TIMEOUT,
     DEFAULT_DATA_FETCH_TIMEOUT,
     DEFAULT_STARTUP_BAN_MAX_RETRIES,
     DEFAULT_STARTUP_BAN_MAX_WAIT,
     DEFAULT_WS_KLINE_STALENESS_THRESHOLD,
     DEFAULT_WS_RECONNECT_MAX_RETRIES,
+    DEFAULT_WS_USER_STALENESS_THRESHOLD,
 )
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
@@ -50,10 +52,6 @@ from .exchange_interface import (
 logger = logging.getLogger(__name__)
 
 try:
-    import nest_asyncio
-
-    nest_asyncio.apply()  # Allow nested run_until_complete for TWM event loop
-
     from binance import ThreadedWebsocketManager
     from binance.client import Client
     from binance.enums import SIDE_BUY, SIDE_SELL
@@ -178,14 +176,19 @@ def with_rate_limit_retry(
                                 logger.warning(
                                     "IP banned for %.0fs, waiting %.0fs before retry "
                                     "(attempt %d/%d)",
-                                    ban_wait, delay, attempt + 1, max_retries,
+                                    ban_wait,
+                                    delay,
+                                    attempt + 1,
+                                    max_retries,
                                 )
                             else:
                                 delay = base_delay * (2**attempt)
                                 logger.warning(
-                                    "Rate limited (code %d), retrying in %.1fs "
-                                    "(attempt %d/%d)",
-                                    error_code, delay, attempt + 1, max_retries,
+                                    "Rate limited (code %d), retrying in %.1fs " "(attempt %d/%d)",
+                                    error_code,
+                                    delay,
+                                    attempt + 1,
+                                    max_retries,
                                 )
                             time.sleep(delay)
                             last_exception = e
@@ -414,20 +417,37 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.testnet,
         )
 
+        # Socket timeout on every REST call so a half-open TCP connection can't
+        # hang order polling, reconciliation, or the WS disconnect-recovery path
+        # indefinitely (#631). python-binance forwards requests_params to requests.
+        rest_timeout = get_config().get_float(
+            "BINANCE_REST_TIMEOUT_SECONDS", DEFAULT_BINANCE_REST_TIMEOUT
+        )
+        requests_params = {"timeout": rest_timeout}
+
         if self.api_key and self.api_secret:
             logger.debug("Creating authenticated %s client...", api_endpoint)
             if api_endpoint == "binanceus":
                 client = Client(
-                    self.api_key, self.api_secret, testnet=self.testnet, tld="us"
+                    self.api_key,
+                    self.api_secret,
+                    testnet=self.testnet,
+                    tld="us",
+                    requests_params=requests_params,
                 )
             else:
-                client = Client(self.api_key, self.api_secret, testnet=self.testnet)
+                client = Client(
+                    self.api_key,
+                    self.api_secret,
+                    testnet=self.testnet,
+                    requests_params=requests_params,
+                )
         else:
             logger.debug("Creating public %s client...", api_endpoint)
             if api_endpoint == "binanceus":
-                client = Client(tld="us")
+                client = Client(tld="us", requests_params=requests_params)
             else:
-                client = Client()
+                client = Client(requests_params=requests_params)
 
         auth_mode = "with credentials" if self.api_key and self.api_secret else "public mode"
         logger.info(
@@ -773,7 +793,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             logger.info(
                 "Margin account verified: tradeEnabled=%s, borrowEnabled=%s, marginLevel=%s",
-                trade_enabled, borrow_enabled, margin_level,
+                trade_enabled,
+                borrow_enabled,
+                margin_level,
             )
 
             # Verify no non-USDT base assets with significant holdings.
@@ -807,7 +829,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                             logger.warning(
                                 "Margin wallet holds %s %s (~$%.2f, borrowed=%.8f) "
                                 "— may be a recovering short, reconciliation will verify",
-                                free, asset_name, value_usd, borrowed,
+                                free,
+                                asset_name,
+                                value_usd,
+                                borrowed,
                             )
                         else:
                             logger.warning(
@@ -815,7 +840,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                                 "— may be a recovering long or manual deposit. "
                                 "If manual, transfer out before next short entry "
                                 "(MARGIN_BUY sells existing inventory before borrowing)",
-                                free, asset_name, value_usd,
+                                free,
+                                asset_name,
+                                value_usd,
                             )
         except RuntimeError:
             raise
@@ -1124,9 +1151,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 # Get current price for the asset
                 try:
                     ticker = self._client.get_symbol_ticker(
-                        symbol=SymbolFactory.to_exchange_symbol(
-                            f"{balance.asset}-USD", "binance"
-                        )
+                        symbol=SymbolFactory.to_exchange_symbol(f"{balance.asset}-USD", "binance")
                     )
 
                     # Validate ticker response before accessing price
@@ -1444,9 +1469,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # Check if this is a duplicate client order ID error (idempotency).
             # Require BOTH conditions: -2010 alone covers other rejections
             # (insufficient balance, etc.) that are NOT duplicates.
-            if client_order_id and (
-                "Duplicate order sent" in error_msg and error_code == -2010
-            ):
+            if client_order_id and ("Duplicate order sent" in error_msg and error_code == -2010):
                 logger.warning(
                     f"Duplicate client order ID detected: {client_order_id}. "
                     "This order may have already been placed. Check order status manually."
@@ -1690,9 +1713,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         if not BINANCE_AVAILABLE or not self._client:
             return None
         try:
-            response = self._call_get_order(
-                symbol=symbol, origClientOrderId=client_order_id
-            )
+            response = self._call_get_order(symbol=symbol, origClientOrderId=client_order_id)
             return self._parse_order_data(response)
         except BinanceOrderException as e:
             if "-2013" in str(e):  # Order does not exist
@@ -1829,7 +1850,6 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         }
         return mapping.get(binance_status, OrderStatus.PENDING)
 
-
     # ---------- WebSocket Stream Management ----------
 
     def _ensure_twm(self) -> None:
@@ -1913,13 +1933,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 on_user_event(msg)
 
             if self._use_margin:
-                self._user_socket_key = self._twm.start_margin_socket(
-                    callback=_user_callback
-                )
+                self._user_socket_key = self._twm.start_margin_socket(callback=_user_callback)
             else:
-                self._user_socket_key = self._twm.start_user_socket(
-                    callback=_user_callback
-                )
+                self._user_socket_key = self._twm.start_user_socket(callback=_user_callback)
             self._last_user_event_time = datetime.now(UTC)
             self._user_ws_state = WebSocketState.PRIMARY
             return True
@@ -1969,13 +1985,48 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     @property
     def ws_healthy(self) -> bool:
-        """Kline stream must be alive and have received at least one event."""
+        """True iff every started stream is PRIMARY and fresh.
+
+        Kline stream is checked unconditionally because the engine relies on
+        it for cached prices. The user/margin stream is checked only when it
+        has been started (``_on_user_event_cb`` set) — a paper-trading run
+        with no user stream remains 'healthy' on this property without it.
+
+        See GH #608: the margin user-data stream can stay disconnected
+        across reconnect attempts while kline remains live; reporting
+        healthy in that case would mask a real failure mode.
+        """
         if self._kline_ws_state != WebSocketState.PRIMARY:
             return False
         if not self._kline_event_received:
             return False  # Not yet confirmed — don't prefer WS cache
         kline_age = (datetime.now(UTC) - self._last_kline_event_time).total_seconds()
-        return kline_age < DEFAULT_WS_KLINE_STALENESS_THRESHOLD
+        if kline_age >= DEFAULT_WS_KLINE_STALENESS_THRESHOLD:
+            return False
+        # User stream is optional (paper trading skips it); only fail
+        # health when it has been started AND is degraded/stale.
+        if self._on_user_event_cb is not None:
+            return self.user_ws_healthy
+        return True
+
+    @property
+    def user_ws_healthy(self) -> bool:
+        """True iff the user/margin stream is PRIMARY and recently active.
+
+        Returns False (not True) when no user stream has been started — the
+        caller must combine with ``_on_user_event_cb is not None`` to
+        distinguish 'unhealthy' from 'not configured'. ``ws_healthy``
+        handles that distinction; external callers querying user-stream
+        status directly should do the same.
+        """
+        if self._on_user_event_cb is None:
+            return False
+        if self._user_ws_state != WebSocketState.PRIMARY:
+            return False
+        if not self._user_event_received:
+            return False
+        user_age = (datetime.now(UTC) - self._last_user_event_time).total_seconds()
+        return user_age < DEFAULT_WS_USER_STALENESS_THRESHOLD
 
     def mark_kline_degraded(self) -> None:
         """Transition kline stream to REST_DEGRADED state (thread-safe)."""
@@ -2017,7 +2068,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             except Exception as e:
                 logger.error(
                     "Kline reconnect attempt %d/%d failed: %s",
-                    attempt, DEFAULT_WS_RECONNECT_MAX_RETRIES, e,
+                    attempt,
+                    DEFAULT_WS_RECONNECT_MAX_RETRIES,
+                    e,
                 )
             if attempt < DEFAULT_WS_RECONNECT_MAX_RETRIES:
                 backoff = 2 ** (attempt - 1)
@@ -2049,7 +2102,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             except Exception as e:
                 logger.error(
                     "User stream reconnect attempt %d/%d failed: %s",
-                    attempt, DEFAULT_WS_RECONNECT_MAX_RETRIES, e,
+                    attempt,
+                    DEFAULT_WS_RECONNECT_MAX_RETRIES,
+                    e,
                 )
             if attempt < DEFAULT_WS_RECONNECT_MAX_RETRIES:
                 backoff = 2 ** (attempt - 1)
