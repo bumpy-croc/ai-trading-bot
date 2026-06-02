@@ -160,6 +160,8 @@ class TestCheckUserStreamHealth:
             mock_engine._check_user_stream_health()
             assert disc.call_count == LIMIT  # unchanged
             ex.mark_user_degraded.assert_called_once()
+            # The dead socket is torn down so its asyncio _read_ready spam stops.
+            ex.stop_user_stream.assert_called_once()
             tracker.enable_polling.assert_called()
 
     @pytest.mark.fast
@@ -214,6 +216,7 @@ class TestCheckUserStreamHealth:
 
         assert disc.call_count == LIMIT  # bounded, not 20
         ex.mark_user_degraded.assert_called_once()  # degraded exactly once
+        ex.stop_user_stream.assert_called_once()  # dead socket torn down (asyncio spam stops)
 
     @pytest.mark.fast
     def test_breaker_survives_post_reconnect_fresh_timestamp(self, mock_engine):
