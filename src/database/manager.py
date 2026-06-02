@@ -3460,6 +3460,47 @@ class DatabaseManager:
             )
             return True
 
+    def expire_stale_pending_orders(self, session_id: int, older_than_minutes: int = 60) -> int:
+        """Fail PENDING_SUBMIT order rows that never reached the exchange.
+
+        A ``PENDING_SUBMIT`` row with no ``exchange_order_id`` older than the cutoff
+        was journaled but never confirmed sent (e.g. a SHORT rejected by the inventory
+        guard before #626, or a crash between journal and submit). It can never be
+        resolved against the exchange, so these accumulate and make startup
+        reconciliation waste a REST round-trip each (4,786 piled up before the
+        2026-05-19 recovery). Failing them in one UPDATE drains the backlog (#629);
+        an order that actually filled is still recovered by position reconciliation.
+
+        Returns the number of rows failed.
+        """
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(minutes=older_than_minutes)
+        with self.get_session() as session:
+            result = session.execute(
+                sa.text(
+                    """
+                    UPDATE orders
+                    SET status = 'FAILED', last_update = :now
+                    WHERE session_id = :sid
+                      AND status = 'PENDING_SUBMIT'
+                      AND exchange_order_id IS NULL
+                      AND created_at < :cutoff
+                    """
+                ),
+                {"now": now, "sid": session_id, "cutoff": cutoff},
+            )
+            failed = int(result.rowcount or 0)
+            session.commit()
+        if failed:
+            logger.info(
+                "Expired %d stale PENDING_SUBMIT order(s) (never sent, older than %dm) "
+                "for session %s",
+                failed,
+                older_than_minutes,
+                session_id,
+            )
+        return failed
+
     def get_unresolved_orders(self, session_id: int) -> list[dict]:
         """Get orders in PENDING_SUBMIT, SUBMITTED, or UNKNOWN status for crash recovery.
 
