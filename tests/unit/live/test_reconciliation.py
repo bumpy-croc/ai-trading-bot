@@ -167,6 +167,110 @@ class TestPositionReconciler:
         assert calls[0].kwargs["status"] == "SUBMITTED"
         assert calls[1].kwargs["status"] == "CONFIRMED"
 
+    def test_resolve_pending_orders_is_bounded(self, reconciler, mock_db):
+        """A large backlog is capped and processed newest-first so startup is bounded (#628)."""
+        from src.config.constants import DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE as CAP
+
+        # Oldest-first, like the real get_unresolved_orders query.
+        backlog = [
+            {
+                "id": i,
+                "client_order_id": f"c{i}",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "UNKNOWN",
+                "created_at": datetime.now(UTC),
+            }
+            for i in range(CAP + 50)
+        ]
+        mock_db.get_unresolved_orders.return_value = backlog
+        reconciler._resolve_single_order = MagicMock(
+            side_effect=lambda od: ReconciliationResult(
+                entity_type="order", entity_id=od["id"], status="resolved"
+            )
+        )
+
+        results = reconciler.resolve_pending_orders()
+
+        # Only the cap is processed; the rest is deferred (not silently dropped).
+        assert reconciler._resolve_single_order.call_count == CAP
+        assert len(results) == CAP
+        # Newest-first: the first processed order is the newest backlog entry.
+        first_processed = reconciler._resolve_single_order.call_args_list[0].args[0]
+        assert first_processed["id"] == CAP + 49
+
+    def test_resolve_pending_orders_respects_time_budget(self, reconciler, mock_db):
+        """The loop stops on the time budget even below the count cap (#628)."""
+        from unittest.mock import patch
+
+        # 50 orders is below the count cap, so only the time budget can stop the loop.
+        backlog = [
+            {
+                "id": i,
+                "client_order_id": f"c{i}",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "UNKNOWN",
+                "created_at": datetime.now(UTC),
+            }
+            for i in range(50)
+        ]
+        mock_db.get_unresolved_orders.return_value = backlog
+        reconciler._resolve_single_order = MagicMock(
+            side_effect=lambda od: ReconciliationResult(
+                entity_type="order", entity_id=od["id"], status="resolved"
+            )
+        )
+
+        # monotonic call 1 = deadline; calls 2-4 = checks for the first 3 orders
+        # (within budget); call 5 = check for the 4th order -> past the budget -> break.
+        counter = {"n": 0}
+
+        def fake_monotonic() -> float:
+            counter["n"] += 1
+            return 0.0 if counter["n"] <= 4 else 10_000.0
+
+        with patch("src.engines.live.reconciliation.time.monotonic", side_effect=fake_monotonic):
+            results = reconciler.resolve_pending_orders()
+
+        # Stopped by the budget at 3 orders, not by the count cap.
+        assert reconciler._resolve_single_order.call_count == 3
+        assert len(results) == 3
+
+    def test_resolve_pending_orders_bulk_fails_stale_first_spot(self, reconciler, mock_db):
+        """Spot mode bulk-fails never-sent PENDING_SUBMIT rows before the per-order loop (#629)."""
+        from src.config.constants import DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES
+
+        # The default reconciler fixture is spot (use_margin=False).
+        mock_db.get_unresolved_orders.return_value = []
+
+        reconciler.resolve_pending_orders()
+
+        mock_db.expire_stale_pending_orders.assert_called_once_with(
+            reconciler.session_id, older_than_minutes=DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES
+        )
+
+    def test_resolve_pending_orders_skips_bulk_fail_in_margin_mode(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Margin mode skips the bulk-fail (no spot account-sync backstop) so a
+        crash-interrupted fill is not orphaned; rows go through the per-order exchange
+        check instead (#629)."""
+        margin_reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            use_margin=True,
+        )
+        mock_db.get_unresolved_orders.return_value = []
+
+        margin_reconciler.resolve_pending_orders()
+
+        mock_db.expire_stale_pending_orders.assert_not_called()
+
     def test_resolve_pending_order_not_found_pending_submit(
         self, reconciler, mock_exchange, mock_db
     ):
@@ -224,7 +328,9 @@ class TestPositionReconciler:
         result = reconciler.reconcile_position(pos)
         assert result.entity_type == "position"
 
-    def test_reconcile_position_entry_cancelled_is_high(self, reconciler, mock_exchange, mock_db, mock_position_tracker):
+    def test_reconcile_position_entry_cancelled_is_high(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
         """Position whose entry was cancelled gets HIGH severity and removes from tracker."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
@@ -272,16 +378,16 @@ class TestPositionReconciler:
         mock_position_tracker.remove_position.assert_called_once()
         mock_db.close_position.assert_not_called()
 
-    def test_reconcile_position_sl_filled_offline(self, reconciler, mock_exchange, mock_db, mock_position_tracker):
+    def test_reconcile_position_sl_filled_offline(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
         """Stop-loss filled while offline removes position and closes DB record."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         pos = MockPosition(stop_loss_order_id="sl_123", db_position_id=7)
         # Entry order is fine
         entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
-        sl_order = MockExchangeOrder(
-            order_id="sl_123", status=ExOS.FILLED, average_price=49000.0
-        )
+        sl_order = MockExchangeOrder(order_id="sl_123", status=ExOS.FILLED, average_price=49000.0)
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
 
         result = reconciler.reconcile_position(pos)
@@ -300,9 +406,7 @@ class TestPositionReconciler:
 
         pos = MockPosition(stop_loss_order_id="sl_456", db_position_id=8)
         entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
-        sl_order = MockExchangeOrder(
-            order_id="sl_456", status=ExOS.FILLED, average_price=None
-        )
+        sl_order = MockExchangeOrder(order_id="sl_456", status=ExOS.FILLED, average_price=None)
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
 
         result = reconciler.reconcile_position(pos)
@@ -330,7 +434,8 @@ class TestPositionReconciler:
         # Correction recorded with MEDIUM severity
         assert result.severity >= Severity.MEDIUM
         sl_corrections = [
-            c for c in result.corrections
+            c
+            for c in result.corrections
             if "unprotected" in c.reason and c.field == "stop_loss_order_id"
         ]
         assert len(sl_corrections) == 1
@@ -359,7 +464,8 @@ class TestPositionReconciler:
         assert pos.stop_loss_order_id == "new_sl_exp"
         assert result.severity >= Severity.MEDIUM
         sl_corrections = [
-            c for c in result.corrections
+            c
+            for c in result.corrections
             if "expired" in c.reason and c.field == "stop_loss_order_id"
         ]
         assert len(sl_corrections) == 1
@@ -929,9 +1035,7 @@ class TestPeriodicReconcilerAssetCheck:
         mock_position_tracker.positions = {"key1": pos}
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
-        mock_exchange.get_order.return_value = MockExchangeOrder(
-            status=ExOS.FILLED
-        )
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
         # Asset balance is zero, but USDT balance is fine
         mock_exchange.get_balance.side_effect = lambda asset: (
             MockBalance(asset="USDT", total=1000.0)
@@ -951,9 +1055,7 @@ class TestPeriodicReconcilerAssetCheck:
 
         # Audit event logged for external close
         audit_calls = mock_db.log_audit_event.call_args_list
-        external_close_logged = any(
-            "closed externally" in str(call) for call in audit_calls
-        )
+        external_close_logged = any("closed externally" in str(call) for call in audit_calls)
         assert external_close_logged
 
     def test_cycle_no_false_positive_when_balance_sufficient(
@@ -964,9 +1066,7 @@ class TestPeriodicReconcilerAssetCheck:
         mock_position_tracker.positions = {"key1": pos}
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
-        mock_exchange.get_order.return_value = MockExchangeOrder(
-            status=ExOS.FILLED
-        )
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
         mock_exchange.get_balance.side_effect = lambda asset: (
             MockBalance(asset="USDT", total=1000.0)
             if asset == "USDT"
@@ -985,9 +1085,7 @@ class TestPeriodicReconcilerAssetCheck:
 
         # No external close audit event should be logged
         audit_calls = mock_db.log_audit_event.call_args_list
-        external_close_logged = any(
-            "closed externally" in str(call) for call in audit_calls
-        )
+        external_close_logged = any("closed externally" in str(call) for call in audit_calls)
         assert not external_close_logged
 
 
@@ -1044,8 +1142,16 @@ class TestBalanceAccountsForPositionNotional:
         Scenario: $20,000 DB, two positions totaling $15,000 notional.
         Exchange USDT = $5,000 (correct).
         """
-        pos1 = MockPosition(entry_price=50000.0, current_size=0.1, original_size=0.1, quantity=0.1, symbol="BTCUSDT")
-        pos2 = MockPosition(entry_price=3000.0, current_size=0.5, original_size=0.5, quantity=10.0 / 3, symbol="ETHUSDT")
+        pos1 = MockPosition(
+            entry_price=50000.0, current_size=0.1, original_size=0.1, quantity=0.1, symbol="BTCUSDT"
+        )
+        pos2 = MockPosition(
+            entry_price=3000.0,
+            current_size=0.5,
+            original_size=0.5,
+            quantity=10.0 / 3,
+            symbol="ETHUSDT",
+        )
         mock_position_tracker.positions = {"pos_1": pos1, "pos_2": pos2}
         mock_exchange.get_balance.return_value = MockBalance(total=5000.0)
         mock_db.get_current_balance.return_value = 20000.0
@@ -1071,9 +1177,7 @@ class TestBalanceAccountsForPositionNotional:
 
         Same scenario as startup: position notional explains USDT drop.
         """
-        pos = MockPosition(
-            entry_price=50000.0, current_size=0.1, exchange_order_id="ex_100"
-        )
+        pos = MockPosition(entry_price=50000.0, current_size=0.1, exchange_order_id="ex_100")
         mock_position_tracker.positions = {"pos_1": pos}
 
         from src.data_providers.exchange_interface import OrderStatus as ExOS
@@ -1165,10 +1269,7 @@ class TestFilledOrderPositionReconciliation:
         assert pos_arg.stop_loss == pytest.approx(50000.0 * 0.95)
         # First call persists stop-loss price, second persists SL order ID
         update_calls = mock_db.update_position.call_args_list
-        assert any(
-            c == call(42, stop_loss=pos_arg.stop_loss)
-            for c in update_calls
-        )
+        assert any(c == call(42, stop_loss=pos_arg.stop_loss) for c in update_calls)
 
     def test_filled_entry_skips_if_position_already_tracked(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -1595,9 +1696,7 @@ class TestFilledOrderPositionReconciliation:
         mock_position_tracker.track_recovered_position.assert_called_once()
 
         # Remaining order cancelled on exchange
-        mock_exchange.cancel_order.assert_called_once_with(
-            exchange_order.order_id, "BTCUSDT"
-        )
+        mock_exchange.cancel_order.assert_called_once_with(exchange_order.order_id, "BTCUSDT")
 
         # Journal marked CONFIRMED (filled portion accounted, remainder cancelled)
         journal_kwargs = mock_db.update_order_journal.call_args.kwargs
@@ -1756,10 +1855,7 @@ class TestFilledOrderPositionReconciliation:
         assert pos_arg.stop_loss == pytest.approx(40000.0 * 1.05)
         # First call persists stop-loss price, second persists SL order ID
         update_calls = mock_db.update_position.call_args_list
-        assert any(
-            c == call(55, stop_loss=pos_arg.stop_loss)
-            for c in update_calls
-        )
+        assert any(c == call(55, stop_loss=pos_arg.stop_loss) for c in update_calls)
 
     def test_filled_entry_db_failure_still_sets_in_memory_stop_loss(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -1894,12 +1990,8 @@ class TestAssetHoldingsExcessDetection:
             db_position_id=42,
         )
         # Held quantity is 200% of tracked — exceeds 150% threshold
-        mock_exchange.get_balance.return_value = MockBalance(
-            asset="BTC", total=0.2, free=0.2
-        )
-        result = ReconciliationResult(
-            entity_type="position", entity_id="test", status="resolved"
-        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.2, free=0.2)
+        result = ReconciliationResult(entity_type="position", entity_id="test", status="resolved")
 
         reconciler._verify_asset_holdings(pos, result)
 
@@ -1925,20 +2017,14 @@ class TestAssetHoldingsExcessDetection:
             db_position_id=42,
         )
         # 140% — below the 150% threshold
-        mock_exchange.get_balance.return_value = MockBalance(
-            asset="BTC", total=0.14, free=0.14
-        )
-        result = ReconciliationResult(
-            entity_type="position", entity_id="test", status="resolved"
-        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.14, free=0.14)
+        result = ReconciliationResult(entity_type="position", entity_id="test", status="resolved")
 
         reconciler._verify_asset_holdings(pos, result)
 
         # No corrections for excess (there might be none at all since
         # 140% is also above the 50% lower bound)
-        excess_corrections = [
-            c for c in result.corrections if "untracked fills" in c.reason
-        ]
+        excess_corrections = [c for c in result.corrections if "untracked fills" in c.reason]
         assert len(excess_corrections) == 0
 
 
@@ -1989,9 +2075,7 @@ class TestPeriodicReconcilerSLVerification:
             severity="HIGH",
         )
 
-    def test_cycle_replaces_cancelled_sl(
-        self, mock_exchange, mock_position_tracker, mock_db
-    ):
+    def test_cycle_replaces_cancelled_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places a cancelled SL order."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
@@ -2033,9 +2117,7 @@ class TestPeriodicReconcilerSLVerification:
             position_id=51, stop_loss_order_id="new_sl_99", current_size=0.5
         )
 
-    def test_cycle_replaces_missing_sl(
-        self, mock_exchange, mock_position_tracker, mock_db
-    ):
+    def test_cycle_replaces_missing_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places an SL order not found on exchange."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
@@ -2101,9 +2183,7 @@ class TestPeriodicReconcilerSLVerification:
         # Critical callback invoked
         critical_callback.assert_called_once()
 
-    def test_cycle_skips_positions_without_sl(
-        self, mock_exchange, mock_position_tracker, mock_db
-    ):
+    def test_cycle_skips_positions_without_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Positions without stop_loss_order_id are not queried for SL status."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
@@ -2665,9 +2745,7 @@ class TestReconciliationFeeAccounting:
         mock_db.atomic_balance_update = mock_atomic_balance_update
         mock_position_tracker._positions_lock = MagicMock()
         mock_position_tracker._positions = {}
-        mock_exchange.place_stop_loss_order.return_value = MagicMock(
-            order_id="sl_z", status="NEW"
-        )
+        mock_exchange.place_stop_loss_order.return_value = MagicMock(order_id="sl_z", status="NEW")
 
         reconciler._reconcile_filled_entry(
             order_data, exchange_order, "BTCUSDT", "LONG", 50000.0, 0.001
@@ -2707,9 +2785,7 @@ class TestReconciliationFeeAccounting:
         mock_db.atomic_balance_update = mock_atomic_balance_update
         mock_position_tracker._positions_lock = MagicMock()
         mock_position_tracker._positions = {}
-        mock_exchange.place_stop_loss_order.return_value = MagicMock(
-            order_id="sl_f", status="NEW"
-        )
+        mock_exchange.place_stop_loss_order.return_value = MagicMock(order_id="sl_f", status="NEW")
 
         # Should not raise — fee failure is non-fatal
         reconciler._reconcile_filled_entry(
@@ -2751,9 +2827,7 @@ class TestReconciliationFeeAccounting:
         )
         mock_db.get_current_balance.return_value = 1000.0
 
-        reconciler._realize_pnl_on_close(
-            position, exit_price=51000.0, reason="test_no_fee"
-        )
+        reconciler._realize_pnl_on_close(position, exit_price=51000.0, reason="test_no_fee")
 
         # P&L = 1.0, no fee
         # new_balance = 1000 + 1.0 = 1001.0

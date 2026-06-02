@@ -36,6 +36,25 @@ class TestBinanceDataProvider:
 
     @pytest.mark.data_provider
     @patch("src.data_providers.binance_provider.Client")
+    def test_client_constructed_with_rest_timeout(self, mock_client_class):
+        """Every Binance REST call gets a socket timeout via requests_params (#631).
+
+        A timeout-less client lets a half-open TCP socket hang order polling,
+        reconciliation, and the WS disconnect-recovery path indefinitely.
+        """
+        mock_client_class.return_value = Mock()
+        with patch("src.data_providers.binance_provider.get_config") as mock_config:
+            mock_config_obj = Mock()
+            mock_config_obj.get_required.return_value = "fake_key"
+            mock_config_obj.get_float.return_value = 15.0
+            mock_config.return_value = mock_config_obj
+            BinanceProvider()
+
+        assert mock_client_class.called
+        assert mock_client_class.call_args.kwargs.get("requests_params") == {"timeout": 15.0}
+
+    @pytest.mark.data_provider
+    @patch("src.data_providers.binance_provider.Client")
     def test_binance_historical_data_success(self, mock_client_class):
         mock_client = Mock()
         mock_client_class.return_value = mock_client

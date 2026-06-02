@@ -48,6 +48,31 @@ class TestOrderStatusMethods:
             assert float(mock_order.filled_price) == 50100.0  # Convert Decimal to float
             mock_session.commit.assert_called_once()
 
+    def test_expire_stale_pending_orders_scoped_update(self):
+        """Bulk-fails only old, never-sent PENDING_SUBMIT rows, scoped to the session (#629)."""
+        from datetime import timedelta
+
+        db_manager = DatabaseManager()
+        with patch.object(db_manager, "get_session") as mock_get_session:
+            mock_session = Mock()
+            mock_get_session.return_value.__enter__.return_value = mock_session
+            mock_session.execute.return_value = Mock(rowcount=4)
+
+            failed = db_manager.expire_stale_pending_orders(session_id=7, older_than_minutes=90)
+
+            assert failed == 4
+            mock_session.commit.assert_called_once()
+            sql, params = mock_session.execute.call_args.args
+            sql_str = " ".join(str(sql).split())
+            assert "SET status = 'FAILED'" in sql_str
+            assert "status = 'PENDING_SUBMIT'" in sql_str
+            assert "exchange_order_id IS NULL" in sql_str
+            assert "session_id = :sid" in sql_str
+            assert "created_at < :cutoff" in sql_str
+            assert params["sid"] == 7
+            # cutoff is ~90 min in the past
+            assert params["cutoff"] < datetime.now(UTC) - timedelta(minutes=89)
+
     def test_update_order_status_new_not_found(self):
         """Test updating order when not found."""
         db_manager = DatabaseManager()

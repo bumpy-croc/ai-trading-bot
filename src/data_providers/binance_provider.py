@@ -24,6 +24,7 @@ import pandas as pd
 
 from src.config import get_config
 from src.config.constants import (
+    DEFAULT_BINANCE_REST_TIMEOUT,
     DEFAULT_DATA_FETCH_TIMEOUT,
     DEFAULT_STARTUP_BAN_MAX_RETRIES,
     DEFAULT_STARTUP_BAN_MAX_WAIT,
@@ -420,18 +421,37 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.testnet,
         )
 
+        # Socket timeout on every REST call so a half-open TCP connection can't
+        # hang order polling, reconciliation, or the WS disconnect-recovery path
+        # indefinitely (#631). python-binance forwards requests_params to requests.
+        rest_timeout = get_config().get_float(
+            "BINANCE_REST_TIMEOUT_SECONDS", DEFAULT_BINANCE_REST_TIMEOUT
+        )
+        requests_params = {"timeout": rest_timeout}
+
         if self.api_key and self.api_secret:
             logger.debug("Creating authenticated %s client...", api_endpoint)
             if api_endpoint == "binanceus":
-                client = Client(self.api_key, self.api_secret, testnet=self.testnet, tld="us")
+                client = Client(
+                    self.api_key,
+                    self.api_secret,
+                    testnet=self.testnet,
+                    tld="us",
+                    requests_params=requests_params,
+                )
             else:
-                client = Client(self.api_key, self.api_secret, testnet=self.testnet)
+                client = Client(
+                    self.api_key,
+                    self.api_secret,
+                    testnet=self.testnet,
+                    requests_params=requests_params,
+                )
         else:
             logger.debug("Creating public %s client...", api_endpoint)
             if api_endpoint == "binanceus":
-                client = Client(tld="us")
+                client = Client(tld="us", requests_params=requests_params)
             else:
-                client = Client()
+                client = Client(requests_params=requests_params)
 
         auth_mode = "with credentials" if self.api_key and self.api_secret else "public mode"
         logger.info(
