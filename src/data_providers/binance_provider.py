@@ -9,6 +9,7 @@ providing a single interface for all Binance operations including:
 - Position management
 """
 
+import asyncio
 import logging
 import math
 import re
@@ -1934,6 +1935,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             api_endpoint = get_binance_api_endpoint()
             if api_endpoint == "binanceus":
                 twm_kwargs["tld"] = "us"
+            # Each ThreadedWebsocketManager must own a DISTINCT event loop. The engine
+            # runs the kline and user/margin streams on two separate BinanceProvider
+            # instances; python-binance's ThreadedApiManager captures the *current* loop
+            # at construction time, so without an explicit loop both managers would grab
+            # the same (main-thread) loop. Whichever stream starts second then calls
+            # run_until_complete() on the already-running loop and dies with
+            # "This event loop is already running" — which is why the margin user-stream
+            # stopped starting after nest_asyncio was removed (#646). A fresh per-manager
+            # loop has no run_until_complete nesting, so it does NOT reintroduce the
+            # "cannot enter context" re-entrancy spam that #646 fixed.
+            twm_kwargs["loop"] = asyncio.new_event_loop()
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
             self._twm.start()
 
