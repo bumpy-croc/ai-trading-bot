@@ -142,6 +142,76 @@ def test_kline_socket_starts_bound_to_twm_loop(mock_config, mock_client):
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.Client")
+@patch("src.data_providers.binance_provider.get_config")
+def test_socket_on_twm_loop_restores_previous_loop_on_exception(mock_config, mock_client):
+    """The previous loop must be restored even when start_fn raises — otherwise a
+    failed socket start would leave the caller's loop hijacked (the #646 regression).
+    """
+    import asyncio
+
+    mock_config_obj = Mock()
+    mock_config_obj.get_required.return_value = "fake_key"
+    mock_config.return_value = mock_config_obj
+
+    provider = BinanceProvider()
+    twm_loop = asyncio.new_event_loop()
+    provider._twm_loop = twm_loop
+    main_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(main_loop)
+
+    def boom():
+        assert asyncio.get_event_loop() is twm_loop  # manager loop installed during call
+        raise RuntimeError("socket start failed")
+
+    try:
+        with pytest.raises(RuntimeError):
+            provider._socket_on_twm_loop(boom)
+        assert asyncio.get_event_loop() is main_loop  # restored despite the exception
+    finally:
+        asyncio.set_event_loop(None)
+        main_loop.close()
+        twm_loop.close()
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.Client")
+@patch("src.data_providers.binance_provider.get_config")
+def test_user_socket_starts_bound_to_twm_loop(mock_config, mock_client):
+    """The margin/user socket must bind to the manager loop too (same #650 mechanism)."""
+    import asyncio
+
+    mock_config_obj = Mock()
+    mock_config_obj.get_required.return_value = "fake_key"
+    mock_config.return_value = mock_config_obj
+
+    provider = BinanceProvider()
+    provider._use_margin = True
+    twm_loop = asyncio.new_event_loop()
+    provider._twm_loop = twm_loop
+    provider._twm = Mock()
+    seen = {}
+
+    def fake_start_margin_socket(**kwargs):
+        seen["loop_during"] = asyncio.get_event_loop()
+        return "user-key"
+
+    provider._twm.start_margin_socket = fake_start_margin_socket
+
+    main_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(main_loop)
+    try:
+        ok = provider.start_user_stream(lambda m: None)
+        assert ok is True
+        assert seen["loop_during"] is twm_loop
+        assert asyncio.get_event_loop() is main_loop
+    finally:
+        asyncio.set_event_loop(None)
+        main_loop.close()
+        twm_loop.close()
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 class TestBinanceDataProvider:
     @pytest.mark.data_provider
     def test_binance_provider_initialization(self):

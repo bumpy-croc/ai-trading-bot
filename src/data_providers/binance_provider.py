@@ -2012,6 +2012,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         try:
             return start_fn()
         finally:
+            # prev is only a thread-local reference we restore — it is never *run* on
+            # this thread (set_event_loop just sets the pointer), so a stale/closed prev
+            # is harmless. Restoring it (incl. on exception) avoids leaving the caller's
+            # loop hijacked, which is what caused the #646 collision.
             asyncio.set_event_loop(prev)
 
     def start_kline_stream(
