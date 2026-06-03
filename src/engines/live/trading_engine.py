@@ -498,6 +498,10 @@ class LiveTradingEngine:
         # Consecutive unproductive user-stream reconnects; trips a circuit breaker
         # that stops the futile reconnect loop and runs REST-only (#616).
         self._user_reconnect_failures = 0
+        # Consecutive unproductive kline reconnects; drives the *recovering* REST
+        # fallback (#662) — momentary REST while reconnecting, auto-return to
+        # WS-primary the instant a real kline event resumes (never REST-until-restart).
+        self._kline_reconnect_failures = 0
         # Stop-loss fills are detected on the OrderTracker poll thread but their
         # bookkeeping exit is deferred to the trading loop so a slow/failing close
         # can't block order polling or force-remove a filled order (#631).
@@ -1531,8 +1535,11 @@ class LiveTradingEngine:
         (the monitor's grace-period wait) so a thread that re-dies immediately
         can't busy-respawn.
         """
-        # Only relevant once a stream the monitor watches has been started.
-        if not (self._ws_kline_active or self._user_data_processor):
+        # Only relevant once a stream the monitor watches has been started. Gate on
+        # the provider's existence, not _ws_kline_active — the latter is toggled off
+        # during a momentary kline REST fallback (#662), and the monitor must stay
+        # supervised then too (it is what detects the WS recovering).
+        if self._ws_kline_provider is None and not self._user_data_processor:
             return
         if not self.is_running or self.stop_event.is_set():
             return
@@ -1609,12 +1616,79 @@ class LiveTradingEngine:
             self.stop_event.wait(DEFAULT_WS_HEALTH_CHECK_INTERVAL)
 
     def _check_kline_health(self) -> None:
-        """Check kline stream health and reconnect if stale."""
-        if not self._ws_kline_provider or not self._ws_kline_active:
+        """Kline stream health with a *recovering* REST fallback (#662).
+
+        REST is only ever a momentary fallback while the WS is down. The instant a
+        real kline event resumes (``ws_healthy`` requires ``_kline_event_received``)
+        we return to WS-primary and clear the breaker, so the bot can never get
+        stuck on REST after a disconnect. Unlike the user-stream breaker (#616),
+        this one keeps probing forever (throttled) rather than staying degraded
+        until restart.
+
+        Runs only on the WS health-monitor thread (the single writer of
+        ``_ws_kline_active`` / ``_kline_reconnect_failures``), matching the existing
+        lock-free convention; main-loop reads of the flag are GIL-atomic.
+        """
+        provider = self._ws_kline_provider
+        if not provider:
             return
-        if not getattr(self._ws_kline_provider, "ws_healthy", True):
-            logger.warning("Kline stream unhealthy — attempting reconnect")
-            self._handle_kline_disconnect()
+
+        # Recovery: a real kline event arrived since the last reconnect, so the WS
+        # is delivering again — return to WS-primary and reset the breaker.
+        if getattr(provider, "ws_healthy", False):
+            if not self._ws_kline_active:
+                logger.info(
+                    "Kline WebSocket recovered after %d health cycle(s) on REST — "
+                    "REST polling disabled, WS primary again (#662)",
+                    self._kline_reconnect_failures,
+                )
+            self._ws_kline_active = True
+            self._kline_reconnect_failures = 0
+            return
+
+        # Unhealthy. Drop to REST immediately so the trading loop keeps trading
+        # while we work to restore the WS. The data-fetch path already prefers REST
+        # whenever the WS is not healthy, so this flips off the WS cache-warming
+        # shortcut and records the degraded state (logged once per outage).
+        if self._ws_kline_active:
+            self._ws_kline_active = False
+            provider.mark_kline_degraded()
+            logger.warning(
+                "Kline stream unhealthy — falling back to REST polling while reconnecting (#662)"
+            )
+
+        self._kline_reconnect_failures += 1
+        if not self._should_probe_kline_reconnect(self._kline_reconnect_failures):
+            return
+
+        logger.warning(
+            "Kline stream stale — attempting WS reconnect (failure #%d)",
+            self._kline_reconnect_failures,
+        )
+        self._handle_kline_disconnect()
+
+    def _should_probe_kline_reconnect(self, failures: int) -> bool:
+        """Whether to attempt a kline WS reconnect on this health cycle (#662).
+
+        Fast phase (``failures`` <= circuit limit): probe every cycle for quick
+        recovery. Throttled phase: probe only every Nth cycle so a persistently
+        dead socket doesn't busy-loop on needless socket churn + REST resyncs.
+
+        NEVER returns permanently False — past the limit it still returns True at
+        every multiple of ``DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY``, so the WS
+        always retains a path back to primary (the owner's "never REST-forever"
+        requirement). Recovery itself is independent of this predicate: the
+        ``ws_healthy`` branch in ``_check_kline_health`` restores WS-primary the
+        instant a real event resumes, even on a throttled (non-probing) cycle.
+        """
+        from src.config.constants import (
+            DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY,
+            DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT,
+        )
+
+        if failures <= DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT:
+            return True
+        return failures % DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY == 0
 
     def _check_user_stream_health(self) -> None:
         """Check user data stream health and reconnect if needed."""
@@ -1689,10 +1763,19 @@ class LiveTradingEngine:
         self._handle_user_stream_disconnect()
 
     def _handle_kline_disconnect(self) -> None:
-        """Handle kline stream failure. Resync from REST and attempt reconnect."""
-        if not self._ws_kline_provider:
+        """Resync kline history from REST and attempt one WS reconnect.
+
+        Does NOT decide WS-primary vs REST — that belongs to ``_check_kline_health``,
+        which returns to WS-primary only once a real event confirms ``ws_healthy``
+        (#662). ``reconnect_kline`` returning True only means a socket was *opened*,
+        not that it delivers data (the #650/#663 failure signature), so trusting it
+        here is exactly what caused the 30s "reconnected" churn.
+        """
+        provider = self._ws_kline_provider
+        if not provider:
             return
-        # Resync kline history from REST
+        # Resync kline history from REST so the buffer has no gap, whether we end up
+        # recovering the WS or keep serving the loop from REST in the meantime.
         if self._kline_buffer:
             try:
                 self._kline_buffer.resync_from_rest(
@@ -1700,24 +1783,14 @@ class LiveTradingEngine:
                 )
             except Exception as e:
                 logger.error("Kline REST resync failed: %s", e)
-        # Attempt reconnect. The call is bounded by the REST socket timeout
-        # (#631); treat any failure as "stay on REST polling" rather than letting
-        # it abort recovery / propagate into the WS health thread.
-        reconnected = False
+        # Attempt reconnect (bounded internally by the REST socket timeout, #631).
+        # Whether it actually restored event flow is confirmed next health cycle via
+        # ws_healthy; we deliberately do not treat the return value as "healthy".
         try:
-            reconnected = bool(
-                hasattr(self._ws_kline_provider, "reconnect_kline")
-                and self._ws_kline_provider.reconnect_kline()
-            )
+            if hasattr(provider, "reconnect_kline"):
+                provider.reconnect_kline()
         except Exception as e:
             logger.error("Kline reconnect attempt failed: %s", e)
-        if reconnected:
-            self._ws_kline_active = True
-            logger.info("Kline WebSocket reconnected")
-        else:
-            self._ws_kline_provider.mark_kline_degraded()
-            self._ws_kline_active = False
-            logger.warning("Kline reconnect failed — REST polling resumed")
 
     def _handle_user_stream_disconnect(self) -> None:
         """Handle user data stream failure. Resync orders and attempt reconnect."""

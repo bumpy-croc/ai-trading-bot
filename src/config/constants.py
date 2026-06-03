@@ -351,7 +351,9 @@ DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES = 60
 
 # WebSocket Stream Constants
 DEFAULT_WS_KLINE_STALENESS_THRESHOLD = 120  # Seconds before kline stream considered stale
-DEFAULT_WS_USER_STALENESS_THRESHOLD = 120  # Seconds before user stream considered stale (only when orders tracked)
+DEFAULT_WS_USER_STALENESS_THRESHOLD = (
+    120  # Seconds before user stream considered stale (only when orders tracked)
+)
 DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
 DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
 # Consecutive unproductive user-stream reconnects (stale again with no real event)
@@ -360,6 +362,16 @@ DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_D
 # and reports success even on a dead multiplexed ws_api socket, so reconnects never
 # self-terminate and churn forever (#616).
 DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT = 3
+# Kline watchdog (#662): a *recovering* REST fallback, unlike the user-stream
+# breaker above. After this many consecutive unproductive kline reconnects
+# (socket re-opened but no real event confirms it — ws_healthy requires
+# _kline_event_received), the engine drops to momentary REST polling but KEEPS
+# probing the WS and returns to WS-primary the instant a real event resumes.
+DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT = 3
+# Once past that limit, attempt a kline reconnect only every Nth health cycle
+# (≈ N × DEFAULT_WS_HEALTH_CHECK_INTERVAL seconds) so a persistently dead socket
+# doesn't busy-loop — but never stop, so a return to WS is always possible (#662).
+DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY = 10
 DEFAULT_STARTUP_BAN_MAX_WAIT = 600  # Max seconds to wait for an IP ban to lift during startup
 DEFAULT_STARTUP_BAN_MAX_RETRIES = 3  # Max retry attempts for ban-related startup failures
 
