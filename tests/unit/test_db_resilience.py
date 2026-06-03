@@ -296,6 +296,7 @@ def test_watchdog_respawns_dead_ws_thread() -> None:
     engine = _make_engine()
     engine.is_running = True
     engine._ws_kline_active = True
+    engine._ws_kline_provider = Mock()  # a kline stream exists → monitor is supervised (#662)
     engine._ws_health_thread = _dead_thread()
     engine._start_ws_health_monitor = Mock()
 
@@ -309,6 +310,9 @@ def test_watchdog_noop_when_thread_alive() -> None:
     engine = _make_engine()
     engine.is_running = True
     engine._ws_kline_active = True
+    engine._ws_kline_provider = (
+        Mock()
+    )  # kline stream exists → guard passes, reach alive-check (#662)
     alive = Mock()
     alive.is_alive.return_value = True
     engine._ws_health_thread = alive
@@ -340,6 +344,9 @@ def test_watchdog_noop_when_stopping() -> None:
     engine = _make_engine()
     engine.is_running = True
     engine._ws_kline_active = True
+    engine._ws_kline_provider = (
+        Mock()
+    )  # kline stream exists → guard passes, reach stopping-check (#662)
     engine.stop_event.set()
     engine._ws_health_thread = _dead_thread()
     engine._start_ws_health_monitor = Mock()
@@ -448,19 +455,24 @@ def test_drain_failure_is_isolated_and_logged(caplog) -> None:
 
 
 @pytest.mark.fast
-def test_kline_disconnect_degrades_when_reconnect_raises() -> None:
-    """A raising kline reconnect (e.g. REST timeout) degrades to polling, not crash."""
+def test_kline_disconnect_survives_reconnect_timeout() -> None:
+    """A raising kline reconnect (e.g. REST timeout) must not propagate (#631).
+
+    Post-#662 _handle_kline_disconnect is state-free — dropping to REST is owned by
+    _check_kline_health (which already did so before calling here). This pins only
+    the exception-safety guarantee: a timing-out reconnect can't crash the WS
+    health thread.
+    """
     engine = _make_engine()
     engine._kline_buffer = None  # skip REST resync
     provider = Mock()
     provider.reconnect_kline.side_effect = TimeoutError("rest socket hung")
     engine._ws_kline_provider = provider
-    engine._ws_kline_active = True
 
     engine._handle_kline_disconnect()  # must not propagate
 
-    provider.mark_kline_degraded.assert_called_once()
-    assert engine._ws_kline_active is False
+    provider.reconnect_kline.assert_called_once()
+    provider.mark_kline_degraded.assert_not_called()  # not this function's job anymore
 
 
 @pytest.mark.fast
