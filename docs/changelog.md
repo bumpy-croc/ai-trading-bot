@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Live position/trade recovery no longer crashes on `Decimal`-vs-`float`
+  arithmetic. `DatabaseManager.get_active_positions` and `get_recent_trades`
+  now coerce SQLAlchemy `Numeric(18,8)` columns (which read back from
+  PostgreSQL as `Decimal`) to `float` at the source — `float()` for
+  non-nullable columns, `_to_optional_float()` for nullable ones — mirroring
+  the existing `orders_data` block and `LivePositionTracker.recover_positions`.
+  Previously these raw `Decimal`s flowed through `_recover_active_positions`
+  into recovered `Position` objects and raised `unsupported operand type(s)
+  for *: 'decimal.Decimal' and 'float'` in reconciliation's default
+  stop-loss branches (`entry_price * (1.0 ± DEFAULT_STOP_LOSS_PCT)`), which
+  run *before* the `place_stop_loss_order` boundary that PR #653 had patched.
+  Also keeps dashboard consumers JSON-serializable (`json.dumps` raises on
+  `Decimal`).
 - Backtest-live engine parity: closed nine silent divergences. Backtest now
   propagates `TimeExitPolicy`-specific exit reasons (`"Max holding period"`,
   `"Weekend flat"`, etc.) instead of hardcoding `"Time limit"`; gained an

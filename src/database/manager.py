@@ -1581,35 +1581,47 @@ class DatabaseManager:
                         "id": p.id,
                         "symbol": p.symbol,
                         "side": p.side.value,
-                        "entry_price": p.entry_price,
-                        "current_price": p.current_price,
-                        "size": p.size,
-                        "quantity": p.quantity,
+                        # Numeric(18, 8) columns read back as Decimal. Coerce to float
+                        # at the source (mirroring orders_data above and
+                        # LivePositionTracker.recover_positions) so recovered Position
+                        # objects never mix Decimal with the float constants used in
+                        # downstream arithmetic (e.g. reconciliation's default stop-loss
+                        # branches: entry_price * (1.0 ± DEFAULT_STOP_LOSS_PCT)).
+                        "entry_price": float(p.entry_price),
+                        "current_price": self._to_optional_float(p.current_price),
+                        "size": float(p.size),
+                        "quantity": self._to_optional_float(p.quantity),
                         "entry_balance": self._to_optional_float(getattr(p, "entry_balance", None)),
-                        "unrealized_pnl": p.unrealized_pnl,
-                        "unrealized_pnl_percent": p.unrealized_pnl_percent,
-                        "stop_loss": p.stop_loss,
-                        "take_profit": p.take_profit,
+                        "unrealized_pnl": self._to_optional_float(p.unrealized_pnl, 0.0),
+                        "unrealized_pnl_percent": self._to_optional_float(
+                            p.unrealized_pnl_percent, 0.0
+                        ),
+                        "stop_loss": self._to_optional_float(p.stop_loss),
+                        "take_profit": self._to_optional_float(p.take_profit),
                         "entry_time": p.entry_time,
                         "strategy": p.strategy_name,
                         "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
-                        "trailing_stop_price": getattr(p, "trailing_stop_price", None),
+                        "trailing_stop_price": self._to_optional_float(
+                            getattr(p, "trailing_stop_price", None)
+                        ),
                         "breakeven_triggered": getattr(p, "breakeven_triggered", False),
-                        "mfe": p.mfe,
-                        "mae": p.mae,
-                        "mfe_price": p.mfe_price,
-                        "mae_price": p.mae_price,
+                        "mfe": self._to_optional_float(p.mfe, 0.0),
+                        "mae": self._to_optional_float(p.mae, 0.0),
+                        "mfe_price": self._to_optional_float(p.mfe_price),
+                        "mae_price": self._to_optional_float(p.mae_price),
                         "mfe_time": p.mfe_time,
                         "mae_time": p.mae_time,
                         # * Include order information for consistency with dashboard
                         "orders": orders_data,
                         # * Include partial operations tracking
-                        "original_size": p.original_size,
-                        "current_size": p.current_size,
+                        "original_size": self._to_optional_float(p.original_size),
+                        "current_size": self._to_optional_float(p.current_size),
                         "partial_exits_taken": p.partial_exits_taken,
                         "scale_ins_taken": p.scale_ins_taken,
-                        "last_partial_exit_price": p.last_partial_exit_price,
-                        "last_scale_in_price": p.last_scale_in_price,
+                        "last_partial_exit_price": self._to_optional_float(
+                            p.last_partial_exit_price
+                        ),
+                        "last_scale_in_price": self._to_optional_float(p.last_scale_in_price),
                         # * Include exchange order IDs for live trading recovery
                         "entry_order_id": getattr(p, "entry_order_id", None),
                         "stop_loss_order_id": getattr(p, "stop_loss_order_id", None),
@@ -1635,19 +1647,22 @@ class DatabaseManager:
                     "id": t.id,
                     "symbol": t.symbol,
                     "side": t.side.value,
-                    "entry_price": t.entry_price,
-                    "exit_price": t.exit_price,
-                    "size": t.size,
-                    "pnl": t.pnl,
-                    "pnl_percent": t.pnl_percent,
+                    # Numeric(18, 8) columns read back as Decimal. Coerce to float at
+                    # the source (mirroring get_active_positions) so dashboard consumers
+                    # stay JSON-serializable and downstream float arithmetic is safe.
+                    "entry_price": float(t.entry_price),
+                    "exit_price": float(t.exit_price),
+                    "size": float(t.size),
+                    "pnl": float(t.pnl),
+                    "pnl_percent": float(t.pnl_percent),
                     "entry_time": t.entry_time,
                     "exit_time": t.exit_time,
                     "exit_reason": t.exit_reason,
                     "strategy": t.strategy_name,
-                    "mfe": t.mfe,
-                    "mae": t.mae,
-                    "mfe_price": t.mfe_price,
-                    "mae_price": t.mae_price,
+                    "mfe": self._to_optional_float(t.mfe, 0.0),
+                    "mae": self._to_optional_float(t.mae, 0.0),
+                    "mfe_price": self._to_optional_float(t.mfe_price),
+                    "mae_price": self._to_optional_float(t.mae_price),
                     "mfe_time": t.mfe_time,
                     "mae_time": t.mae_time,
                 }
