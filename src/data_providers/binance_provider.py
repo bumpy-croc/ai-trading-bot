@@ -1990,6 +1990,30 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
             self._twm.start()
 
+    def _socket_on_twm_loop(self, start_fn: Callable[[], Any]) -> Any:
+        """Invoke a TWM ``start_*_socket`` call with the manager's own loop installed
+        as this thread's current loop, then restore the previous loop.
+
+        python-binance builds each socket's ReconnectingWebsocket SYNCHRONOUSLY on the
+        calling thread and binds it to ``get_loop()`` (the current thread's loop). The
+        manager thread runs ``self._twm_loop``, so the socket must bind to THAT loop —
+        otherwise its read-loop is scheduled onto a loop nothing runs and zero events
+        are ever delivered (the #650 regression: kline went dark after the first
+        reconnect). Restoring the previous loop afterwards means we never permanently
+        hijack the main thread's loop (which is what caused the #646 collision).
+        """
+        if self._twm_loop is None:
+            return start_fn()
+        try:
+            prev = asyncio.get_event_loop()
+        except RuntimeError:
+            prev = None
+        asyncio.set_event_loop(self._twm_loop)
+        try:
+            return start_fn()
+        finally:
+            asyncio.set_event_loop(prev)
+
     def start_kline_stream(
         self, symbol: str, timeframe: str, on_kline: Callable[[dict], None]
     ) -> bool:
@@ -2020,8 +2044,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 on_kline(msg)
 
             self._kline_event_received = False  # Reset until first event confirms
-            self._kline_socket_key = self._twm.start_kline_socket(
-                callback=_kline_callback, symbol=symbol, interval=timeframe
+            self._kline_socket_key = self._socket_on_twm_loop(
+                lambda: self._twm.start_kline_socket(
+                    callback=_kline_callback, symbol=symbol, interval=timeframe
+                )
             )
             self._kline_ws_state = WebSocketState.PRIMARY
             self._last_kline_event_time = datetime.now(UTC)
@@ -2054,9 +2080,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 on_user_event(msg)
 
             if self._use_margin:
-                self._user_socket_key = self._twm.start_margin_socket(callback=_user_callback)
+                self._user_socket_key = self._socket_on_twm_loop(
+                    lambda: self._twm.start_margin_socket(callback=_user_callback)
+                )
             else:
-                self._user_socket_key = self._twm.start_user_socket(callback=_user_callback)
+                self._user_socket_key = self._socket_on_twm_loop(
+                    lambda: self._twm.start_user_socket(callback=_user_callback)
+                )
             self._last_user_event_time = datetime.now(UTC)
             self._user_ws_state = WebSocketState.PRIMARY
             return True

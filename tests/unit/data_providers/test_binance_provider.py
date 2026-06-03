@@ -97,6 +97,51 @@ def test_stop_streams_closes_twm_event_loop(mock_config, mock_client):
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.Client")
+@patch("src.data_providers.binance_provider.get_config")
+def test_kline_socket_starts_bound_to_twm_loop(mock_config, mock_client):
+    """The kline socket is built synchronously on the calling thread and binds to the
+    CURRENT loop; start_kline_stream must install the manager's own loop for the call
+    (so the socket binds to the loop the TWM thread runs, not a loop nothing runs) and
+    restore the previous loop afterwards. Regression guard for #650 — passing a per-
+    manager loop without making it current bound the socket to the wrong loop and zero
+    kline events were ever delivered.
+    """
+    import asyncio
+
+    mock_config_obj = Mock()
+    mock_config_obj.get_required.return_value = "fake_key"
+    mock_config.return_value = mock_config_obj
+
+    provider = BinanceProvider()
+    twm_loop = asyncio.new_event_loop()
+    provider._twm_loop = twm_loop
+    provider._twm = Mock()
+    seen = {}
+
+    def fake_start_kline_socket(**kwargs):
+        seen["loop_during"] = asyncio.get_event_loop()
+        return "kline-key"
+
+    provider._twm.start_kline_socket = fake_start_kline_socket
+
+    main_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(main_loop)
+    try:
+        ok = provider.start_kline_stream("ETHUSDT", "1h", lambda m: None)
+        assert ok is True
+        # Socket constructed while the MANAGER loop was current (not main_loop), so
+        # python-binance binds it to the loop the TWM thread actually runs.
+        assert seen["loop_during"] is twm_loop
+        # Caller's previous loop is restored (no permanent main-thread hijack).
+        assert asyncio.get_event_loop() is main_loop
+    finally:
+        asyncio.set_event_loop(None)
+        main_loop.close()
+        twm_loop.close()
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 class TestBinanceDataProvider:
     @pytest.mark.data_provider
     def test_binance_provider_initialization(self):
