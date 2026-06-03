@@ -58,15 +58,19 @@ class TestCheckKlineHealth:
 
     @pytest.mark.fast
     def test_triggers_disconnect_when_unhealthy(self, mock_engine):
-        """Should call _handle_kline_disconnect when ws_healthy is False."""
+        """Unhealthy first cycle: drop to REST (flag off + degrade once) and reconnect."""
         mock_provider = MagicMock()
         mock_provider.ws_healthy = False
         mock_engine._ws_kline_provider = mock_provider
         mock_engine._ws_kline_active = True
+        mock_engine._kline_reconnect_failures = 0
 
         with patch.object(mock_engine, "_handle_kline_disconnect") as mock_disconnect:
             mock_engine._check_kline_health()
             mock_disconnect.assert_called_once()
+            # The degrade-on-first-unhealthy step must not regress silently.
+            assert mock_engine._ws_kline_active is False
+            mock_provider.mark_kline_degraded.assert_called_once()
 
     @pytest.mark.fast
     def test_does_nothing_when_healthy(self, mock_engine):
@@ -337,6 +341,29 @@ class TestKlineRecoveringRestFallback:
         mock_engine._ws_kline_active = True
         mock_engine._kline_reconnect_failures = 0
         return provider
+
+    @pytest.mark.fast
+    def test_should_probe_predicate_never_permanently_false(self, mock_engine):
+        """The throttle predicate probes every cycle up to the limit, then every
+        Nth cycle — and is never permanently False, so the WS always has a path
+        back to primary (#662)."""
+        from src.config.constants import (
+            DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY as PROBE,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT as LIMIT,
+        )
+
+        # Fast phase: probe on every cycle up to the limit.
+        assert all(mock_engine._should_probe_kline_reconnect(n) for n in range(1, LIMIT + 1))
+        # Throttled phase: only multiples of PROBE probe.
+        assert mock_engine._should_probe_kline_reconnect(LIMIT + 1) is False
+        assert mock_engine._should_probe_kline_reconnect(PROBE) is True
+        # Never permanently false: a probe always recurs within every PROBE-cycle window.
+        for start in range(LIMIT + 1, 5 * PROBE, PROBE):
+            assert any(
+                mock_engine._should_probe_kline_reconnect(n) for n in range(start, start + PROBE)
+            )
 
     @pytest.mark.fast
     def test_unhealthy_drops_to_momentary_rest_and_reconnects(self, mock_engine):

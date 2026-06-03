@@ -1633,17 +1633,12 @@ class LiveTradingEngine:
         if not provider:
             return
 
-        from src.config.constants import (
-            DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY,
-            DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT,
-        )
-
         # Recovery: a real kline event arrived since the last reconnect, so the WS
         # is delivering again — return to WS-primary and reset the breaker.
         if getattr(provider, "ws_healthy", False):
             if not self._ws_kline_active:
                 logger.info(
-                    "Kline WebSocket recovered after %d reconnect attempt(s) — "
+                    "Kline WebSocket recovered after %d health cycle(s) on REST — "
                     "REST polling disabled, WS primary again (#662)",
                     self._kline_reconnect_failures,
                 )
@@ -1659,23 +1654,41 @@ class LiveTradingEngine:
             self._ws_kline_active = False
             provider.mark_kline_degraded()
             logger.warning(
-                "Kline stream unhealthy — falling back to REST polling while " "reconnecting (#662)"
+                "Kline stream unhealthy — falling back to REST polling while reconnecting (#662)"
             )
 
         self._kline_reconnect_failures += 1
-
-        # Throttle once past the circuit limit: a persistently dead socket must not
-        # be reconnected every health cycle forever (needless socket + REST-resync
-        # churn), but we must NEVER stop — so probe only every Nth cycle instead.
-        failures = self._kline_reconnect_failures
-        if (
-            failures > DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT
-            and failures % DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY != 0
-        ):
+        if not self._should_probe_kline_reconnect(self._kline_reconnect_failures):
             return
 
-        logger.warning("Kline stream stale — attempting WS reconnect (failure #%d)", failures)
+        logger.warning(
+            "Kline stream stale — attempting WS reconnect (failure #%d)",
+            self._kline_reconnect_failures,
+        )
         self._handle_kline_disconnect()
+
+    def _should_probe_kline_reconnect(self, failures: int) -> bool:
+        """Whether to attempt a kline WS reconnect on this health cycle (#662).
+
+        Fast phase (``failures`` <= circuit limit): probe every cycle for quick
+        recovery. Throttled phase: probe only every Nth cycle so a persistently
+        dead socket doesn't busy-loop on needless socket churn + REST resyncs.
+
+        NEVER returns permanently False — past the limit it still returns True at
+        every multiple of ``DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY``, so the WS
+        always retains a path back to primary (the owner's "never REST-forever"
+        requirement). Recovery itself is independent of this predicate: the
+        ``ws_healthy`` branch in ``_check_kline_health`` restores WS-primary the
+        instant a real event resumes, even on a throttled (non-probing) cycle.
+        """
+        from src.config.constants import (
+            DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY,
+            DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT,
+        )
+
+        if failures <= DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT:
+            return True
+        return failures % DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY == 0
 
     def _check_user_stream_health(self) -> None:
         """Check user data stream health and reconnect if needed."""
