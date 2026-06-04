@@ -4434,15 +4434,15 @@ class LiveTradingEngine:
     def _recover_existing_session(self) -> float | None:
         """Try to recover balance from an existing session.
 
-        Checks for an active session first (crash recovery). If none exists —
-        clean restart after graceful shutdown — falls back to the most recent
-        matching session within 24 hours. Skipped entirely when
-        TRADING_FRESH_START=true is set in the environment.
+        Prefers an active session (crash recovery); otherwise falls back to the
+        most recent matching session within 7 days (clean-restart path). When
+        there is genuinely no recent session to recover (new symbol/strategy,
+        fresh DB, or older than the window), returns None and the engine starts
+        fresh. Recovery runs unconditionally in every environment so staging
+        mirrors production — there is intentionally no bypass flag. (A
+        recovery-bypass env var silently orphaned open positions and reset to a
+        phantom balance; removed — see #668.)
         """
-        if os.environ.get("TRADING_FRESH_START", "").lower() == "true":
-            logger.info("TRADING_FRESH_START=true — skipping session recovery")
-            return None
-
         try:
             # Prefer an active session (crash recovery path).
             session_id = self.db_manager.get_active_session_id()

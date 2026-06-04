@@ -30,10 +30,14 @@ def make_engine(enable_live_trading: bool = False) -> LiveTradingEngine:
     db_patch = patch("src.engines.live.trading_engine.DatabaseManager")
     config_patch = patch("src.engines.live.trading_engine.get_config", return_value={})
     # Live trading mode requires an exchange interface and provider setup
-    exchange_patch = patch(
-        "src.engines.live.trading_engine._create_exchange_provider",
-        return_value=(MagicMock(), "mock"),
-    ) if enable_live_trading else patch("builtins.id", side_effect=id)  # no-op patch
+    exchange_patch = (
+        patch(
+            "src.engines.live.trading_engine._create_exchange_provider",
+            return_value=(MagicMock(), "mock"),
+        )
+        if enable_live_trading
+        else patch("builtins.id", side_effect=id)
+    )  # no-op patch
 
     with db_patch, config_patch, exchange_patch:
         engine = LiveTradingEngine(
@@ -123,20 +127,6 @@ def test_recovery_prefers_active_session_over_recent():
 
     assert result == 999.0
     engine.db_manager.get_last_session_id.assert_not_called()
-
-
-@pytest.mark.fast
-def test_fresh_start_env_var_bypasses_recovery(monkeypatch):
-    """TRADING_FRESH_START=true skips all session recovery."""
-    monkeypatch.setenv("TRADING_FRESH_START", "true")
-    engine = make_engine()
-    engine.db_manager.get_active_session_id = MagicMock(return_value=10)
-    engine.db_manager.recover_last_balance = MagicMock(return_value=999.0)
-
-    result = engine._recover_existing_session()
-
-    assert result is None
-    engine.db_manager.get_active_session_id.assert_not_called()
 
 
 @pytest.mark.fast
