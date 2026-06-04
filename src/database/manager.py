@@ -71,7 +71,7 @@ def _trade_net_pnl(trade: Any) -> float:
     Gracefully returns gross PnL when margin_interest_cost is missing or invalid.
     """
     raw = getattr(trade, "margin_interest_cost", None)
-    interest = float(raw) if isinstance(raw, (int, float, Decimal)) else 0.0
+    interest = float(raw) if isinstance(raw, int | float | Decimal) else 0.0
     return float(trade.pnl) - interest
 
 
@@ -644,9 +644,7 @@ class DatabaseManager:
                 trading_session.win_rate = (
                     (len(winning_trades) / len(trades) * 100) if trades else 0
                 )
-                trading_session.total_pnl = sum(
-                    _trade_net_pnl(t) for t in trades
-                )
+                trading_session.total_pnl = sum(_trade_net_pnl(t) for t in trades)
 
                 # Calculate max drawdown from account history
                 account_history = (
@@ -799,7 +797,9 @@ class DatabaseManager:
                 mae_price=mae_price,
                 mfe_time=mfe_time,
                 mae_time=mae_time,
-                margin_interest_cost=margin_interest_cost if margin_interest_cost is not None else 0.0,
+                margin_interest_cost=(
+                    margin_interest_cost if margin_interest_cost is not None else 0.0
+                ),
             )
 
             session.add(trade)
@@ -1478,9 +1478,9 @@ class DatabaseManager:
         def _sanitize_scalar(val):
             import numpy as np
 
-            if isinstance(val, (np.integer,)):
+            if isinstance(val, np.integer):
                 return int(val)
-            elif isinstance(val, (np.floating,)):
+            elif isinstance(val, np.floating):
                 return float(val)
             elif hasattr(val, "item") and callable(val.item):
                 return val.item()
@@ -1750,7 +1750,7 @@ class DatabaseManager:
 
             # Some unit tests mock the session and return a MagicMock instead of
             # a list.  Gracefully degrade when the result is not list-like.
-            if not isinstance(account_history, (list, tuple)):
+            if not isinstance(account_history, list | tuple):
                 account_history = []
 
             max_drawdown = 0.0
@@ -2018,9 +2018,7 @@ class DatabaseManager:
             trades = session.query(Trade).filter(Trade.session_id == session_id).all()
 
             # Calculate current balance from initial balance + net PnL
-            total_pnl = sum(
-                _trade_net_pnl(trade) for trade in trades
-            )
+            total_pnl = sum(_trade_net_pnl(trade) for trade in trades)
             current_balance = trading_session.initial_balance + total_pnl
 
             # Update the balance tracking and warn if persistence fails
@@ -2532,9 +2530,9 @@ class DatabaseManager:
             if math.isnan(obj) or math.isinf(obj):
                 return None
             return obj
-        elif isinstance(obj, (np.integer,)):
+        elif isinstance(obj, np.integer):
             return int(obj)
-        elif isinstance(obj, (np.floating,)):
+        elif isinstance(obj, np.floating):
             val = float(obj)
             # Check for NaN/Inf after converting numpy float to Python float
             if math.isnan(val) or math.isinf(val):

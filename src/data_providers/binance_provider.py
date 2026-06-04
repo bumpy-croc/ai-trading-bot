@@ -46,20 +46,18 @@ from .exchange_interface import (
     OrderStatus,
     OrderType,
     Position,
-    SideEffectType,
     Trade,
 )
 
 logger = logging.getLogger(__name__)
 
 try:
+    # Ensure ws.protocol.State is accessible (not auto-loaded in websockets 13+)
+    import websockets.protocol  # noqa: F401
     from binance import ThreadedWebsocketManager
     from binance.client import Client
     from binance.enums import SIDE_BUY, SIDE_SELL
     from binance.exceptions import BinanceAPIException, BinanceOrderException
-
-    # Ensure ws.protocol.State is accessible (not auto-loaded in websockets 13+)
-    import websockets.protocol  # noqa: F401
 
     BINANCE_AVAILABLE = True
 except ImportError:
@@ -1633,9 +1631,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             bal = self.get_balance(base_asset)
             return float(bal.free) if bal is not None else None
         except Exception as e:
-            logger.warning(
-                "Could not read free %s balance for stop-loss sizing: %s", base_asset, e
-            )
+            logger.warning("Could not read free %s balance for stop-loss sizing: %s", base_asset, e)
             return None
 
     # Only retry transient -1015 (too many orders), NOT -1003 (IP ban).

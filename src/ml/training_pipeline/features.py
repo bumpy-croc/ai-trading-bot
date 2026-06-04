@@ -244,7 +244,7 @@ def _validate_and_clean_data(data: pd.DataFrame) -> pd.DataFrame:
     rows_before = len(data)
     nan_counts = data.isna().sum()
     # Avoid reassigning function parameter (CODE.md line 77)
-    cleaned_data = data.dropna()
+    cleaned_data = data.dropna().copy()
     rows_dropped = rows_before - len(cleaned_data)
 
     if rows_dropped > 0:
@@ -309,12 +309,12 @@ def _scale_technical_indicators(
         col = f"sma_{window}"
         if col in data.columns:
             scaled = f"{col}_scaled"
-            data[scaled] = MinMaxScaler().fit_transform(data[[col]])
+            data.loc[:, scaled] = MinMaxScaler().fit_transform(data[[col]])
             feature_names.append(scaled)
 
     # Scale RSI
     if "rsi" in data.columns:
-        data["rsi_scaled"] = MinMaxScaler().fit_transform(data[["rsi"]])
+        data.loc[:, "rsi_scaled"] = MinMaxScaler().fit_transform(data[["rsi"]])
         feature_names.append("rsi_scaled")
 
     return data, feature_names
@@ -340,13 +340,14 @@ def _add_sentiment_features(
     if sentiment_assessment["recommendation"] not in ["full_sentiment", "hybrid_with_fallback"]:
         return data, feature_names, scalers
 
+    data = data.copy()
     sentiment_features = ["sentiment_score", "sentiment_volume", "sentiment_momentum"]
     for feature in sentiment_features:
         if feature in data.columns:
-            data[f"{feature}_filled"] = data[feature].fillna(0)
+            data.loc[:, f"{feature}_filled"] = data[feature].fillna(0)
             scaler = MinMaxScaler()
             scaled = f"{feature}_scaled"
-            data[scaled] = scaler.fit_transform(data[[f"{feature}_filled"]])
+            data.loc[:, scaled] = scaler.fit_transform(data[[f"{feature}_filled"]])
             feature_names.append(scaled)
             scalers[feature] = scaler
 

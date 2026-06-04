@@ -23,7 +23,6 @@ from src.config.constants import (
     DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES,
     DEFAULT_RECONCILE_TIME_BUDGET_SECONDS,
     DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT,
-    DEFAULT_RECONCILIATION_DUST_THRESHOLD,
     DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
     DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN,
     DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
@@ -156,7 +155,7 @@ class PositionReconciler:
         results.extend(self.resolve_pending_orders())
 
         # Step B: Verify each recovered position
-        for order_id, position in positions.items():
+        for _order_id, position in positions.items():
             result = self.reconcile_position(position)
             results.append(result)
 
@@ -420,7 +419,6 @@ class PositionReconciler:
         Defensive: catches all exceptions since the position may already be
         in the correct state.
         """
-        from src.engines.live.execution.position_tracker import LivePosition
 
         order_type = order_data.get("order_type", "")
         symbol = order_data.get("symbol", "")
@@ -448,7 +446,7 @@ class PositionReconciler:
         fill_qty: float,
     ) -> None:
         """Create position if an ENTRY order filled but was never persisted."""
-        from datetime import UTC, datetime
+        from datetime import UTC
 
         from src.engines.live.execution.position_tracker import LivePosition
 
@@ -547,8 +545,7 @@ class PositionReconciler:
                     )
                 except Exception as e:
                     logger.warning(
-                        "Failed to deduct entry fee $%.4f for recovered "
-                        "position %s: %s",
+                        "Failed to deduct entry fee $%.4f for recovered " "position %s: %s",
                         entry_fee,
                         client_order_id,
                         e,
@@ -1811,9 +1808,7 @@ class PositionReconciler:
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
 
-    def _verify_margin_position_exists(
-        self, position: Any, result: ReconciliationResult
-    ) -> None:
+    def _verify_margin_position_exists(self, position: Any, result: ReconciliationResult) -> None:
         """Verify a margin position still exists by checking borrowed balance.
 
         For short positions, checks if the base asset has borrowed > 0.
@@ -1900,13 +1895,9 @@ class PositionReconciler:
                         self._remove_phantom_position(position, result)
 
         except Exception as e:
-            logger.warning(
-                "Margin position check failed for %s: %s — position retained", symbol, e
-            )
+            logger.warning("Margin position check failed for %s: %s — position retained", symbol, e)
 
-    def _remove_phantom_position(
-        self, position: Any, result: ReconciliationResult
-    ) -> None:
+    def _remove_phantom_position(self, position: Any, result: ReconciliationResult) -> None:
         """Remove a phantom position from tracker and DB, cancel its exchange SL."""
         # Cancel the server-side stop-loss before removing from tracker.
         # Leaving an orphaned SL on the exchange is a fund-loss path —
@@ -1917,12 +1908,15 @@ class PositionReconciler:
                 self.exchange.cancel_order(sl_order_id, position.symbol)
                 logger.info(
                     "Cancelled orphaned SL %s for removed position %s",
-                    sl_order_id, position.symbol,
+                    sl_order_id,
+                    position.symbol,
                 )
             except Exception as e:
                 logger.warning(
                     "Failed to cancel SL %s for removed position %s: %s",
-                    sl_order_id, position.symbol, e,
+                    sl_order_id,
+                    position.symbol,
+                    e,
                 )
 
         self.position_tracker.remove_position(position.order_id)
@@ -2462,9 +2456,7 @@ class PeriodicReconciler:
                     symbol = position.symbol
                     base_asset = PositionReconciler._extract_base_asset(symbol)
                     side = getattr(position, "side", None)
-                    is_short = (
-                        side == PositionSide.SHORT or str(side).lower() == "short"
-                    )
+                    is_short = side == PositionSide.SHORT or str(side).lower() == "short"
 
                     balance = self.exchange.get_balance(base_asset)
                     position_gone = False
@@ -2520,9 +2512,7 @@ class PeriodicReconciler:
                             try:
                                 self.db_manager.close_position(db_pos_id)
                             except Exception as e:
-                                logger.warning(
-                                    "Failed to close DB position %s: %s", db_pos_id, e
-                                )
+                                logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
                 except Exception as e:
                     logger.warning(
                         "Margin position check failed for %s: %s",
@@ -2541,18 +2531,14 @@ class PeriodicReconciler:
             for _key, position in list(positions_snapshot.items()):
                 try:
                     side = getattr(position, "side", None)
-                    is_short = (
-                        side == PositionSide.SHORT or str(side).lower() == "short"
-                    )
+                    is_short = side == PositionSide.SHORT or str(side).lower() == "short"
                     if not is_short:
                         continue
                     entry_time = getattr(position, "entry_time", None)
                     if entry_time is None:
                         continue
 
-                    base_asset = PositionReconciler._extract_base_asset(
-                        position.symbol
-                    )
+                    base_asset = PositionReconciler._extract_base_asset(position.symbol)
                     cache_key = f"{position.symbol}_{_key}"
                     cached = self._interest_cache.get(cache_key)
                     if cached and (now - cached[1]) < interest_cache_ttl:
@@ -2589,9 +2575,7 @@ class PeriodicReconciler:
                     )
 
             # Evict stale cache entries for positions no longer tracked
-            active_keys = {
-                f"{pos.symbol}_{k}" for k, pos in positions_snapshot.items()
-            }
+            active_keys = {f"{pos.symbol}_{k}" for k, pos in positions_snapshot.items()}
             stale = [k for k in self._interest_cache if k not in active_keys]
             for k in stale:
                 del self._interest_cache[k]
@@ -2611,11 +2595,7 @@ class PeriodicReconciler:
 
                 current_size = getattr(position, "current_size", None)
                 original_size = getattr(position, "original_size", None)
-                if (
-                    current_size is not None
-                    and original_size is not None
-                    and original_size > 0
-                ):
+                if current_size is not None and original_size is not None and original_size > 0:
                     position_qty = qty * (current_size / original_size)
                 else:
                     position_qty = qty
@@ -2735,7 +2715,12 @@ class PeriodicReconciler:
                             pos_qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if current is not None and original is not None and original > 0 and pos_qty > 0:
+                            if (
+                                current is not None
+                                and original is not None
+                                and original > 0
+                                and pos_qty > 0
+                            ):
                                 held = pos_qty * (current / original)
                                 remaining = max(held - partial_fill, 0.0)
                                 position.current_size = original * (remaining / max(pos_qty, 1e-9))

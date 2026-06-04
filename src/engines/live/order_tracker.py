@@ -239,7 +239,9 @@ class OrderTracker:
                             )
                             if self.on_cancel:
                                 try:
-                                    self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
+                                    self.on_cancel(
+                                        order_id, tracked.symbol, tracked.last_filled_qty
+                                    )
                                 except Exception as cb_err:
                                     logger.error(
                                         "Cancel callback failed for force-removed order %s: %s",
@@ -554,7 +556,9 @@ class OrderTracker:
                 fill_delta = actual_filled - tracked.last_filled_qty
                 logger.warning(
                     "Order %s: reconciling missed fill delta %.8f before %s",
-                    order_id, fill_delta, status.value,
+                    order_id,
+                    fill_delta,
+                    status.value,
                 )
                 if self.on_partial_fill:
                     try:

@@ -33,7 +33,7 @@ Reference: docs/research/500_percent_annual_returns.md
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from src.strategies.components import (
     EnhancedRegimeDetector,
@@ -92,9 +92,9 @@ class FlatRiskManager(RiskManager):
 
     def calculate_position_size(
         self,
-        signal: "Signal",
+        signal: Signal,
         balance: float,
-        regime: Optional["RegimeContext"] = None,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> float:
         """Return balance * risk_fraction without confidence/strength scaling.
@@ -117,7 +117,7 @@ class FlatRiskManager(RiskManager):
         self,
         position: Any,
         current_data: Any,
-        regime: Optional["RegimeContext"] = None,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> bool:
         """Exit when unrealized loss exceeds stop_loss_pct."""
@@ -128,8 +128,8 @@ class FlatRiskManager(RiskManager):
     def get_stop_loss(
         self,
         entry_price: float,
-        signal: "Signal",
-        regime: Optional["RegimeContext"] = None,
+        signal: Signal,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> float:
         """Calculate stop loss based on fixed percentage."""

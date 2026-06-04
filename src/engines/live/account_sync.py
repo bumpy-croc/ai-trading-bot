@@ -69,9 +69,7 @@ class AccountSynchronizer:
         self._use_margin = use_margin
         self.last_sync_time: datetime | None = None
 
-    def sync_account_data(
-        self, force: bool = False, symbol: str | None = None
-    ) -> SyncResult:
+    def sync_account_data(self, force: bool = False, symbol: str | None = None) -> SyncResult:
         """
         Synchronize all account data from the exchange.
 
@@ -125,12 +123,8 @@ class AccountSynchronizer:
             # Balance/position sync remains skipped in margin mode because USDT
             # netAsset doesn't reflect true equity when shorts are open.
             if not self._use_margin:
-                balance_sync_result = self._sync_balances(
-                    exchange_data.get("balances", [])
-                )
-                position_sync_result = self._sync_positions(
-                    exchange_data.get("positions", [])
-                )
+                balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
+                position_sync_result = self._sync_positions(exchange_data.get("positions", []))
             else:
                 # Margin: reconcile the tracked balance against true net equity
                 # (assets minus liabilities), not USDT alone. Position sync stays
@@ -206,9 +200,7 @@ class AccountSynchronizer:
         # Flat iff net equity matches USDT cash (no position value or liability).
         usdt_bal = self.exchange.get_balance("USDT")
         usdt_total = (
-            float(usdt_bal.total)
-            if usdt_bal is not None and usdt_bal.total is not None
-            else None
+            float(usdt_bal.total) if usdt_bal is not None and usdt_bal.total is not None else None
         )
         flat_tolerance = max(1.0, equity * 0.01)
         if usdt_total is None or abs(equity - usdt_total) > flat_tolerance:
@@ -271,7 +263,7 @@ class AccountSynchronizer:
 
             if usdt_balance:
                 # Validate total is numeric
-                if usdt_balance.total is None or not isinstance(usdt_balance.total, (int, float)):
+                if usdt_balance.total is None or not isinstance(usdt_balance.total, int | float):
                     logger.error(
                         "Invalid USDT balance total: %s (type=%s) - skipping sync",
                         usdt_balance.total,
@@ -347,8 +339,8 @@ class AccountSynchronizer:
                     exchange_size = exchange_pos.size
                     db_size = db_pos["size"]
 
-                    if not isinstance(exchange_size, (int, float)) or not isinstance(
-                        db_size, (int, float)
+                    if not isinstance(exchange_size, int | float) or not isinstance(
+                        db_size, int | float
                     ):
                         logger.warning(
                             "Skipping position sync with non-numeric size: "

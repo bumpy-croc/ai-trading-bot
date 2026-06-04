@@ -166,7 +166,7 @@ class PerformanceTracker:
                 ts_converted = ts_converted.tz_localize(UTC)
             else:
                 ts_converted = ts_converted.tz_convert(UTC)
-            return ts_converted.to_pydatetime()
+            return ts_converted.floor("us").to_pydatetime()
         if timestamp.tzinfo is None:
             return timestamp.replace(tzinfo=UTC)
         return timestamp.astimezone(UTC)

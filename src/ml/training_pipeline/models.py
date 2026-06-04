@@ -262,6 +262,8 @@ def create_model(
         try:
             from src.ml.training_pipeline.models_tft import (
                 RECOMMENDED_HYPERPARAMETERS as TFT_HYPERPARAMS,
+            )
+            from src.ml.training_pipeline.models_tft import (
                 create_tft_model,
             )
         except ImportError:

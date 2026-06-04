@@ -166,6 +166,5 @@ class BinanceWSKeepaliveFilter(logging.Filter):
         elif record.exc_text:
             text = text + "\n" + record.exc_text
         return any(
-            all(marker in text for marker in group)
-            for group in self.KEEPALIVE_MARKER_GROUPS
+            all(marker in text for marker in group) for group in self.KEEPALIVE_MARKER_GROUPS
         )
