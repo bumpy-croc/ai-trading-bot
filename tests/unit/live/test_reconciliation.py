@@ -114,6 +114,62 @@ def reconciler(mock_exchange, mock_position_tracker, mock_db):
     )
 
 
+def test_estimate_position_notional_handles_decimal_fields(reconciler, mock_position_tracker):
+    """DB-loaded positions carry Decimal quantity/price/size; the notional
+    estimate (and the margin position check, same pattern) must coerce to
+    float, not raise 'unsupported operand type(s) for *: Decimal and float'
+    (#653 class — broke margin position reconciliation in prod)."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    mock_position_tracker.positions = {
+        "ETHUSDT:long": SimpleNamespace(
+            quantity=Decimal("0.5"),
+            entry_price=Decimal("2000"),
+            current_size=Decimal("0.5"),
+            original_size=Decimal("1.0"),
+        )
+    }
+
+    notional = reconciler._estimate_position_notional()  # must not raise
+
+    assert isinstance(notional, float)
+    # qty 0.5 * (current 0.5 / original 1.0) = 0.25; * price 2000 = 500.0
+    assert notional == pytest.approx(500.0)
+
+
+def test_verify_margin_position_handles_decimal_quantity(
+    mock_exchange, mock_position_tracker, mock_db
+):
+    """Startup margin position check on a DB-loaded (Decimal) short position must
+    not raise 'Decimal * float' on the `position_qty * 0.5` threshold (#653)."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    reconciler = PositionReconciler(
+        exchange_interface=mock_exchange,
+        position_tracker=mock_position_tracker,
+        db_manager=mock_db,
+        session_id=1,
+        use_margin=True,
+    )
+    reconciler._remove_phantom_position = MagicMock()
+    position = SimpleNamespace(
+        symbol="ETHUSDT",
+        side="short",
+        quantity=Decimal("1.0"),
+        current_size=Decimal("1.0"),
+        original_size=Decimal("1.0"),
+    )
+    # borrowed (float) 0.1 < position_qty 1.0 * 0.5 → external-partial-close branch
+    mock_exchange.get_margin_borrowed = MagicMock(return_value=0.1)
+    mock_exchange.get_balance.return_value = SimpleNamespace(total=0.1)
+
+    reconciler._verify_margin_position_exists(position, MagicMock())  # must not raise
+
+    reconciler._remove_phantom_position.assert_called_once()
+
+
 # ---------- Startup Reconciliation Tests ----------
 
 
