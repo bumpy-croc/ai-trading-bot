@@ -1322,6 +1322,28 @@ class LiveTradingEngine:
             self.live_execution_engine.session_id = self.trading_session_id
             self.live_execution_engine.strategy_name = self._strategy_name()
 
+        # Startup self-heal (#657): close any OPEN position in this session that
+        # already has a terminal Trade. Deliberately NOT gated behind
+        # enable_live_trading/exchange — the whole bug was that closing was
+        # paper-blind, so this must run in paper mode too. Pure DB reconciliation
+        # (no exchange calls), idempotent, and complements the atomic status flip
+        # now performed inside log_trade. Placed before account sync so the books
+        # are consistent before any exchange reconciliation reads them.
+        if self.trading_session_id is not None:
+            try:
+                healed = self.db_manager.heal_positions_with_terminal_trades(
+                    self.trading_session_id
+                )
+                if healed:
+                    logger.info(
+                        "🩹 Startup self-heal closed %d stale-OPEN position(s) with "
+                        "terminal trades (session #%s)",
+                        healed,
+                        self.trading_session_id,
+                    )
+            except Exception as heal_err:
+                logger.warning("Startup position self-heal failed (continuing): %s", heal_err)
+
         # Perform account synchronization if available
         self._pending_balance_correction = False
         self._pending_corrected_balance = None
@@ -3948,6 +3970,29 @@ class LiveTradingEngine:
                 self._log_trade(trade)
 
             if self.trading_session_id is not None:
+                # Pass the position's DB row id so log_trade flips the Position
+                # to CLOSED in the SAME transaction as the Trade insert. This is
+                # the single fix for #657: previously the closed Trade row was
+                # written but positions.status stayed OPEN (the dedicated CLOSED
+                # setters are all gated on enable_live_trading+exchange, so they
+                # were dead in paper mode), leaving positions permanently OPEN
+                # and re-closed on restart as phantom duplicate trades.
+                #
+                # db_position_id is set on the position object at open time
+                # (LivePositionTracker.open_position) and on recovery
+                # (_recover_active_positions). It may legitimately be None for a
+                # position that was never persisted (e.g. db logging failed, or
+                # tests without a DB); in that case log_trade falls back to its
+                # original behaviour (insert trade only, no status flip).
+                close_position_id = getattr(position, "db_position_id", None)
+                if close_position_id is None:
+                    logger.warning(
+                        "Closing %s (%s) without db_position_id — position row "
+                        "status will not be flipped to CLOSED; relying on startup "
+                        "self-heal to reconcile.",
+                        position.symbol,
+                        position.order_id,
+                    )
                 self.db_manager.log_trade(
                     symbol=position.symbol,
                     side=position.side.value,
@@ -3964,6 +4009,7 @@ class LiveTradingEngine:
                     entry_time=position.entry_time,
                     exit_time=datetime.now(UTC),
                     session_id=self.trading_session_id,
+                    position_id=close_position_id,
                     mfe=(metrics.mfe if metrics else None),
                     mae=(metrics.mae if metrics else None),
                     mfe_price=(metrics.mfe_price if metrics else None),
@@ -4564,6 +4610,33 @@ class LiveTradingEngine:
         try:
             if not self.trading_session_id:
                 return
+
+            # Self-heal BEFORE reloading (works in paper too, no exchange calls):
+            # close any OPEN position in this session that already has a terminal
+            # Trade. Such rows are the #657 footgun — historically a closed Trade
+            # was logged without flipping positions.status, so the stale-OPEN row
+            # gets reloaded here with its old stop_loss and re-closed, producing a
+            # phantom duplicate trade. Healing first means get_active_positions
+            # below cannot return them. Belt-and-suspenders alongside the atomic
+            # status flip now done in log_trade.
+            try:
+                healed = self.db_manager.heal_positions_with_terminal_trades(
+                    self.trading_session_id
+                )
+                if healed:
+                    logger.info(
+                        "🩹 Self-healed %d stale-OPEN position(s) with terminal trades "
+                        "before recovery (session #%s)",
+                        healed,
+                        self.trading_session_id,
+                    )
+            except Exception as heal_err:
+                # Never let a heal failure block recovery; the atomic log_trade
+                # flip remains the primary defense going forward.
+                logger.warning(
+                    "Position self-heal failed before recovery (continuing): %s",
+                    heal_err,
+                )
 
             # Get active positions from database
             db_positions = self.db_manager.get_active_positions(self.trading_session_id)
