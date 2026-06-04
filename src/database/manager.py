@@ -1729,6 +1729,150 @@ class DatabaseManager:
 
             return result
 
+    def reassign_open_positions_to_session(
+        self,
+        old_session_id: int,
+        new_session_id: int,
+        symbol: str | None = None,
+        strategy_name: str | None = None,
+    ) -> list[int]:
+        """Carry OPEN positions forward from a closed session to a new one (#668).
+
+        On a graceful restart the engine creates a NEW trading session but only
+        recovers the *balance* from the most recent inactive session. OPEN
+        positions stay bound to the OLD session via ``Position.session_id``, so
+        ``get_active_positions(new_session_id)`` filters them out and the
+        position is orphaned (still OPEN in the DB, invisible to the live
+        tracker). This re-points genuinely-OPEN positions — and their linked
+        orders — onto the new session so recovery can reload them.
+
+        Only ``PositionStatus.OPEN`` rows move. Positions closed atomically by
+        ``log_trade`` (#671) are already CLOSED and are left behind, so a
+        genuinely-closed position is never resurrected. The move is idempotent:
+        a second call finds nothing under ``old_session_id``.
+
+        Linked ``Order`` rows are re-pointed to ``new_session_id`` for journal
+        consistency, but the ``uq_order_internal_session`` unique constraint
+        (``internal_order_id`` + ``session_id``) is respected: if an order with
+        the same ``internal_order_id`` already exists under the new session,
+        that order is left under the old session. Position↔order linkage still
+        works via ``Order.position_id`` (the join ``get_active_positions`` uses),
+        so leaving the order behind does not strand the position.
+
+        Args:
+            old_session_id: Session the orphaned positions are currently bound to.
+            new_session_id: Active session to carry them forward onto.
+            symbol: Restrict the move to this symbol (avoids pulling positions
+                for a different symbol that shares the DB). When None, moves all.
+            strategy_name: Restrict the move to this strategy (avoids pulling a
+                different strategy's positions). When None, ignores strategy.
+
+        Returns:
+            The DB ids of the positions that were moved (empty if none matched).
+        """
+        if old_session_id == new_session_id:
+            # No-op: nothing to carry forward onto the same session.
+            return []
+
+        # Single WRITE-timeout transaction: position re-point, order re-point,
+        # and audit rows commit together (atomic — CODE.md Database & Transactions).
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
+            query = session.query(Position).filter(
+                Position.status == PositionStatus.OPEN,
+                Position.session_id == old_session_id,
+            )
+            if symbol is not None:
+                query = query.filter(Position.symbol == symbol)
+            if strategy_name is not None:
+                query = query.filter(Position.strategy_name == strategy_name)
+
+            # Row-level lock so a concurrent reconciler cannot mutate these
+            # positions mid-move (CODE.md: for_update in reconciliation queries).
+            # SQLite ignores FOR UPDATE (single-writer), Postgres honours it.
+            positions = query.with_for_update().all()
+
+            if not positions:
+                return []
+
+            moved_ids: list[int] = []
+            now = datetime.now(UTC)
+            for position in positions:
+                # Re-point linked orders first, skipping any that would collide
+                # with an existing (internal_order_id, new_session_id) row.
+                orders = session.query(Order).filter(Order.position_id == position.id).all()
+                for order in orders:
+                    collision = (
+                        session.query(Order.id)
+                        .filter(
+                            Order.internal_order_id == order.internal_order_id,
+                            Order.session_id == new_session_id,
+                            Order.id != order.id,
+                        )
+                        .first()
+                    )
+                    if collision is not None:
+                        # Leave this order under the old session — re-pointing it
+                        # would violate uq_order_internal_session. Linkage to the
+                        # position survives via Order.position_id.
+                        logger.warning(
+                            "Order #%s (internal_id=%s) for position #%s left under "
+                            "session #%s: re-point would collide with uq_order_internal_session "
+                            "in session #%s",
+                            order.id,
+                            order.internal_order_id,
+                            position.id,
+                            old_session_id,
+                            new_session_id,
+                        )
+                        continue
+                    order.session_id = new_session_id
+                    order.last_update = now
+
+                position.session_id = new_session_id
+                position.last_update = now
+                moved_ids.append(position.id)
+
+                # Immutable audit trail under the NEW session (where it now lives).
+                session.add(
+                    ReconciliationAuditEvent(
+                        session_id=new_session_id,
+                        entity_type="position",
+                        entity_id=position.id,
+                        field="session_id",
+                        old_value=str(old_session_id),
+                        new_value=str(new_session_id),
+                        reason=(
+                            f"Carried OPEN {position.symbol} position forward from "
+                            f"inactive session #{old_session_id} on clean restart (#668)"
+                        ),
+                        severity="HIGH",
+                    )
+                )
+
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    "Failed to reassign OPEN positions from session #%s to #%s: %s. "
+                    "Transaction rolled back.",
+                    old_session_id,
+                    new_session_id,
+                    e,
+                    exc_info=True,
+                )
+                raise
+
+            logger.info(
+                "Carried %d OPEN position(s) forward from inactive session #%s to "
+                "active session #%s (#668): %s",
+                len(moved_ids),
+                old_session_id,
+                new_session_id,
+                moved_ids,
+            )
+            return moved_ids
+
     def get_recent_trades(self, limit: int = 50, session_id: int | None = None) -> list[dict]:
         """Get recent trades."""
         with self.get_session() as session:
