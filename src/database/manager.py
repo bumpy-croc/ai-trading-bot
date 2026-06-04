@@ -2289,9 +2289,13 @@ class DatabaseManager:
             # Get all trades for this session
             trades = session.query(Trade).filter(Trade.session_id == session_id).all()
 
-            # Calculate current balance from initial balance + net PnL
+            # Calculate current balance from initial balance + net PnL.
+            # Coerce the Numeric initial_balance to float at the DB read boundary:
+            # _trade_net_pnl() returns float, and Decimal + float raises TypeError,
+            # which the caller swallows -> None -> the balance is silently lost and
+            # the session resets (CODE.md "Arithmetic & Financial Calculations").
             total_pnl = sum(_trade_net_pnl(trade) for trade in trades)
-            current_balance = trading_session.initial_balance + total_pnl
+            current_balance = float(trading_session.initial_balance) + total_pnl
 
             # Update the balance tracking and warn if persistence fails
             success = self.update_balance(
