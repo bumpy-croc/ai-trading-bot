@@ -1367,6 +1367,10 @@ class LiveTradingEngine:
                     reassign_err,
                     exc_info=True,
                 )
+            finally:
+                # Clear so a later start()/stop()/start() re-entry cannot re-trigger a
+                # stale-session reassign (#668, P3).
+                self._recovered_inactive_session_id = None
 
         # Startup self-heal (#657): close any OPEN position in this session that
         # already has a terminal Trade. Deliberately NOT gated behind
@@ -4555,23 +4559,27 @@ class LiveTradingEngine:
                 return None
 
             logger.info("🔍 Found %s session #%s", source, session_id)
+
+            # Clean restart (inactive session): remember it so start() can carry its
+            # OPEN positions forward into the new session — INDEPENDENT of whether a
+            # positive balance was recovered. A fully-liquidated session (balance 0)
+            # can still hold an OPEN position; gating this on balance > 0 would
+            # re-orphan it (#668, P2). The active/crash path reuses the session
+            # directly below and never needs this.
+            if source != "active":
+                self._recovered_inactive_session_id = session_id
+
             recovered_balance = self.db_manager.recover_last_balance(session_id)
             if recovered_balance and recovered_balance > 0:
-                # For crash recovery (active session), reuse the existing session ID so
-                # trades continue to be attributed to the same session row.
-                # For clean restarts (inactive session), only recover the balance — a new
-                # session will be created below, preventing writes to a closed session.
+                # Crash recovery (active session): reuse the existing session ID so
+                # trades stay attributed to the same session row. Clean restarts create
+                # a new session below; their OPEN positions are carried forward via
+                # _recovered_inactive_session_id (set above).
                 if source == "active":
                     self.trading_session_id = session_id
                     # Wire session context to execution engine so journaling works
                     self.live_execution_engine.session_id = session_id
                     self.live_execution_engine.strategy_name = self._strategy_name()
-                else:
-                    # Clean restart: remember the inactive session so start() can
-                    # carry its OPEN positions forward into the new session once
-                    # the new session id exists. Without this the OPEN position
-                    # stays bound to this closed session and is orphaned (#668).
-                    self._recovered_inactive_session_id = session_id
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,
