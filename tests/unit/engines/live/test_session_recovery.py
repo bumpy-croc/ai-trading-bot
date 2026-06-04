@@ -142,6 +142,36 @@ def test_recovery_returns_none_when_session_found_but_no_balance():
 
 
 @pytest.mark.fast
+def test_inactive_session_remembered_even_when_balance_zero():
+    """#668 P2: a fully-liquidated inactive session (balance 0) still gets its id
+    remembered so start() carries its OPEN positions forward — gating the
+    remember on balance > 0 would re-orphan them."""
+    engine = make_engine()
+    engine.db_manager.get_active_session_id = MagicMock(return_value=None)
+    engine.db_manager.get_last_session_id = MagicMock(return_value=42)
+    engine.db_manager.recover_last_balance = MagicMock(return_value=0.0)
+
+    result = engine._recover_existing_session()
+
+    assert result is None  # no positive balance recovered
+    assert engine._recovered_inactive_session_id == 42  # but the session is remembered
+
+
+@pytest.mark.fast
+def test_active_session_does_not_set_recovered_inactive_id():
+    """The active/crash-recovery path reuses the session directly and must NOT set
+    _recovered_inactive_session_id (#668 selectivity)."""
+    engine = make_engine()
+    engine.db_manager.get_active_session_id = MagicMock(return_value=77)
+    engine.db_manager.recover_last_balance = MagicMock(return_value=850.0)
+
+    engine._recover_existing_session()
+
+    assert engine._recovered_inactive_session_id is None
+    assert engine.trading_session_id == 77
+
+
+@pytest.mark.fast
 def test_paper_mode_stop_preserves_open_positions():
     """In paper trading, stop() must NOT force-close positions."""
     engine = make_engine(enable_live_trading=False)
