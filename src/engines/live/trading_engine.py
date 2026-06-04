@@ -4448,7 +4448,7 @@ class LiveTradingEngine:
             session_id = self.db_manager.get_active_session_id()
             source = "active"
 
-            # Fallback: most recent matching session within 24h (clean-restart path).
+            # Fallback: most recent matching session within 7 days (clean-restart path).
             if session_id is None:
                 strategy = self._strategy_name()
                 session_id = self.db_manager.get_last_session_id(

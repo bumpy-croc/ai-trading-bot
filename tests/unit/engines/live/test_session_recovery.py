@@ -62,7 +62,7 @@ def make_engine(enable_live_trading: bool = False) -> LiveTradingEngine:
 
 @pytest.mark.fast
 def test_recovery_falls_back_to_recent_inactive_session():
-    """No active session → falls back to most-recent session within 24 hours.
+    """No active session → falls back to most-recent session within 7 days.
 
     Critically: trading_session_id must remain None so start() creates a
     fresh session. Reusing the closed session ID would cause every balance
