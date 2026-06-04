@@ -644,9 +644,7 @@ class DatabaseManager:
                 trading_session.win_rate = (
                     (len(winning_trades) / len(trades) * 100) if trades else 0
                 )
-                trading_session.total_pnl = sum(
-                    _trade_net_pnl(t) for t in trades
-                )
+                trading_session.total_pnl = sum(_trade_net_pnl(t) for t in trades)
 
                 # Calculate max drawdown from account history
                 account_history = (
@@ -717,6 +715,7 @@ class DatabaseManager:
         mfe_time: datetime | None = None,
         mae_time: datetime | None = None,
         margin_interest_cost: float | None = None,
+        position_id: int | None = None,
     ) -> int:
         """Logs a completed trade to the database.
 
@@ -746,6 +745,15 @@ class DatabaseManager:
             mae_price: Price at MAE
             mfe_time: Timestamp of MFE
             mae_time: Timestamp of MAE
+            position_id: Database ID of the Position this trade closes. When
+                provided, the matching Position row is flipped to CLOSED in the
+                SAME transaction as the Trade insert (atomic close). The new
+                Trade's ``position_id`` FK is also set. When None (the default),
+                behaviour is unchanged: only the Trade is inserted and no
+                position status is touched. This keyword keeps every existing
+                caller backward-compatible while letting the live/paper exit path
+                close the position atomically (fixes #657: positions left OPEN in
+                paper mode, causing phantom duplicate trades on restart).
 
         Returns:
             Trade ID
@@ -793,17 +801,48 @@ class DatabaseManager:
                 confidence_score=confidence_score,
                 strategy_config=strategy_config,
                 session_id=session_id or self._current_session_id,
+                position_id=position_id,
                 mfe=mfe,
                 mae=mae,
                 mfe_price=mfe_price,
                 mae_price=mae_price,
                 mfe_time=mfe_time,
                 mae_time=mae_time,
-                margin_interest_cost=margin_interest_cost if margin_interest_cost is not None else 0.0,
+                margin_interest_cost=(
+                    margin_interest_cost if margin_interest_cost is not None else 0.0
+                ),
             )
 
             session.add(trade)
             try:
+                # When closing a tracked position, flip its status to CLOSED in
+                # the SAME transaction as the Trade insert so the two coupled
+                # writes commit together or not at all (CODE.md "Database &
+                # Transactions": coupled fields in a single transaction). This
+                # mirrors the atomic Trade-insert + Position-close block in
+                # atomic_position_reconciliation, minus the balance update (the
+                # caller owns balance via atomic_balance_update). Runs in BOTH
+                # paper and live mode — the #657 bug was that closing was
+                # paper-blind, so positions accumulated as permanently OPEN.
+                if position_id is not None:
+                    position = session.query(Position).filter(Position.id == position_id).first()
+                    if position is not None:
+                        position.status = PositionStatus.CLOSED
+                        position.current_price = exit_price
+                        position.last_update = exit_time
+                        position.unrealized_pnl = pnl
+                        position.unrealized_pnl_percent = pnl_percent
+                    else:
+                        # Position vanished (e.g. already purged). Keep the
+                        # trade — losing the audit row is worse than a missing
+                        # status flip — but record the inconsistency loudly.
+                        logger.warning(
+                            "log_trade: position_id=%s not found for %s; "
+                            "trade inserted without atomic status flip.",
+                            position_id,
+                            symbol,
+                        )
+
                 session.commit()
             except IntegrityError as ie:
                 # Rollback on integrity errors (duplicate keys, constraint violations)
@@ -813,7 +852,10 @@ class DatabaseManager:
                 )
                 raise
             except Exception as e:
-                # Rollback on any other database errors
+                # Rollback on any other database errors. Because the Trade insert
+                # and the Position status flip share this session, the rollback
+                # discards BOTH — neither the orphaned trade nor a half-closed
+                # position can survive a failure (atomic both-or-neither).
                 session.rollback()
                 logger.error(
                     f"Failed to log trade for {symbol}: {e}. Transaction rolled back.",
@@ -1298,6 +1340,75 @@ class DatabaseManager:
                 )
 
             return fixes_applied
+
+    def heal_positions_with_terminal_trades(self, session_id: int | None = None) -> int:
+        """Close OPEN positions that already have a matching terminal Trade.
+
+        Self-heals the #657 inconsistency: a position whose exit Trade was logged
+        but whose ``status`` was never flipped to CLOSED (the historical paper-mode
+        bug). Such a row, if left OPEN, is reloaded by ``_recover_active_positions``
+        on restart and re-closed — producing a phantom duplicate trade. This closes
+        any OPEN position that is the FK target of at least one Trade.
+
+        Paper-safe: pure DB reconciliation, no exchange calls and no
+        ``enable_live_trading`` gating, so it runs identically in paper and live
+        mode. Idempotent — a second call finds nothing left to close.
+
+        Args:
+            session_id: Restrict the heal to one trading session. When None, uses
+                the current session if set, otherwise heals across all sessions.
+
+        Returns:
+            Number of positions transitioned OPEN -> CLOSED.
+        """
+        effective_session_id = session_id or self._current_session_id
+
+        with self.get_session() as session:
+            # Subquery: position IDs that are the FK target of any Trade. A Trade
+            # row only exists for a completed (terminal) exit, so its presence is
+            # proof the position should be CLOSED.
+            closed_position_ids = (
+                session.query(Trade.position_id)
+                .filter(Trade.position_id.isnot(None))
+                .distinct()
+                .subquery()
+            )
+
+            query = session.query(Position).filter(
+                Position.status == PositionStatus.OPEN,
+                Position.id.in_(session.query(closed_position_ids.c.position_id)),
+            )
+            if effective_session_id is not None:
+                query = query.filter(Position.session_id == effective_session_id)
+
+            stale_positions = query.all()
+            healed = 0
+            now = datetime.now(UTC)
+            for position in stale_positions:
+                position.status = PositionStatus.CLOSED
+                position.last_update = now
+                healed += 1
+
+            if healed == 0:
+                return 0
+
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to heal positions with terminal trades: {e}. "
+                    "Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
+
+            logger.info(
+                "Startup self-heal: closed %d OPEN position(s) that already had a "
+                "terminal trade (prevents phantom duplicate trades on recovery).",
+                healed,
+            )
+            return healed
 
     def get_trades_by_symbol_and_date(
         self, symbol: str, start_date: datetime, session_id: int | None = None
@@ -2003,9 +2114,7 @@ class DatabaseManager:
             trades = session.query(Trade).filter(Trade.session_id == session_id).all()
 
             # Calculate current balance from initial balance + net PnL
-            total_pnl = sum(
-                _trade_net_pnl(trade) for trade in trades
-            )
+            total_pnl = sum(_trade_net_pnl(trade) for trade in trades)
             current_balance = trading_session.initial_balance + total_pnl
 
             # Update the balance tracking and warn if persistence fails
