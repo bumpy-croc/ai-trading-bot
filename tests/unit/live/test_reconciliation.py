@@ -114,6 +114,30 @@ def reconciler(mock_exchange, mock_position_tracker, mock_db):
     )
 
 
+def test_estimate_position_notional_handles_decimal_fields(reconciler, mock_position_tracker):
+    """DB-loaded positions carry Decimal quantity/price/size; the notional
+    estimate (and the margin position check, same pattern) must coerce to
+    float, not raise 'unsupported operand type(s) for *: Decimal and float'
+    (#653 class — broke margin position reconciliation in prod)."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    mock_position_tracker.positions = {
+        "ETHUSDT:long": SimpleNamespace(
+            quantity=Decimal("0.5"),
+            entry_price=Decimal("2000"),
+            current_size=Decimal("0.5"),
+            original_size=Decimal("1.0"),
+        )
+    }
+
+    notional = reconciler._estimate_position_notional()  # must not raise
+
+    assert isinstance(notional, float)
+    # qty 0.5 * (current 0.5 / original 1.0) = 0.25; * price 2000 = 500.0
+    assert notional == pytest.approx(500.0)
+
+
 # ---------- Startup Reconciliation Tests ----------
 
 
