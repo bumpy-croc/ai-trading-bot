@@ -145,6 +145,31 @@ class TestReassignOpenPositions:
         assert _position_session(db, already_new) == new  # already-current untouched
         assert _position_session(db, other_symbol) == oldest  # co-tenant symbol not pulled in
 
+    def test_old_session_none_adopts_null_session_orphan(self):
+        """old=None must also adopt an OPEN position whose session_id is NULL
+        (the column is nullable). `session_id != new` ALONE drops NULL rows
+        (NULL <> x → UNKNOWN → excluded), so the explicit `IS NULL` in the
+        filter is load-bearing — this guards against a future "simplification"
+        that would silently re-orphan a NULL-session position (#668)."""
+        db = _make_db()
+        new = _new_session(db)
+        orphan = _open_position(db, new, entry_order_id="exch-null")
+        # Strand it: NULL session_id (no owning session).
+        with db.get_session() as session:
+            session.query(Position).filter(Position.id == orphan).first().session_id = None
+            session.commit()
+        assert _position_session(db, orphan) is None
+
+        moved = db.reassign_open_positions_to_session(
+            old_session_id=None,
+            new_session_id=new,
+            symbol="BTCUSDT",
+            strategy_name="TestStrategy",
+        )
+
+        assert moved == [orphan]
+        assert _position_session(db, orphan) == new
+
     def test_closed_position_is_not_carried_forward(self):
         """A position CLOSED under the old session (e.g. by #671's atomic close)
         must NOT be resurrected onto the new session."""
