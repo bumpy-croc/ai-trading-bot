@@ -1829,12 +1829,15 @@ class PositionReconciler:
             # get_balance returns AccountBalance with total=netAsset in margin mode
             balance = self.exchange.get_balance(base_asset)
 
-            # Scale tracked quantity by partial exit ratio
-            qty = getattr(position, "quantity", 0) or 0.0
+            # Scale tracked quantity by partial exit ratio. Coerce to float —
+            # DB-loaded positions carry Decimal (Numeric) fields, and the
+            # "position_qty * 0.5" comparisons below raise "Decimal * float"
+            # otherwise (#653 class; broke startup margin reconciliation).
+            qty = float(getattr(position, "quantity", 0) or 0.0)
             current_size = getattr(position, "current_size", None)
             original_size = getattr(position, "original_size", None)
-            if current_size is not None and original_size is not None and original_size > 0:
-                position_qty = qty * (current_size / original_size)
+            if current_size is not None and original_size is not None and float(original_size) > 0:
+                position_qty = qty * (float(current_size) / float(original_size))
             else:
                 position_qty = qty
 
@@ -1947,15 +1950,18 @@ class PositionReconciler:
         total = 0.0
         positions = self.position_tracker.positions
         for position in positions.values():
-            # Use quantity (actual asset amount), not size (balance fraction)
-            qty = getattr(position, "quantity", None) or 0.0
-            price = getattr(position, "entry_price", 0)
+            # Use quantity (actual asset amount), not size (balance fraction).
+            # Coerce to float — DB-loaded positions carry Decimal (Numeric)
+            # fields, and mixing Decimal with the float `total`/price below
+            # raises "unsupported operand type(s) for *" (#653 class).
+            qty = float(getattr(position, "quantity", None) or 0.0)
+            price = float(getattr(position, "entry_price", 0) or 0.0)
             if qty > 0 and price > 0:
                 # Scale by current_size/original_size to account for partial exits
                 current = getattr(position, "current_size", None)
                 original = getattr(position, "original_size", None)
-                if current is not None and original is not None and original > 0:
-                    qty = qty * (current / original)
+                if current is not None and original is not None and float(original) > 0:
+                    qty = qty * (float(current) / float(original))
                 total += qty * price
         return total
 
@@ -2077,8 +2083,12 @@ class PositionReconciler:
         if exit_price is None or exit_price <= 0:
             return
 
-        entry_price = getattr(position, "entry_price", 0)
-        qty = getattr(position, "quantity", 0) or 0.0
+        # Coerce to float — DB-loaded positions carry Decimal (Numeric) fields,
+        # and "(entry_price - exit_price) * qty" below raises "Decimal - float"
+        # otherwise (#653 class), silently failing to realize P&L on a margin
+        # close so the session balance drifts.
+        entry_price = float(getattr(position, "entry_price", 0) or 0.0)
+        qty = float(getattr(position, "quantity", 0) or 0.0)
         if entry_price <= 0 or qty <= 0:
             return
 
@@ -2087,8 +2097,8 @@ class PositionReconciler:
         # P&L on the full original quantity, doubling the realized amount.
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current is not None and original is not None and original > 0:
-            qty = qty * (current / original)
+        if current is not None and original is not None and float(original) > 0:
+            qty = qty * (float(current) / float(original))
 
         # Calculate realized P&L (long: sell higher = profit)
         side = getattr(position, "side", "long")
@@ -2469,12 +2479,15 @@ class PeriodicReconciler:
                     balance = self.exchange.get_balance(base_asset)
                     position_gone = False
 
-                    # Scale tracked quantity by partial exit ratio
-                    qty = getattr(position, "quantity", None) or 0.0
+                    # Scale tracked quantity by partial exit ratio. Coerce to
+                    # float — DB-loaded positions carry Decimal (Numeric) fields,
+                    # and "pos_qty * 0.5" below raises "Decimal * float" otherwise
+                    # (#653 class; broke margin position reconciliation in prod).
+                    qty = float(getattr(position, "quantity", None) or 0.0)
                     cur = getattr(position, "current_size", None)
                     orig = getattr(position, "original_size", None)
-                    if cur is not None and orig is not None and orig > 0:
-                        pos_qty = qty * (cur / orig)
+                    if cur is not None and orig is not None and float(orig) > 0:
+                        pos_qty = qty * (float(cur) / float(orig))
                     else:
                         pos_qty = qty
 
