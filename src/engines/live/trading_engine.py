@@ -381,6 +381,12 @@ class LiveTradingEngine:
             )
             raise RuntimeError("Database connection required. Service stopped.") from e
         self.trading_session_id: int | None = None
+        # On a clean restart the engine recovers balance from the most recent
+        # inactive session but creates a NEW session. This holds that old
+        # session id so start() can carry its OPEN positions forward into the
+        # new session (#668); None when recovery took the active/crash path or
+        # found no recent session.
+        self._recovered_inactive_session_id: int | None = None
 
         # Initialize dynamic risk manager after database is available
         if self.enable_dynamic_risk:
@@ -1321,6 +1327,46 @@ class LiveTradingEngine:
             # Wire session_id and strategy_name to execution engine for order journaling
             self.live_execution_engine.session_id = self.trading_session_id
             self.live_execution_engine.strategy_name = self._strategy_name()
+
+        # Carry OPEN positions forward on a clean restart (#668). The inactive
+        # session recovered above (balance only) still owns any OPEN position via
+        # Position.session_id, so _recover_active_positions() at line ~1281 saw a
+        # None session id and loaded nothing — the position would be orphaned.
+        # Re-point those positions onto the new session, then reload them into the
+        # live tracker. Ordering: reassign → recover-into-tracker (which self-heals
+        # first) → the heal + exchange reconciliation below re-verify the position
+        # and its server-side stop-loss against the exchange.
+        if self._recovered_inactive_session_id is not None and self.trading_session_id is not None:
+            try:
+                moved_ids = self.db_manager.reassign_open_positions_to_session(
+                    old_session_id=self._recovered_inactive_session_id,
+                    new_session_id=self.trading_session_id,
+                    symbol=self._active_symbol,
+                    strategy_name=self._strategy_name(),
+                )
+                if moved_ids:
+                    logger.info(
+                        "🔁 Carried %d OPEN position(s) forward from inactive session "
+                        "#%s into new session #%s; reloading into tracker",
+                        len(moved_ids),
+                        self._recovered_inactive_session_id,
+                        self.trading_session_id,
+                    )
+                    # Reload now that the rows belong to the new session. Safe and
+                    # idempotent if it already ran (empty session ⇒ no-op).
+                    self._recover_active_positions()
+            except Exception as reassign_err:
+                # A failure here must not abort startup, but it is capital-critical
+                # (an OPEN position stays orphaned), so log loudly for alerting.
+                logger.critical(
+                    "Failed to carry OPEN positions forward from inactive session "
+                    "#%s into session #%s (positions may be orphaned — MANUAL "
+                    "RECONCILIATION REQUIRED): %s",
+                    self._recovered_inactive_session_id,
+                    self.trading_session_id,
+                    reassign_err,
+                    exc_info=True,
+                )
 
         # Startup self-heal (#657): close any OPEN position in this session that
         # already has a terminal Trade. Deliberately NOT gated behind
@@ -4520,6 +4566,12 @@ class LiveTradingEngine:
                     # Wire session context to execution engine so journaling works
                     self.live_execution_engine.session_id = session_id
                     self.live_execution_engine.strategy_name = self._strategy_name()
+                else:
+                    # Clean restart: remember the inactive session so start() can
+                    # carry its OPEN positions forward into the new session once
+                    # the new session id exists. Without this the OPEN position
+                    # stays bound to this closed session and is orphaned (#668).
+                    self._recovered_inactive_session_id = session_id
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,
