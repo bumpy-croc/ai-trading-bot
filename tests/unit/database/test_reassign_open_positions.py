@@ -114,6 +114,37 @@ class TestReassignOpenPositions:
         # ...and no longer under the old one.
         assert all(p["id"] != position_id for p in db.get_active_positions(old))
 
+    def test_old_session_none_adopts_all_orphaned_positions(self):
+        """old_session_id=None adopts EVERY orphaned OPEN position for the
+        symbol/strategy (any session != new) — including one stranded under an
+        OLDER session than the most-recent (an intervening flat restart left it
+        two sessions back: the live-prod-orphan case, #668)."""
+        db = _make_db()
+        oldest = _new_session(db)  # holds the real orphan
+        intervening = _new_session(db)  # a later, flat session
+        new = _new_session(db)  # the current active session
+
+        orphan_oldest = _open_position(db, oldest, entry_order_id="exch-oldest")
+        orphan_mid = _open_position(db, intervening, entry_order_id="exch-mid")
+        closed = _open_position(db, oldest, entry_order_id="exch-closed")
+        _close_position(db, closed)
+        already_new = _open_position(db, new, entry_order_id="exch-new")
+        other_symbol = _open_position(db, oldest, symbol="ETHUSDT", entry_order_id="exch-eth")
+
+        moved = db.reassign_open_positions_to_session(
+            old_session_id=None,
+            new_session_id=new,
+            symbol="BTCUSDT",
+            strategy_name="TestStrategy",
+        )
+
+        assert set(moved) == {orphan_oldest, orphan_mid}  # both orphans, across two sessions
+        assert _position_session(db, orphan_oldest) == new
+        assert _position_session(db, orphan_mid) == new
+        assert _position_session(db, closed) == oldest  # CLOSED not resurrected
+        assert _position_session(db, already_new) == new  # already-current untouched
+        assert _position_session(db, other_symbol) == oldest  # co-tenant symbol not pulled in
+
     def test_closed_position_is_not_carried_forward(self):
         """A position CLOSED under the old session (e.g. by #671's atomic close)
         must NOT be resurrected onto the new session."""

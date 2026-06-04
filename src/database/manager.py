@@ -1743,7 +1743,7 @@ class DatabaseManager:
 
     def reassign_open_positions_to_session(
         self,
-        old_session_id: int,
+        old_session_id: int | None,
         new_session_id: int,
         symbol: str | None = None,
         strategy_name: str | None = None,
@@ -1782,17 +1782,30 @@ class DatabaseManager:
         Returns:
             The DB ids of the positions that were moved (empty if none matched).
         """
-        if old_session_id == new_session_id:
+        if old_session_id is not None and old_session_id == new_session_id:
             # No-op: nothing to carry forward onto the same session.
             return []
 
         # Single WRITE-timeout transaction: position re-point, order re-point,
         # and audit rows commit together (atomic — CODE.md Database & Transactions).
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
-            query = session.query(Position).filter(
-                Position.status == PositionStatus.OPEN,
-                Position.session_id == old_session_id,
-            )
+            query = session.query(Position).filter(Position.status == PositionStatus.OPEN)
+            if old_session_id is None:
+                # Adopt EVERY orphaned OPEN position for this symbol/strategy: any
+                # not already under the new session — INCLUDING positions stranded
+                # under an OLDER inactive session than the one whose balance we
+                # recovered (e.g. an intervening flat restart left the position
+                # behind two sessions back). Phantom-safe: the startup heal (#657)
+                # closes any carried-forward position that has a terminal Trade, and
+                # reconcile_startup exchange-verifies the rest (#668).
+                query = query.filter(
+                    sa.or_(
+                        Position.session_id != new_session_id,
+                        Position.session_id.is_(None),
+                    )
+                )
+            else:
+                query = query.filter(Position.session_id == old_session_id)
             if symbol is not None:
                 query = query.filter(Position.symbol == symbol)
             if strategy_name is not None:
@@ -1809,6 +1822,10 @@ class DatabaseManager:
             moved_ids: list[int] = []
             now = datetime.now(UTC)
             for position in positions:
+                # Capture the original session BEFORE re-pointing — old_session_id
+                # may be None (adopting all orphans), so the position's own
+                # session_id is the source of truth for the audit + logs.
+                original_session_id = position.session_id
                 # Re-point linked orders first, skipping any that would collide
                 # with an existing (internal_order_id, new_session_id) row.
                 orders = session.query(Order).filter(Order.position_id == position.id).all()
@@ -1833,7 +1850,7 @@ class DatabaseManager:
                             order.id,
                             order.internal_order_id,
                             position.id,
-                            old_session_id,
+                            original_session_id,
                             new_session_id,
                         )
                         continue
@@ -1851,11 +1868,11 @@ class DatabaseManager:
                         entity_type="position",
                         entity_id=position.id,
                         field="session_id",
-                        old_value=str(old_session_id),
+                        old_value=str(original_session_id),
                         new_value=str(new_session_id),
                         reason=(
                             f"Carried OPEN {position.symbol} position forward from "
-                            f"inactive session #{old_session_id} on clean restart (#668)"
+                            f"inactive session #{original_session_id} on clean restart (#668)"
                         ),
                         severity="HIGH",
                     )
