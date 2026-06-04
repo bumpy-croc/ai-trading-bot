@@ -1272,7 +1272,12 @@ class LiveTradingEngine:
         if self.resume_from_last_balance:
             recovered_balance = self._recover_existing_session()
             if recovered_balance is not None:
-                self.current_balance = recovered_balance
+                # _recover_existing_session() already coerced this to a finite float
+                # and rejected corrupt (non-finite) state. The float() here is a
+                # cheap defensive invariant so current_balance never becomes a
+                # Decimal — which would break downstream float arithmetic such as
+                # _print_final_stats (CODE.md "Arithmetic & Financial Calculations").
+                self.current_balance = float(recovered_balance)
                 logger.info(
                     "💾 Recovered balance from previous session: $%.2f",
                     recovered_balance,
@@ -4570,6 +4575,21 @@ class LiveTradingEngine:
                 self._recovered_inactive_session_id = session_id
 
             recovered_balance = self.db_manager.recover_last_balance(session_id)
+            # Sanitize BEFORE the positivity filter below. recover_last_balance()
+            # can return a Decimal (Numeric column), and corrupt state can be
+            # non-finite — float(Decimal('Infinity'))/NaN -> inf/nan. The `> 0`
+            # check would otherwise silently drop -inf/NaN to None (engine starts
+            # on the default balance and may trade) or raise on Decimal('NaN').
+            # Coerce to a float invariant and fail fast on non-finite: a corrupt
+            # persisted balance must halt startup, never feed position sizing
+            # (CODE.md "Arithmetic & Financial Calculations").
+            if recovered_balance is not None:
+                recovered_balance = float(recovered_balance)
+                if not math.isfinite(recovered_balance):
+                    raise ValueError(
+                        f"Recovered balance is not finite ({recovered_balance!r}); "
+                        "refusing to start on corrupt persisted state."
+                    )
             if recovered_balance and recovered_balance > 0:
                 # Crash recovery (active session): reuse the existing session ID so
                 # trades stay attributed to the same session row. Clean restarts create
@@ -4590,6 +4610,11 @@ class LiveTradingEngine:
 
             logger.warning("⚠️  Session #%s found but no balance to recover", session_id)
             return None
+        except ValueError:
+            # Corrupt-balance invariant violation — must not be swallowed by the
+            # broad handler below (that would silently fall back to the default
+            # balance). Propagate so startup fails fast.
+            raise
         except Exception as e:
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
             return None
