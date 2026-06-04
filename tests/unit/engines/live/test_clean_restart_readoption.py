@@ -236,7 +236,7 @@ class TestCleanRestartCarriesOpenPositionForward:
         """The carry-forward is scoped to the active symbol + strategy so a
         co-tenant symbol/strategy in the same DB is not pulled in."""
         db = DatabaseManager("sqlite:///:memory:")
-        old_session_id, _ = _seed_inactive_session_with_open_position(db)
+        _seed_inactive_session_with_open_position(db)
         engine = _make_live_engine_with_real_db(db)
         engine.db_manager.reassign_open_positions_to_session = MagicMock(
             wraps=engine.db_manager.reassign_open_positions_to_session
@@ -246,7 +246,10 @@ class TestCleanRestartCarriesOpenPositionForward:
 
         engine.db_manager.reassign_open_positions_to_session.assert_called_once()
         kwargs = engine.db_manager.reassign_open_positions_to_session.call_args.kwargs
-        assert kwargs["old_session_id"] == old_session_id
+        # old_session_id=None ⇒ adopt ALL orphaned OPEN positions (any session != new),
+        # not just the recovered session — catches a position stranded under an OLDER
+        # session by an intervening flat restart (the live-prod-orphan case, #668).
+        assert kwargs["old_session_id"] is None
         assert kwargs["new_session_id"] == engine.trading_session_id
         assert kwargs["symbol"] == SYMBOL
         assert kwargs["strategy_name"] == STRATEGY_NAME
