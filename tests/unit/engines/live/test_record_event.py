@@ -8,7 +8,7 @@ strategy/data-provider wiring required by the real constructor.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -145,3 +145,37 @@ class TestRecordEvent:
         )
 
         engine._send_alert.assert_called_once()
+
+
+class TestSendAlert:
+    """_send_alert must report the REAL delivery outcome so alert_sent is honest:
+    True only on a 2xx webhook response; False when unconfigured, on a non-2xx
+    status (requests does not raise on those), or on a network exception."""
+
+    @staticmethod
+    def _engine(webhook: str | None) -> LiveTradingEngine:
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.alert_webhook_url = webhook
+        return engine
+
+    def test_no_webhook_returns_false(self):
+        assert self._engine(None)._send_alert("hi") is False
+
+    def test_2xx_returns_true(self):
+        engine = self._engine("http://hook.test")
+        with patch("requests.post") as post:
+            post.return_value.raise_for_status.return_value = None  # 2xx
+            assert engine._send_alert("hi") is True
+            post.assert_called_once()
+
+    def test_non_2xx_returns_false(self):
+        """A 4xx/5xx response (raise_for_status raises) means NOT delivered."""
+        engine = self._engine("http://hook.test")
+        with patch("requests.post") as post:
+            post.return_value.raise_for_status.side_effect = RuntimeError("500")
+            assert engine._send_alert("hi") is False
+
+    def test_post_exception_returns_false(self):
+        engine = self._engine("http://hook.test")
+        with patch("requests.post", side_effect=RuntimeError("network down")):
+            assert engine._send_alert("hi") is False
