@@ -4431,9 +4431,11 @@ class LiveTradingEngine:
             alert_sent = False
             alert_method: str | None = None
             if alert:
-                self._send_alert(message)
-                alert_sent = True
-                alert_method = "webhook"
+                # Record the real OUTCOME, not just intent: _send_alert returns
+                # False when no webhook is configured or the POST fails, so
+                # alert_sent reflects whether an operator was actually paged.
+                alert_sent = bool(self._send_alert(message))
+                alert_method = "webhook" if alert_sent else None
 
             self.db_manager.log_event(
                 event_type=event_type,
@@ -4450,10 +4452,17 @@ class LiveTradingEngine:
             # Observability must never propagate into the trading loop.
             logger.warning("observability event failed: %s", e)
 
-    def _send_alert(self, message: str):
-        """Send trading alert (webhook, email, etc.)"""
+    def _send_alert(self, message: str) -> bool:
+        """Send a trading alert (webhook).
+
+        Returns True only if an alert was actually dispatched (a webhook POST
+        was attempted without raising); False when no webhook is configured or
+        the POST failed. Callers persist this as the real ``alert_sent`` so
+        operators aren't misled into thinking a critical event paged them when
+        it didn't.
+        """
         if not self.alert_webhook_url:
-            return
+            return False
 
         try:
             import requests
@@ -4463,8 +4472,10 @@ class LiveTradingEngine:
                 "timestamp": datetime.now(UTC).isoformat(),
             }
             requests.post(self.alert_webhook_url, json=payload, timeout=10)
+            return True
         except Exception as e:
             logger.error("Failed to send alert: %s", e, exc_info=True)
+            return False
 
     def _sleep_with_interrupt(self, seconds: float):
         """Sleep in small increments to allow for interrupt and float seconds"""

@@ -76,6 +76,7 @@ class TestRecordEvent:
     def test_alert_true_sends_alert_and_sets_flags(self):
         """alert=True dispatches the webhook and records alert_sent/alert_method."""
         engine = _make_engine()
+        engine._send_alert = MagicMock(return_value=True)  # webhook delivered
 
         engine._record_event(
             EventType.ALERT,
@@ -91,6 +92,27 @@ class TestRecordEvent:
         assert kwargs["alert_sent"] is True
         assert kwargs["alert_method"] == "webhook"
         assert kwargs["severity"] == "critical"
+
+    def test_alert_not_dispatched_records_alert_sent_false(self):
+        """When _send_alert returns False (no webhook configured / POST failed),
+        alert_sent is recorded as False and alert_method as None — operators must
+        not be misled into believing a critical event paged them when it didn't."""
+        engine = _make_engine()
+        engine._send_alert = MagicMock(return_value=False)  # nothing delivered
+
+        engine._record_event(
+            EventType.ALERT,
+            "Emergency close",
+            severity="critical",
+            component="execution",
+            error_code="EMERGENCY_CLOSE",
+            alert=True,
+        )
+
+        engine._send_alert.assert_called_once_with("Emergency close")
+        _, kwargs = engine.db_manager.log_event.call_args
+        assert kwargs["alert_sent"] is False
+        assert kwargs["alert_method"] is None
 
     def test_swallows_log_event_failure(self):
         """A db_manager.log_event failure must never propagate to the caller."""
