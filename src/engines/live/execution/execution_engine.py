@@ -14,6 +14,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from src.config.constants import (
@@ -962,7 +963,12 @@ class LiveExecutionEngine:
                         symbol,
                     )
                 else:
-                    quantity = normalized
+                    # `(integer) * step_size` in float math leaves artifacts (e.g.
+                    # 40 * 0.0001 = 0.004000000000000001) that exceed the asset's max
+                    # precision; sent verbatim Binance rejects with code 51077. Quantize
+                    # to the step's decimal count so the sent value has no excess decimals.
+                    step_decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
+                    quantity = round(normalized, step_decimals)
             except (ArithmeticError, ValueError) as e:
                 logger.error("Step_size normalization failed for %s: %s", symbol, e)
 

@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import Enum
 from functools import wraps
 from typing import Any, TypeVar
@@ -1737,6 +1738,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     quantity = math.floor(quantity / step_size + 1e-9) * step_size
             elif step_size > 0:
                 quantity = round(quantity / step_size) * step_size
+
+            # `(integer) * step_size` in float math leaves artifacts (e.g.
+            # 40 * 0.0001 = 0.004000000000000001) that exceed the asset's max
+            # precision, so Binance rejects with code 51077. Quantize to the
+            # step's decimal count so the value sent has no excess decimals.
+            if step_size > 0:
+                step_decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
+                quantity = round(quantity, step_decimals)
 
             if quantity <= 0:
                 logger.error(
