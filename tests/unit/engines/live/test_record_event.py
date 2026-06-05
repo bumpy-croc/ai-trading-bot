@@ -8,9 +8,10 @@ strategy/data-provider wiring required by the real constructor.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from src.database.models import EventType
 from src.engines.live.trading_engine import LiveTradingEngine
@@ -145,3 +146,40 @@ class TestRecordEvent:
         )
 
         engine._send_alert.assert_called_once()
+
+
+class TestSendAlert:
+    """_send_alert must report the REAL delivery outcome so alert_sent is honest:
+    True only on a 2xx webhook response; False when unconfigured, on a non-2xx
+    status (requests does not raise on those), or on a network exception."""
+
+    @staticmethod
+    def _engine(webhook: str | None) -> LiveTradingEngine:
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.alert_webhook_url = webhook
+        return engine
+
+    def test_no_webhook_returns_false(self):
+        """No webhook configured -> not delivered (False); no POST attempted."""
+        assert self._engine(None)._send_alert("hi") is False
+
+    def test_2xx_returns_true(self):
+        """A 2xx webhook response -> alert delivered (True)."""
+        engine = self._engine("http://hook.test")
+        with patch("requests.post", autospec=True) as post:
+            post.return_value.raise_for_status.return_value = None  # 2xx
+            assert engine._send_alert("hi") is True
+            post.assert_called_once()
+
+    def test_non_2xx_returns_false(self):
+        """A 4xx/5xx response (raise_for_status raises) means NOT delivered."""
+        engine = self._engine("http://hook.test")
+        with patch("requests.post", autospec=True) as post:
+            post.return_value.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
+            assert engine._send_alert("hi") is False
+
+    def test_post_exception_returns_false(self):
+        """A network exception during the POST -> not delivered (False)."""
+        engine = self._engine("http://hook.test")
+        with patch("requests.post", autospec=True, side_effect=ConnectionError("network down")):
+            assert engine._send_alert("hi") is False
