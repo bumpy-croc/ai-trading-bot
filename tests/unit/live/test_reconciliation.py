@@ -138,6 +138,36 @@ def test_estimate_position_notional_handles_decimal_fields(reconciler, mock_posi
     assert notional == pytest.approx(500.0)
 
 
+def test_verify_entry_order_handles_decimal_position_fields(reconciler):
+    """_verify_entry_order subtracts the exchange fill (float) from DB position
+    fields (Decimal entry_price / quantity). Both diff subtractions must coerce
+    to float — otherwise 'unsupported operand type(s) for -: float and Decimal'
+    raises and silently disables the primary PositionReconciler in prod, forcing
+    the legacy fallback every startup reconcile (#673 Bug 2)."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from src.data_providers.exchange_interface import OrderStatus as ExOS
+    from src.engines.live.reconciliation import ReconciliationResult
+
+    position = SimpleNamespace(
+        symbol="ETHUSDT",
+        db_position_id=1,
+        entry_price=Decimal("2000"),
+        quantity=Decimal("0.5"),
+        current_size=Decimal("0.5"),
+        original_size=Decimal("1.0"),
+    )
+    # FILLED order; price/qty within correction thresholds so no DB write is
+    # attempted — the bug is in the diff subtraction itself, which runs first.
+    order = MockExchangeOrder(status=ExOS.FILLED, average_price=2000.5, filled_quantity=0.5)
+    result = ReconciliationResult(entity_type="position", entity_id=1, status="verified")
+
+    # Pre-fix this raised TypeError (float - Decimal); must complete cleanly now.
+    out = reconciler._verify_entry_order(position, order, result)
+    assert out is result
+
+
 def test_verify_margin_position_handles_decimal_quantity(
     mock_exchange, mock_position_tracker, mock_db
 ):
