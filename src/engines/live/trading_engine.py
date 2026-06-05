@@ -1333,30 +1333,28 @@ class LiveTradingEngine:
             self.live_execution_engine.session_id = self.trading_session_id
             self.live_execution_engine.strategy_name = self._strategy_name()
 
-        # Re-adopt orphaned OPEN positions on a clean restart (#668). A graceful
-        # restart recovers balance but creates a NEW session; any OPEN position
-        # still bound to a PRIOR session is invisible to get_active_positions(new)
-        # and would be orphaned. We adopt EVERY such position for this
-        # symbol/strategy — not just the single recovered session's — because an
-        # intervening flat restart can leave the position stranded two sessions
-        # back. Ordering: reassign → recover-into-tracker → the heal (#657, closes
-        # any phantom with a terminal trade) + exchange reconciliation below
-        # re-verify each position and its server-side stop-loss against Binance.
+        # Carry OPEN positions forward on a clean restart (#668). The inactive
+        # session recovered above (balance only) still owns any OPEN position via
+        # Position.session_id, so _recover_active_positions() at line ~1281 saw a
+        # None session id and loaded nothing — the position would be orphaned.
+        # Re-point those positions onto the new session, then reload them into the
+        # live tracker. Ordering: reassign → recover-into-tracker (which self-heals
+        # first) → the heal + exchange reconciliation below re-verify the position
+        # and its server-side stop-loss against the exchange.
         if self._recovered_inactive_session_id is not None and self.trading_session_id is not None:
             try:
                 moved_ids = self.db_manager.reassign_open_positions_to_session(
-                    # None ⇒ adopt ALL orphaned OPEN positions (any session != new),
-                    # scoped to this symbol/strategy.
-                    old_session_id=None,
+                    old_session_id=self._recovered_inactive_session_id,
                     new_session_id=self.trading_session_id,
                     symbol=self._active_symbol,
                     strategy_name=self._strategy_name(),
                 )
                 if moved_ids:
                     logger.info(
-                        "🔁 Re-adopted %d orphaned OPEN position(s) into new session "
-                        "#%s; reloading into tracker",
+                        "🔁 Carried %d OPEN position(s) forward from inactive session "
+                        "#%s into new session #%s; reloading into tracker",
                         len(moved_ids),
+                        self._recovered_inactive_session_id,
                         self.trading_session_id,
                     )
                     # Reload now that the rows belong to the new session. Safe and
@@ -1366,8 +1364,10 @@ class LiveTradingEngine:
                 # A failure here must not abort startup, but it is capital-critical
                 # (an OPEN position stays orphaned), so log loudly for alerting.
                 logger.critical(
-                    "Failed to re-adopt orphaned OPEN positions into session #%s "
-                    "(positions may be orphaned — MANUAL RECONCILIATION REQUIRED): %s",
+                    "Failed to carry OPEN positions forward from inactive session "
+                    "#%s into session #%s (positions may be orphaned — MANUAL "
+                    "RECONCILIATION REQUIRED): %s",
+                    self._recovered_inactive_session_id,
                     self.trading_session_id,
                     reassign_err,
                     exc_info=True,
