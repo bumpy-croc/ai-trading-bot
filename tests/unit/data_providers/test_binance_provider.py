@@ -1078,6 +1078,7 @@ class TestStopLossPriceTickPrecision:
 
     @staticmethod
     def _tick_decimals(tick_size):
+        """Number of decimal places the tick size implies (e.g. 0.01 -> 2, 1.0 -> 1)."""
         return max(0, -Decimal(str(tick_size)).as_tuple().exponent)
 
     @pytest.mark.fast
