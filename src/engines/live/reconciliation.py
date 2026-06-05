@@ -1231,10 +1231,14 @@ class PositionReconciler:
         from src.data_providers.exchange_interface import OrderStatus as ExOrderStatus
 
         if exchange_order.status == ExOrderStatus.FILLED:
-            # Check fill price matches entry_price
-            if exchange_order.average_price and position.entry_price > 0:
+            # Check fill price matches entry_price. Coerce to float — DB-loaded
+            # positions carry Decimal (Numeric) fields; "float - Decimal" below
+            # raises TypeError (#673 Bug 2: silently disabled PositionReconciler
+            # in prod, falling back to legacy reconciliation every startup).
+            entry_price_f = float(position.entry_price or 0.0)
+            if exchange_order.average_price and entry_price_f > 0:
                 price_diff_pct = (
-                    abs(exchange_order.average_price - position.entry_price) / position.entry_price
+                    abs(float(exchange_order.average_price) - entry_price_f) / entry_price_f
                 )
                 if price_diff_pct > 0.001:  # >0.1% difference
                     audit = AuditEvent(
@@ -1272,9 +1276,11 @@ class PositionReconciler:
                         )
                         raise
 
-            # Check fill quantity matches position quantity
+            # Check fill quantity matches position quantity. Coerce to float —
+            # same Decimal/float mismatch as the price check above (#673 Bug 2).
             filled_qty = getattr(exchange_order, "filled_quantity", None)
-            position_qty = getattr(position, "quantity", None) or 0.0
+            filled_qty = float(filled_qty) if filled_qty is not None else None
+            position_qty = float(getattr(position, "quantity", None) or 0.0)
             if filled_qty and filled_qty > 0 and position_qty > 0:
                 qty_diff_pct = abs(filled_qty - position_qty) / position_qty
                 # Correct if >1% difference — significant enough to affect P&L
