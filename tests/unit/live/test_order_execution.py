@@ -295,6 +295,7 @@ class TestExecuteEntry:
 # ============================================================================
 
 
+@pytest.mark.unit
 class TestNormalizeQuantityPrecision:
     """The entry quantity from _normalize_quantity must respect LOT_SIZE precision.
 
