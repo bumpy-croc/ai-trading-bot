@@ -160,9 +160,11 @@ class TestSendAlert:
         return engine
 
     def test_no_webhook_returns_false(self):
+        """No webhook configured -> not delivered (False); no POST attempted."""
         assert self._engine(None)._send_alert("hi") is False
 
     def test_2xx_returns_true(self):
+        """A 2xx webhook response -> alert delivered (True)."""
         engine = self._engine("http://hook.test")
         with patch("requests.post", autospec=True) as post:
             post.return_value.raise_for_status.return_value = None  # 2xx
@@ -177,6 +179,7 @@ class TestSendAlert:
             assert engine._send_alert("hi") is False
 
     def test_post_exception_returns_false(self):
+        """A network exception during the POST -> not delivered (False)."""
         engine = self._engine("http://hook.test")
         with patch("requests.post", autospec=True, side_effect=ConnectionError("network down")):
             assert engine._send_alert("hi") is False
