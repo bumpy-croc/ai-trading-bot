@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from src.database.models import EventType
 from src.engines.live.trading_engine import LiveTradingEngine
@@ -163,7 +164,7 @@ class TestSendAlert:
 
     def test_2xx_returns_true(self):
         engine = self._engine("http://hook.test")
-        with patch("requests.post") as post:
+        with patch("requests.post", autospec=True) as post:
             post.return_value.raise_for_status.return_value = None  # 2xx
             assert engine._send_alert("hi") is True
             post.assert_called_once()
@@ -171,11 +172,11 @@ class TestSendAlert:
     def test_non_2xx_returns_false(self):
         """A 4xx/5xx response (raise_for_status raises) means NOT delivered."""
         engine = self._engine("http://hook.test")
-        with patch("requests.post") as post:
-            post.return_value.raise_for_status.side_effect = RuntimeError("500")
+        with patch("requests.post", autospec=True) as post:
+            post.return_value.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
             assert engine._send_alert("hi") is False
 
     def test_post_exception_returns_false(self):
         engine = self._engine("http://hook.test")
-        with patch("requests.post", side_effect=RuntimeError("network down")):
+        with patch("requests.post", autospec=True, side_effect=ConnectionError("network down")):
             assert engine._send_alert("hi") is False
