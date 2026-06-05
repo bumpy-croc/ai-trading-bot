@@ -4455,11 +4455,11 @@ class LiveTradingEngine:
     def _send_alert(self, message: str) -> bool:
         """Send a trading alert (webhook).
 
-        Returns True only if an alert was actually dispatched (a webhook POST
-        was attempted without raising); False when no webhook is configured or
-        the POST failed. Callers persist this as the real ``alert_sent`` so
-        operators aren't misled into thinking a critical event paged them when
-        it didn't.
+        Returns True only if an alert was actually delivered (a webhook POST
+        returned a 2xx status); False when no webhook is configured, the POST
+        raised, or the endpoint returned a non-2xx status (4xx/5xx). Callers
+        persist this as the real ``alert_sent`` so operators aren't misled into
+        thinking a critical event paged them when it didn't.
         """
         if not self.alert_webhook_url:
             return False
@@ -4471,7 +4471,11 @@ class LiveTradingEngine:
                 "text": f"🤖 Trading Bot: {message}",
                 "timestamp": datetime.now(UTC).isoformat(),
             }
-            requests.post(self.alert_webhook_url, json=payload, timeout=10)
+            resp = requests.post(self.alert_webhook_url, json=payload, timeout=10)
+            # A 4xx/5xx response means the alert was NOT delivered — requests
+            # does not raise on HTTP error status by default, so check it
+            # explicitly or alert_sent would falsely read True (#688 review).
+            resp.raise_for_status()
             return True
         except Exception as e:
             logger.error("Failed to send alert: %s", e, exc_info=True)
