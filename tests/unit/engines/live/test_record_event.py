@@ -15,7 +15,7 @@ import pytest
 from src.database.models import EventType
 from src.engines.live.trading_engine import LiveTradingEngine
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 
 def _make_engine() -> LiveTradingEngine:
