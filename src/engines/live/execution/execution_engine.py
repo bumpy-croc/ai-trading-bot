@@ -14,7 +14,6 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any
 
 from src.config.constants import (
@@ -29,6 +28,7 @@ from src.data_providers.exchange_interface import (
 )
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
+from src.trading.precision import quantize_to_step
 
 logger = logging.getLogger(__name__)
 
@@ -967,11 +967,11 @@ class LiveExecutionEngine:
                     # 40 * 0.0001 = 0.004000000000000001) that exceed the asset's max
                     # precision; sent verbatim Binance rejects with code 51077. Quantize
                     # to the step's decimal count so the sent value has no excess decimals.
-                    exponent = Decimal(str(step_size)).as_tuple().exponent
-                    step_decimals = max(0, -exponent) if isinstance(exponent, int) else 0
-                    quantity = round(normalized, step_decimals)
+                    quantity = quantize_to_step(normalized, step_size)
             except (ArithmeticError, ValueError) as e:
-                logger.error("Step_size normalization failed for %s: %s", symbol, e)
+                logger.error(
+                    "Step_size normalization failed for %s: %s", symbol, e, exc_info=True
+                )
 
         # Validate min_qty constraint
         min_qty = symbol_info.get("min_qty")

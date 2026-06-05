@@ -17,7 +17,6 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from enum import Enum
 from functools import wraps
 from typing import Any, TypeVar
@@ -36,6 +35,7 @@ from src.config.constants import (
 )
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
+from src.trading.precision import quantize_to_step
 from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
@@ -1743,13 +1743,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # 40 * 0.0001 = 0.004000000000000001) that exceed the asset's max
             # precision, so Binance rejects with code 51077. Quantize to the
             # step's decimal count so the value sent has no excess decimals.
-            if step_size > 0:
-                # .exponent is a negative int for any finite Decimal (str of a real
-                # step_size); the isinstance guard satisfies the type checker and
-                # safely defaults to 0 decimals for the impossible non-finite case.
-                exponent = Decimal(str(step_size)).as_tuple().exponent
-                step_decimals = max(0, -exponent) if isinstance(exponent, int) else 0
-                quantity = round(quantity, step_decimals)
+            quantity = quantize_to_step(quantity, step_size)
 
             if quantity <= 0:
                 logger.error(
