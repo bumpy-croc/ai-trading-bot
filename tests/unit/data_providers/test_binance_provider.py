@@ -1039,6 +1039,8 @@ class TestStopLossQuantityStepPrecision:
         assert sent_qty == pytest.approx(0.0003, abs=1e-9)
 
 
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
 class TestStopLossPriceTickPrecision:
     """The stopPrice/price sent to Binance must carry no more decimals than PRICE_FILTER allows.
 
