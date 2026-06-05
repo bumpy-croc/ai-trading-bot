@@ -4,10 +4,11 @@ Covers the _recover_existing_session() method which restores balance across
 both crash restarts (active session) and clean restarts (recent inactive session).
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 
+from src.database.manager import DatabaseManager
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
 
@@ -47,9 +48,10 @@ def make_engine(enable_live_trading: bool = False) -> LiveTradingEngine:
             enable_live_trading=enable_live_trading,
         )
 
-    # Replace the db_manager created during __init__ with a fresh MagicMock
-    # so each test gets a clean, unconfigured mock to assert against.
-    engine.db_manager = MagicMock()
+    # Replace the db_manager created during __init__ with a fresh autospec'd
+    # mock so each test gets a clean instance to assert against AND signature
+    # mismatches on real DatabaseManager methods are caught (CODE.md).
+    engine.db_manager = create_autospec(DatabaseManager, instance=True)
     # Simulate what start() sets before calling _recover_existing_session().
     engine._active_symbol = "BTCUSDT"
     return engine
