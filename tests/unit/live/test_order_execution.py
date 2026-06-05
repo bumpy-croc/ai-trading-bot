@@ -291,6 +291,69 @@ class TestExecuteEntry:
 
 
 # ============================================================================
+# Tests for _normalize_quantity step-size precision (51077 guard)
+# ============================================================================
+
+
+@pytest.mark.unit
+class TestNormalizeQuantityPrecision:
+    """The entry quantity from _normalize_quantity must respect LOT_SIZE precision.
+
+    `round(qty / step_size) * step_size` in float math leaves artifacts (e.g.
+    round(0.0003 / 0.0001) * 0.0001 == 0.00030000000000000003). That over-precise
+    value is what reaches place_order -> create_order for entries, and Binance
+    rejects it with code 51077. Without the quantize these assertions FAIL (the raw
+    float has exponent -17 to -20); with it the exponent never goes below the step.
+    """
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize(
+        ("step_size", "quantity"),
+        [
+            (0.0001, 0.0003),  # reproduces the 51077 incident case; raw exp == -20
+            (0.001, 0.009),  # raw exp == -18
+            (0.01, 0.35),  # raw exp == -17
+            (1.0, 40.0),  # integer step: stays whole, no artifact introduced
+        ],
+    )
+    def test_normalized_quantity_quantized_to_step(
+        self, execution_engine_with_exchange, mock_exchange, step_size, quantity
+    ):
+        """Normalized quantity carries no more decimals than the step implies."""
+        mock_exchange.get_symbol_info.return_value = {
+            "step_size": step_size,
+            "min_qty": 0.0,
+            "min_notional": 0.0,
+        }
+
+        result = execution_engine_with_exchange._normalize_quantity(
+            "BTCUSDT", quantity, value=1_000.0
+        )
+
+        step_decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
+        assert Decimal(str(result)).as_tuple().exponent >= -step_decimals
+        assert result == pytest.approx(quantity, abs=step_size / 2)
+
+    @pytest.mark.fast
+    def test_reproduces_51077_case_exponent_within_four_decimals(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """Explicit 51077 reproduction: step 0.0001, qty 0.0003 -> exponent >= -4."""
+        mock_exchange.get_symbol_info.return_value = {
+            "step_size": 0.0001,
+            "min_qty": 0.0,
+            "min_notional": 0.0,
+        }
+
+        result = execution_engine_with_exchange._normalize_quantity(
+            "BTCUSDT", 0.0003, value=1_000.0
+        )
+
+        assert Decimal(str(result)).as_tuple().exponent >= -4
+        assert result == pytest.approx(0.0003, abs=1e-9)
+
+
+# ============================================================================
 # Tests for LiveExecutionEngine exit execution
 # ============================================================================
 

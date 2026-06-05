@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -923,6 +924,119 @@ class TestPlaceStopLossOrder:
 
         # Assert
         assert result is None
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
+class TestStopLossQuantityStepPrecision:
+    """The quantity sent to Binance must carry no more decimals than LOT_SIZE allows.
+
+    `(integer) * step_size` in float math leaves artifacts (e.g.
+    round(0.0003 / 0.0001) * 0.0001 == 0.00030000000000000003). Sent verbatim, that
+    over-precise value is rejected with code 51077 ("Precision is over the maximum
+    defined for this asset"), which in prod made the SL submission ambiguous and left
+    a position unprotected in close-only mode. The quantize step must clamp the value
+    to the step's decimal count. Without the fix these assertions FAIL (the raw float
+    has exponent -17 to -20); with it the exponent never goes below what the step allows.
+    """
+
+    @staticmethod
+    def _make_provider(mock_config, mock_client_class, step_size, base_asset="ETH"):
+        """Build a provider whose symbol_info reports `step_size` and has free balance."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {"orderId": "slp"}
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={
+                "step_size": step_size,
+                "tick_size": 0.01,
+                "base_asset": base_asset,
+            }
+        )
+        # Free balance comfortably covers the quantity so the SELL cap never trims it.
+        provider.get_balance = Mock(return_value=Mock(free=1_000_000.0))
+        return provider, mock_client
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize(
+        ("step_size", "quantity"),
+        [
+            # step -> a clean lot-multiple qty whose float round-trip is over-precise.
+            (0.0001, 0.0003),  # reproduces the 51077 incident case; raw exp == -20
+            (0.001, 0.009),  # raw exp == -18
+            (0.01, 0.35),  # raw exp == -17
+            (1.0, 40.0),  # integer step: must stay whole, no artifact introduced
+        ],
+    )
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_buy_branch_quantity_quantized_to_step(
+        self, mock_config, mock_client_class, step_size, quantity
+    ):
+        """BUY/other branch: round(qty/step)*step is quantized to the step's precision."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, step_size)
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.BUY, quantity=quantity, stop_price=2100.0
+        )
+
+        assert result == "slp"
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        step_decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
+        # No more decimal places than the step implies (exponent not below -step_decimals).
+        assert Decimal(str(sent_qty)).as_tuple().exponent >= -step_decimals
+        # The quantize preserves the intended quantity (rounding artifact only).
+        assert sent_qty == pytest.approx(quantity, abs=step_size / 2)
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize(
+        ("step_size", "quantity"),
+        [
+            (0.0001, 0.0003),
+            (0.001, 0.009),
+            (0.01, 0.35),
+            (1.0, 40.0),
+        ],
+    )
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_sell_branch_quantity_quantized_to_step(
+        self, mock_config, mock_client_class, step_size, quantity
+    ):
+        """SELL branch: floor(qty/step)*step is quantized to the step's precision too."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, step_size)
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.SELL, quantity=quantity, stop_price=1900.0
+        )
+
+        assert result == "slp"
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        step_decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
+        assert Decimal(str(sent_qty)).as_tuple().exponent >= -step_decimals
+        assert sent_qty == pytest.approx(quantity, abs=step_size / 2)
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_reproduces_51077_case_exponent_within_four_decimals(
+        self, mock_config, mock_client_class
+    ):
+        """Explicit 51077 reproduction: step 0.0001, qty 0.0003 -> exponent >= -4."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, 0.0001)
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.BUY, quantity=0.0003, stop_price=2100.0
+        )
+
+        assert result == "slp"
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert Decimal(str(sent_qty)).as_tuple().exponent >= -4
+        assert sent_qty == pytest.approx(0.0003, abs=1e-9)
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
