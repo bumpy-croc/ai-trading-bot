@@ -96,6 +96,10 @@ def test_active_session_recovery_reuses_session_id():
 
     assert result == 850.0
     assert engine.trading_session_id == 77
+    # Reused session MUST be registered with the DB manager, or session-scoped
+    # writes (balance updates, etc.) fail with "No active trading session" on the
+    # first trade after recovery (#41).
+    engine.db_manager.set_current_session.assert_called_once_with(77)
 
 
 @pytest.mark.fast

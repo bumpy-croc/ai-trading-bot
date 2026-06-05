@@ -4706,6 +4706,12 @@ class LiveTradingEngine:
                 # _recovered_inactive_session_id (set above).
                 if source == "active":
                     self.trading_session_id = session_id
+                    # Register the reused session with the DB manager. create_trading_session
+                    # sets _current_session_id for NEW sessions, but this active-recovery path
+                    # reuses an existing one — without this, every session-scoped write that
+                    # falls back to _current_session_id (balance updates, etc.) fails with
+                    # "No active trading session" on the first trade after recovery (#41).
+                    self.db_manager.set_current_session(session_id)
                     # Wire session context to execution engine so journaling works
                     self.live_execution_engine.session_id = session_id
                     self.live_execution_engine.strategy_name = self._strategy_name()

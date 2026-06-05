@@ -615,6 +615,18 @@ class DatabaseManager:
             logger.info(f"Created trading session #{trading_session.id}: {session_name}")
             return trading_session.id
 
+    def set_current_session(self, session_id: int) -> None:
+        """Bind this manager to an already-existing trading session.
+
+        ``create_trading_session`` sets ``_current_session_id`` for new sessions,
+        but the live engine's crash-recovery path REUSES an existing active
+        session instead of creating one. Without registering it here, every
+        session-scoped write that falls back to ``_current_session_id`` (balance
+        updates, position reconciliation, account history, ...) fails with
+        "No active trading session" on the first trade after recovery (#41).
+        """
+        self._current_session_id = session_id
+
     def end_trading_session(
         self, session_id: int | None = None, final_balance: float | None = None
     ) -> None:
