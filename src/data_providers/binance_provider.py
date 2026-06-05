@@ -35,6 +35,7 @@ from src.config.constants import (
 )
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
+from src.trading.precision import quantize_to_step
 from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
@@ -1737,6 +1738,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     quantity = math.floor(quantity / step_size + 1e-9) * step_size
             elif step_size > 0:
                 quantity = round(quantity / step_size) * step_size
+
+            # `(integer) * step_size` in float math leaves artifacts (e.g.
+            # 40 * 0.0001 = 0.004000000000000001) that exceed the asset's max
+            # precision, so Binance rejects with code 51077. Quantize to the
+            # step's decimal count so the value sent has no excess decimals.
+            quantity = quantize_to_step(quantity, step_size)
 
             if quantity <= 0:
                 logger.error(
