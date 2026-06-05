@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Live restart balance recovery no longer crashes or silently resets on
+  `Decimal`-vs-`float` arithmetic. `DatabaseManager.recover_last_balance`'s trades
+  fallback computed `initial_balance + net PnL`, raising `TypeError` on
+  `Decimal + float` — swallowed by `_recover_existing_session`, which then returned
+  `None` and reset the engine to its default balance on restart. With no trades it
+  returned a raw `Decimal` that later broke `_print_final_stats`' float arithmetic
+  on shutdown (`unsupported operand -: Decimal and float`). The fallback now coerces
+  `float(initial_balance)`; `_recover_existing_session` coerces the recovered value
+  to `float` and fails fast (raises) on a non-finite balance *before* its `> 0`
+  positivity filter, so corrupt persisted state can never reach position sizing or
+  silently fall back to the default balance.
 - Backtest-live engine parity: closed nine silent divergences. Backtest now
   propagates `TimeExitPolicy`-specific exit reasons (`"Max holding period"`,
   `"Weekend flat"`, etc.) instead of hardcoding `"Time limit"`; gained an
