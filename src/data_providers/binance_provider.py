@@ -1744,7 +1744,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # precision, so Binance rejects with code 51077. Quantize to the
             # step's decimal count so the value sent has no excess decimals.
             if step_size > 0:
-                step_decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
+                # .exponent is a negative int for any finite Decimal (str of a real
+                # step_size); the isinstance guard satisfies the type checker and
+                # safely defaults to 0 decimals for the impossible non-finite case.
+                exponent = Decimal(str(step_size)).as_tuple().exponent
+                step_decimals = max(0, -exponent) if isinstance(exponent, int) else 0
                 quantity = round(quantity, step_decimals)
 
             if quantity <= 0:
