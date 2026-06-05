@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -50,7 +51,7 @@ from src.data_providers.exchange_interface import (
 )
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
-from src.database.models import TradeSource
+from src.database.models import EventType, TradeSource
 
 # Modular handlers (optional injection for testability)
 from src.engines.live.data.market_data_handler import MarketDataHandler
@@ -1416,6 +1417,7 @@ class LiveTradingEngine:
                     # Check if balance was corrected
                     balance_sync = sync_result.data.get("balance_sync", {})
                     if balance_sync.get("corrected", False):
+                        previous_balance = balance_sync.get("old_balance", self.current_balance)
                         corrected_balance = balance_sync.get("new_balance", self.current_balance)
                         # Atomic balance update with lock to prevent race conditions
                         with self._balance_lock:
@@ -1425,6 +1427,18 @@ class LiveTradingEngine:
                         logger.info(
                             "💰 Balance corrected from exchange: $%.2f",
                             corrected_balance,
+                        )
+                        # A silent balance overwrite masked a real capital-erosion
+                        # incident before — make every correction auditable.
+                        self._record_event(
+                            EventType.WARNING,
+                            (
+                                "Balance overwritten from exchange: "
+                                f"{previous_balance} -> {corrected_balance}"
+                            ),
+                            severity="warning",
+                            component="balance",
+                            error_code="BALANCE_OVERWRITE",
                         )
                 else:
                     logger.warning("⚠️ Account synchronization failed: %s", sync_result.message)
@@ -1495,6 +1509,16 @@ class LiveTradingEngine:
                 logger.info("🔄 Periodic reconciler started")
             except Exception as e:
                 logger.warning("Failed to start periodic reconciler: %s", e)
+                # A silently-disabled reconciler is exactly the kind of failure
+                # that ran invisible for months — surface it in system_events.
+                self._record_event(
+                    EventType.ERROR,
+                    f"Periodic reconciler failed to start: {e}",
+                    severity="error",
+                    component="reconciler",
+                    error_code="RECONCILER_START_FAILED",
+                    exc=e,
+                )
 
         # Try to start WebSocket streams for reduced API weight
         self._start_websocket_streams(symbol, timeframe)
@@ -1525,6 +1549,16 @@ class LiveTradingEngine:
         if not self._close_only_mode:
             self._close_only_mode = True
             logger.critical("🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review")
+            # Emit once on transition (guarded above) so the kill-switch is
+            # visible in system_events and pages an operator.
+            self._record_event(
+                EventType.ALERT,
+                "Close-only mode activated — no new entries until manual review",
+                severity="critical",
+                component="risk",
+                error_code="CLOSE_ONLY",
+                alert=True,
+            )
 
     def resume_trading(self) -> None:
         """Resume normal trading after close-only mode review."""
@@ -3614,8 +3648,16 @@ class LiveTradingEngine:
                         max_retries,
                         symbol,
                     )
-                    self._send_alert(
-                        f"⚠️ EMERGENCY: Closing {symbol} position - stop-loss placement failed"
+                    # Record the structured event and fire the alert in one call
+                    # (alert=True dispatches the webhook, so no separate
+                    # _send_alert is needed here).
+                    self._record_event(
+                        EventType.ALERT,
+                        f"EMERGENCY: Closing {symbol} position - stop-loss placement failed",
+                        severity="critical",
+                        component="execution",
+                        error_code="EMERGENCY_CLOSE",
+                        alert=True,
                     )
                     # Fetch current market price for accurate exit pricing.
                     # The position is still open on the exchange without a stop loss,
@@ -4356,6 +4398,58 @@ class LiveTradingEngine:
         except Exception as e:
             logger.error("Failed to log trade: %s", e, exc_info=True)
 
+    def _record_event(
+        self,
+        event_type: EventType,
+        message: str,
+        *,
+        severity: str = "error",
+        component: str | None = None,
+        error_code: str | None = None,
+        exc: BaseException | None = None,
+        alert: bool = False,
+    ) -> None:
+        """Emit a structured ``system_events`` row (and optionally an alert).
+
+        Populates the long-dormant observability columns (``component``,
+        ``error_code``, ``stack_trace``, ``alert_sent``, ``alert_method``) so
+        operators can triage incidents from ``system_events`` instead of grepping
+        application logs. A stack trace is captured only when ``exc`` is supplied
+        and an exception is currently being handled.
+
+        Entirely fault-isolated: any logging, DB, or alert failure is swallowed so
+        observability can never break the trading loop.
+        """
+        try:
+            # Capture the active traceback only when an exception is in flight;
+            # format_exc() returns the literal string "NoneType: None\n" outside
+            # an except block, which would be noise in the audit trail.
+            stack_trace = traceback.format_exc() if exc is not None else None
+            if stack_trace is not None and stack_trace.startswith("NoneType: None"):
+                stack_trace = None
+
+            alert_sent = False
+            alert_method: str | None = None
+            if alert:
+                self._send_alert(message)
+                alert_sent = True
+                alert_method = "webhook"
+
+            self.db_manager.log_event(
+                event_type=event_type,
+                message=message,
+                severity=severity,
+                component=component,
+                error_code=error_code,
+                stack_trace=stack_trace,
+                session_id=self.trading_session_id,
+                alert_sent=alert_sent,
+                alert_method=alert_method,
+            )
+        except Exception as e:
+            # Observability must never propagate into the trading loop.
+            logger.warning("observability event failed: %s", e)
+
     def _send_alert(self, message: str):
         """Send trading alert (webhook, email, etc.)"""
         if not self.alert_webhook_url:
@@ -4912,7 +5006,9 @@ class LiveTradingEngine:
                         "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
                         critical_count,
                     )
-                    self._close_only_mode = True
+                    # Route through the guarded helper so the CLOSE_ONLY event is
+                    # emitted on this startup-critical path too, not just runtime.
+                    self._enter_close_only_mode()
 
                 # Log HIGH severity auto-corrections (cancelled entries, SL fills)
                 for r in results:
@@ -4936,6 +5032,14 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.warning(
                     "PositionReconciler failed, falling back to legacy reconciliation: %s", e
+                )
+                self._record_event(
+                    EventType.ERROR,
+                    f"PositionReconciler failed, falling back to legacy reconciliation: {e}",
+                    severity="error",
+                    component="reconciler",
+                    error_code="RECONCILER_FALLBACK",
+                    exc=e,
                 )
 
         # Legacy fallback: SL-based reconciliation (requires positions)

@@ -1510,9 +1510,17 @@ class DatabaseManager:
         component: str | None = None,
         details: dict | None = None,
         session_id: int | None = None,
+        error_code: str | None = None,
+        stack_trace: str | None = None,
+        alert_sent: bool = False,
+        alert_method: str | None = None,
     ) -> int:
         """
         Log a system event.
+
+        The ``error_code``, ``stack_trace``, ``alert_sent`` and ``alert_method``
+        fields populate the long-existing observability columns on
+        ``SystemEvent`` so operators can triage incidents from ``system_events``.
 
         Returns:
             Event ID
@@ -1543,6 +1551,10 @@ class DatabaseManager:
                 severity=severity,
                 component=component,
                 details=details,
+                error_code=error_code,
+                stack_trace=stack_trace,
+                alert_sent=alert_sent,
+                alert_method=alert_method,
                 session_id=session_id or self._current_session_id,
                 timestamp=datetime.now(UTC),
             )
