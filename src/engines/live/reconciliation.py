@@ -1691,10 +1691,14 @@ class PositionReconciler:
     def _extract_base_asset(symbol: str) -> str:
         """Extract the base asset from a trading pair symbol.
 
-        Strips common quote currencies (USDT, BUSD, USD) from the end
-        of the symbol to get the base asset (e.g., "BTC" from "BTCUSDT").
+        Strips common quote currencies (USDT, BUSD, USDC, USD) from the end of
+        the symbol to get the base asset (e.g., "BTC" from "BTCUSDT", "ETH" from
+        "ETHUSDC"). Longest-first so 4-char quotes match before "USD". Single
+        source of truth for base-asset resolution (incl. the orphaned-borrow sweep,
+        which groups symbols by base asset — a missed quote would split a base into
+        two groups and weaken Gate 2).
         """
-        for quote in ("USDT", "BUSD", "USD"):
+        for quote in ("USDT", "BUSD", "USDC", "USD"):
             if symbol.endswith(quote) and len(symbol) > len(quote):
                 return symbol[: -len(quote)]
         return symbol
