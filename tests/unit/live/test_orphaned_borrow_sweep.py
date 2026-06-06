@@ -8,13 +8,15 @@ Money never moves unless every gate passes AND the flag is "active".
 
 from __future__ import annotations
 
+import threading
+import time
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.engines.live import reconciliation
-from src.engines.live.reconciliation import run_orphaned_borrow_sweep
+from src.engines.live.reconciliation import BaseAssetLockRegistry, run_orphaned_borrow_sweep
 
 pytestmark = pytest.mark.fast
 
@@ -67,7 +69,15 @@ def _db(unresolved=None):
 
 
 def _run(
-    exchange, tracker, db, *, mode="active", symbols=(SYMBOL,), cooldown=None, use_margin=True
+    exchange,
+    tracker,
+    db,
+    *,
+    mode="active",
+    symbols=(SYMBOL,),
+    cooldown=None,
+    use_margin=True,
+    lock_registry=None,
 ):
     with patch.object(reconciliation, "get_flag", return_value=mode):
         return run_orphaned_borrow_sweep(
@@ -78,6 +88,7 @@ def _run(
             use_margin=use_margin,
             symbols=list(symbols),
             cooldown_state={} if cooldown is None else cooldown,
+            lock_registry=lock_registry,
         )
 
 
@@ -266,3 +277,80 @@ def test_periodic_reconciler_uses_shared_cooldown_dict():
         sweep_cooldown=shared,
     )
     assert pr._sweep_cooldown is shared
+
+
+# ---- serialization lock (#703) --------------------------------------------- #
+
+
+def test_lock_registry_shared_per_base_and_reentrant():
+    reg = BaseAssetLockRegistry()
+    assert reg.lock_for("ETH") is reg.lock_for("ETH")  # same base -> same lock
+    assert reg.lock_for("ETH") is not reg.lock_for("BTC")  # different base -> different lock
+    lock = reg.lock_for("ETH")
+    with lock:  # re-entrant: a held lock can be re-acquired on the same thread
+        with lock:
+            pass
+
+
+def test_sweep_holds_lock_across_repay():
+    """The repay happens strictly between acquiring and releasing the base-asset lock."""
+    events: list[str] = []
+
+    class _TrackingLock:
+        def __enter__(self):
+            events.append("acquire")
+            return self
+
+        def __exit__(self, *a):
+            events.append("release")
+            return False
+
+    class _Registry:
+        def lock_for(self, base):
+            return _TrackingLock()
+
+    ex = _exchange(verify_after=_snapshot(borrowed="0", interest="0", free="0", net="0"))
+    ex.repay_margin_loan.side_effect = lambda *a, **k: (events.append("repay"), True)[1]
+    _run(ex, _tracker(), _db(), mode="active", lock_registry=_Registry())
+    assert events == ["acquire", "repay", "release"]
+
+
+def test_lock_serialises_sweep_behind_an_entry_holding_the_lock():
+    """While a (simulated) entry holds the ETH lock, the sweep's repay is blocked, and
+    only proceeds once the entry releases — proving sweep-vs-entry serialization (#703)."""
+    reg = BaseAssetLockRegistry()
+    order: list[str] = []
+    holder_has_lock = threading.Event()
+    let_holder_finish = threading.Event()
+
+    def holder():  # stands in for an in-flight entry that placed a borrow but isn't tracked yet
+        with reg.lock_for("ETH"):
+            order.append("entry_acquired")
+            holder_has_lock.set()
+            let_holder_finish.wait(2.0)
+            order.append("entry_released")
+
+    ex = _exchange(verify_after=_snapshot(borrowed="0", interest="0", free="0", net="0"))
+    ex.repay_margin_loan.side_effect = lambda *a, **k: (order.append("repay"), True)[1]
+
+    t = threading.Thread(target=holder)
+    t.start()
+    assert holder_has_lock.wait(2.0)
+
+    done = threading.Event()
+
+    def sweeper():
+        _run(ex, _tracker(), _db(), mode="active", lock_registry=reg)
+        done.set()
+
+    s = threading.Thread(target=sweeper)
+    s.start()
+    time.sleep(0.2)  # give the sweeper time to reach (and block on) the lock
+    assert "repay" not in order  # blocked: the entry still holds the lock
+
+    let_holder_finish.set()
+    assert done.wait(2.0)
+    t.join(2.0)
+    s.join(2.0)
+    # The repay only happened after the entry released the lock.
+    assert order.index("entry_released") < order.index("repay")
