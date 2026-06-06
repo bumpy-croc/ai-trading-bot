@@ -1504,6 +1504,7 @@ class LiveTradingEngine:
                     session_id=self.trading_session_id,
                     on_critical=self._enter_close_only_mode,
                     use_margin=use_margin,
+                    symbols=[self._active_symbol] if self._active_symbol else [],
                 )
                 self._periodic_reconciler.start()
                 logger.info("🔄 Periodic reconciler started")
@@ -4970,6 +4971,7 @@ class LiveTradingEngine:
                 from src.engines.live.reconciliation import (
                     PositionReconciler,
                     Severity,
+                    run_orphaned_borrow_sweep,
                 )
 
                 use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
@@ -4985,6 +4987,20 @@ class LiveTradingEngine:
                 if not positions_snapshot:
                     logger.info("📊 No local positions to reconcile — checking pending orders")
                     results = reconciler.resolve_pending_orders()
+
+                    # After pending orders are resolved (so a fill that becomes a
+                    # position is adopted first), sweep any orphaned margin borrow.
+                    # No-op unless margin + flag enabled; safe when flat.
+                    if use_margin and self._active_symbol:
+                        run_orphaned_borrow_sweep(
+                            exchange=self.exchange_interface,
+                            position_tracker=self.live_position_tracker,
+                            db_manager=self.db_manager,
+                            session_id=self.trading_session_id,
+                            use_margin=use_margin,
+                            symbols=[self._active_symbol],
+                            cooldown_state={},
+                        )
 
                     # Process results even with no positions — a filled entry
                     # order may create a position, and critical issues must

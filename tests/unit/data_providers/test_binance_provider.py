@@ -1165,6 +1165,99 @@ class TestStopLossPriceTickPrecision:
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 @patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
+class TestOrphanedBorrowExchangeHelpers:
+    """repay_margin_loan / get_margin_account_asset / has_open_orders for the sweep."""
+
+    @staticmethod
+    def _provider(mock_config, mock_client_class):
+        cfg = Mock()
+        cfg.get_required.return_value = "fake_key"
+        mock_config.return_value = cfg
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        provider = BinanceProvider()
+        provider._use_margin = True
+        provider._client = mock_client
+        return provider, mock_client
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_repay_uses_modern_borrow_repay_endpoint(self, mock_config, mock_client_class):
+        provider, client = self._provider(mock_config, mock_client_class)
+        ok = provider.repay_margin_loan("ETH", Decimal("0.00282625"))
+        assert ok is True
+        client.margin_borrow_repay.assert_called_once_with(
+            asset="ETH", amount="0.00282625", type="REPAY", isIsolated="FALSE"
+        )
+        # The deprecated /sapi/v1/margin/repay endpoint must NOT be used.
+        client.repay_margin_loan.assert_not_called()
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_repay_returns_false_on_error(self, mock_config, mock_client_class):
+        provider, client = self._provider(mock_config, mock_client_class)
+        client.margin_borrow_repay.side_effect = Exception("APIError(code=-3015) exceeds liability")
+        assert provider.repay_margin_loan("ETH", Decimal("0.003")) is False
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_repay_noop_when_not_margin_or_nonpositive(self, mock_config, mock_client_class):
+        provider, client = self._provider(mock_config, mock_client_class)
+        provider._use_margin = False
+        assert provider.repay_margin_loan("ETH", Decimal("0.003")) is False
+        provider._use_margin = True
+        assert provider.repay_margin_loan("ETH", Decimal("0")) is False
+        client.margin_borrow_repay.assert_not_called()
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_has_open_orders_fail_closed_on_error(self, mock_config, mock_client_class):
+        provider, _ = self._provider(mock_config, mock_client_class)
+        with patch.object(provider, "_call_get_open_orders", side_effect=Exception("boom")):
+            assert provider.has_open_orders("ETHUSDT") is None  # fail-closed, not []
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_has_open_orders_true_and_false(self, mock_config, mock_client_class):
+        provider, _ = self._provider(mock_config, mock_client_class)
+        with patch.object(provider, "_call_get_open_orders", return_value=[{"orderId": 1}]):
+            assert provider.has_open_orders("ETHUSDT") is True
+        with patch.object(provider, "_call_get_open_orders", return_value=[]):
+            assert provider.has_open_orders("ETHUSDT") is False
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_get_margin_account_asset_returns_raw_strings(self, mock_config, mock_client_class):
+        provider, _ = self._provider(mock_config, mock_client_class)
+        account = {
+            "balances": [
+                {
+                    "asset": "ETH",
+                    "free": "0.0029",
+                    "locked": "0",
+                    "borrowed": "0.00282625",
+                    "interest": "0.0000001",
+                    "netAsset": "0.00007",
+                }
+            ]
+        }
+        with patch.object(provider, "_call_get_account", return_value=account):
+            snap = provider.get_margin_account_asset("ETH")
+        assert snap is not None
+        assert snap["borrowed"] == "0.00282625"
+        assert snap["free"] == "0.0029"
+        assert snap["interest"] == "0.0000001"
+        assert snap["netAsset"] == "0.00007"
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
 class TestGetOrderIdRouting:
     """Tests for get_order() routing between orderId and origClientOrderId."""
 
@@ -1357,10 +1450,12 @@ class TestMarginFlag:
     @patch("src.data_providers.binance_provider.get_config")
     def test_is_live_flag(self, mock_config, mock_client_class):
         """Verify _is_live=True when TRADING_MODE=live."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "spot",
-            "TRADING_MODE": "live",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "spot",
+                "TRADING_MODE": "live",
+            }
+        )
         mock_client = Mock()
         mock_client_class.return_value = mock_client
 
@@ -1387,10 +1482,12 @@ class TestMarginFailFast:
     @patch("src.data_providers.binance_provider.get_config")
     def test_margin_live_mode_no_offline_fallback(self, mock_config, mock_client_class):
         """Live+margin raises RuntimeError instead of falling back to offline stub."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "margin",
-            "TRADING_MODE": "live",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "margin",
+                "TRADING_MODE": "live",
+            }
+        )
         mock_client_class.side_effect = Exception("Connection refused")
 
         with pytest.raises(RuntimeError, match="FATAL.*live margin mode"):
@@ -1400,10 +1497,12 @@ class TestMarginFailFast:
     @patch("src.data_providers.binance_provider.get_config")
     def test_margin_paper_mode_allows_offline_fallback(self, mock_config, mock_client_class):
         """Paper+margin falls back to offline stub (no RuntimeError)."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "margin",
-            "TRADING_MODE": "paper",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "margin",
+                "TRADING_MODE": "paper",
+            }
+        )
         mock_client_class.side_effect = Exception("Connection refused")
 
         provider = BinanceProvider()
@@ -1413,10 +1512,12 @@ class TestMarginFailFast:
     @patch("src.data_providers.binance_provider.get_config")
     def test_margin_live_no_sdk_fails_fast(self, mock_config):
         """Live+margin raises RuntimeError when SDK is not installed."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "margin",
-            "TRADING_MODE": "live",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "margin",
+                "TRADING_MODE": "live",
+            }
+        )
 
         with pytest.raises(RuntimeError, match="Binance library not available"):
             BinanceProvider()
@@ -1479,10 +1580,12 @@ class TestMarginStartupChecks:
     @patch("src.data_providers.binance_provider.get_config")
     def test_margin_startup_api_error_live_raises(self, mock_config, mock_client_class):
         """API error during margin verification in live mode raises RuntimeError."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "margin",
-            "TRADING_MODE": "live",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "margin",
+                "TRADING_MODE": "live",
+            }
+        )
         mock_client = Mock()
         mock_client_class.return_value = mock_client
         mock_client.get_margin_account.side_effect = Exception("API timeout")
@@ -1494,10 +1597,12 @@ class TestMarginStartupChecks:
     @patch("src.data_providers.binance_provider.get_config")
     def test_margin_startup_api_error_paper_warns(self, mock_config, mock_client_class):
         """API error during margin verification in paper mode logs warning, no raise."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "margin",
-            "TRADING_MODE": "paper",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "margin",
+                "TRADING_MODE": "paper",
+            }
+        )
         mock_client = Mock()
         mock_client_class.return_value = mock_client
         mock_client.get_margin_account.side_effect = Exception("API timeout")
@@ -1515,10 +1620,12 @@ class TestMarginBaseAssetGuard:
     @patch("src.data_providers.binance_provider.get_config")
     def test_warns_non_usdt_holdings_in_live_mode(self, mock_config, mock_client_class):
         """Live margin mode warns (not raises) for non-USDT assets — could be a recovering long."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "margin",
-            "TRADING_MODE": "live",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "margin",
+                "TRADING_MODE": "live",
+            }
+        )
         mock_client = Mock()
         mock_client_class.return_value = mock_client
         mock_client.get_margin_account.return_value = {
@@ -1542,10 +1649,12 @@ class TestMarginBaseAssetGuard:
     @patch("src.data_providers.binance_provider.get_config")
     def test_allows_dust_holdings(self, mock_config, mock_client_class):
         """Dust amounts (< $1) are ignored."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "margin",
-            "TRADING_MODE": "live",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "margin",
+                "TRADING_MODE": "live",
+            }
+        )
         mock_client = Mock()
         mock_client_class.return_value = mock_client
         mock_client.get_margin_account.return_value = {
@@ -1567,10 +1676,12 @@ class TestMarginBaseAssetGuard:
     @patch("src.data_providers.binance_provider.get_config")
     def test_warns_in_paper_mode(self, mock_config, mock_client_class):
         """Paper mode warns but doesn't raise for non-USDT holdings."""
-        mock_config.return_value = _make_config_mock({
-            "BINANCE_ACCOUNT_TYPE": "margin",
-            "TRADING_MODE": "paper",
-        })
+        mock_config.return_value = _make_config_mock(
+            {
+                "BINANCE_ACCOUNT_TYPE": "margin",
+                "TRADING_MODE": "paper",
+            }
+        )
         mock_client = Mock()
         mock_client_class.return_value = mock_client
         mock_client.get_margin_account.return_value = {
@@ -1661,7 +1772,9 @@ class TestMarginDispatch:
     @patch("src.data_providers.binance_provider.get_config")
     def test_spot_dispatch_routes_to_spot_methods(self, mock_config, mock_client_class):
         """Dispatch methods call spot client methods when _use_margin=False."""
-        provider, mock_client = self._make_provider(mock_config, mock_client_class, use_margin=False)
+        provider, mock_client = self._make_provider(
+            mock_config, mock_client_class, use_margin=False
+        )
 
         # _call_get_account
         mock_client.get_account.return_value = {"balances": [], "canTrade": True}
@@ -1711,11 +1824,16 @@ class TestMarginDispatch:
     @patch("src.data_providers.binance_provider.get_config")
     def test_spot_dispatch_strips_sideEffectType(self, mock_config, mock_client_class):
         """Spot dispatch removes sideEffectType param to avoid Binance error."""
-        provider, mock_client = self._make_provider(mock_config, mock_client_class, use_margin=False)
+        provider, mock_client = self._make_provider(
+            mock_config, mock_client_class, use_margin=False
+        )
 
         mock_client.create_order.return_value = {"orderId": "123"}
         provider._call_create_order(
-            symbol="BTCUSDT", side="BUY", type="MARKET", quantity=0.1,
+            symbol="BTCUSDT",
+            side="BUY",
+            type="MARKET",
+            quantity=0.1,
             sideEffectType="MARGIN_BUY",
         )
         call_kwargs = mock_client.create_order.call_args.kwargs
@@ -1988,27 +2106,37 @@ class TestMarginErrorCodes:
     def test_margin_insufficient_balance_raises(self, mock_config, mock_client_class):
         """Error -3041 (insufficient margin balance) raises ValueError, not None."""
         from binance.exceptions import BinanceAPIException
+
         from src.data_providers.exchange_interface import OrderType
 
         mock_config.return_value = _make_config_mock({"BINANCE_ACCOUNT_TYPE": "margin"})
         mock_client = Mock()
         mock_client_class.return_value = mock_client
         mock_client.get_margin_account.return_value = {
-            "tradeEnabled": True, "borrowEnabled": True,
-            "marginLevel": "2.5", "userAssets": [],
+            "tradeEnabled": True,
+            "borrowEnabled": True,
+            "marginLevel": "2.5",
+            "userAssets": [],
         }
         mock_client.get_margin_symbol.return_value = {
-            "isMarginTrade": True, "isBuyAllowed": True, "isSellAllowed": True,
+            "isMarginTrade": True,
+            "isBuyAllowed": True,
+            "isSellAllowed": True,
         }
         mock_client.get_exchange_info.return_value = {
-            "symbols": [{
-                "symbol": "ETHUSDT", "baseAsset": "ETH", "quoteAsset": "USDT",
-                "status": "TRADING", "filters": [
-                    {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
-                    {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
-                    {"filterType": "MIN_NOTIONAL", "minNotional": "10"},
-                ],
-            }],
+            "symbols": [
+                {
+                    "symbol": "ETHUSDT",
+                    "baseAsset": "ETH",
+                    "quoteAsset": "USDT",
+                    "status": "TRADING",
+                    "filters": [
+                        {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                        {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
+                        {"filterType": "MIN_NOTIONAL", "minNotional": "10"},
+                    ],
+                }
+            ],
         }
 
         # Simulate Binance margin error -3041

@@ -80,7 +80,9 @@ DEFAULT_HEALTH_MAX_CHECK_INTERVAL = 300  # Maximum health check interval
 # A cross-margin borrow with no tracked position behind it (e.g. an un-repaid short
 # remnant) blocks new shorts (#697) and accrues interest. The reconciler sweep repays
 # such an orphaned borrow ONLY when the base asset is provably flat and fully covered.
-DEFAULT_ORPHANED_BORROW_REPAY_CAP_USD = 50.0  # Max USD value of a borrow to auto-repay; above → alert only
+DEFAULT_ORPHANED_BORROW_REPAY_CAP_USD = (
+    50.0  # Max USD value of a borrow to auto-repay; above → alert only
+)
 NET_FLAT_DUST_USD = 1.0  # |netAsset| * price below this counts as flat (no real position)
 BORROW_DUST_EPSILON = 1e-8  # Borrowed amounts at/below this are treated as zero
 ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS = 300  # Min seconds between sweep attempts per base asset
