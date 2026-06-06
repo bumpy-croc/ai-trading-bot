@@ -1041,6 +1041,130 @@ class TestStopLossQuantityStepPrecision:
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 @patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
+class TestStopLossPriceTickPrecision:
+    """The stopPrice/price sent to Binance must carry no more decimals than PRICE_FILTER allows.
+
+    `round(price / tick) * tick` in float math leaves artifacts (e.g.
+    round(1648.82 / 0.01) * 0.01 == 1648.8200000000001). Sent verbatim, that
+    over-precise value is rejected with code -1111 ("Parameter 'price' has too much
+    precision"), which in prod made every stop-loss placement fail and forced an
+    emergency close of the just-opened position. The quantize step must clamp both the
+    stopPrice and the derived limit price to the tick's decimal count. Without the fix
+    these assertions FAIL (the raw float exponent is far below the tick precision); with
+    it the exponent never goes below what the tick allows. Mirror of the quantity 51077
+    guard in TestStopLossQuantityStepPrecision, for the price side (#698).
+    """
+
+    @staticmethod
+    def _make_provider(mock_config, mock_client_class, tick_size, base_asset="ETH"):
+        """Build a provider whose symbol_info reports `tick_size` and has free balance."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {"orderId": "slp"}
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={
+                "step_size": 0.0001,
+                "tick_size": tick_size,
+                "base_asset": base_asset,
+            }
+        )
+        # Free balance comfortably covers the quantity so the SELL cap never trims it.
+        provider.get_balance = Mock(return_value=Mock(free=1_000_000.0))
+        return provider, mock_client
+
+    @staticmethod
+    def _tick_decimals(tick_size):
+        """Number of decimal places the tick size implies (e.g. 0.01 -> 2, 1.0 -> 1)."""
+        return max(0, -Decimal(str(tick_size)).as_tuple().exponent)
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize(
+        ("tick_size", "stop_price"),
+        [
+            # tick -> a price whose round(price/tick)*tick float round-trip is over-precise.
+            (0.01, 1648.82),  # reproduces the live -1111 case; raw exp far below -2
+            (0.1, 1648.8),
+            (0.01, 2100.07),
+            (1.0, 2100.0),  # integer tick: must stay whole, no artifact introduced
+        ],
+    )
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_buy_branch_prices_quantized_to_tick(
+        self, mock_config, mock_client_class, tick_size, stop_price
+    ):
+        """BUY branch: stopPrice and the derived limit price carry no excess decimals."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, tick_size)
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.BUY, quantity=0.05, stop_price=stop_price
+        )
+
+        assert result == "slp"
+        tick_decimals = self._tick_decimals(tick_size)
+        sent_stop = mock_client.create_order.call_args.kwargs["stopPrice"]
+        sent_price = mock_client.create_order.call_args.kwargs["price"]
+        # Sent as strings; neither may have more decimals than the tick implies.
+        assert Decimal(sent_stop).as_tuple().exponent >= -tick_decimals
+        assert Decimal(sent_price).as_tuple().exponent >= -tick_decimals
+        # stopPrice preserves the intended level (within one tick).
+        assert float(sent_stop) == pytest.approx(stop_price, abs=tick_size)
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize(
+        ("tick_size", "stop_price"),
+        [
+            (0.01, 1899.93),
+            (0.1, 1899.9),
+            (0.01, 1648.82),
+            (1.0, 1900.0),
+        ],
+    )
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_sell_branch_prices_quantized_to_tick(
+        self, mock_config, mock_client_class, tick_size, stop_price
+    ):
+        """SELL branch: stopPrice and the derived limit price carry no excess decimals."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, tick_size)
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.SELL, quantity=0.05, stop_price=stop_price
+        )
+
+        assert result == "slp"
+        tick_decimals = self._tick_decimals(tick_size)
+        sent_stop = mock_client.create_order.call_args.kwargs["stopPrice"]
+        sent_price = mock_client.create_order.call_args.kwargs["price"]
+        assert Decimal(sent_stop).as_tuple().exponent >= -tick_decimals
+        assert Decimal(sent_price).as_tuple().exponent >= -tick_decimals
+        assert float(sent_stop) == pytest.approx(stop_price, abs=tick_size)
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_reproduces_1111_case_exponent_within_two_decimals(
+        self, mock_config, mock_client_class
+    ):
+        """Explicit -1111 reproduction: tick 0.01, stop 1648.82 -> exponent >= -2."""
+        provider, mock_client = self._make_provider(mock_config, mock_client_class, 0.01)
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.BUY, quantity=0.05, stop_price=1648.82
+        )
+
+        assert result == "slp"
+        sent_stop = mock_client.create_order.call_args.kwargs["stopPrice"]
+        assert Decimal(sent_stop).as_tuple().exponent >= -2
+        assert float(sent_stop) == pytest.approx(1648.82, abs=1e-9)
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
 class TestGetOrderIdRouting:
     """Tests for get_order() routing between orderId and origClientOrderId."""
 
