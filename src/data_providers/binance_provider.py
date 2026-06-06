@@ -1701,8 +1701,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 tick_size_raw = symbol_info.get("tick_size", 0.01)
                 tick_size = float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
                 if tick_size > 0:
-                    stop_price = round(stop_price / tick_size) * tick_size
-                    limit_price = round(limit_price / tick_size) * tick_size
+                    # `round(x / tick) * tick` in float math leaves artifacts (e.g.
+                    # round(1648.82 / 0.01) * 0.01 = 1648.8200000000001) that exceed the
+                    # asset's price precision, so Binance rejects the stop-loss with code
+                    # -1111 ("price has too much precision"). Quantize to the tick's decimal
+                    # count, mirroring the quantity quantize at the LOT_SIZE step below.
+                    stop_price = quantize_to_step(
+                        round(stop_price / tick_size) * tick_size, tick_size
+                    )
+                    limit_price = quantize_to_step(
+                        round(limit_price / tick_size) * tick_size, tick_size
+                    )
 
                 # Validate step_size is numeric before division to prevent TypeError
                 step_size_raw = symbol_info.get("step_size", 0.00001)
