@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import Enum
 from functools import wraps
 from typing import Any, TypeVar
@@ -1084,6 +1085,84 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         except Exception as e:
             logger.warning("Failed to get borrowed amount for %s: %s", asset, e)
             return None  # Unknown — caller must not assume position is closed
+
+    def get_margin_account_asset(self, asset: str) -> dict | None:
+        """Raw cross-margin wallet fields for ``asset`` as strings, or None on error.
+
+        Returns a dict with ``free``/``locked``/``borrowed``/``interest``/``netAsset``
+        (Binance's raw string values) so callers can build exact ``Decimal``s rather
+        than float-rounding a loan amount. ``None`` means the lookup could not be
+        confirmed (transient error) — callers making a safety decision must treat
+        ``None`` as "unknown" and NOT act. An asset absent from the account returns
+        zeros.
+        """
+        if not self._use_margin or not BINANCE_AVAILABLE or not self._client:
+            return None
+        try:
+            account = self._call_get_account()
+            for bal in account.get("balances", []):
+                if bal["asset"] == asset:
+                    return {
+                        "asset": asset,
+                        "free": str(bal.get("free", "0")),
+                        "locked": str(bal.get("locked", "0")),
+                        "borrowed": str(bal.get("borrowed", "0")),
+                        "interest": str(bal.get("interest", "0")),
+                        "netAsset": str(bal.get("netAsset", bal.get("free", "0"))),
+                    }
+            return {
+                "asset": asset,
+                "free": "0",
+                "locked": "0",
+                "borrowed": "0",
+                "interest": "0",
+                "netAsset": "0",
+            }
+        except Exception as e:
+            logger.warning("Failed to read margin account asset %s: %s", asset, e)
+            return None
+
+    def has_open_orders(self, symbol: str) -> bool | None:
+        """Whether ``symbol`` has any open order — fail-CLOSED.
+
+        Unlike :meth:`get_open_orders` (which returns ``[]`` on failure), this returns
+        ``None`` when the lookup cannot be confirmed (transient error), so a caller
+        making a safety decision can treat ``None`` as "an order may exist" and skip.
+        ``True`` if one or more open orders, ``False`` if confirmed none.
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            return None
+        try:
+            orders_data = self._call_get_open_orders(symbol=symbol)
+            return len(orders_data) > 0
+        except Exception as e:
+            logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
+            return None
+
+    def repay_margin_loan(self, asset: str, amount: Decimal) -> bool:
+        """Repay a cross-margin loan for ``asset`` via the modern borrow-repay endpoint.
+
+        Uses ``POST /sapi/v1/margin/borrow-repay`` (``type=REPAY``); the legacy
+        ``/sapi/v1/margin/repay`` endpoint is deprecated by Binance. Cross margin only
+        — no ``symbol`` (that parameter is for isolated margin). Returns ``True`` on
+        success. Never raises: any failure (e.g. ``-3015`` repay-exceeds-liability,
+        ``-3007`` HAS_PENDING_TRANSACTION, network) returns ``False`` so the caller
+        re-evaluates on the next cycle. Success is confirmed by the caller re-reading
+        the account, not by this return value alone.
+        """
+        if not self._use_margin or not BINANCE_AVAILABLE or not self._client:
+            return False
+        if amount <= 0:
+            return False
+        try:
+            self._client.margin_borrow_repay(
+                asset=asset, amount=str(amount), type="REPAY", isIsolated="FALSE"
+            )
+            logger.info("Margin repay submitted: %s %s", amount, asset)
+            return True
+        except Exception as e:
+            logger.warning("Margin repay failed for %s amount %s: %s", asset, amount, e)
+            return False
 
     def get_margin_interest_history(
         self,
