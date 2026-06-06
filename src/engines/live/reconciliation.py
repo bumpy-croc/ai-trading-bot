@@ -15,20 +15,25 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from src.config.constants import (
+    BORROW_DUST_EPSILON,
     DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE,
+    DEFAULT_ORPHANED_BORROW_REPAY_CAP_USD,
     DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES,
     DEFAULT_RECONCILE_TIME_BUDGET_SECONDS,
     DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT,
-    DEFAULT_RECONCILIATION_DUST_THRESHOLD,
     DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
     DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN,
     DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
     DEFAULT_STOP_LOSS_PCT,
+    NET_FLAT_DUST_USD,
+    ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS,
 )
+from src.config.feature_flags import get_flag
 from src.data_providers.exchange_interface import SideEffectType
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.shared.models import PositionSide
@@ -420,7 +425,6 @@ class PositionReconciler:
         Defensive: catches all exceptions since the position may already be
         in the correct state.
         """
-        from src.engines.live.execution.position_tracker import LivePosition
 
         order_type = order_data.get("order_type", "")
         symbol = order_data.get("symbol", "")
@@ -448,7 +452,7 @@ class PositionReconciler:
         fill_qty: float,
     ) -> None:
         """Create position if an ENTRY order filled but was never persisted."""
-        from datetime import UTC, datetime
+        from datetime import UTC
 
         from src.engines.live.execution.position_tracker import LivePosition
 
@@ -547,8 +551,7 @@ class PositionReconciler:
                     )
                 except Exception as e:
                     logger.warning(
-                        "Failed to deduct entry fee $%.4f for recovered "
-                        "position %s: %s",
+                        "Failed to deduct entry fee $%.4f for recovered " "position %s: %s",
                         entry_fee,
                         client_order_id,
                         e,
@@ -1688,10 +1691,14 @@ class PositionReconciler:
     def _extract_base_asset(symbol: str) -> str:
         """Extract the base asset from a trading pair symbol.
 
-        Strips common quote currencies (USDT, BUSD, USD) from the end
-        of the symbol to get the base asset (e.g., "BTC" from "BTCUSDT").
+        Strips common quote currencies (USDT, BUSD, USDC, USD) from the end of
+        the symbol to get the base asset (e.g., "BTC" from "BTCUSDT", "ETH" from
+        "ETHUSDC"). Longest-first so 4-char quotes match before "USD". Single
+        source of truth for base-asset resolution (incl. the orphaned-borrow sweep,
+        which groups symbols by base asset — a missed quote would split a base into
+        two groups and weaken Gate 2).
         """
-        for quote in ("USDT", "BUSD", "USD"):
+        for quote in ("USDT", "BUSD", "USDC", "USD"):
             if symbol.endswith(quote) and len(symbol) > len(quote):
                 return symbol[: -len(quote)]
         return symbol
@@ -1817,9 +1824,7 @@ class PositionReconciler:
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
 
-    def _verify_margin_position_exists(
-        self, position: Any, result: ReconciliationResult
-    ) -> None:
+    def _verify_margin_position_exists(self, position: Any, result: ReconciliationResult) -> None:
         """Verify a margin position still exists by checking borrowed balance.
 
         For short positions, checks if the base asset has borrowed > 0.
@@ -1909,13 +1914,9 @@ class PositionReconciler:
                         self._remove_phantom_position(position, result)
 
         except Exception as e:
-            logger.warning(
-                "Margin position check failed for %s: %s — position retained", symbol, e
-            )
+            logger.warning("Margin position check failed for %s: %s — position retained", symbol, e)
 
-    def _remove_phantom_position(
-        self, position: Any, result: ReconciliationResult
-    ) -> None:
+    def _remove_phantom_position(self, position: Any, result: ReconciliationResult) -> None:
         """Remove a phantom position from tracker and DB, cancel its exchange SL."""
         # Cancel the server-side stop-loss before removing from tracker.
         # Leaving an orphaned SL on the exchange is a fund-loss path —
@@ -1926,12 +1927,15 @@ class PositionReconciler:
                 self.exchange.cancel_order(sl_order_id, position.symbol)
                 logger.info(
                     "Cancelled orphaned SL %s for removed position %s",
-                    sl_order_id, position.symbol,
+                    sl_order_id,
+                    position.symbol,
                 )
             except Exception as e:
                 logger.warning(
                     "Failed to cancel SL %s for removed position %s: %s",
-                    sl_order_id, position.symbol, e,
+                    sl_order_id,
+                    position.symbol,
+                    e,
                 )
 
         self.position_tracker.remove_position(position.order_id)
@@ -2313,6 +2317,8 @@ class PeriodicReconciler:
         interval: float = DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
         on_critical: Any = None,
         use_margin: bool = False,
+        symbols: list[str] | None = None,
+        sweep_cooldown: dict[str, float] | None = None,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -2326,6 +2332,8 @@ class PeriodicReconciler:
             use_margin: Whether margin trading mode is active. When True,
                 skip spot-specific checks (asset holdings) that don't apply
                 to cross-margin accounts.
+            symbols: Configured trading symbols, used by the orphaned-borrow sweep
+                to know which base assets it may repay.
         """
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
@@ -2334,6 +2342,7 @@ class PeriodicReconciler:
         self._use_margin = use_margin
         self.interval = interval
         self.on_critical = on_critical
+        self._symbols = symbols or []
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -2343,6 +2352,12 @@ class PeriodicReconciler:
         self._locks_lock = threading.Lock()  # Protects _position_mutation_locks dict
         # Cache for margin interest queries (5-min TTL per position)
         self._interest_cache: dict[str, tuple[float, float]] = {}
+        # Per-base-asset cooldown timestamps for the orphaned-borrow sweep. Shared
+        # with the engine's startup sweep when provided, so the two paths don't both
+        # act within one cooldown window.
+        self._sweep_cooldown: dict[str, float] = (
+            sweep_cooldown if sweep_cooldown is not None else {}
+        )
 
     def start(self) -> None:
         """Start the periodic reconciliation daemon thread."""
@@ -2400,6 +2415,20 @@ class PeriodicReconciler:
 
     def _reconcile_cycle(self) -> None:
         """Execute one reconciliation cycle."""
+        # Orphaned-borrow sweep runs every cycle — INCLUDING when flat — because an
+        # orphaned borrow exists precisely when there is no tracked position. Must
+        # run before the flat early-return below. No-op unless margin + flag enabled.
+        if self._use_margin and self._symbols:
+            run_orphaned_borrow_sweep(
+                exchange=self.exchange,
+                position_tracker=self.position_tracker,
+                db_manager=self.db_manager,
+                session_id=self.session_id,
+                use_margin=self._use_margin,
+                symbols=self._symbols,
+                cooldown_state=self._sweep_cooldown,
+            )
+
         # Snapshot positions (release lock before API calls)
         positions_snapshot = self.position_tracker.positions
         if not positions_snapshot:
@@ -2478,9 +2507,7 @@ class PeriodicReconciler:
                     symbol = position.symbol
                     base_asset = PositionReconciler._extract_base_asset(symbol)
                     side = getattr(position, "side", None)
-                    is_short = (
-                        side == PositionSide.SHORT or str(side).lower() == "short"
-                    )
+                    is_short = side == PositionSide.SHORT or str(side).lower() == "short"
 
                     balance = self.exchange.get_balance(base_asset)
                     position_gone = False
@@ -2539,9 +2566,7 @@ class PeriodicReconciler:
                             try:
                                 self.db_manager.close_position(db_pos_id)
                             except Exception as e:
-                                logger.warning(
-                                    "Failed to close DB position %s: %s", db_pos_id, e
-                                )
+                                logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
                 except Exception as e:
                     logger.warning(
                         "Margin position check failed for %s: %s",
@@ -2560,18 +2585,14 @@ class PeriodicReconciler:
             for _key, position in list(positions_snapshot.items()):
                 try:
                     side = getattr(position, "side", None)
-                    is_short = (
-                        side == PositionSide.SHORT or str(side).lower() == "short"
-                    )
+                    is_short = side == PositionSide.SHORT or str(side).lower() == "short"
                     if not is_short:
                         continue
                     entry_time = getattr(position, "entry_time", None)
                     if entry_time is None:
                         continue
 
-                    base_asset = PositionReconciler._extract_base_asset(
-                        position.symbol
-                    )
+                    base_asset = PositionReconciler._extract_base_asset(position.symbol)
                     cache_key = f"{position.symbol}_{_key}"
                     cached = self._interest_cache.get(cache_key)
                     if cached and (now - cached[1]) < interest_cache_ttl:
@@ -2608,9 +2629,7 @@ class PeriodicReconciler:
                     )
 
             # Evict stale cache entries for positions no longer tracked
-            active_keys = {
-                f"{pos.symbol}_{k}" for k, pos in positions_snapshot.items()
-            }
+            active_keys = {f"{pos.symbol}_{k}" for k, pos in positions_snapshot.items()}
             stale = [k for k in self._interest_cache if k not in active_keys]
             for k in stale:
                 del self._interest_cache[k]
@@ -2630,11 +2649,7 @@ class PeriodicReconciler:
 
                 current_size = getattr(position, "current_size", None)
                 original_size = getattr(position, "original_size", None)
-                if (
-                    current_size is not None
-                    and original_size is not None
-                    and original_size > 0
-                ):
+                if current_size is not None and original_size is not None and original_size > 0:
                     position_qty = qty * (current_size / original_size)
                 else:
                     position_qty = qty
@@ -2754,7 +2769,12 @@ class PeriodicReconciler:
                             pos_qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if current is not None and original is not None and original > 0 and pos_qty > 0:
+                            if (
+                                current is not None
+                                and original is not None
+                                and original > 0
+                                and pos_qty > 0
+                            ):
                                 held = pos_qty * (current / original)
                                 remaining = max(held - partial_fill, 0.0)
                                 position.current_size = original * (remaining / max(pos_qty, 1e-9))
@@ -3093,3 +3113,270 @@ def classify_severity(
             return Severity.LOW
 
     return Severity.LOW
+
+
+# --------------------------------------------------------------------------- #
+# Orphaned-margin-borrow sweep
+# --------------------------------------------------------------------------- #
+# A cross-margin borrow with no tracked position behind it (e.g. a short whose
+# cover never repaid the loan) blocks new shorts (#697) and accrues interest.
+# Closing repays via AUTO_REPAY on the order, but a flat bot fires no close, so an
+# orphaned borrow is never repaid. This sweep repays it — strictly guarded, per
+# BASE ASSET (a borrow is asset-scoped, not tied to one symbol). Default mode is
+# dry-run (detect + log only). See docs/plan and ORPHANED_BORROW_* constants.
+#
+# NOTE: active mode requires the shared base-asset exchange-mutation lock that
+# serialises this sweep against entry/exit (a focused follow-up). Until that lands
+# keep the flag at "off" or "dry_run" in production.
+
+
+def _base_asset_of(symbol: str) -> str:
+    """Base asset of a pair (delegates to the canonical reconciler implementation).
+
+    Single source of truth — avoids a divergent copy of the quote-stripping logic.
+    """
+    return PositionReconciler._extract_base_asset(symbol)
+
+
+def run_orphaned_borrow_sweep(
+    *,
+    exchange: Any,
+    position_tracker: Any,
+    db_manager: Any,
+    session_id: int,
+    use_margin: bool,
+    symbols: list[str],
+    cooldown_state: dict[str, float],
+) -> list[ReconciliationResult]:
+    """Repay cross-margin borrows that have no tracked position (orphaned).
+
+    Groups ``symbols`` by base asset and, for each base asset, repays its borrow
+    ONLY when every configured symbol sharing that base is provably flat and
+    order-free, the held balance fully covers the borrow, net exposure is ~flat,
+    and the value is under a hard USD cap. Mode comes from the
+    ``orphaned_borrow_sweep_mode`` feature flag: ``off`` (no-op), ``dry_run``
+    (detect + log, default) or ``active`` (repay). Never raises; a per-asset error
+    is isolated. ``cooldown_state`` is mutated to throttle attempts per base asset.
+    """
+    results: list[ReconciliationResult] = []
+    if not use_margin or not symbols:
+        return results
+    mode = get_flag("orphaned_borrow_sweep_mode", "off")
+    if mode not in ("dry_run", "active"):
+        return results
+    if not all(
+        hasattr(exchange, m)
+        for m in ("get_margin_account_asset", "repay_margin_loan", "has_open_orders")
+    ):
+        return results
+
+    by_base: dict[str, list[str]] = {}
+    for sym in symbols:
+        by_base.setdefault(_base_asset_of(sym), []).append(sym)
+
+    for base_asset, base_symbols in by_base.items():
+        try:
+            result = _sweep_one_base_asset(
+                exchange=exchange,
+                position_tracker=position_tracker,
+                db_manager=db_manager,
+                session_id=session_id,
+                base_asset=base_asset,
+                base_symbols=base_symbols,
+                mode=mode,
+                cooldown_state=cooldown_state,
+            )
+            if result is not None:
+                results.append(result)
+        except Exception as e:  # never let a sweep error break the caller
+            logger.warning("Orphaned-borrow sweep failed for %s: %s — skipped", base_asset, e)
+    return results
+
+
+def _sweep_one_base_asset(
+    *,
+    exchange: Any,
+    position_tracker: Any,
+    db_manager: Any,
+    session_id: int,
+    base_asset: str,
+    base_symbols: list[str],
+    mode: str,
+    cooldown_state: dict[str, float],
+) -> ReconciliationResult | None:
+    """Evaluate the gate chain for one base asset and repay/alert/dry-run."""
+    now = time.time()
+    if now - cooldown_state.get(base_asset, 0.0) < ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS:
+        return None
+
+    # Gate 2: no tracked position for ANY symbol sharing the base asset.
+    for sym in base_symbols:
+        if position_tracker.has_position_for_symbol(sym):
+            return None
+
+    # Gate 3 (fail-closed): no in-flight order (journal rows or open exchange orders)
+    # for any symbol sharing the base asset. Unknown == "an order may exist" -> skip.
+    try:
+        unresolved = db_manager.get_unresolved_orders(session_id)
+    except Exception as e:
+        logger.warning(
+            "Orphaned-borrow sweep: unresolved-orders lookup failed for %s — skipping (fail-closed): %s",
+            base_asset,
+            e,
+        )
+        return None
+    if unresolved is None:
+        return None
+    base_set = set(base_symbols)
+    for order in unresolved:
+        osym = order.get("symbol") if isinstance(order, dict) else getattr(order, "symbol", None)
+        if osym in base_set:
+            return None
+    for sym in base_symbols:
+        has_orders = exchange.has_open_orders(sym)
+        if has_orders is None or has_orders:  # fail-closed on None
+            return None
+
+    # Gate 5: provably flat & covered, from a single Decimal snapshot.
+    snap = exchange.get_margin_account_asset(base_asset)
+    if snap is None:
+        return None
+    try:
+        borrowed = Decimal(snap["borrowed"])
+        interest = Decimal(snap["interest"])
+        free = Decimal(snap["free"])
+        locked = Decimal(snap["locked"])
+        net = Decimal(snap["netAsset"])
+    except (KeyError, ArithmeticError, TypeError, ValueError):
+        return None
+    owed = borrowed + interest
+    if owed <= Decimal(str(BORROW_DUST_EPSILON)):
+        return None  # nothing to repay
+    if locked != 0:
+        return None  # base asset reserved by an order
+    if free < owed:
+        logger.warning(
+            "Orphaned-borrow sweep: %s free %s < owed %s — skipping (possible real short)",
+            base_asset,
+            free,
+            owed,
+        )
+        return None
+
+    # Gate 6: valid price + value cap.
+    try:
+        price = exchange.get_current_price(base_symbols[0])
+    except Exception as e:
+        logger.warning(
+            "Orphaned-borrow sweep: price lookup failed for %s — skipping: %s",
+            base_symbols[0],
+            e,
+        )
+        price = None
+    if price is None or not math.isfinite(float(price)) or float(price) <= 0:
+        return None
+    price_d = Decimal(str(price))
+    if abs(net) * price_d > Decimal(str(NET_FLAT_DUST_USD)):
+        return None  # net exposure not flat — a real position exists
+    owed_value = owed * price_d
+
+    def _audit(old: str, new: str, reason: str, severity: Severity) -> None:
+        try:
+            db_manager.log_audit_event(
+                session_id=session_id,
+                entity_type="balance",
+                entity_id=None,
+                field="borrowed",
+                old_value=old,
+                new_value=new,
+                reason=reason,
+                severity=severity.value,
+            )
+        except Exception as e:
+            logger.error("Failed to persist orphaned-borrow audit: %s", e, exc_info=True)
+
+    # Any decision (alert/dry-run/active) starts the cooldown.
+    cooldown_state[base_asset] = now
+
+    if owed_value > Decimal(str(DEFAULT_ORPHANED_BORROW_REPAY_CAP_USD)):
+        logger.critical(
+            "🚨 Orphaned %s borrow %s (~$%.2f) exceeds auto-repay cap $%.0f — manual review required",
+            base_asset,
+            owed,
+            float(owed_value),
+            DEFAULT_ORPHANED_BORROW_REPAY_CAP_USD,
+        )
+        _audit(
+            str(owed),
+            str(owed),
+            f"Orphaned margin borrow {base_asset} ~${float(owed_value):.2f} exceeds cap — manual review",
+            Severity.CRITICAL,
+        )
+        return ReconciliationResult(
+            entity_type="balance",
+            entity_id=base_asset,
+            status="unresolved",
+            severity=Severity.CRITICAL,
+        )
+
+    if mode == "dry_run":
+        logger.warning(
+            "🔍 DRY-RUN orphaned-borrow sweep: would repay %s %s (~$%.2f) — all gates passed",
+            owed,
+            base_asset,
+            float(owed_value),
+        )
+        _audit(
+            str(owed),
+            str(owed),
+            f"DRY-RUN: would repay orphaned margin borrow {owed} {base_asset}",
+            Severity.MEDIUM,
+        )
+        return ReconciliationResult(
+            entity_type="balance", entity_id=base_asset, status="skipped", severity=Severity.MEDIUM
+        )
+
+    # mode == "active": repay, then re-query to confirm the loan is cleared.
+    if not exchange.repay_margin_loan(base_asset, owed):
+        logger.warning("Orphaned-borrow repay returned False for %s %s", owed, base_asset)
+        return ReconciliationResult(
+            entity_type="balance",
+            entity_id=base_asset,
+            status="unresolved",
+            severity=Severity.MEDIUM,
+        )
+    verify = exchange.get_margin_account_asset(base_asset)
+    if verify is None:
+        logger.warning(
+            "Orphaned-borrow repay submitted for %s but post-repay re-query failed — re-verify next cycle",
+            base_asset,
+        )
+        return ReconciliationResult(
+            entity_type="balance",
+            entity_id=base_asset,
+            status="unresolved",
+            severity=Severity.MEDIUM,
+        )
+    try:
+        remaining = Decimal(verify["borrowed"]) + Decimal(verify["interest"])
+    except (KeyError, ArithmeticError, TypeError, ValueError):
+        remaining = owed  # cannot confirm -> treat as not-cleared
+    if remaining > Decimal(str(BORROW_DUST_EPSILON)):
+        logger.warning(
+            "Orphaned-borrow partial repay for %s — %s still owed; re-evaluate next cycle",
+            base_asset,
+            remaining,
+        )
+        return ReconciliationResult(
+            entity_type="balance",
+            entity_id=base_asset,
+            status="unresolved",
+            severity=Severity.MEDIUM,
+        )
+    logger.info(
+        "✅ Repaid orphaned margin borrow %s %s (~$%.2f)", owed, base_asset, float(owed_value)
+    )
+    _audit(str(owed), "0", f"Repaid orphaned margin borrow {owed} {base_asset}", Severity.HIGH)
+    return ReconciliationResult(
+        entity_type="balance", entity_id=base_asset, status="corrected", severity=Severity.HIGH
+    )
