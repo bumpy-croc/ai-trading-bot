@@ -23,6 +23,10 @@ pytestmark = pytest.mark.fast
 SYMBOL = "ETHUSDT"
 BASE = "ETH"
 
+# Sentinel so _run() defaults active-mode tests to a REAL lock registry (matching
+# production), while still allowing an explicit lock_registry=None to test fail-closed.
+_DEFAULT_REGISTRY = object()
+
 
 def _snapshot(borrowed="0.003", interest="0", free="0.003", locked="0", net="0.00007"):
     return {
@@ -77,8 +81,12 @@ def _run(
     symbols=(SYMBOL,),
     cooldown=None,
     use_margin=True,
-    lock_registry=None,
+    lock_registry=_DEFAULT_REGISTRY,
 ):
+    # Default to a real registry so active-mode gate tests exercise the locked path
+    # (as production does). Pass lock_registry=None explicitly to test fail-closed.
+    if lock_registry is _DEFAULT_REGISTRY:
+        lock_registry = BaseAssetLockRegistry()
     with patch.object(reconciliation, "get_flag", return_value=mode):
         return run_orphaned_borrow_sweep(
             exchange=exchange,
@@ -354,3 +362,10 @@ def test_lock_serialises_sweep_behind_an_entry_holding_the_lock():
     s.join(2.0)
     # The repay only happened after the entry released the lock.
     assert order.index("entry_released") < order.index("repay")
+
+
+def test_active_without_lock_registry_refuses_to_repay():
+    """Fail-closed: active mode with no lock registry must NOT repay (can't serialise)."""
+    ex = _exchange()
+    _run(ex, _tracker(), _db(), mode="active", lock_registry=None)
+    ex.repay_margin_loan.assert_not_called()

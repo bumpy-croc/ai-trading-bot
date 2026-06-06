@@ -3195,6 +3195,14 @@ def run_orphaned_borrow_sweep(
     mode = get_flag("orphaned_borrow_sweep_mode", "off")
     if mode not in ("dry_run", "active"):
         return results
+    # Fail-closed: a live repay MUST be serialised against entry/exit. Never repay
+    # unlocked, even if a direct caller forgot to pass the registry (#703).
+    if mode == "active" and lock_registry is None:
+        logger.error(
+            "Orphaned-borrow sweep ACTIVE mode requires a lock_registry to serialise "
+            "against entry/exit — refusing to repay unlocked."
+        )
+        return results
     if not all(
         hasattr(exchange, m)
         for m in ("get_margin_account_asset", "repay_margin_loan", "has_open_orders")
