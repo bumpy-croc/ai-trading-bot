@@ -493,6 +493,12 @@ class LiveTradingEngine:
         # Shared per-base-asset cooldown for the orphaned-borrow sweep, so the
         # startup sweep and the periodic reconciler don't both act in one window.
         self._orphan_sweep_cooldown: dict[str, float] = {}
+        # Shared per-base-asset exchange-mutation lock: entry/exit and the
+        # orphaned-borrow sweep serialise on it, so an active repay can never race a
+        # just-placed borrow that isn't tracked yet (#703).
+        from src.engines.live.reconciliation import BaseAssetLockRegistry
+
+        self._base_asset_locks = BaseAssetLockRegistry()
         self.completed_trades: list[Trade] = []
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
@@ -1509,6 +1515,7 @@ class LiveTradingEngine:
                     use_margin=use_margin,
                     symbols=[self._active_symbol] if self._active_symbol else [],
                     sweep_cooldown=self._orphan_sweep_cooldown,
+                    lock_registry=self._base_asset_locks,
                 )
                 self._periodic_reconciler.start()
                 logger.info("🔄 Periodic reconciler started")
@@ -3302,6 +3309,38 @@ class LiveTradingEngine:
         signal_strength: float,
         signal_confidence: float,
     ) -> None:
+        """Serialise the entry on the symbol's base-asset lock, then execute it.
+
+        The lock is held across order submit -> position tracking (and any
+        emergency-close fallback, which re-acquires it re-entrantly) so the
+        orphaned-borrow sweep can't repay a borrow this entry just created (#703).
+        """
+        from src.engines.live.reconciliation import PositionReconciler
+
+        base = PositionReconciler._extract_base_asset(symbol)
+        with self._base_asset_locks.lock_for(base):
+            self._execute_entry_locked(
+                symbol=symbol,
+                side=side,
+                size=size,
+                price=price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                signal_strength=signal_strength,
+                signal_confidence=signal_confidence,
+            )
+
+    def _execute_entry_locked(
+        self,
+        symbol: str,
+        side: PositionSide,
+        size: float,
+        price: float,
+        stop_loss: float | None,
+        take_profit: float | None,
+        signal_strength: float,
+        signal_confidence: float,
+    ) -> None:
         """Execute a new trading position using shared execution modules."""
         try:
             # Prevent duplicate positions on the same symbol (guards against multi-slot
@@ -3885,6 +3924,37 @@ class LiveTradingEngine:
                         self.current_balance += refund_amount
 
     def _execute_exit(
+        self,
+        position: Position,
+        reason: str,
+        limit_price: float | None,
+        current_price: float,
+        candle_high: float | None,
+        candle_low: float | None,
+        candle,
+        skip_live_close: bool = False,
+    ) -> None:
+        """Serialise the close on the position's base-asset lock, then execute it (#703).
+
+        Re-entrant: an entry that already holds the lock (its SL-failed emergency
+        close routes here) re-acquires it on the same thread without deadlock.
+        """
+        from src.engines.live.reconciliation import PositionReconciler
+
+        base = PositionReconciler._extract_base_asset(getattr(position, "symbol", "") or "")
+        with self._base_asset_locks.lock_for(base):
+            self._execute_exit_locked(
+                position,
+                reason,
+                limit_price,
+                current_price,
+                candle_high,
+                candle_low,
+                candle,
+                skip_live_close=skip_live_close,
+            )
+
+    def _execute_exit_locked(
         self,
         position: Position,
         reason: str,
@@ -5004,6 +5074,7 @@ class LiveTradingEngine:
                             use_margin=use_margin,
                             symbols=[self._active_symbol],
                             cooldown_state=self._orphan_sweep_cooldown,
+                            lock_registry=self._base_asset_locks,
                         )
 
                     # Process results even with no positions — a filled entry

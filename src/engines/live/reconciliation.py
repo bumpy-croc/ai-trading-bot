@@ -2319,6 +2319,7 @@ class PeriodicReconciler:
         use_margin: bool = False,
         symbols: list[str] | None = None,
         sweep_cooldown: dict[str, float] | None = None,
+        lock_registry: Any = None,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -2358,6 +2359,8 @@ class PeriodicReconciler:
         self._sweep_cooldown: dict[str, float] = (
             sweep_cooldown if sweep_cooldown is not None else {}
         )
+        # Shared per-base-asset exchange-mutation lock (serialises sweep vs entry/exit).
+        self._lock_registry = lock_registry
 
     def start(self) -> None:
         """Start the periodic reconciliation daemon thread."""
@@ -2427,6 +2430,7 @@ class PeriodicReconciler:
                 use_margin=self._use_margin,
                 symbols=self._symbols,
                 cooldown_state=self._sweep_cooldown,
+                lock_registry=self._lock_registry,
             )
 
         # Snapshot positions (release lock before API calls)
@@ -3125,9 +3129,31 @@ def classify_severity(
 # BASE ASSET (a borrow is asset-scoped, not tied to one symbol). Default mode is
 # dry-run (detect + log only). See docs/plan and ORPHANED_BORROW_* constants.
 #
-# NOTE: active mode requires the shared base-asset exchange-mutation lock that
-# serialises this sweep against entry/exit (a focused follow-up). Until that lands
-# keep the flag at "off" or "dry_run" in production.
+# Active mode serialises against entry/exit via a shared per-base-asset
+# exchange-mutation lock (BaseAssetLockRegistry), so a repay can never race a
+# just-opened short whose borrow isn't tracked yet (#703).
+
+
+class BaseAssetLockRegistry:
+    """Per-base-asset re-entrant locks shared by entry/exit execution and the sweep.
+
+    A cross-margin borrow is asset-scoped, so all order placement and the
+    orphaned-borrow repay for a given base asset (e.g. ETH) serialise on one lock.
+    Re-entrant so an entry that holds the lock can call an exit/emergency-close that
+    re-acquires it on the same thread without deadlocking.
+    """
+
+    def __init__(self) -> None:
+        self._locks: dict[str, threading.RLock] = {}
+        self._meta = threading.Lock()
+
+    def lock_for(self, base_asset: str) -> threading.RLock:
+        with self._meta:
+            lock = self._locks.get(base_asset)
+            if lock is None:
+                lock = threading.RLock()
+                self._locks[base_asset] = lock
+            return lock
 
 
 def _base_asset_of(symbol: str) -> str:
@@ -3147,6 +3173,7 @@ def run_orphaned_borrow_sweep(
     use_margin: bool,
     symbols: list[str],
     cooldown_state: dict[str, float],
+    lock_registry: Any = None,
 ) -> list[ReconciliationResult]:
     """Repay cross-margin borrows that have no tracked position (orphaned).
 
@@ -3157,12 +3184,24 @@ def run_orphaned_borrow_sweep(
     ``orphaned_borrow_sweep_mode`` feature flag: ``off`` (no-op), ``dry_run``
     (detect + log, default) or ``active`` (repay). Never raises; a per-asset error
     is isolated. ``cooldown_state`` is mutated to throttle attempts per base asset.
+
+    ``lock_registry`` (a :class:`BaseAssetLockRegistry`) serialises the gate
+    re-read + repay against entry/exit on the same base asset, so an active repay
+    can't race a just-placed borrow. Required for safe ``active`` mode.
     """
     results: list[ReconciliationResult] = []
     if not use_margin or not symbols:
         return results
     mode = get_flag("orphaned_borrow_sweep_mode", "off")
     if mode not in ("dry_run", "active"):
+        return results
+    # Fail-closed: a live repay MUST be serialised against entry/exit. Never repay
+    # unlocked, even if a direct caller forgot to pass the registry (#703).
+    if mode == "active" and lock_registry is None:
+        logger.error(
+            "Orphaned-borrow sweep ACTIVE mode requires a lock_registry to serialise "
+            "against entry/exit — refusing to repay unlocked."
+        )
         return results
     if not all(
         hasattr(exchange, m)
@@ -3185,6 +3224,7 @@ def run_orphaned_borrow_sweep(
                 base_symbols=base_symbols,
                 mode=mode,
                 cooldown_state=cooldown_state,
+                lock_registry=lock_registry,
             )
             if result is not None:
                 results.append(result)
@@ -3194,6 +3234,40 @@ def run_orphaned_borrow_sweep(
 
 
 def _sweep_one_base_asset(
+    *,
+    exchange: Any,
+    position_tracker: Any,
+    db_manager: Any,
+    session_id: int,
+    base_asset: str,
+    base_symbols: list[str],
+    mode: str,
+    cooldown_state: dict[str, float],
+    lock_registry: Any = None,
+) -> ReconciliationResult | None:
+    """Acquire the per-base-asset mutation lock (if provided), then run the gates.
+
+    Serialises an active repay with entry/exit on the same base asset (#703), so the
+    repay can never act on a borrow a concurrent entry just created. Gates are re-read
+    under the lock.
+    """
+    kwargs = {
+        "exchange": exchange,
+        "position_tracker": position_tracker,
+        "db_manager": db_manager,
+        "session_id": session_id,
+        "base_asset": base_asset,
+        "base_symbols": base_symbols,
+        "mode": mode,
+        "cooldown_state": cooldown_state,
+    }
+    if lock_registry is None:
+        return _sweep_one_base_asset_locked(**kwargs)
+    with lock_registry.lock_for(base_asset):
+        return _sweep_one_base_asset_locked(**kwargs)
+
+
+def _sweep_one_base_asset_locked(
     *,
     exchange: Any,
     position_tracker: Any,
