@@ -139,19 +139,21 @@ def test_execution_engine_exit_auto_repay():
 
 @pytest.mark.fast
 def test_trading_engine_stop_loss_auto_repay():
-    """Stop-loss call in trading_engine._execute_entry includes side_effect_type='AUTO_REPAY'.
+    """Stop-loss call in the entry body includes side_effect_type='AUTO_REPAY'.
 
-    The stop-loss is placed inline in _execute_entry with retry logic. Rather than
-    constructing the full entry flow (which requires extensive mocking), we verify
-    the source code contains the kwarg on the place_stop_loss_order call.
+    The stop-loss is placed inline in the entry body (``_execute_entry_locked`` — the
+    real work; ``_execute_entry`` is a thin wrapper that only takes the base-asset
+    lock, #703) with retry logic. Rather than constructing the full entry flow (which
+    requires extensive mocking), we verify the source contains the kwarg on the
+    place_stop_loss_order call.
     """
     import inspect
 
     from src.engines.live.trading_engine import LiveTradingEngine
 
-    source = inspect.getsource(LiveTradingEngine._execute_entry)
+    source = inspect.getsource(LiveTradingEngine._execute_entry_locked)
     assert "side_effect_type=SideEffectType.AUTO_REPAY" in source, (
-        "trading_engine._execute_entry must pass side_effect_type=SideEffectType.AUTO_REPAY "
+        "the entry body must pass side_effect_type=SideEffectType.AUTO_REPAY "
         "to place_stop_loss_order"
     )
 
@@ -418,8 +420,10 @@ def _make_binance_provider(*, use_margin: bool = False):
     """Create a BinanceProvider with mocked client and optional margin mode."""
     from unittest.mock import patch
 
-    with patch("src.data_providers.binance_provider.get_config") as mock_config, \
-         patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True):
+    with (
+        patch("src.data_providers.binance_provider.get_config") as mock_config,
+        patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True),
+    ):
         mock_config_obj = MagicMock()
         mock_config_obj.get.return_value = None
         mock_config_obj.get_required.return_value = "fake_key"
@@ -441,23 +445,25 @@ def _make_binance_provider(*, use_margin: bool = False):
 def test_margin_get_balances_uses_net_asset():
     """In margin mode, total should be netAsset, not free+locked."""
     provider = _make_binance_provider(use_margin=True)
-    provider._call_get_account = MagicMock(return_value={
-        "balances": [
-            {
-                "asset": "BTC",
-                "free": "1.5",
-                "locked": "0.5",
-                # netAsset = free + locked - borrowed - interest = 1.0
-                "netAsset": "1.0",
-            },
-            {
-                "asset": "USDT",
-                "free": "10000.0",
-                "locked": "0.0",
-                "netAsset": "8000.0",
-            },
-        ]
-    })
+    provider._call_get_account = MagicMock(
+        return_value={
+            "balances": [
+                {
+                    "asset": "BTC",
+                    "free": "1.5",
+                    "locked": "0.5",
+                    # netAsset = free + locked - borrowed - interest = 1.0
+                    "netAsset": "1.0",
+                },
+                {
+                    "asset": "USDT",
+                    "free": "10000.0",
+                    "locked": "0.0",
+                    "netAsset": "8000.0",
+                },
+            ]
+        }
+    )
 
     balances = provider.get_balances()
     btc = next(b for b in balances if b.asset == "BTC")
@@ -473,11 +479,13 @@ def test_margin_get_balances_uses_net_asset():
 def test_spot_get_balances_uses_free_plus_locked():
     """In spot mode, total should remain free+locked (no regression)."""
     provider = _make_binance_provider(use_margin=False)
-    provider._call_get_account = MagicMock(return_value={
-        "balances": [
-            {"asset": "BTC", "free": "1.5", "locked": "0.5", "netAsset": "1.0"},
-        ]
-    })
+    provider._call_get_account = MagicMock(
+        return_value={
+            "balances": [
+                {"asset": "BTC", "free": "1.5", "locked": "0.5", "netAsset": "1.0"},
+            ]
+        }
+    )
 
     balances = provider.get_balances()
     btc = next(b for b in balances if b.asset == "BTC")
@@ -488,11 +496,13 @@ def test_spot_get_balances_uses_free_plus_locked():
 def test_margin_get_balance_uses_net_asset():
     """In margin mode, get_balance() should use netAsset for total."""
     provider = _make_binance_provider(use_margin=True)
-    provider._call_get_account = MagicMock(return_value={
-        "balances": [
-            {"asset": "BTC", "free": "1.5", "locked": "0.5", "netAsset": "1.0"},
-        ]
-    })
+    provider._call_get_account = MagicMock(
+        return_value={
+            "balances": [
+                {"asset": "BTC", "free": "1.5", "locked": "0.5", "netAsset": "1.0"},
+            ]
+        }
+    )
 
     balance = provider.get_balance("BTC")
     assert balance is not None
@@ -503,11 +513,13 @@ def test_margin_get_balance_uses_net_asset():
 def test_spot_get_balance_uses_free_plus_locked():
     """In spot mode, get_balance() should use free+locked."""
     provider = _make_binance_provider(use_margin=False)
-    provider._call_get_account = MagicMock(return_value={
-        "balances": [
-            {"asset": "BTC", "free": "1.5", "locked": "0.5"},
-        ]
-    })
+    provider._call_get_account = MagicMock(
+        return_value={
+            "balances": [
+                {"asset": "BTC", "free": "1.5", "locked": "0.5"},
+            ]
+        }
+    )
 
     balance = provider.get_balance("BTC")
     assert balance is not None
@@ -518,11 +530,13 @@ def test_spot_get_balance_uses_free_plus_locked():
 def test_margin_get_balances_fallback_when_no_net_asset():
     """If netAsset is missing in margin mode, fall back to free+locked."""
     provider = _make_binance_provider(use_margin=True)
-    provider._call_get_account = MagicMock(return_value={
-        "balances": [
-            {"asset": "BTC", "free": "1.5", "locked": "0.5"},
-        ]
-    })
+    provider._call_get_account = MagicMock(
+        return_value={
+            "balances": [
+                {"asset": "BTC", "free": "1.5", "locked": "0.5"},
+            ]
+        }
+    )
 
     balances = provider.get_balances()
     btc = next(b for b in balances if b.asset == "BTC")
