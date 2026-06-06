@@ -490,6 +490,9 @@ class LiveTradingEngine:
         self.is_running = False
         self._close_only_mode = False  # No new entries when True; exits still run
         self._periodic_reconciler = None  # Set during start() for live trading
+        # Shared per-base-asset cooldown for the orphaned-borrow sweep, so the
+        # startup sweep and the periodic reconciler don't both act in one window.
+        self._orphan_sweep_cooldown: dict[str, float] = {}
         self.completed_trades: list[Trade] = []
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
@@ -1505,6 +1508,7 @@ class LiveTradingEngine:
                     on_critical=self._enter_close_only_mode,
                     use_margin=use_margin,
                     symbols=[self._active_symbol] if self._active_symbol else [],
+                    sweep_cooldown=self._orphan_sweep_cooldown,
                 )
                 self._periodic_reconciler.start()
                 logger.info("🔄 Periodic reconciler started")
@@ -4999,7 +5003,7 @@ class LiveTradingEngine:
                             session_id=self.trading_session_id,
                             use_margin=use_margin,
                             symbols=[self._active_symbol],
-                            cooldown_state={},
+                            cooldown_state=self._orphan_sweep_cooldown,
                         )
 
                     # Process results even with no positions — a filled entry

@@ -249,3 +249,20 @@ def test_cooldown_blocks_second_attempt_in_window():
     ex2 = _exchange()
     _run(ex2, _tracker(), _db(), mode="active", cooldown=cooldown)
     ex2.repay_margin_loan.assert_not_called()
+
+
+def test_periodic_reconciler_uses_shared_cooldown_dict():
+    """The engine passes one cooldown dict to both the startup sweep and the periodic
+    reconciler, so the two paths can't both repay within one cooldown window."""
+    from src.engines.live.reconciliation import PeriodicReconciler
+
+    shared: dict[str, float] = {}
+    pr = PeriodicReconciler(
+        exchange_interface=MagicMock(),
+        position_tracker=MagicMock(),
+        db_manager=MagicMock(),
+        session_id=1,
+        symbols=["ETHUSDT"],
+        sweep_cooldown=shared,
+    )
+    assert pr._sweep_cooldown is shared

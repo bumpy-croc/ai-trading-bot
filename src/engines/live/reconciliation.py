@@ -2314,6 +2314,7 @@ class PeriodicReconciler:
         on_critical: Any = None,
         use_margin: bool = False,
         symbols: list[str] | None = None,
+        sweep_cooldown: dict[str, float] | None = None,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -2347,8 +2348,12 @@ class PeriodicReconciler:
         self._locks_lock = threading.Lock()  # Protects _position_mutation_locks dict
         # Cache for margin interest queries (5-min TTL per position)
         self._interest_cache: dict[str, tuple[float, float]] = {}
-        # Per-base-asset cooldown timestamps for the orphaned-borrow sweep
-        self._sweep_cooldown: dict[str, float] = {}
+        # Per-base-asset cooldown timestamps for the orphaned-borrow sweep. Shared
+        # with the engine's startup sweep when provided, so the two paths don't both
+        # act within one cooldown window.
+        self._sweep_cooldown: dict[str, float] = (
+            sweep_cooldown if sweep_cooldown is not None else {}
+        )
 
     def start(self) -> None:
         """Start the periodic reconciliation daemon thread."""
@@ -3122,11 +3127,11 @@ def classify_severity(
 
 
 def _base_asset_of(symbol: str) -> str:
-    """Base asset of a pair by stripping a known quote suffix (ETHUSDT -> ETH)."""
-    for quote in ("USDT", "BUSD", "USDC", "USD"):
-        if symbol.endswith(quote) and len(symbol) > len(quote):
-            return symbol[: -len(quote)]
-    return symbol
+    """Base asset of a pair (delegates to the canonical reconciler implementation).
+
+    Single source of truth — avoids a divergent copy of the quote-stripping logic.
+    """
+    return PositionReconciler._extract_base_asset(symbol)
 
 
 def run_orphaned_borrow_sweep(
@@ -3209,7 +3214,12 @@ def _sweep_one_base_asset(
     # for any symbol sharing the base asset. Unknown == "an order may exist" -> skip.
     try:
         unresolved = db_manager.get_unresolved_orders(session_id)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "Orphaned-borrow sweep: unresolved-orders lookup failed for %s — skipping (fail-closed): %s",
+            base_asset,
+            e,
+        )
         return None
     if unresolved is None:
         return None
@@ -3252,7 +3262,12 @@ def _sweep_one_base_asset(
     # Gate 6: valid price + value cap.
     try:
         price = exchange.get_current_price(base_symbols[0])
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "Orphaned-borrow sweep: price lookup failed for %s — skipping: %s",
+            base_symbols[0],
+            e,
+        )
         price = None
     if price is None or not math.isfinite(float(price)) or float(price) <= 0:
         return None
@@ -3274,7 +3289,7 @@ def _sweep_one_base_asset(
                 severity=severity.value,
             )
         except Exception as e:
-            logger.error("Failed to persist orphaned-borrow audit: %s", e)
+            logger.error("Failed to persist orphaned-borrow audit: %s", e, exc_info=True)
 
     # Any decision (alert/dry-run/active) starts the cooldown.
     cooldown_state[base_asset] = now
