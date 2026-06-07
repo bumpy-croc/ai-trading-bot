@@ -162,3 +162,63 @@ state (`get_open_orders`, account sync, the actual order id) before acting or al
 - **Plan-mode + multi-round codex on the plan** before coding a risk-critical feature. The
   orphaned-borrow sweep plan went 7 → 3 → 1 → 0 codex findings *before* a line was written, which
   caught the asset-vs-symbol scoping and the entry-vs-sweep TOCTOU up front.
+
+---
+
+## 5. Live-monitoring signatures (what to grep for)
+
+The `bot-monitor-live` skill is the durable *method* for watching production; **this section is the
+evolving list of *concrete* signatures it greps for.** Add new ones here as incidents teach them —
+keep the skill generic and let the specifics live here.
+
+### 5.1 Pull logs + judge liveness safely
+- `railway logs -n 400` (bounded). **Never `--since <N>m`** — it hangs. Shows ONLY the current
+  deployment, so a boot marker in your window may be an expected deploy OR a surprise restart.
+- **Clock skew** (also §3): logs are **UTC**, your wall clock / wake scheduler may be **GMT+1**.
+  Compute `date -u` minus the last log timestamp before declaring "down" — usually a 1h illusion
+  (~2 min `Decision:` cadence).
+- **Don't trust the deploy API for liveness.** Railway can show SUCCESS while the loop is dead (a
+  DB/DNS outage killed it — see `MEMORY` bots-down-railway-dns). Ground truth = a recent
+  `Decision:`/`Status:` log line **and** the hourly `account_history` heartbeat row in the DB.
+
+### 5.2 Escalate immediately (critical markers)
+- `emergency.close` / "Stop-loss placement failed" — opened a position it couldn't protect; repeated
+  = capital-bleed churn.
+- `CLOSE-ONLY MODE ACTIVATED` — entries halted (reconcile/DB problem).
+- `code=-1111` (price precision) / `code=51077` (qty precision) — order precision rejection (should
+  be fixed; recurrence = regression, see §1.1).
+- `-2010` / "insufficient balance" on a stop-loss → unprotected position.
+- "No active trading session for balance update" — balance updates silently failing (§1.3, #693).
+- `Margin position check failed` — reconciler erroring every cycle (§1.2, #674).
+- A **new** position opened while an **untracked**/orphaned position may be live → double-exposure.
+- Unexpected `AI Trading Bot Starting` (a restart you didn't cause) — may re-orphan; watch recovery.
+- kline WS churn that never returns to WS-primary; any `Traceback`; margin level drifting toward
+  ~1.0–1.1 (liquidation) or reported balance diverging from true equity (phantom balance).
+
+### 5.3 Watch / report (non-critical)
+- A growing **orphaned margin borrow** (`borrowed=` with no tracked position) — blocks shorts +
+  accrues interest (§1.4 / §1.5).
+- `Task exception was never retrieved` — a swallowed async error; benign as a one-off at boot, report
+  if it recurs / clusters.
+- Sustained idleness when the bot *should* trade (sub-minimum sizing on a small account, #700).
+
+### 5.4 Known-benign — do NOT alarm
+- A **tracked** `Positions: 1` is normal trading, **not** double-exposure — only an *untracked*
+  orphan is. A position surviving a restart (`new opens = 0`, `Positions` stays `1`) = re-adoption
+  worked (#677) — that's GOOD.
+- `🔍 DRY-RUN orphaned-borrow sweep: would repay …` ~every 5 min — expected `[WARN]`, log-only, no
+  money moved.
+- `Calculated quantity 0.00000000 below minimum` — a sizing *skip* on a small account (#700); logged
+  at ERROR but it's the bot correctly declining a sub-minimum trade.
+- `Cannot open short … margin wallet holds … ETH` (#697) — the SHORT guard refusing while base-asset
+  dust sits in margin; expected until the borrow is repaid.
+- `51077` matching a **timestamp nanosecond suffix** (`…243651077Z`) — anchor the grep (`code=51077`,
+  `(code=51077)`); don't match bare digits in UTC timestamps.
+- An expected deploy boot (one you / the operator just triggered).
+
+### 5.5 Verify before alarming (phantom premises)
+A recurring/cron prompt may assert e.g. "a real ETH LONG was ORPHANED at 19:12 → double-exposure!".
+This has repeatedly been a **phantom**: no SL order existed, account sync showed `0 open orders`, the
+held ETH was sub-threshold dust. Treat automated/stale context as a hypothesis; confirm against live
+state — `get_open_orders`, account-sync open-order count, the actual SL order id, tracked `Positions`,
+and `free` vs `borrowed` vs `netAsset` — before reporting an incident (see §2.5).
