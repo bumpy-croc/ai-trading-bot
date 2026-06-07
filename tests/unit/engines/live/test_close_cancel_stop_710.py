@@ -91,8 +91,10 @@ def _make_live_engine(
 
     exchange.get_order.side_effect = _get_order
 
-    # held-inventory check (_position_still_held).
-    if held and borrowed:
+    # held-inventory check (_position_still_held). held=None -> API failure (no asset).
+    if held is None:
+        asset = None
+    elif held and borrowed:
         asset = {"free": "0", "locked": "0", "borrowed": "0.5", "netAsset": "-0.5"}
     elif held:
         asset = {"free": "1.0", "locked": "0", "borrowed": "0", "netAsset": "1.0"}
@@ -336,4 +338,37 @@ def test_filled_stop_path_does_not_cancel_or_reprotect():
 
     engine.live_exit_handler.execute_filled_exit.assert_called_once()
     engine.exchange_interface.cancel_order.assert_not_called()
+    engine.exchange_interface.place_stop_loss_order.assert_not_called()
+
+
+def test_post_cancel_unreadable_state_defers_close():
+    # Clean before cancel; the post-cancel read is unreadable -> defer (no close).
+    engine, calls = _make_live_engine(_ok(), sl_fills=(0.0, None))
+    position = _track(engine)
+
+    _exit(engine, position)
+
+    engine.exchange_interface.cancel_order.assert_called_once()
+    engine.live_exit_handler.execute_exit.assert_not_called()
+    assert calls == ["cancel"]
+
+
+def test_reprotect_skips_when_held_check_api_fails():
+    # A failed close + an unreadable held-inventory check -> conservatively skip
+    # re-protect (do not orphan a stop); the reconciler reconciles.
+    engine, _calls = _make_live_engine(_fail(), sl_fills=(0.0, 0.0), held=None)
+    position = _track(engine)
+
+    _exit(engine, position)
+
+    engine.exchange_interface.place_stop_loss_order.assert_not_called()
+
+
+def test_short_no_longer_borrowed_skips_reprotect():
+    # SHORT that is no longer borrowed (covered) -> not held -> no re-protect.
+    engine, _calls = _make_live_engine(_fail(), sl_fills=(0.0, 0.0), held=False)
+    position = _track(engine, side=PositionSide.SHORT)
+
+    _exit(engine, position)
+
     engine.exchange_interface.place_stop_loss_order.assert_not_called()
