@@ -4010,6 +4010,29 @@ class LiveTradingEngine:
                     current_balance=self.current_balance,
                 )
             else:
+                # #710: On margin a resting stop-loss order reserves the position's
+                # base asset, so a market close submitted while it rests is rejected
+                # by the exchange with -2010 (insufficient balance). Cancel the
+                # protective order FIRST to free the balance. If the cancel cannot be
+                # confirmed, do NOT submit the close: the stop may have just filled
+                # (closing would over-sell) or may still rest (closing would -2010) —
+                # leave the position protected and let the next cycle / reconciler act.
+                protective_order_cancelled = False
+                if (
+                    self.enable_live_trading
+                    and self.exchange_interface
+                    and position.stop_loss_order_id
+                ):
+                    if not self._cancel_stop_loss_order(position):
+                        logger.warning(
+                            "Skipping market close of %s: could not confirm cancel of "
+                            "resting stop-loss %s; position remains protected, will retry.",
+                            position.symbol,
+                            position.stop_loss_order_id,
+                        )
+                        return
+                    protective_order_cancelled = True
+
                 exit_result = self.live_exit_handler.execute_exit(
                     position=position,
                     exit_reason=reason,
@@ -4020,6 +4043,12 @@ class LiveTradingEngine:
                     candle_low=candle_low,
                     data_provider=self.data_provider,
                 )
+                if not exit_result.success and protective_order_cancelled:
+                    # The close failed AFTER we freed the balance, so the position is
+                    # momentarily unprotected — re-place the stop-loss now. The
+                    # periodic reconciler (which re-places a missing stop-loss or
+                    # emergency-closes) is the ultimate backstop. (#710)
+                    self._reprotect_position(position)
             if not exit_result.success:
                 logger.error(
                     "Failed to close position %s: %s",
@@ -4191,28 +4220,11 @@ class LiveTradingEngine:
                     margin_interest_cost=interest_cost,
                 )
 
-            if (
-                self.enable_live_trading
-                and self.exchange_interface
-                and position.stop_loss_order_id
-                and not sl_already_filled
-            ):
-                try:
-                    cancelled = self.exchange_interface.cancel_order(
-                        position.stop_loss_order_id, position.symbol
-                    )
-                    if cancelled:
-                        logger.info(
-                            "Cancelled stop-loss order %s for %s",
-                            position.stop_loss_order_id,
-                            position.symbol,
-                        )
-                except Exception as e:
-                    logger.warning("Error cancelling stop-loss order: %s", e)
-
-                if self.order_tracker:
-                    self.order_tracker.stop_tracking(position.stop_loss_order_id)
-
+            # NOTE(#710): the resting stop-loss is now cancelled BEFORE the market
+            # close (see the close path above) so it cannot reserve the base asset
+            # and trigger -2010. No post-close cancel is needed here; on a successful
+            # close the position (and its already-cancelled stop) are removed by the
+            # exit handler.
             logger.info(
                 "📈 Closed %s position for %s: PnL=$%.2f, Reason=%s, Balance=$%.2f",
                 position.side.value,
@@ -4233,6 +4245,117 @@ class LiveTradingEngine:
             )
         except Exception as e:
             logger.error("Failed to close position %s: %s", position.order_id, e, exc_info=True)
+
+    def _cancel_stop_loss_order(self, position: Position) -> bool:
+        """Cancel a position's resting stop-loss order and stop tracking it.
+
+        Returns True only when the exchange confirms the cancel. The close path uses
+        this before a market exit so the stop no longer reserves the base asset
+        (otherwise the close is rejected -2010 on margin, #710). A False result means
+        the order may still rest, or may have just filled, so the caller must NOT
+        submit a close (it would -2010, or over-sell an already-closed position).
+        """
+        if not (
+            self.enable_live_trading and self.exchange_interface and position.stop_loss_order_id
+        ):
+            return False
+        cancelled = False
+        try:
+            cancelled = bool(
+                self.exchange_interface.cancel_order(position.stop_loss_order_id, position.symbol)
+            )
+            if cancelled:
+                logger.info(
+                    "Cancelled stop-loss order %s for %s before close",
+                    position.stop_loss_order_id,
+                    position.symbol,
+                )
+        except Exception as e:
+            logger.warning(
+                "Error cancelling stop-loss order %s for %s: %s",
+                position.stop_loss_order_id,
+                position.symbol,
+                e,
+            )
+        # Only stop tracking when the cancel is confirmed; otherwise the order may
+        # still be live on the exchange and must remain watched.
+        if cancelled and self.order_tracker:
+            self.order_tracker.stop_tracking(position.stop_loss_order_id)
+        return cancelled
+
+    def _reprotect_position(self, position: Position) -> None:
+        """Re-place a stop-loss after a failed close left a position momentarily naked.
+
+        Reached only when a market close failed *after* its resting stop was
+        cancelled to free the base balance (#710). Re-establish protection at the
+        tracked stop price so the position is not left unprotected. The periodic
+        reconciler — which re-places a missing stop-loss or emergency-closes — is the
+        ultimate backstop if this inline attempt cannot run or also fails.
+        """
+        stop_price = getattr(position, "stop_loss", None)
+        quantity = getattr(position, "quantity", None)
+        if (
+            not self.enable_live_trading
+            or not self.exchange_interface
+            or not stop_price
+            or stop_price <= 0
+            or not quantity
+            or quantity <= 0
+        ):
+            logger.critical(
+                "CRITICAL: %s close failed after its stop-loss was cancelled and it "
+                "cannot be re-protected inline (stop_price=%s, quantity=%s) — position "
+                "is UNPROTECTED pending the reconciler. MANUAL REVIEW REQUIRED.",
+                position.symbol,
+                stop_price,
+                quantity,
+            )
+            self._send_alert(
+                f"🚨 {position.symbol} UNPROTECTED: close failed after stop-loss "
+                f"cancel and it could not be re-placed inline. Reconciler backstop "
+                f"engaged. MANUAL REVIEW REQUIRED."
+            )
+            return
+
+        sl_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+        sl_order_id = None
+        try:
+            sl_order_id = self.exchange_interface.place_stop_loss_order(
+                symbol=position.symbol,
+                side=sl_side,
+                quantity=float(quantity),
+                stop_price=float(stop_price),
+                side_effect_type=SideEffectType.AUTO_REPAY,
+            )
+        except Exception as e:
+            logger.error(
+                "Re-protect: stop-loss placement raised for %s: %s",
+                position.symbol,
+                e,
+            )
+
+        if sl_order_id:
+            if position.order_id is not None:
+                self.live_position_tracker.set_stop_loss_order_id(position.order_id, sl_order_id)
+            if self.order_tracker:
+                self.order_tracker.track_order(sl_order_id, position.symbol)
+            logger.warning(
+                "Re-protected %s after a failed close: new stop-loss %s @ $%.2f",
+                position.symbol,
+                sl_order_id,
+                float(stop_price),
+            )
+        else:
+            logger.critical(
+                "CRITICAL: %s close failed AND re-placing its stop-loss failed — "
+                "position is UNPROTECTED pending the periodic reconciler. MANUAL "
+                "REVIEW REQUIRED.",
+                position.symbol,
+            )
+            self._send_alert(
+                f"🚨 {position.symbol} UNPROTECTED: close failed and stop-loss "
+                f"re-placement failed. Reconciler is the only backstop. REVIEW NOW."
+            )
 
     def _check_stop_loss_filled(self, position: Position) -> tuple[bool, float | None]:
         """Check if a stop-loss order already filled on the exchange."""
