@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from src.database.models import EventType
 from src.engines.live.account_sync import AccountSynchronizer
 
 pytestmark = pytest.mark.unit
@@ -52,14 +53,10 @@ def test_get_account_equity_spot_uses_usdt_total(mock_config, mock_client_class)
 def _make_sync(equity, db_balance, usdt_total):
     exchange = Mock()
     exchange.get_account_equity.return_value = equity
-    exchange.get_balance.return_value = (
-        Mock(total=usdt_total) if usdt_total is not None else None
-    )
+    exchange.get_balance.return_value = Mock(total=usdt_total) if usdt_total is not None else None
     db = Mock()
     db.get_current_balance.return_value = db_balance
-    sync = AccountSynchronizer(
-        exchange=exchange, db_manager=db, session_id=1, use_margin=True
-    )
+    sync = AccountSynchronizer(exchange=exchange, db_manager=db, session_id=1, use_margin=True)
     return sync, db
 
 
@@ -117,3 +114,112 @@ def test_margin_equity_no_correct_when_equity_zero_or_negative():
 
     assert res["synced"] is False
     db.update_balance.assert_not_called()
+
+
+def test_margin_equity_correction_records_audit_and_system_event():
+    """A book-down MUST leave both an audit row and a warning+ system event.
+
+    Regression guard: in prod on 2026-06-03 a margin_equity_sync_correction booked
+    the tracked balance from $99.89 down to true equity $84.14 (-15.8%, the single
+    largest capital event of the fortnight) yet wrote ZERO reconciliation_audit_events
+    and ZERO warning+ system_events rows, so monitoring never saw it.
+    """
+    sync, db = _make_sync(equity=84.14, db_balance=99.89, usdt_total=84.14)
+
+    res = sync._sync_margin_equity()
+
+    assert res["corrected"] is True
+    db.update_balance.assert_called_once()
+
+    # (a) immutable reconciliation audit row with before/after values
+    db.log_audit_event.assert_called_once()
+    audit = db.log_audit_event.call_args.kwargs
+    assert audit["session_id"] == 1
+    assert audit["entity_type"] == "balance"
+    assert audit["field"] == "total_balance"
+    assert audit["severity"] == "CRITICAL"  # >=5% book-down is material
+    assert float(audit["old_value"]) == pytest.approx(99.89)
+    assert float(audit["new_value"]) == pytest.approx(84.14)
+    assert audit["reason"]  # non-empty human-readable explanation
+
+    # (b) operator-facing system event at warning+ severity for alerting
+    db.log_event.assert_called_once()
+    event = db.log_event.call_args.kwargs
+    assert event["event_type"] == EventType.BALANCE_ADJUSTMENT
+    assert event["severity"] == "critical"  # warning+ (critical for >=5%)
+    assert event["session_id"] == 1
+
+
+def test_margin_equity_small_correction_is_high_warning():
+    """A >1% but <5% book-down -> HIGH audit + 'warning' system event (not critical).
+
+    Mirrors the second unaudited prod event (2026-06-05, ~ -1.6%).
+    """
+    # 84.14 -> 82.77 is -1.63%: above the 1% correction gate, below the 5% CRITICAL line.
+    sync, db = _make_sync(equity=82.77, db_balance=84.14, usdt_total=82.77)
+
+    res = sync._sync_margin_equity()
+
+    assert res["corrected"] is True
+    assert db.log_audit_event.call_args.kwargs["severity"] == "HIGH"
+    assert db.log_event.call_args.kwargs["severity"] == "warning"
+
+
+def test_margin_equity_no_audit_or_event_when_within_threshold():
+    """No correction -> no audit row and no system event are emitted."""
+    sync, db = _make_sync(equity=99.50, db_balance=99.89, usdt_total=99.50)
+
+    sync._sync_margin_equity()
+
+    db.update_balance.assert_not_called()
+    db.log_audit_event.assert_not_called()
+    db.log_event.assert_not_called()
+
+
+def test_margin_equity_audit_logging_failure_does_not_break_correction():
+    """Observability writes are best-effort: a failure must neither raise nor
+    unwind the already-persisted balance correction, and the two writes are
+    independently guarded (an audit failure still attempts the system event)."""
+    sync, db = _make_sync(equity=84.14, db_balance=99.89, usdt_total=84.14)
+    db.log_audit_event.side_effect = RuntimeError("audit table unavailable")
+
+    res = sync._sync_margin_equity()  # must not raise
+
+    assert res["corrected"] is True
+    db.update_balance.assert_called_once()
+    db.log_event.assert_called_once()  # attempted despite the audit failure
+
+
+def test_margin_equity_no_audit_when_balance_update_fails():
+    """If the balance write itself fails (update_balance -> False), do NOT emit an
+    audit/alert claiming a correction that never persisted."""
+    sync, db = _make_sync(equity=84.14, db_balance=99.89, usdt_total=84.14)
+    db.update_balance.return_value = False
+
+    res = sync._sync_margin_equity()
+
+    assert res["synced"] is False
+    assert res["corrected"] is False
+    db.log_audit_event.assert_not_called()
+    db.log_event.assert_not_called()
+
+
+def test_margin_equity_correction_audited_during_startup_session_handoff():
+    """Startup edge (found in Codex review): the synchronizer's own session_id is
+    still None during the INITIAL sync — trading_engine assigns it only AFTER
+    sync_account_data() returns — but the DB manager already has a current session, so
+    update_balance persists via its _current_session_id fallback. The audit + system
+    event MUST still fire, bound to that resolved session, not be silently skipped.
+    """
+    sync, db = _make_sync(equity=84.14, db_balance=99.89, usdt_total=84.14)
+    sync.session_id = None  # not yet assigned during the initial sync
+    db._current_session_id = 7  # update_balance / get_current_balance fall back to this
+    db.update_balance.return_value = True
+
+    res = sync._sync_margin_equity()
+
+    assert res["corrected"] is True
+    db.log_audit_event.assert_called_once()
+    assert db.log_audit_event.call_args.kwargs["session_id"] == 7
+    db.log_event.assert_called_once()
+    assert db.log_event.call_args.kwargs["session_id"] == 7

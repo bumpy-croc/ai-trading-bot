@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Margin-equity balance corrections are now audited and alertable.
+  `margin_equity_sync_correction` book-downs (written by
+  `AccountSynchronizer._sync_margin_equity`) previously updated the balance ledger
+  without recording a `reconciliation_audit_events` row or a warning-level
+  `system_events` row, so the single largest capital event a margin session can
+  produce was invisible to monitoring/auditing — a −$15.75 (−15.8%) production
+  book-down on 2026-06-03 (and a second −$1.37 on 2026-06-05) left zero audit
+  trail. The path now emits both records via a new best-effort
+  `_record_equity_correction_audit` helper: an immutable audit row
+  (`entity_type='balance'`, `field='total_balance'`, before/after values, severity
+  `HIGH`, escalating to `CRITICAL` when divergence ≥ 5%) and a `BALANCE_ADJUSTMENT`
+  system event at `warning` severity (`critical` when ≥ 5%) so alerting can see large
+  book-downs. Both writes are independently guarded so a logging failure can neither
+  raise into the sync loop nor unwind the already-persisted correction; emission is
+  skipped entirely if `update_balance` itself reports failure (no audit for a
+  correction that never persisted). The audit binds to the same session the balance
+  write used — resolved via `update_balance`'s own `_current_session_id` fallback — so
+  the first post-restart correction (when `AccountSynchronizer.session_id` has not yet
+  been assigned) is captured too, not just steady-state periodic syncs.
 - Live position/trade recovery no longer crashes on `Decimal`-vs-`float`
   arithmetic. `DatabaseManager.get_active_positions` and `get_recent_trades`
   now coerce SQLAlchemy `Numeric(18,8)` columns (which read back from
