@@ -231,12 +231,10 @@ class TestCheckUserStreamHealth:
     @pytest.mark.fast
     def test_reconnect_calls_bounded_over_many_cycles(self, mock_engine):
         """Regression for the #616 churn: a dead socket yields BOUNDED reconnects,
-        not an unbounded ~2-min loop. Post-#717 the bound is LIMIT fast reconnects
-        plus a throttled probe every Nth degraded cycle — still bounded (one probe
-        per 10 cycles), never the per-cycle churn (#616) nor zero (the #717 fix)."""
-        from src.config.constants import (
-            DEFAULT_WS_USER_DEGRADED_PROBE_EVERY as PROBE,
-        )
+        not an unbounded ~2-min loop. Post-#717/#723 the bound is LIMIT fast
+        reconnects plus a probe on the exponential-backoff boundary schedule — still
+        bounded (and rarer than the old every-10), never the per-cycle churn (#616)
+        nor zero (the #717 fix)."""
         from src.config.constants import (
             DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT,
         )
@@ -247,15 +245,16 @@ class TestCheckUserStreamHealth:
         ex.mark_user_degraded.side_effect = lambda: setattr(
             ex, "_user_ws_state", WebSocketState.REST_DEGRADED
         )
-        cycles = 20
+        cycles = 25  # past the first backoff boundary (10) and the second (20)
         with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
             for _ in range(cycles):
                 mock_engine._check_user_stream_health()
 
-        # LIMIT fast reconnects (PRIMARY phase) + one throttled probe at failure==PROBE.
-        # The degraded counter advances 1/cycle from LIMIT; over `cycles` it reaches
-        # LIMIT + (cycles - LIMIT - 1) = 19, crossing PROBE(10) exactly once.
-        expected_probes = LIMIT + sum(1 for f in range(LIMIT + 1, cycles) if f % PROBE == 0)
+        # LIMIT fast reconnects (PRIMARY phase) + backoff-boundary probes at the
+        # absolute failure counts 10 and 20 (the degraded counter advances 1/cycle
+        # from LIMIT, reaching cycles-1=24, crossing boundaries 10 and 20).
+        boundaries_hit = [b for b in (10, 20) if b < cycles]
+        expected_probes = LIMIT + len(boundaries_hit)
         assert disc.call_count == expected_probes  # bounded, far below `cycles`
         assert disc.call_count < cycles
         ex.mark_user_degraded.assert_called_once()  # degraded exactly once
@@ -324,11 +323,12 @@ class TestUserStreamRecoveringRestFallback:
 
     @pytest.mark.fast
     def test_should_probe_predicate_never_permanently_false(self, mock_engine):
-        """The throttle predicate probes every cycle up to the limit, then every
-        Nth cycle — and is never permanently False, so a degraded user stream
-        always retains a path back to WS-primary (#717)."""
+        """The throttle predicate probes every cycle up to the limit, then on the
+        #723 exponential-backoff boundary schedule — and is never permanently False
+        past the ramp (the gap is fixed at CEILING), so a degraded user stream always
+        retains a path back to WS-primary (#717)."""
         from src.config.constants import (
-            DEFAULT_WS_USER_DEGRADED_PROBE_EVERY as PROBE,
+            DEFAULT_WS_USER_DEGRADED_PROBE_CEILING as CEILING,
         )
         from src.config.constants import (
             DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT,
@@ -336,24 +336,23 @@ class TestUserStreamRecoveringRestFallback:
 
         # Fast phase: probe on every cycle up to the limit.
         assert all(mock_engine._should_probe_user_reconnect(n) for n in range(1, LIMIT + 1))
-        # Throttled phase: only multiples of PROBE probe.
+        # Throttled phase: the first boundary probes; a value just past it does not.
         assert mock_engine._should_probe_user_reconnect(LIMIT + 1) is False
-        assert mock_engine._should_probe_user_reconnect(PROBE) is True
-        # Never permanently false: a probe always recurs within every PROBE window.
-        for start in range(LIMIT + 1, 5 * PROBE, PROBE):
+        assert mock_engine._should_probe_user_reconnect(10) is True  # first boundary
+        # Never permanently false: past the geometric ramp the gap is the constant
+        # CEILING, so every window of CEILING consecutive failures contains a probe.
+        ramp_end = 520  # past the ramp, boundaries are CEILING-spaced (… 400, 520, 640)
+        for start in range(ramp_end, ramp_end + 4 * CEILING, CEILING):
             assert any(
-                mock_engine._should_probe_user_reconnect(n) for n in range(start, start + PROBE)
+                mock_engine._should_probe_user_reconnect(n) for n in range(start, start + CEILING)
             )
 
     @pytest.mark.fast
     def test_degraded_probe_is_throttled_past_limit_but_never_zero(self, mock_engine):
-        """A persistently-degraded user stream gets fast probes up to the limit,
-        then throttled probes every Nth cycle — bounded, but NEVER zero (always a
-        path back to WS). Regression vs BOTH the #616 per-cycle churn and the
-        REST-until-restart absorbing state."""
-        from src.config.constants import (
-            DEFAULT_WS_USER_DEGRADED_PROBE_EVERY as PROBE,
-        )
+        """A persistently-degraded user stream gets fast probes up to the limit, then
+        probes on the #723 exponential-backoff boundary schedule — bounded, but NEVER
+        zero (always a path back to WS). Regression vs BOTH the #616 per-cycle churn
+        and the REST-until-restart absorbing state."""
         from src.config.constants import (
             DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT,
         )
@@ -364,19 +363,25 @@ class TestUserStreamRecoveringRestFallback:
         mock_engine._user_reconnect_failures = 0
         attempt_cycles: list[int] = []
 
-        def _record():
+        def _record(**_kwargs):
             # _handle_user_stream_disconnect runs after the counter is bumped, so
             # the counter == the cycle index at each attempt.
             attempt_cycles.append(mock_engine._user_reconnect_failures)
 
+        horizon = 640  # spans the geometric ramp into the CEILING-spaced tail
         with patch.object(mock_engine, "_handle_user_stream_disconnect", side_effect=_record):
-            for _ in range(5 * PROBE):  # 50 degraded cycles
+            for _ in range(horizon):
                 mock_engine._check_user_stream_health()
 
-        expected = [n for n in range(1, 5 * PROBE + 1) if n <= LIMIT or n % PROBE == 0]
+        # Fast phase 1..LIMIT, then the exact backoff boundaries 10,20,40,80,160,…,640.
+        boundaries = {10, 20, 40, 80, 160, 280, 400, 520, 640}
+        expected = [n for n in range(1, horizon + 1) if n <= LIMIT or n in boundaries]
         assert attempt_cycles == expected
-        # Never stops: probes continue into the final stretch of cycles.
-        assert any(c > 5 * PROBE - PROBE for c in attempt_cycles)
+        # Never stops: a probe fires at the very end of the horizon (640).
+        assert attempt_cycles[-1] == 640
+        # Far fewer than the old fixed every-10 cadence (which would be ~64 probes).
+        old_cadence_count = LIMIT + sum(1 for n in range(LIMIT + 1, horizon + 1) if n % 10 == 0)
+        assert len(attempt_cycles) < old_cadence_count
         # Probing the degraded stream must never re-mark it degraded or touch polling.
         ex.mark_user_degraded.assert_not_called()
 
@@ -753,6 +758,58 @@ class TestHandleUserStreamDisconnect:
         mock_exchange.mark_user_degraded.assert_called_once()
         mock_tracker.enable_polling.assert_called_once()
 
+    @pytest.mark.fast
+    def test_hard_true_routes_to_hard_reconnect_user(self, mock_engine):
+        """#723: hard=True dispatches the full-teardown rebuild (hard_reconnect_user),
+        NOT the in-place reconnect_user."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex.hard_reconnect_user.return_value = True
+        mock_engine.exchange_interface = ex
+        mock_engine.order_tracker = MagicMock()
+        mock_engine._periodic_reconciler = MagicMock()
+
+        with patch("src.engines.live.user_data_processor.UserDataProcessor"):
+            mock_engine._handle_user_stream_disconnect(hard=True)
+
+        ex.hard_reconnect_user.assert_called_once()
+        ex.reconnect_user.assert_not_called()
+
+    @pytest.mark.fast
+    def test_hard_false_routes_to_in_place_reconnect_user(self, mock_engine):
+        """#723: hard=False (the default) keeps the cheap in-place reconnect_user."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex.reconnect_user.return_value = True
+        mock_engine.exchange_interface = ex
+        mock_engine.order_tracker = MagicMock()
+        mock_engine._periodic_reconciler = MagicMock()
+
+        with patch("src.engines.live.user_data_processor.UserDataProcessor"):
+            mock_engine._handle_user_stream_disconnect(hard=False)
+
+        ex.reconnect_user.assert_called_once()
+        ex.hard_reconnect_user.assert_not_called()
+
+    @pytest.mark.fast
+    def test_hard_reconnect_returns_false_marks_degraded_no_false_primary(self, mock_engine):
+        """#723: a hard reconnect that returns False (e.g. teardown/rebuild failed)
+        leaves the stream degraded with polling on — no false PRIMARY (E.13)."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex.hard_reconnect_user.return_value = False
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        mock_engine.order_tracker = tracker
+        mock_engine._periodic_reconciler = MagicMock()
+
+        with patch("src.engines.live.user_data_processor.UserDataProcessor"):
+            mock_engine._handle_user_stream_disconnect(hard=True)
+
+        ex.mark_user_degraded.assert_called_once()
+        tracker.enable_polling.assert_called_once()  # polling stays ON
+        tracker.disable_polling.assert_not_called()  # recovery only ever via a real event
+
 
 class TestStartWebSocketStreamsUserPolling:
     """#717: at boot the user stream starts but REST polling stays ON until the
@@ -818,3 +875,316 @@ class TestStartWebSocketStreamsUserPolling:
             mock_engine._check_user_stream_health()
 
         tracker.disable_polling.assert_called_once()  # handed off to WS-primary
+
+
+class TestUserDegradedProbeBackoffSchedule:
+    """#723 Phase 1: the user degraded-probe uses an EXPONENTIAL-BACKOFF schedule of
+    absolute failure-count boundaries (10, 20, 40, 80, 160, 280, 400, 520, 640, …),
+    generated iteratively from the three backoff constants — NOT a fixed every-Nth
+    cadence and NOT a hardcoded list. Bounds the unrecoverable-margin-stream churn
+    (#616) while preserving #717's never-permanently-False path back to WS-primary."""
+
+    # The pinned boundary sequence the plan flags as the arithmetic most likely to
+    # drift. Generated below from the constants and asserted equal to this.
+    PINNED_BOUNDARIES = [10, 20, 40, 80, 160, 280, 400, 520, 640]
+
+    @staticmethod
+    def _generate_boundaries(max_failure):
+        """Reference generator: walk boundaries from the constants up to max_failure."""
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_BACKOFF_BASE as BASE,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_CEILING as CEILING,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_FIRST_BOUNDARY as FIRST,
+        )
+
+        out = []
+        boundary = FIRST
+        gap = FIRST
+        while boundary <= max_failure:
+            out.append(boundary)
+            boundary += gap
+            gap = min(gap * BASE, CEILING)
+        return out
+
+    @pytest.mark.fast
+    def test_generated_boundary_list_matches_pinned_sequence(self, mock_engine):
+        """The boundary set generated from FIRST/BASE/CEILING equals the pinned
+        10,20,40,80,160,280,400,520,640 — a constant-drift regression guard (E.1)."""
+        assert self._generate_boundaries(640) == self.PINNED_BOUNDARIES
+
+    @pytest.mark.fast
+    def test_post_ramp_gaps_all_equal_ceiling(self, mock_engine):
+        """Once the geometric ramp saturates, every gap equals CEILING (E.1) — the
+        property that makes the schedule never-permanently-False."""
+        from src.config.constants import DEFAULT_WS_USER_DEGRADED_PROBE_CEILING as CEILING
+
+        boundaries = self._generate_boundaries(5 * CEILING)
+        gaps = [boundaries[i + 1] - boundaries[i] for i in range(len(boundaries) - 1)]
+        # Gaps ramp 10,20,40,80 then are pinned at CEILING (120) thereafter.
+        assert gaps[:4] == [10, 20, 40, 80]
+        assert all(g == CEILING for g in gaps[4:])
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize("failures", [1, 2, 3, 10, 20, 40, 80, 160, 280, 400, 520])
+    def test_probe_true_at_fast_phase_and_every_boundary(self, mock_engine, failures):
+        """True at the fast phase (1..LIMIT) and at every backoff boundary (E.1)."""
+        assert mock_engine._should_probe_user_reconnect(failures) is True
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize("failures", [4, 9, 11, 21, 39, 81, 159, 161, 279, 281, 399, 401])
+    def test_probe_false_at_non_boundaries(self, mock_engine, failures):
+        """False at non-boundary failure counts straddling the boundaries (E.1)."""
+        assert mock_engine._should_probe_user_reconnect(failures) is False
+
+    @pytest.mark.fast
+    def test_never_permanently_false_past_ramp(self, mock_engine):
+        """For ANY window of CEILING consecutive failures past the geometric ramp, at
+        least one returns True — forever (the #717 path-back guarantee) (E.2)."""
+        from src.config.constants import DEFAULT_WS_USER_DEGRADED_PROBE_CEILING as CEILING
+
+        ramp_end = 520
+        for start in range(ramp_end, ramp_end + 8 * CEILING):
+            window = range(start, start + CEILING)
+            assert any(mock_engine._should_probe_user_reconnect(n) for n in window), start
+
+    @pytest.mark.fast
+    def test_fast_phase_unchanged(self, mock_engine):
+        """Fast phase still probes every cycle up to the limit (regression guard for
+        #717's quick recovery) (E.3)."""
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+
+        assert all(mock_engine._should_probe_user_reconnect(n) for n in range(1, LIMIT + 1))
+
+    @pytest.mark.fast
+    def test_churn_strictly_below_old_cadence_and_monotonically_rarer(self, mock_engine):
+        """Over a long horizon the backoff fires strictly fewer probes than the old
+        fixed every-10, and the spacing is monotonically non-decreasing until the
+        CEILING — the intended churn reduction (E.4)."""
+        horizon = 1000
+        probes = [n for n in range(1, horizon + 1) if mock_engine._should_probe_user_reconnect(n)]
+        old_every_10 = [n for n in range(1, horizon + 1) if n <= 3 or n % 10 == 0]
+        assert len(probes) < len(old_every_10)  # strictly fewer
+        # ~12 probes over 1000 cycles vs ~100 for the old cadence (plan's target).
+        assert len(probes) < 20
+
+        # Spacing between consecutive throttled boundaries is monotonically
+        # non-decreasing (it doubles, then plateaus at CEILING) — never gets denser.
+        from src.config.constants import DEFAULT_WS_USER_DEGRADED_PROBE_CEILING as CEILING
+
+        throttled = [p for p in probes if p >= 10]
+        gaps = [throttled[i + 1] - throttled[i] for i in range(len(throttled) - 1)]
+        assert gaps == sorted(gaps)  # non-decreasing
+        assert max(gaps) == CEILING
+
+    @pytest.mark.fast
+    def test_recovery_under_backoff_returns_to_primary(self, mock_engine):
+        """Mid-backoff (a non-probing throttled cycle), a real event still recovers
+        immediately: recovery is independent of the probe predicate (E.5)."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.REST_DEGRADED
+        ex.user_ws_healthy = False
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        tracker.is_polling_enabled.return_value = True
+        mock_engine.order_tracker = tracker
+        # Sit at a NON-boundary failure count (no probe this cycle).
+        mock_engine._user_reconnect_failures = 158  # 159 next cycle, not a boundary
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+            mock_engine._check_user_stream_health()  # 159 → no probe
+            disc.assert_not_called()
+            assert mock_engine._user_reconnect_failures == 159
+
+            # A real event arrives mid-backoff → recover regardless of the predicate.
+            ex.user_ws_healthy = True
+            mock_engine._check_user_stream_health()
+
+        tracker.disable_polling.assert_called_once()
+        assert mock_engine._user_reconnect_failures == 0  # breaker reset
+
+    @pytest.mark.fast
+    def test_next_probe_eta_widens_with_backoff(self, mock_engine):
+        """The diagnostic ETA helper reports a widening gap (≈5m → 10m → 60m) as the
+        backoff ramps, derived from the same constants so it can't drift (D.3)."""
+        # At failure 3 (just before the first boundary 10): 7 cycles × 30s = 3.5m.
+        assert mock_engine._user_next_probe_eta_minutes(3) == pytest.approx(3.5)
+        # At boundary 10: gap to the NEXT boundary (20) = 10 cycles × 30s = 5m.
+        assert mock_engine._user_next_probe_eta_minutes(10) == pytest.approx(5.0)
+        # At boundary 80: gap to 160 = 80 cycles × 30s = 40m.
+        assert mock_engine._user_next_probe_eta_minutes(80) == pytest.approx(40.0)
+        # Past the ramp (e.g. 520): gap is CEILING (120) × 30s = 60m.
+        assert mock_engine._user_next_probe_eta_minutes(520) == pytest.approx(60.0)
+
+    @pytest.mark.fast
+    def test_kline_predicate_and_constant_untouched(self, mock_engine):
+        """Phase 1 must NOT touch kline: its predicate is still the fixed every-Nth
+        cadence and its constant is unchanged (E.7)."""
+        from src.config.constants import (
+            DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY as KLINE_PROBE,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT as KLINE_LIMIT,
+        )
+
+        assert KLINE_PROBE == 10  # unchanged
+        # Kline still uses the simple modulo cadence (NOT the user backoff schedule):
+        # multiples of KLINE_PROBE past the limit probe; non-multiples do not.
+        assert mock_engine._should_probe_kline_reconnect(KLINE_LIMIT + 1) is False
+        assert mock_engine._should_probe_kline_reconnect(2 * KLINE_PROBE) is True
+        assert mock_engine._should_probe_kline_reconnect(2 * KLINE_PROBE + 1) is False
+        # The user backoff boundary 20 would also be a kline probe (both multiples of
+        # 10), but the user-specific boundary 40-vs-30 distinction proves they differ:
+        assert mock_engine._should_probe_kline_reconnect(30) is True  # kline: 30%10==0
+        assert mock_engine._should_probe_user_reconnect(30) is False  # user: 30 not a boundary
+
+
+class TestUserHardReconnectMode:
+    """#723 Phase 2: a flag-gated full teardown + fresh-AsyncClient rebuild
+    (hard_reconnect_user). Ships INERT (FEATURE_WS_USER_HARD_RECONNECT default OFF).
+    The mode is decided by the CALLER before stop_user_stream flips state, and a
+    kline/user coupling falls back to in-place reconnect (never crashes the thread)."""
+
+    @staticmethod
+    def _degraded_engine(mock_engine, *, kline_provider=None):
+        """Live engine sitting in REST_DEGRADED at the first backoff boundary so the
+        next health cycle probes."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.REST_DEGRADED
+        ex.user_ws_healthy = False
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        tracker.is_polling_enabled.return_value = True
+        mock_engine.order_tracker = tracker
+        # Separate kline provider by default (the real topology): not the exchange.
+        mock_engine._ws_kline_provider = (
+            kline_provider if kline_provider is not None else MagicMock()
+        )
+        # Land exactly on boundary 10 next cycle so _should_probe_user_reconnect True.
+        mock_engine._user_reconnect_failures = 9
+        return ex, tracker
+
+    @pytest.mark.fast
+    def test_flag_off_uses_in_place_reconnect(self, mock_engine):
+        """Flag OFF (default): the degraded probe passes hard=False → in-place
+        reconnect path (E.10)."""
+        ex, _tracker = self._degraded_engine(mock_engine)
+        with (
+            patch("src.config.feature_flags.is_enabled", return_value=False) as flag,
+            patch.object(mock_engine, "_handle_user_stream_disconnect") as disc,
+        ):
+            mock_engine._check_user_stream_health()
+        disc.assert_called_once_with(hard=False)
+        # Even if never queried due to short-circuit, assert the flag key if used.
+        if flag.called:
+            assert flag.call_args[0][0] == "ws_user_hard_reconnect"
+
+    @pytest.mark.fast
+    def test_flag_on_degraded_uses_hard_reconnect(self, mock_engine):
+        """Flag ON + REST_DEGRADED + failures>LIMIT: the probe passes hard=True (E.10)."""
+        ex, _tracker = self._degraded_engine(mock_engine)
+        with (
+            patch("src.config.feature_flags.is_enabled", return_value=True),
+            patch.object(mock_engine, "_handle_user_stream_disconnect") as disc,
+        ):
+            mock_engine._check_user_stream_health()
+        disc.assert_called_once_with(hard=True)
+
+    @pytest.mark.fast
+    def test_flag_on_primary_stale_still_uses_in_place(self, mock_engine):
+        """Flag ON but PRIMARY-stale path → hard=False (mode decided by caller, not
+        read inside the handler post-teardown) (E.10)."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = False
+        ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        mock_engine._ws_kline_provider = MagicMock()
+        mock_engine._user_reconnect_failures = 0  # fast phase
+
+        with (
+            patch("src.config.feature_flags.is_enabled", return_value=True),
+            patch.object(mock_engine, "_handle_user_stream_disconnect") as disc,
+        ):
+            mock_engine._check_user_stream_health()
+        # PRIMARY-stale caller never passes hard → default False.
+        disc.assert_called_once_with()
+
+    @pytest.mark.fast
+    def test_flag_on_resyncing_still_uses_in_place(self, mock_engine):
+        """Flag ON but RESYNCING path → in-place (hard=False default) (E.10)."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.RESYNCING
+        ex.user_ws_healthy = False
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        mock_engine._ws_kline_provider = MagicMock()
+
+        with (
+            patch("src.config.feature_flags.is_enabled", return_value=True),
+            patch.object(mock_engine, "_handle_user_stream_disconnect") as disc,
+        ):
+            mock_engine._check_user_stream_health()
+        disc.assert_called_once_with()  # RESYNCING caller: no hard kwarg
+
+    @pytest.mark.fast
+    def test_coupling_guard_falls_back_to_in_place_and_does_not_raise(self, mock_engine, caplog):
+        """B-VERIFY-1 guard: if kline and user share a provider, flag ON + degraded
+        logs CRITICAL and uses in-place reconnect (hard=False) — and does NOT raise
+        (the WS health thread must not crash) (E.11)."""
+        import logging
+
+        ex, _tracker = self._degraded_engine(mock_engine)
+        # Co-locate: kline provider IS the exchange interface (the dangerous topology).
+        mock_engine._ws_kline_provider = ex
+
+        with (
+            patch("src.config.feature_flags.is_enabled", return_value=True),
+            patch.object(mock_engine, "_handle_user_stream_disconnect") as disc,
+            caplog.at_level(logging.CRITICAL),
+        ):
+            mock_engine._check_user_stream_health()  # must not raise
+
+        disc.assert_called_once_with(hard=False)  # fell back to cheap path
+        assert any(
+            "share a provider" in r.message and r.levelno == logging.CRITICAL
+            for r in caplog.records
+        )
+
+    @pytest.mark.fast
+    def test_should_hard_reconnect_helper_default_off(self, mock_engine):
+        """_should_hard_reconnect_user is False when the flag is unset (default OFF),
+        so a missing env var can never silently enable the teardown path (E.13)."""
+        ex = MagicMock()
+        mock_engine.exchange_interface = ex
+        mock_engine._ws_kline_provider = MagicMock()
+        # No FEATURE_WS_USER_HARD_RECONNECT in env, no overrides → resolves OFF.
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop("FEATURE_WS_USER_HARD_RECONNECT", None)
+            assert mock_engine._should_hard_reconnect_user() is False
+
+    @pytest.mark.fast
+    def test_should_hard_reconnect_helper_false_when_method_missing(self, mock_engine):
+        """Defensive: even flag ON, if the provider lacks hard_reconnect_user the
+        helper returns False (no AttributeError at probe time)."""
+        ex = MagicMock(spec=["reconnect_user", "stop_user_stream", "mark_user_degraded"])
+        mock_engine.exchange_interface = ex
+        mock_engine._ws_kline_provider = MagicMock()
+        with patch("src.config.feature_flags.is_enabled", return_value=True):
+            assert mock_engine._should_hard_reconnect_user() is False
