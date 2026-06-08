@@ -1624,14 +1624,21 @@ class LiveTradingEngine:
                 )
                 if user_started:
                     self._user_data_processor.start()
-                    if self.order_tracker:
-                        self.order_tracker.disable_polling()
-                    # Catch-up: reconcile to detect any events missed during handoff
+                    # Catch-up: reconcile to detect any events missed during handoff.
                     if self.order_tracker:
                         self.order_tracker.poll_once()
                     if self._periodic_reconciler:
                         self._periodic_reconciler.reconcile_once()
-                    logger.info("User data WebSocket stream active — order polling disabled")
+                    # Polling stays ON until the FIRST real user event confirms the
+                    # socket is delivering. start_margin_socket is fire-and-forget and
+                    # returns True even on a dead multiplexed ws_api socket, so disabling
+                    # polling here would blackout order tracking on a never-delivering
+                    # stream. _restore_user_ws_primary (the single disable site) flips it
+                    # off once user_ws_healthy goes True on a health cycle (#717).
+                    logger.info(
+                        "User data WebSocket stream started — REST polling stays on "
+                        "until the first event confirms delivery (#717)"
+                    )
             except Exception as e:
                 logger.warning("Failed to start user data WebSocket stream: %s", e)
 
@@ -1815,30 +1822,78 @@ class LiveTradingEngine:
         return failures % DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY == 0
 
     def _check_user_stream_health(self) -> None:
-        """Check user data stream health and reconnect if needed."""
+        """User-stream health with a *recovering* REST fallback (#717).
+
+        Mirrors the kline self-heal (#662): the engine falls back to REST order
+        polling whenever the user/margin stream is down, but the instant a real
+        user event resumes (``user_ws_healthy`` requires ``_user_event_received``)
+        it returns to WS-primary and resets the breaker — so it can never get
+        stuck on REST until restart, the absorbing-state bug of the original #616
+        circuit breaker.
+
+        Unlike kline, "WS-primary" here is not a per-cycle data-fetch choice: order
+        events are pushed into the UserDataProcessor and the fallback is the
+        OrderTracker REST poll loop, so WS-primary == ``order_tracker`` polling
+        disabled. Recovery therefore rebuilds the processor + reconciles (in
+        ``_handle_user_stream_disconnect``) and ``disable_polling`` is flipped only
+        by ``_restore_user_ws_primary``, gated on a confirmed real event.
+
+        Runs only on the WS health-monitor thread (the single writer of
+        ``_user_reconnect_failures``), matching the lock-free convention; main-loop
+        reads of the polling flag are GIL-atomic.
+        """
         if not self.enable_live_trading or not self.exchange_interface:
             return
         exchange = self.exchange_interface
-        # Check for RESYNCING state (set by error callback) — needs recovery
+        # Idleness is normal: with nothing tracked there is no staleness signal to
+        # act on, no fills to miss, and no reason to churn the socket (which would
+        # generate needless #716 teardown noise). REST polling, if on, keeps
+        # backstopping order/balance state. The breaker only ever accumulates past
+        # this gate, so it cannot be non-zero while idle. Gate first (#717).
+        if not self.order_tracker or self.order_tracker.get_tracked_count() == 0:
+            return
+
+        # Recovery: a real user event arrived (user_ws_healthy requires
+        # _user_event_received of the current generation), so the stream is
+        # delivering — return to WS-primary and reset the breaker. Checked before
+        # the state gate below so it also recovers from REST_DEGRADED, not just
+        # PRIMARY. This is the self-heal #616 lacked (#717).
+        if getattr(exchange, "user_ws_healthy", False):
+            self._restore_user_ws_primary()
+            self._user_reconnect_failures = 0
+            return
+
+        # RESYNCING (set by the error callback) needs an immediate recovery cycle.
         if getattr(exchange, "_user_ws_state", None) == WebSocketState.RESYNCING:
             logger.warning("User data stream in RESYNCING state — triggering recovery")
             self._handle_user_stream_disconnect()
             return
-        if getattr(exchange, "_user_ws_state", None) != WebSocketState.PRIMARY:
-            return
-        if not self.order_tracker or self.order_tracker.get_tracked_count() == 0:
-            return
-
-        # A genuinely healthy stream (a real user event arrived since the last
-        # reconnect — user_ws_healthy requires _user_event_received) clears the
-        # reconnect circuit breaker.
-        if getattr(exchange, "user_ws_healthy", False):
-            self._user_reconnect_failures = 0
 
         from src.config.constants import (
             DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
             DEFAULT_WS_USER_STALENESS_THRESHOLD,
         )
+
+        # REST_DEGRADED: the circuit is open and we are on REST polling. THE FIX —
+        # instead of staying absorbed here until restart (#616), keep probing the
+        # WS on a throttle so a recovered network path can return us to WS-primary.
+        # The probe re-enters _handle_user_stream_disconnect (re-stop + reconnect);
+        # the recovery branch above promotes us back the moment a real event lands.
+        if getattr(exchange, "_user_ws_state", None) == WebSocketState.REST_DEGRADED:
+            self._user_reconnect_failures += 1
+            if not self._should_probe_user_reconnect(self._user_reconnect_failures):
+                return
+            logger.warning(
+                "User data stream degraded — probing WS reconnect (failure #%d, #717)",
+                self._user_reconnect_failures,
+            )
+            self._handle_user_stream_disconnect()
+            return
+
+        # From here we require PRIMARY: anything else (DISCONNECTED/SUSPENDED) is
+        # not a state this watchdog drives.
+        if getattr(exchange, "_user_ws_state", None) != WebSocketState.PRIMARY:
+            return
 
         last_event = getattr(exchange, "_last_user_event_time", None)
         if not last_event:
@@ -1852,29 +1907,27 @@ class LiveTradingEngine:
         # fire-and-forget and reports success even on a dead multiplexed ws_api
         # socket, so reconnect_user returns True and this watchdog would otherwise
         # reconnect every ~2 min forever (spewing asyncio re-entrancy errors).
-        # After a few unproductive reconnects, open the circuit: stop reconnecting
-        # and run REST-polling-only, which the engine already falls back to
-        # (OrderTracker polls every 10s; the periodic reconciler backstops at 120s).
-        # mark_user_degraded() sets REST_DEGRADED, so the != PRIMARY guard above
-        # then short-circuits this check — the warning below logs exactly once (#616).
+        # After a few unproductive reconnects, open the circuit: tear down the dead
+        # socket, mark REST_DEGRADED, and run REST-polling-only. Unlike #616, the
+        # REST_DEGRADED branch above now keeps throttled-probing, so this is the
+        # fast-phase boundary, not a terminal state (#717).
         if self._user_reconnect_failures >= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
             logger.warning(
                 "User data stream did not recover after %d reconnects — circuit open, "
-                "staying on REST polling until the next restart (#616).",
+                "falling back to REST polling and throttled-probing the WS (#717).",
                 self._user_reconnect_failures,
             )
-            # Tear down the dead user socket so its asyncio _read_ready callback stops
-            # firing on the shared event loop. Marking degraded alone stops reconnects
-            # but leaves the orphaned socket attached, which keeps spewing
-            # "cannot enter context" errors (~2,100/hr) indefinitely. stop_user_stream
-            # closes only the user socket (not kline), correct here since we are
-            # dropping to REST polling (#616).
+            # Tear down the dead user socket BEFORE marking degraded so the terminal
+            # state is REST_DEGRADED, not DISCONNECTED (stop_user_stream sets
+            # DISCONNECTED). Order matters: a DISCONNECTED terminal state would make
+            # the REST_DEGRADED probe branch unreachable. stop_user_stream also halts
+            # the dead socket's asyncio _read_ready spam (~2,100/hr) and bumps the
+            # generation so any in-flight stale callback is dropped (#616/#717).
             if hasattr(exchange, "stop_user_stream"):
                 exchange.stop_user_stream()
             if hasattr(exchange, "mark_user_degraded"):
                 exchange.mark_user_degraded()
-            if self.order_tracker:
-                self.order_tracker.enable_polling()
+            self.order_tracker.enable_polling()
             return
 
         self._user_reconnect_failures += 1
@@ -1885,6 +1938,51 @@ class LiveTradingEngine:
             DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
         )
         self._handle_user_stream_disconnect()
+
+    def _should_probe_user_reconnect(self, failures: int) -> bool:
+        """Whether to probe a user-stream WS reconnect on this degraded cycle (#717).
+
+        Structurally identical to the kline predicate: fast phase (``failures`` <=
+        the circuit limit) probes every cycle; past it, probe only every Nth cycle
+        so a persistently dead socket doesn't busy-loop on socket churn + the #716
+        teardown noise. NEVER permanently False — past the limit it still returns
+        True at every multiple of ``DEFAULT_WS_USER_DEGRADED_PROBE_EVERY``, so the
+        WS always retains a path back to primary. Recovery itself is independent of
+        this predicate (the ``user_ws_healthy`` branch promotes the instant a real
+        event resumes, even on a throttled non-probing cycle).
+        """
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_EVERY,
+            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
+        )
+
+        if failures <= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
+            return True
+        return failures % DEFAULT_WS_USER_DEGRADED_PROBE_EVERY == 0
+
+    def _restore_user_ws_primary(self) -> None:
+        """Return the user stream to WS-primary: disable REST polling once a real
+        event confirms delivery (#717).
+
+        This is the SINGLE site that disables user-stream order polling, for both
+        fresh boot and post-degradation recovery. It is gated on
+        ``order_tracker.is_polling_enabled()`` — NOT on ``_user_ws_state``, which
+        flips to PRIMARY in ``start_user_stream`` *before* the first real event, so
+        gating on it would disable polling on a never-delivering socket (the
+        blackout this fix prevents). When polling is already off (steady state) this
+        is a no-op, so it does not spam a "recovered" log every health cycle.
+        """
+        if not self.order_tracker or not self.order_tracker.is_polling_enabled():
+            return
+        # A real user event arrived while polling was still on — the WS is now the
+        # primary order-event path. poll_once first closes any gap between the last
+        # poll and the handoff so no fill is missed.
+        self.order_tracker.poll_once()
+        self.order_tracker.disable_polling()
+        logger.info(
+            "User data WebSocket recovered — real event confirmed, REST polling "
+            "disabled, WS primary again (#717)"
+        )
 
     def _handle_kline_disconnect(self) -> None:
         """Resync kline history from REST and attempt one WS reconnect.
@@ -1963,17 +2061,18 @@ class LiveTradingEngine:
                     self._user_data_processor.start()
                     reconnected = True
                     logger.info("User data WebSocket reconnected")
-                    # Post-reconnect catch-up: reconcile events from the handoff
-                    # gap before disabling polling, so nothing is lost. A catch-up
-                    # failure leaves REST polling on as a safe fallback rather than
-                    # undoing the reconnect.
+                    # Post-reconnect catch-up: reconcile events from the handoff gap
+                    # so nothing is lost. Polling deliberately stays ON — a reconnect
+                    # only re-OPENS the socket; reconnect_user/start_margin_socket is
+                    # fire-and-forget and may return success on a dead socket. Only a
+                    # real event (user_ws_healthy) on a later health cycle restores
+                    # WS-primary via _restore_user_ws_primary, the single disable site.
+                    # This closes the post-reconnect blackout window (#717).
                     try:
                         if self.order_tracker:
                             self.order_tracker.poll_once()
                         if self._periodic_reconciler:
                             self._periodic_reconciler.reconcile_once()
-                        if self.order_tracker:
-                            self.order_tracker.disable_polling()
                     except Exception as e:
                         logger.error(
                             "Post-reconnect catch-up failed (staying on REST polling): %s", e

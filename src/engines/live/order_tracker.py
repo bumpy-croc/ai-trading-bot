@@ -239,7 +239,9 @@ class OrderTracker:
                             )
                             if self.on_cancel:
                                 try:
-                                    self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
+                                    self.on_cancel(
+                                        order_id, tracked.symbol, tracked.last_filled_qty
+                                    )
                                 except Exception as cb_err:
                                     logger.error(
                                         "Cancel callback failed for force-removed order %s: %s",
@@ -554,7 +556,9 @@ class OrderTracker:
                 fill_delta = actual_filled - tracked.last_filled_qty
                 logger.warning(
                     "Order %s: reconciling missed fill delta %.8f before %s",
-                    order_id, fill_delta, status.value,
+                    order_id,
+                    fill_delta,
+                    status.value,
                 )
                 if self.on_partial_fill:
                     try:
@@ -706,6 +710,18 @@ class OrderTracker:
     def poll_once(self) -> None:
         """Execute a single poll cycle. Used during WS to REST transitions."""
         self._check_orders()
+
+    def is_polling_enabled(self) -> bool:
+        """Return whether REST polling is currently active.
+
+        This is the source of truth for "is the user stream serving as the
+        primary order-event path or are we on the REST fallback". The trading
+        engine gates user-stream recovery on this (not on the provider's
+        ``_user_ws_state``, which flips to PRIMARY before the first real event
+        confirms the socket is delivering) so a no-event probe can't blackout
+        order tracking (#717).
+        """
+        return self._polling_enabled
 
     def disable_polling(self) -> None:
         """Disable REST polling. Used when WebSocket is active."""
