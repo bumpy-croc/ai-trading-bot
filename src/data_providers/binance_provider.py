@@ -2503,6 +2503,63 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 time.sleep(backoff)
         return False
 
+    def hard_reconnect_user(self, on_user_event: Callable[[dict], None] | None = None) -> bool:
+        """Fully rebuild the user stream on a fresh AsyncClient/ws_api socket (#723).
+
+        Unlike ``reconnect_user`` (which only ``stop_socket`` + re-subscribes over the
+        SAME shared ``client.ws_api`` object), this tears the whole TWM down via
+        ``stop_streams`` — which calls ``AsyncClient.close_connection`` and drops
+        ``ws_api`` — then ``_ensure_twm`` builds a NEW ``ThreadedWebsocketManager`` →
+        new ``AsyncClient`` → brand-new ``WebsocketAPI`` (empty subscription/route map,
+        fresh read loop, fresh TCP socket), and ``start_user_stream`` subscribes over
+        it. This is the margin analogue of what makes the kline stream recover (a
+        genuinely fresh socket), and the only supported-library way to escape an
+        object-level-degraded ws_api the in-place re-subscribe can't restore (#616 M1).
+
+        Gated OFF by default behind ``FEATURE_WS_USER_HARD_RECONNECT`` at the call site
+        (the engine), so this method only runs when deliberately enabled. It does NOT
+        touch the kline stream (kline lives on a separate provider/TWM) and CANNOT
+        sever order placement or stop-loss submission (those use the separate
+        synchronous ``self._client``, never the TWM's ``AsyncClient``).
+
+        The generation token is bumped under ``_user_stream_lock`` inside both
+        ``stop_streams`` and ``start_user_stream`` (reused as-is), so a stale callback
+        from the torn-down AsyncClient is dropped and cannot fake recovery. Like
+        ``reconnect_user``, returning True means only that a socket was *opened* — real
+        WS-primary recovery is still gated on a confirmed event via the engine's single
+        ``_restore_user_ws_primary`` disable site, so a fire-and-forget start on a still-
+        broken (M2 server-side) socket cannot blackout order tracking.
+
+        Args:
+            on_user_event: Fresh callback for the rebuilt stream. If None, reuses the
+                previously stored callback.
+
+        Returns:
+            True if the stream was restarted, False otherwise.
+        """
+        callback = on_user_event or self._on_user_event_cb
+        if not callback:
+            return False
+        try:
+            # Full teardown: closes the AsyncClient (ws_api=None) and the TWM loop. The
+            # user generation is bumped under the lock here, invalidating any in-flight
+            # callback from the old socket before the new one is built.
+            self.stop_streams()
+        except Exception as e:
+            # A failed teardown must not be reported as a recovered stream. Leave the
+            # caller to keep REST polling on / re-mark degraded (no false PRIMARY).
+            logger.error("Hard user-stream reconnect: teardown (stop_streams) failed: %s", e)
+            return False
+        try:
+            # Rebuild the TWM → new AsyncClient → fresh ws_api, then subscribe over it.
+            # start_user_stream calls _ensure_twm internally, but call it explicitly so a
+            # rebuild failure surfaces here distinctly from a subscribe failure.
+            self._ensure_twm()
+            return self.start_user_stream(callback)
+        except Exception as e:
+            logger.error("Hard user-stream reconnect: rebuild/start failed: %s", e)
+            return False
+
 
 # Aliases for backward compatibility
 BinanceDataProvider = BinanceProvider
