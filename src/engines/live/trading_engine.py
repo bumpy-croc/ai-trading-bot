@@ -1883,11 +1883,21 @@ class LiveTradingEngine:
             self._user_reconnect_failures += 1
             if not self._should_probe_user_reconnect(self._user_reconnect_failures):
                 return
+            # Decide the reconnect MODE here, BEFORE _handle_user_stream_disconnect's
+            # stop_user_stream flips state to DISCONNECTED (the handler can no longer
+            # read REST_DEGRADED). hard=True (full teardown + fresh AsyncClient/ws_api,
+            # #723) only when the flag is on AND the kline/user coupling guard passes;
+            # otherwise the cheap in-place re-subscribe. This is the ONLY caller that
+            # may set hard=True.
+            hard = self._should_hard_reconnect_user()
             logger.warning(
-                "User data stream degraded — probing WS reconnect (failure #%d, #717)",
+                "User data stream degraded — probing WS %s (failure #%d, "
+                "next probe in ~%.0fm, #717/#723)",
+                "HARD-reconnect" if hard else "reconnect",
                 self._user_reconnect_failures,
+                self._user_next_probe_eta_minutes(self._user_reconnect_failures),
             )
-            self._handle_user_stream_disconnect()
+            self._handle_user_stream_disconnect(hard=hard)
             return
 
         # From here we require PRIMARY: anything else (DISCONNECTED/SUSPENDED) is
@@ -1940,25 +1950,140 @@ class LiveTradingEngine:
         self._handle_user_stream_disconnect()
 
     def _should_probe_user_reconnect(self, failures: int) -> bool:
-        """Whether to probe a user-stream WS reconnect on this degraded cycle (#717).
+        """Whether to probe a user-stream WS reconnect on this degraded cycle (#717/#723).
 
-        Structurally identical to the kline predicate: fast phase (``failures`` <=
-        the circuit limit) probes every cycle; past it, probe only every Nth cycle
-        so a persistently dead socket doesn't busy-loop on socket churn + the #716
-        teardown noise. NEVER permanently False — past the limit it still returns
-        True at every multiple of ``DEFAULT_WS_USER_DEGRADED_PROBE_EVERY``, so the
-        WS always retains a path back to primary. Recovery itself is independent of
-        this predicate (the ``user_ws_healthy`` branch promotes the instant a real
-        event resumes, even on a throttled non-probing cycle).
+        Fast phase (``failures`` <= the circuit limit) probes every cycle for quick
+        recovery. Throttled phase: probe on an *exponential-backoff* schedule of
+        absolute failure-count boundaries (10, 20, 40, 80, 160, 280, 400, 520, …),
+        not the old fixed every-Nth cadence, so an unrecoverable margin stream (the
+        #616 dead multiplexed ws_api socket an in-place re-subscribe can't restore)
+        stops churning ~200×/day while still being probed indefinitely.
+
+        NEVER permanently False — past the geometric ramp the gap is fixed at the
+        CEILING, so every CEILING-wide window of ``failures`` still contains a probe
+        boundary; the WS therefore always retains a path back to primary (#717's
+        guarantee). Recovery itself is independent of this predicate (the
+        ``user_ws_healthy`` branch in ``_check_user_stream_health`` promotes the
+        instant a real event resumes, even on a throttled non-probing cycle).
+
+        Pure function of ``failures`` (no mutable backoff state), preserving the
+        lock-free single-writer model: the boundary set is derived analytically from
+        the three backoff constants on every call (see ``_user_probe_boundary_reached``).
         """
-        from src.config.constants import (
-            DEFAULT_WS_USER_DEGRADED_PROBE_EVERY,
-            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
-        )
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT
 
         if failures <= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
             return True
-        return failures % DEFAULT_WS_USER_DEGRADED_PROBE_EVERY == 0
+        return self._user_probe_boundary_reached(failures)
+
+    @staticmethod
+    def _user_probe_boundary_reached(failures: int) -> bool:
+        """True iff ``failures`` is an exponential-backoff probe boundary (#723).
+
+        Boundaries start at ``FIRST`` and grow by gaps that double each step
+        (``gap *= BASE``) until a gap would exceed ``CEILING``, after which the gap
+        is fixed at ``CEILING`` forever — yielding the sequence
+        ``FIRST, FIRST+FIRST, …`` = ``10, 20, 40, 80, 160, 280, 400, 520, 640, …``
+        (gaps ``10, 20, 40, 80, 120, 120, …``) for the default constants. The set is
+        generated ITERATIVELY from the constants (no hardcoded list, no closed form —
+        a cumulative-sum closed form would give the wrong ``10, 30, 70, 150, …``): we
+        walk boundaries up to ``failures`` and test exact equality. Membership is the
+        whole predicate, so the walk is O(log(failures/FIRST)) up to the ramp then
+        O((failures-ramp)/CEILING) — cheap at the once-per-30-s health-check cadence.
+
+        The post-ramp gap equals the constant ``CEILING``, so every window of
+        ``CEILING`` consecutive failure counts contains exactly one boundary — the
+        never-permanently-False invariant the user stream relies on (#717).
+        """
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_BACKOFF_BASE as BASE,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_CEILING as CEILING,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_FIRST_BOUNDARY as FIRST,
+        )
+
+        if failures < FIRST:
+            return False
+        boundary = FIRST
+        gap = FIRST
+        # Advance to the first boundary >= failures, growing the gap geometrically
+        # (capped at CEILING). The order — add the gap, THEN grow it — makes the first
+        # increment FIRST (10→20), matching the pinned 10,20,40,80,160,280,… schedule.
+        while boundary < failures:
+            boundary += gap
+            gap = min(gap * BASE, CEILING)
+        return boundary == failures
+
+    @staticmethod
+    def _user_next_probe_eta_minutes(failures: int) -> float:
+        """Approx minutes until the next user degraded-probe after ``failures`` (#723).
+
+        Diagnostic only: the gap (in health cycles) from the current failure count to
+        the next exponential-backoff boundary, scaled by the health-check interval, so
+        the degraded-probe log shows the backoff widening (e.g. "next probe in ~5m" →
+        "~10m" → "~60m") for prod monitoring. Derived from the same constants as the
+        boundary set, so it can never drift from the actual probe cadence.
+        """
+        from src.config.constants import (
+            DEFAULT_WS_HEALTH_CHECK_INTERVAL as INTERVAL,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_BACKOFF_BASE as BASE,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_CEILING as CEILING,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_FIRST_BOUNDARY as FIRST,
+        )
+
+        # Walk to the first boundary strictly past `failures`; the cycle gap to it,
+        # times the seconds-per-cycle, is the ETA. (At a boundary, this returns the
+        # gap to the NEXT one — the spacing that will apply after this probe fires.)
+        boundary = FIRST
+        gap = FIRST
+        while boundary <= failures:
+            boundary += gap
+            gap = min(gap * BASE, CEILING)
+        return (boundary - failures) * INTERVAL / 60.0
+
+    def _should_hard_reconnect_user(self) -> bool:
+        """Whether the degraded probe should use a HARD reconnect this cycle (#723).
+
+        True only when ALL hold:
+        1. ``FEATURE_WS_USER_HARD_RECONNECT`` is enabled (default OFF — money/stability-
+           adjacent, ships inert per LESSONS §3/§4). A missing env var resolves False.
+        2. The kline and user streams are on SEPARATE providers (B-VERIFY-1). The hard
+           path does a full ``exchange_interface.stop_streams()``; if a future refactor
+           ever co-located kline on the same provider (``_ws_kline_provider is
+           exchange_interface``), that teardown would also kill kline. We REFUSE the
+           hard path in that case — log CRITICAL and fall back to the cheap in-place
+           reconnect — rather than a bare ``assert`` that would crash the WS health
+           thread (the codex guard, #723).
+        3. The provider actually exposes ``hard_reconnect_user`` (defensive).
+
+        Pure read; safe on the WS health thread (no state mutation, never raises).
+        """
+        from src.config.feature_flags import is_enabled
+
+        if not is_enabled("ws_user_hard_reconnect", False):
+            return False
+        if not hasattr(self.exchange_interface, "hard_reconnect_user"):
+            return False
+        # Coupling guard: a shared provider would let the user teardown kill kline.
+        if (
+            self._ws_kline_provider is not None
+            and self._ws_kline_provider is self.exchange_interface
+        ):
+            logger.critical(
+                "Kline and user streams share a provider — refusing hard reconnect, "
+                "using in-place reconnect (#723)"
+            )
+            return False
+        return True
 
     def _restore_user_ws_primary(self) -> None:
         """Return the user stream to WS-primary: disable REST polling once a real
@@ -2014,13 +2139,28 @@ class LiveTradingEngine:
         except Exception as e:
             logger.error("Kline reconnect attempt failed: %s", e)
 
-    def _handle_user_stream_disconnect(self) -> None:
-        """Handle user data stream failure. Resync orders and attempt reconnect."""
+    def _handle_user_stream_disconnect(self, *, hard: bool = False) -> None:
+        """Handle user data stream failure. Resync orders and attempt reconnect.
+
+        ``hard`` selects the reconnect strategy and MUST be decided by the caller:
+        this handler's first action (``stop_user_stream``) flips ``_user_ws_state`` to
+        DISCONNECTED, so the handler can no longer read "were we REST_DEGRADED?" itself
+        (the codex ordering fix, #723). When ``hard`` is True it does a full
+        teardown + fresh-AsyncClient rebuild (``hard_reconnect_user``); otherwise the
+        cheap in-place re-subscribe (``reconnect_user``). Only the REST_DEGRADED
+        throttled-probe branch passes ``hard=True`` (and only when
+        ``FEATURE_WS_USER_HARD_RECONNECT`` is on AND the kline/user coupling guard
+        passes); the fast-phase, RESYNCING, and PRIMARY-stale callers pass ``hard=False``
+        so a flag-on PRIMARY/RESYNCING cycle still uses the cheap path.
+        """
         from src.engines.live.user_data_processor import UserDataProcessor
 
         if not self.enable_live_trading or not self.exchange_interface:
             return
-        # 1. Stop the old user socket FIRST to prevent new events arriving
+        # 1. Stop the old user socket FIRST to prevent new events arriving. (When
+        #    hard=True the subsequent hard_reconnect_user does a full stop_streams
+        #    teardown anyway; this early stop_user_stream keeps the state machine /
+        #    generation bump identical across both paths and is harmless/idempotent.)
         if hasattr(self.exchange_interface, "stop_user_stream"):
             self.exchange_interface.stop_user_stream()
         # 2. Now drain the UserDataProcessor (no new events can arrive)
@@ -2047,20 +2187,32 @@ class LiveTradingEngine:
             self.exchange_interface.mark_user_degraded()
             logger.critical("UserDataProcessor did not stop cleanly — staying in REST_DEGRADED")
             return
-        # 6. Attempt user stream reconnect with fresh callback
+        # 6. Attempt user stream reconnect with fresh callback. `hard` (decided by the
+        #    caller, see docstring) picks a full teardown + fresh-AsyncClient rebuild
+        #    (#723) over the cheap in-place re-subscribe. Both are fire-and-forget: a
+        #    True return means a socket opened, NOT that it delivers — recovery stays
+        #    gated on a real event via _restore_user_ws_primary (the single disable
+        #    site), so neither path can blackout order tracking on a dead socket (#717).
+        reconnect_method = "hard_reconnect_user" if hard else "reconnect_user"
         reconnected = False
-        if hasattr(self.exchange_interface, "reconnect_user"):
+        if hasattr(self.exchange_interface, reconnect_method):
             try:
                 new_processor = UserDataProcessor(
                     order_tracker=self.order_tracker,
                 )
-                if self.exchange_interface.reconnect_user(
-                    on_user_event=new_processor.enqueue,
-                ):
+                reconnect_fn = getattr(self.exchange_interface, reconnect_method)
+                if reconnect_fn(on_user_event=new_processor.enqueue):
                     self._user_data_processor = new_processor
                     self._user_data_processor.start()
                     reconnected = True
-                    logger.info("User data WebSocket reconnected")
+                    logger.info(
+                        "User data WebSocket %s",
+                        (
+                            "hard-reconnected (fresh AsyncClient/ws_api, #723)"
+                            if hard
+                            else "reconnected"
+                        ),
+                    )
                     # Post-reconnect catch-up: reconcile events from the handoff gap
                     # so nothing is lost. Polling deliberately stays ON — a reconnect
                     # only re-OPENS the socket; reconnect_user/start_margin_socket is

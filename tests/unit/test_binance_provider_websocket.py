@@ -622,6 +622,126 @@ class TestReconnect:
         assert result is False
 
 
+class TestHardReconnectUser:
+    """#723 Phase 2: hard_reconnect_user fully rebuilds the user stream on a FRESH
+    AsyncClient/ws_api (stop_streams → _ensure_twm → start_user_stream), the margin
+    analogue of kline recovery. Returning True means a socket *opened*, not that it
+    delivers — recovery stays gated on a real event at the engine."""
+
+    @pytest.mark.fast
+    def test_calls_stop_streams_then_ensure_twm_then_start_in_order(self, provider):
+        """The teardown → rebuild → start sequence runs in that exact order (E.8)."""
+        provider._on_user_event_cb = MagicMock()
+        order: list[str] = []
+
+        with (
+            patch.object(provider, "stop_streams", side_effect=lambda: order.append("stop")),
+            patch.object(provider, "_ensure_twm", side_effect=lambda: order.append("ensure")),
+            patch.object(
+                provider,
+                "start_user_stream",
+                side_effect=lambda cb: (order.append("start"), True)[1],
+            ) as mock_start,
+        ):
+            result = provider.hard_reconnect_user()
+
+        assert result is True
+        assert order == ["stop", "ensure", "start"]
+        mock_start.assert_called_once_with(provider._on_user_event_cb)
+
+    @pytest.mark.fast
+    def test_uses_fresh_callback_when_provided(self, provider):
+        """A fresh callback is forwarded to start_user_stream (stale callbacks must
+        not reference a stopped consumer, CODE.md §238)."""
+        provider._on_user_event_cb = MagicMock()
+        fresh_cb = MagicMock()
+
+        with (
+            patch.object(provider, "stop_streams"),
+            patch.object(provider, "_ensure_twm"),
+            patch.object(provider, "start_user_stream", return_value=True) as mock_start,
+        ):
+            provider.hard_reconnect_user(on_user_event=fresh_cb)
+
+        mock_start.assert_called_once_with(fresh_cb)
+
+    @pytest.mark.fast
+    def test_returns_false_without_callback(self, provider):
+        """No callback stored and none provided → returns False, no teardown."""
+        provider._on_user_event_cb = None
+        with patch.object(provider, "stop_streams") as mock_stop:
+            result = provider.hard_reconnect_user()
+        assert result is False
+        mock_stop.assert_not_called()
+
+    @pytest.mark.fast
+    def test_bumps_generation_via_stop_and_start(self, provider):
+        """The generation is advanced by the real stop_streams + start_user_stream
+        locked bumps, so a stale callback from the torn-down AsyncClient is dropped
+        (E.8/E.12). Uses the real stop_streams/start path with a mocked TWM."""
+        mock_twm = MagicMock()
+        mock_twm.start_user_socket.return_value = "user_key"
+        provider._twm = mock_twm
+        provider._twm_loop = None  # _socket_on_twm_loop falls through to direct call
+        provider._use_margin = False
+        provider._on_user_event_cb = MagicMock()
+        before = provider._user_stream_generation
+
+        # Real stop_streams nulls self._twm; the rebuild (mocked here) restores a fresh
+        # TWM so the subsequent real start_user_stream can subscribe over it.
+        def _rebuild_twm():
+            provider._twm = mock_twm
+
+        with patch.object(provider, "_ensure_twm", side_effect=_rebuild_twm):
+            result = provider.hard_reconnect_user()
+
+        assert result is True
+        # stop_streams bumps once, start_user_stream bumps once → +2.
+        assert provider._user_stream_generation == before + 2
+
+    @pytest.mark.fast
+    def test_teardown_failure_returns_false_no_rebuild(self, provider):
+        """If stop_streams raises, hard_reconnect_user returns False and does NOT
+        attempt a rebuild/start — no false PRIMARY on a failed teardown (E.13)."""
+        provider._on_user_event_cb = MagicMock()
+        with (
+            patch.object(provider, "stop_streams", side_effect=RuntimeError("twm stuck")),
+            patch.object(provider, "_ensure_twm") as mock_ensure,
+            patch.object(provider, "start_user_stream") as mock_start,
+        ):
+            result = provider.hard_reconnect_user()
+        assert result is False
+        mock_ensure.assert_not_called()
+        mock_start.assert_not_called()
+
+    @pytest.mark.fast
+    def test_rebuild_failure_returns_false(self, provider):
+        """If _ensure_twm raises after teardown, returns False (degraded, no false
+        PRIMARY) and does not call start (E.13)."""
+        provider._on_user_event_cb = MagicMock()
+        with (
+            patch.object(provider, "stop_streams"),
+            patch.object(provider, "_ensure_twm", side_effect=RuntimeError("loop create failed")),
+            patch.object(provider, "start_user_stream") as mock_start,
+        ):
+            result = provider.hard_reconnect_user()
+        assert result is False
+        mock_start.assert_not_called()
+
+    @pytest.mark.fast
+    def test_start_returns_false_propagates_false(self, provider):
+        """If start_user_stream returns False on the fresh socket, hard_reconnect_user
+        returns False → caller marks degraded; no false PRIMARY recovery (E.13)."""
+        provider._on_user_event_cb = MagicMock()
+        with (
+            patch.object(provider, "stop_streams"),
+            patch.object(provider, "_ensure_twm"),
+            patch.object(provider, "start_user_stream", return_value=False),
+        ):
+            result = provider.hard_reconnect_user()
+        assert result is False
+
+
 class TestOnStreamDisconnect:
     """Tests for per-stream disconnect handlers."""
 
