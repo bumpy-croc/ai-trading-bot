@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.data_providers.exchange_interface import OrderSide, OrderStatus, OrderType
+from src.data_providers.exchange_interface import OrderStatus, OrderType
 from src.engines.live.event_deduplicator import EventDeduplicator
 from src.engines.live.order_tracker import OrderTracker
 
@@ -281,6 +281,16 @@ class TestPollingControl:
 
         tracker.enable_polling()
         assert tracker._polling_enabled is True
+
+    def test_is_polling_enabled_reflects_state(self, tracker):
+        """is_polling_enabled() reports the live polling flag — the engine gates
+        user-stream WS-primary recovery on it, not on the provider's WS state (#717)."""
+        # Default: polling on.
+        assert tracker.is_polling_enabled() is True
+        tracker.disable_polling()
+        assert tracker.is_polling_enabled() is False
+        tracker.enable_polling()
+        assert tracker.is_polling_enabled() is True
 
     def test_poll_loop_respects_polling_enabled_flag(self, tracker, mock_exchange):
         """Test that _poll_loop skips _check_orders when polling is disabled."""

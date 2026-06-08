@@ -371,8 +371,14 @@ DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_D
 # before the watchdog opens a circuit breaker: stop the futile ~2-min reconnect loop
 # and run REST-polling-only. python-binance's start_margin_socket is fire-and-forget
 # and reports success even on a dead multiplexed ws_api socket, so reconnects never
-# self-terminate and churn forever (#616).
+# self-terminate and churn forever (#616). This is also the fast-phase boundary for
+# the self-healing user-stream probe (#717): below it, probe every health cycle.
 DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT = 3
+# User-stream self-heal throttle (#717): once past the circuit limit, attempt a user
+# reconnect only every Nth health cycle (≈ N × DEFAULT_WS_HEALTH_CHECK_INTERVAL ≈ 5 min)
+# so a persistently dead socket doesn't busy-loop — but never stop, so a return to
+# WS-primary is always possible. Bounds the #716 teardown noise to ~1 cycle per probe.
+DEFAULT_WS_USER_DEGRADED_PROBE_EVERY = 10
 # Kline watchdog (#662): a *recovering* REST fallback, unlike the user-stream
 # breaker above. After this many consecutive unproductive kline reconnects
 # (socket re-opened but no real event confirms it — ws_healthy requires

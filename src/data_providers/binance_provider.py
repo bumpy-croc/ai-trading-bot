@@ -307,6 +307,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         self._last_user_event_time = datetime.now(UTC)
         self._kline_event_received = False  # True after first kline WS event
         self._user_event_received = False  # True after first user WS event
+        # Monotonic token identifying the current user-socket "generation" (#717).
+        # Bumped before every teardown (stop_user_stream / stop_streams) and on
+        # each (re)start; the user callback captures the generation live at start
+        # and drops any event whose generation no longer matches. This defeats the
+        # stale-callback false-recovery race: a python-binance read_ready callback
+        # from a torn-down socket can still fire on the shared TWM loop after we
+        # opened the circuit, and without this guard it would set
+        # _user_event_received=True and trick the watchdog into "recovering".
+        self._user_stream_generation = 0
+        # Serialises the generation check-and-record in _user_callback (TWM loop
+        # thread) against the generation bump + _user_event_received reset in
+        # start/stop (WS health-monitor thread). Without it the generation guard is
+        # check-then-act: a stale callback could pass the check, be preempted by a
+        # teardown+restart, then write _user_event_received=True under the NEW
+        # generation — a false recovery that disables REST polling on a possibly
+        # dead socket (a TOCTOU blackout). The lock makes that compound update
+        # atomic (#717). Held only around the flag mutations, never around the
+        # downstream on_user_event forwarding or the socket start/stop loop calls.
+        self._user_stream_lock = threading.Lock()
 
     @staticmethod
     def _validate_credentials(
@@ -2240,14 +2259,40 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._ensure_twm()
             self._on_user_event_cb = on_user_event
 
+            # New generation: this start invalidates any in-flight callback from a
+            # prior (torn-down) socket. Capture it in the closure so this callback
+            # only counts while it remains the current generation (#717). The bump,
+            # the capture, and the _user_event_received reset (Defense A — clear the
+            # stale "healthy" flag until the first real event of THIS generation;
+            # mirrors kline at ~line 2217) are done together under the lock so a
+            # concurrent stale callback cannot interleave between them.
+            with self._user_stream_lock:
+                self._user_stream_generation += 1
+                generation = self._user_stream_generation
+                self._user_event_received = False
+
             def _user_callback(msg: dict) -> None:
                 """Route user data events, handling errors before user callback."""
-                if msg.get("e") == "error":
+                is_error = msg.get("e") == "error"
+                # Drop events from a superseded socket, and record freshness/the
+                # event flag, atomically w.r.t. the generation bump in start/stop. A
+                # python-binance read_ready callback can still fire on the shared TWM
+                # loop after stop_socket; without the lock the check-then-write could
+                # land _user_event_received=True under a newer generation and fake a
+                # recovery the watchdog acts on (#717).
+                with self._user_stream_lock:
+                    if generation != self._user_stream_generation:
+                        return
+                    if is_error:
+                        self._on_user_disconnect()
+                    else:
+                        self._last_user_event_time = datetime.now(UTC)
+                        self._user_event_received = True
+                # Forwarding + logging happen outside the lock (CODE.md: no callbacks
+                # or long-running work under a lock).
+                if is_error:
                     logger.error("User data WS error: %s", msg.get("m", "unknown"))
-                    self._on_user_disconnect()
                     return
-                self._last_user_event_time = datetime.now(UTC)
-                self._user_event_received = True
                 on_user_event(msg)
 
             if self._use_margin:
@@ -2267,6 +2312,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     def stop_user_stream(self) -> None:
         """Stop only the user data WebSocket stream."""
+        # Invalidate the current generation FIRST (under the lock, atomically with
+        # clearing the event flag) so any callback still draining on the TWM loop
+        # during teardown is dropped and can't fake a recovery (#717).
+        with self._user_stream_lock:
+            self._user_stream_generation += 1
+            self._user_event_received = False
         if self._user_socket_key and self._twm:
             try:
                 self._twm.stop_socket(self._user_socket_key)
@@ -2274,10 +2325,15 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.error("Failed to stop user socket: %s", e)
             self._user_socket_key = None
             self._user_ws_state = WebSocketState.DISCONNECTED
-            self._user_event_received = False
 
     def stop_streams(self) -> None:
         """Stop all WebSocket streams. Recreates TWM on reconnect."""
+        # Invalidate the current user generation FIRST (before teardown), atomically
+        # with clearing the event flag under the lock, so a callback still draining
+        # on the TWM loop is dropped and can't fake a recovery during shutdown (#717).
+        with self._user_stream_lock:
+            self._user_stream_generation += 1
+            self._user_event_received = False
         if self._twm:
             twm, loop = self._twm, self._twm_loop
             twm.stop()
@@ -2297,7 +2353,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._kline_ws_state = WebSocketState.DISCONNECTED
             self._user_ws_state = WebSocketState.DISCONNECTED
             self._kline_event_received = False
-            self._user_event_received = False
+            # _user_event_received is cleared above under _user_stream_lock (atomic
+            # with the generation bump); not repeated here to keep a single locked
+            # writer of that flag (#717).
 
     @property
     def ws_state(self) -> WebSocketState:
