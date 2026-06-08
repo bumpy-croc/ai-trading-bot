@@ -135,6 +135,13 @@ state (`get_open_orders`, account sync, the actual order id) before acting or al
   **Always close stdin** (`< /dev/null` or pipe to `tail`) or it hangs on
   "Reading additional input from stdin…". Run scoped from a neutral cwd with
   `--skip-git-repo-check --model gpt-5.5`.
+- **`railway` resolves the project link by cwd** — run `railway logs`/`status` from the linked repo
+  dir (worktree root), NOT `/tmp` (an unlinked dir errors `No linked project found`). Redirect
+  output to `/tmp`, but run the command from the repo.
+- **Prod logs use 4-char level tags** `[ERRO]`/`[WARN]`/`[INFO]` — NOT `[ERROR]`. Grep `\[ERRO\]`
+  or severity is undercounted.
+- **Target prod explicitly:** `railway logs -e production -s "Trading Bot" -n 400` (env is
+  `production`, the live bot service is `Trading Bot`).
 
 ---
 
@@ -215,6 +222,15 @@ keep the skill generic and let the specifics live here.
 - `51077` matching a **timestamp nanosecond suffix** (`…243651077Z`) — anchor the grep (`code=51077`,
   `(code=51077)`); don't match bare digits in UTC timestamps.
 - An expected deploy boot (one you / the operator just triggered).
+- `[WARN] New order found on exchange: <id> … / [INFO] Skipping creation of new order <id> from
+  sync` — `account_sync` re-detecting the resting stop-loss each cycle and (by design) not
+  duplicating it into the DB. Benign; that order IS the protective SL.
+- `[ERRO] Task exception was never retrieved → KeyError('margin_subscription:0')` (binance
+  `threaded_stream.py:74`) at user-stream circuit-open — benign teardown noise (fix tracked in #716;
+  disappears once it ships).
+- The kline self-heal sequence (`Kline WS error: Connection closed` → `RESYNCING` → `KlineBuffer
+  resynced … candles` → `Kline WebSocket recovered … WS primary again (#662)`) — the GOOD path,
+  ~30 s, no data gap. Do NOT alarm.
 
 ### 5.5 Verify before alarming (phantom premises)
 A recurring/cron prompt may assert e.g. "a real ETH LONG was ORPHANED at 19:12 → double-exposure!".
