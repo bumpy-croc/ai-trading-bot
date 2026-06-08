@@ -104,6 +104,9 @@ class TestCheckUserStreamHealth:
         mock_engine.enable_live_trading = True
         mock_exchange = MagicMock()
         mock_exchange._user_ws_state = WebSocketState.PRIMARY
+        # Stale stream → NOT healthy (no real event), so the recovery branch is
+        # skipped and the staleness/reconnect path runs.
+        mock_exchange.user_ws_healthy = False
         mock_exchange._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
         mock_engine.exchange_interface = mock_exchange
 
@@ -149,7 +152,14 @@ class TestCheckUserStreamHealth:
 
     @pytest.mark.fast
     def test_breaker_trips_after_limit_unproductive_reconnects(self, mock_engine):
-        """After LIMIT dead reconnects, stop reconnecting and degrade to REST (#616)."""
+        """After LIMIT dead reconnects, stop fast-reconnecting and degrade to REST.
+
+        Post-#717 'degrade to REST' is no longer terminal — the REST_DEGRADED
+        branch throttled-probes — but the fast-phase boundary, teardown-before-
+        degrade order, and enable_polling on circuit-open are preserved from #616.
+        The fixture leaves _user_ws_state==PRIMARY (mark_user_degraded is a mock
+        that does not flip it), so this isolates the PRIMARY fast-phase only.
+        """
         from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
 
         ex, tracker = self._dead_socket_engine(mock_engine)
@@ -160,15 +170,16 @@ class TestCheckUserStreamHealth:
             assert mock_engine._user_reconnect_failures == LIMIT
             ex.mark_user_degraded.assert_not_called()
 
-            # Next cycle: circuit open — degrade to REST, no further reconnect.
+            # Next cycle: circuit open — degrade to REST, no further fast reconnect.
             mock_engine._check_user_stream_health()
-            assert disc.call_count == LIMIT  # unchanged
+            assert disc.call_count == LIMIT  # unchanged on the circuit-open cycle
             ex.mark_user_degraded.assert_called_once()
             # The dead socket is torn down so its asyncio _read_ready spam stops.
             ex.stop_user_stream.assert_called_once()
             tracker.enable_polling.assert_called()
             # Teardown must happen BEFORE degrade, else the terminal state is
-            # DISCONNECTED instead of REST_DEGRADED and the one-shot guard breaks.
+            # DISCONNECTED instead of REST_DEGRADED and the probe branch is
+            # unreachable (#717).
             ordered = [
                 c[0] for c in ex.mock_calls if c[0] in ("stop_user_stream", "mark_user_degraded")
             ]
@@ -194,39 +205,63 @@ class TestCheckUserStreamHealth:
             disc.assert_not_called()  # not stale → no reconnect
 
     @pytest.mark.fast
-    def test_degraded_state_short_circuits(self, mock_engine):
-        """Once REST_DEGRADED, the check returns early (warning logged only once)."""
+    def test_degraded_probes_ws_reconnect_instead_of_absorbing(self, mock_engine):
+        """THE #717 FIX: REST_DEGRADED no longer short-circuits to restart — it
+        probes a WS reconnect (fast phase: every cycle up to the limit) so a
+        recovered network path can return to WS-primary. It does NOT re-mark
+        degraded (already degraded) and does NOT touch the polling flag (recovery
+        owns that, gated on a real event)."""
         mock_engine.enable_live_trading = True
         ex = MagicMock()
         ex._user_ws_state = WebSocketState.REST_DEGRADED
+        ex.user_ws_healthy = False  # no real event yet
         mock_engine.exchange_interface = ex
         tracker = MagicMock()
         tracker.get_tracked_count.return_value = 2
         mock_engine.order_tracker = tracker
+        mock_engine._user_reconnect_failures = 0  # fresh into the degraded branch
 
         with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
             mock_engine._check_user_stream_health()
-            disc.assert_not_called()
-            ex.mark_user_degraded.assert_not_called()
+            disc.assert_called_once()  # probed, not absorbed
+            assert mock_engine._user_reconnect_failures == 1
+            ex.mark_user_degraded.assert_not_called()  # already degraded
+            tracker.disable_polling.assert_not_called()  # polling stays on (no event)
 
     @pytest.mark.fast
     def test_reconnect_calls_bounded_over_many_cycles(self, mock_engine):
         """Regression for the #616 churn: a dead socket yields BOUNDED reconnects,
-        not an unbounded ~2-min loop."""
-        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+        not an unbounded ~2-min loop. Post-#717 the bound is LIMIT fast reconnects
+        plus a throttled probe every Nth degraded cycle — still bounded (one probe
+        per 10 cycles), never the per-cycle churn (#616) nor zero (the #717 fix)."""
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_EVERY as PROBE,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT,
+        )
 
         ex, tracker = self._dead_socket_engine(mock_engine)
-        # mark_user_degraded flips state to REST_DEGRADED, as the real method does.
+        # mark_user_degraded flips state to REST_DEGRADED, as the real method does,
+        # so subsequent cycles exercise the throttled-probe branch.
         ex.mark_user_degraded.side_effect = lambda: setattr(
             ex, "_user_ws_state", WebSocketState.REST_DEGRADED
         )
+        cycles = 20
         with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
-            for _ in range(20):
+            for _ in range(cycles):
                 mock_engine._check_user_stream_health()
 
-        assert disc.call_count == LIMIT  # bounded, not 20
+        # LIMIT fast reconnects (PRIMARY phase) + one throttled probe at failure==PROBE.
+        # The degraded counter advances 1/cycle from LIMIT; over `cycles` it reaches
+        # LIMIT + (cycles - LIMIT - 1) = 19, crossing PROBE(10) exactly once.
+        expected_probes = LIMIT + sum(1 for f in range(LIMIT + 1, cycles) if f % PROBE == 0)
+        assert disc.call_count == expected_probes  # bounded, far below `cycles`
+        assert disc.call_count < cycles
         ex.mark_user_degraded.assert_called_once()  # degraded exactly once
-        ex.stop_user_stream.assert_called_once()  # dead socket torn down (asyncio spam stops)
+        # Dead socket torn down once on circuit-open (the mocked probe doesn't tear
+        # down here); asyncio _read_ready spam stops.
+        ex.stop_user_stream.assert_called_once()
 
     @pytest.mark.fast
     def test_breaker_survives_post_reconnect_fresh_timestamp(self, mock_engine):
@@ -263,6 +298,202 @@ class TestCheckUserStreamHealth:
             mock_engine._check_user_stream_health()
             ex.mark_user_degraded.assert_called_once()
             assert disc.call_count == LIMIT
+
+
+class TestUserStreamRecoveringRestFallback:
+    """#717: the user/margin stream uses a *recovering* REST fallback (mirrors the
+    kline #662 self-heal). REST order-polling backs the stream whenever it is down,
+    and the instant a real user event resumes the engine returns to WS-primary
+    (polling off) and resets the breaker — closing the #616 absorbing-state bug
+    where it stayed on REST until restart. Crucially, polling is disabled by exactly
+    ONE site (_restore_user_ws_primary), gated on a current-generation real event,
+    so a no-event probe can never blackout order tracking."""
+
+    @staticmethod
+    def _engine_with_tracker(mock_engine, *, polling_enabled=True, tracked=2):
+        """Live engine whose order tracker reports a controllable polling flag and
+        tracked-order count."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = tracked
+        tracker.is_polling_enabled.return_value = polling_enabled
+        mock_engine.order_tracker = tracker
+        return ex, tracker
+
+    @pytest.mark.fast
+    def test_should_probe_predicate_never_permanently_false(self, mock_engine):
+        """The throttle predicate probes every cycle up to the limit, then every
+        Nth cycle — and is never permanently False, so a degraded user stream
+        always retains a path back to WS-primary (#717)."""
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_EVERY as PROBE,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT,
+        )
+
+        # Fast phase: probe on every cycle up to the limit.
+        assert all(mock_engine._should_probe_user_reconnect(n) for n in range(1, LIMIT + 1))
+        # Throttled phase: only multiples of PROBE probe.
+        assert mock_engine._should_probe_user_reconnect(LIMIT + 1) is False
+        assert mock_engine._should_probe_user_reconnect(PROBE) is True
+        # Never permanently false: a probe always recurs within every PROBE window.
+        for start in range(LIMIT + 1, 5 * PROBE, PROBE):
+            assert any(
+                mock_engine._should_probe_user_reconnect(n) for n in range(start, start + PROBE)
+            )
+
+    @pytest.mark.fast
+    def test_degraded_probe_is_throttled_past_limit_but_never_zero(self, mock_engine):
+        """A persistently-degraded user stream gets fast probes up to the limit,
+        then throttled probes every Nth cycle — bounded, but NEVER zero (always a
+        path back to WS). Regression vs BOTH the #616 per-cycle churn and the
+        REST-until-restart absorbing state."""
+        from src.config.constants import (
+            DEFAULT_WS_USER_DEGRADED_PROBE_EVERY as PROBE,
+        )
+        from src.config.constants import (
+            DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT,
+        )
+
+        ex, _tracker = self._engine_with_tracker(mock_engine)
+        ex._user_ws_state = WebSocketState.REST_DEGRADED
+        ex.user_ws_healthy = False  # never recovers
+        mock_engine._user_reconnect_failures = 0
+        attempt_cycles: list[int] = []
+
+        def _record():
+            # _handle_user_stream_disconnect runs after the counter is bumped, so
+            # the counter == the cycle index at each attempt.
+            attempt_cycles.append(mock_engine._user_reconnect_failures)
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect", side_effect=_record):
+            for _ in range(5 * PROBE):  # 50 degraded cycles
+                mock_engine._check_user_stream_health()
+
+        expected = [n for n in range(1, 5 * PROBE + 1) if n <= LIMIT or n % PROBE == 0]
+        assert attempt_cycles == expected
+        # Never stops: probes continue into the final stretch of cycles.
+        assert any(c > 5 * PROBE - PROBE for c in attempt_cycles)
+        # Probing the degraded stream must never re-mark it degraded or touch polling.
+        ex.mark_user_degraded.assert_not_called()
+
+    @pytest.mark.fast
+    def test_degrade_then_recover_returns_to_ws_primary(self, mock_engine):
+        """Full degrade → recover → WS-primary: while degraded the engine probes;
+        the instant user_ws_healthy goes True (a real event), it disables polling
+        (the single site) and resets the breaker."""
+        ex, tracker = self._engine_with_tracker(mock_engine, polling_enabled=True)
+        ex._user_ws_state = WebSocketState.REST_DEGRADED
+        ex.user_ws_healthy = False
+        # Fast-phase counter: the next degraded cycle increments to <= LIMIT and
+        # so probes (this isolates the probe→recovery handoff, not the throttle).
+        mock_engine._user_reconnect_failures = 0
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+            # Degraded, no event: fast-phase probe runs, polling untouched.
+            mock_engine._check_user_stream_health()
+            assert disc.call_count == 1  # probed
+            tracker.disable_polling.assert_not_called()
+
+            # A real event arrives → recovery branch fires regardless of _user_ws_state.
+            ex.user_ws_healthy = True
+            mock_engine._check_user_stream_health()
+
+        tracker.poll_once.assert_called_once()  # close the handoff gap first
+        tracker.disable_polling.assert_called_once()  # WS-primary again
+        assert mock_engine._user_reconnect_failures == 0  # breaker reset
+        # Recovery must not also fire a disconnect/reconnect.
+        assert disc.call_count == 1  # only the degraded-probe cycle, not the recovery
+
+    @pytest.mark.fast
+    def test_no_blackout_probe_opens_socket_no_event_keeps_polling_on(self, mock_engine):
+        """THE core safety invariant: a probe that re-opens the socket but receives
+        NO real event must leave REST polling ON. The recovery (disable_polling) is
+        gated on user_ws_healthy, so a never-delivering socket can never blackout
+        order tracking — even across many probe cycles."""
+        from src.config.constants import DEFAULT_WS_USER_DEGRADED_PROBE_EVERY as PROBE
+
+        ex, tracker = self._engine_with_tracker(mock_engine, polling_enabled=True)
+        ex._user_ws_state = WebSocketState.REST_DEGRADED
+        ex.user_ws_healthy = False  # socket opens but never delivers
+        mock_engine._user_reconnect_failures = 0
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect"):
+            for _ in range(3 * PROBE):
+                mock_engine._check_user_stream_health()
+
+        # Across every probe cycle, polling was never disabled — no blackout.
+        tracker.disable_polling.assert_not_called()
+
+    @pytest.mark.fast
+    def test_no_spurious_recovery_at_steady_state(self, mock_engine, caplog):
+        """At steady state (WS-primary, polling already off, real events flowing),
+        the recovery branch is a no-op: disable_polling is gated on
+        is_polling_enabled() so it does not re-fire or log every cycle."""
+        import logging
+
+        ex, tracker = self._engine_with_tracker(mock_engine, polling_enabled=False)
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = True  # healthy, events flowing
+        mock_engine._user_reconnect_failures = 0
+
+        with caplog.at_level(logging.INFO):
+            with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+                for _ in range(5):
+                    mock_engine._check_user_stream_health()
+
+        tracker.disable_polling.assert_not_called()  # already off — no-op
+        tracker.poll_once.assert_not_called()  # no redundant catch-up poll
+        disc.assert_not_called()
+        assert "recovered" not in caplog.text.lower()  # no per-cycle log spam
+
+    @pytest.mark.fast
+    def test_recovery_skipped_with_zero_tracked_orders(self, mock_engine):
+        """With zero tracked orders the check returns at the gate (no fills to miss,
+        no reason to churn the socket), so recovery/probe never runs even if the
+        stream reports healthy."""
+        ex, tracker = self._engine_with_tracker(mock_engine, polling_enabled=True, tracked=0)
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = True
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+            mock_engine._check_user_stream_health()
+
+        disc.assert_not_called()
+        tracker.disable_polling.assert_not_called()  # gate-first short-circuit
+
+    @pytest.mark.fast
+    def test_breaker_persists_while_circuit_open_then_resets_on_recovery(self, mock_engine):
+        """The breaker accumulates through the PRIMARY fast phase, persists into
+        REST_DEGRADED (a stale post-reconnect timestamp must not reset it), and is
+        cleared only by a real recovery event — proving REST is never permanent."""
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+
+        ex, tracker = self._engine_with_tracker(mock_engine, polling_enabled=True)
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = False
+        ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+        # mark_user_degraded flips to REST_DEGRADED like the real method.
+        ex.mark_user_degraded.side_effect = lambda: setattr(
+            ex, "_user_ws_state", WebSocketState.REST_DEGRADED
+        )
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect"):
+            # Drive through the fast phase + circuit-open.
+            for _ in range(LIMIT + 1):
+                mock_engine._check_user_stream_health()
+        assert ex._user_ws_state == WebSocketState.REST_DEGRADED
+        assert mock_engine._user_reconnect_failures >= LIMIT  # persisted, not reset
+
+        # A real event now recovers and resets the breaker.
+        ex.user_ws_healthy = True
+        with patch.object(mock_engine, "_handle_user_stream_disconnect"):
+            mock_engine._check_user_stream_health()
+        assert mock_engine._user_reconnect_failures == 0
+        tracker.disable_polling.assert_called_once()
 
 
 class TestHandleKlineDisconnect:
@@ -496,7 +727,11 @@ class TestHandleUserStreamDisconnect:
         assert mock_tracker.poll_once.call_count == 2
         assert mock_reconciler.reconcile_once.call_count == 2
         mock_exchange.reconnect_user.assert_called_once()
-        mock_tracker.disable_polling.assert_called_once()
+        # The handler no longer disables polling on reconnect — a reopened socket is
+        # not proof of delivery. Only _restore_user_ws_primary (gated on a real
+        # event, on a later health cycle) flips polling off, so a fire-and-forget
+        # reconnect onto a dead socket can't blackout order tracking (#717).
+        mock_tracker.disable_polling.assert_not_called()
 
     @pytest.mark.fast
     def test_enables_polling_on_reconnect_failure(self, mock_engine):
@@ -517,3 +752,69 @@ class TestHandleUserStreamDisconnect:
 
         mock_exchange.mark_user_degraded.assert_called_once()
         mock_tracker.enable_polling.assert_called_once()
+
+
+class TestStartWebSocketStreamsUserPolling:
+    """#717: at boot the user stream starts but REST polling stays ON until the
+    first real event confirms delivery — the fresh-boot half of the single
+    disable-polling-site invariant. start_margin_socket is fire-and-forget and may
+    return True on a dead multiplexed socket, so disabling polling at startup
+    (the old behaviour) could blackout order tracking on a never-delivering stream."""
+
+    @staticmethod
+    def _live_engine(mock_engine, *, user_started=True):
+        """Configure the fixture engine for the live user-stream startup path."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex.start_user_stream.return_value = user_started
+        # No kline provider on the wrapped data provider → kline block is skipped,
+        # isolating the user-stream startup assertions.
+        mock_engine.data_provider = MagicMock(spec=["get_current_price"])
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.is_polling_enabled.return_value = True
+        mock_engine.order_tracker = tracker
+        mock_engine._periodic_reconciler = MagicMock()
+        return ex, tracker
+
+    @pytest.mark.fast
+    def test_startup_keeps_polling_until_first_event(self, mock_engine):
+        """Starting the user stream runs handoff catch-up (poll_once + reconcile)
+        but does NOT disable polling — polling stays on until a real event."""
+        ex, tracker = self._live_engine(mock_engine, user_started=True)
+
+        with (
+            patch("src.engines.live.user_data_processor.UserDataProcessor") as mock_udp_cls,
+            patch.object(mock_engine, "_start_ws_health_monitor"),
+        ):
+            mock_udp_cls.return_value = MagicMock()
+            mock_engine._start_websocket_streams("BTCUSDT", "1h")
+
+        ex.start_user_stream.assert_called_once()
+        tracker.poll_once.assert_called_once()  # handoff catch-up still happens
+        mock_engine._periodic_reconciler.reconcile_once.assert_called_once()
+        tracker.disable_polling.assert_not_called()  # THE fix: polling stays on
+
+    @pytest.mark.fast
+    def test_startup_then_first_event_disables_polling(self, mock_engine):
+        """After boot (polling on), the first real event makes user_ws_healthy True
+        and the next health cycle hands off to WS-primary via the single disable
+        site — closing the fresh-boot blackout window end to end."""
+        ex, tracker = self._live_engine(mock_engine, user_started=True)
+
+        with (
+            patch("src.engines.live.user_data_processor.UserDataProcessor") as mock_udp_cls,
+            patch.object(mock_engine, "_start_ws_health_monitor"),
+        ):
+            mock_udp_cls.return_value = MagicMock()
+            mock_engine._start_websocket_streams("BTCUSDT", "1h")
+        tracker.disable_polling.assert_not_called()  # still on after boot
+
+        # First real event arrives → health cycle promotes to WS-primary.
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = True
+        tracker.get_tracked_count.return_value = 1
+        with patch.object(mock_engine, "_handle_user_stream_disconnect"):
+            mock_engine._check_user_stream_health()
+
+        tracker.disable_polling.assert_called_once()  # handed off to WS-primary
