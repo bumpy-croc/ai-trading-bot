@@ -66,6 +66,38 @@ bucket = get_flag("optimizer_bucket", default="control")
 
 `resolve_all()` returns a merged dictionary that is useful when exposing diagnostics endpoints.
 
+### Feature flag reference
+
+Every feature flag in the project. Each resolves via the precedence above; the
+`FEATURE_<UPPER_SNAKE_KEY>` env var is the per-flag override (**setting one in Railway triggers a
+redeploy/restart**). Boolean flags accept `true/on/1/yes/enabled` (and `false/off/0/no/disabled`).
+
+**Live-engine flags** — change live trading / runtime behaviour:
+
+| Env var | Flag key | Default | Values | What it does |
+|---|---|---|---|---|
+| `FEATURE_WS_USER_HARD_RECONNECT` | `ws_user_hard_reconnect` | `off` | boolean | **#723 Phase 2 (experimental).** When the margin user-data WebSocket is stuck in `REST_DEGRADED`, the throttled recovery probe performs a full **hard reconnect** — teardown + fresh `AsyncClient`/`ws_api` (`hard_reconnect_user()`) — instead of an in-place reconnect, to attempt real recovery from the #616/#723 "reconnect doesn't restore events" failure. **High-risk WS/event-loop subsystem; ships OFF.** Each hard reconnect emits 2 benign asyncio teardown artifacts (`Error stopping client`, `Task was destroyed but it is pending!`). Recovery is still gated on a real user event (#717); REST polling covers order/balance while degraded, so leaving it OFF is safe. |
+| `FEATURE_ORPHANED_BORROW_SWEEP_MODE` | `orphaned_borrow_sweep_mode` | `off` | `off` / `dry_run` / `active` | **#702/#703.** Periodic reconciler sweep that repays an orphaned margin borrow (a base-asset loan with no tracked position). `off` = no-op; `dry_run` = detect + log only, no money moved; `active` = **repay** (a money-mover — requires the #705 base-asset exchange-mutation lock and serialises against entry/exit). Deployed as `dry_run` during validation, then `active`. |
+| `FEATURE_USE_PREDICTION_ENGINE` | `use_prediction_engine` | `true` | boolean | Gates whether the strategy uses the ML prediction engine for signal generation (`src/strategies/components/strategy.py`). Off ⇒ the strategy falls back to its non-prediction signal path. Also referenced by the experiment runner/promotion. |
+| `FEATURE_ENABLE_REGIME_DETECTION` | `enable_regime_detection` | `false` | boolean | Enables market-regime detection in the live engine (`src/engines/live/trading_engine.py`, read directly via `os.getenv`). |
+
+**Experiment / optimizer flags** — used by the A/B experiment + parameter-optimizer promotion subsystem (`src/experiments/`); repo defaults live in `feature_flags.json`:
+
+| Env var | Flag key | Default | Values | What it does |
+|---|---|---|---|---|
+| `FEATURE_EXPERIMENT_BUCKET` | `experiment_bucket` | _(caller default)_ | string | Assigns the A/B experiment bucket (e.g. `control`, `beta`) for experiment routing. |
+| `FEATURE_OPTIMIZER_CANARY_FRACTION` | `optimizer_canary_fraction` | `"0.1"` | string (float) | Fraction reserved for the optimizer canary when promoting tuned parameters. |
+| `FEATURE_OPTIMIZER_AUTO_APPLY` | `optimizer_auto_apply` | `false` | boolean | Whether the optimizer auto-applies promoted parameters (vs. requiring manual promotion). |
+
+> ⚠️ Flipping a live-engine flag is an outward-facing action: it restarts the bot, and for
+> `active`/`true` money- or stability-affecting flags it changes live behaviour. After the restart,
+> validate (position re-adoption, kline alive, the flag's intended effect) and keep a rollback (flip
+> back) ready. See `.claude/LESSONS.md` §3.
+>
+> _Not flags:_ `nonexistent_flag` (test fixture) and `optimizer_bucket` (docstring example) are not
+> real flags; `FEATURE_CACHE_TTL` / `FEATURE_ENGINEERING_CONFIG` / `FEATURE_ADDITION` belong to the
+> ML **feature-engineering** config, a separate system despite the `FEATURE_` prefix.
+
 ## Constants and overrides
 
 Runtime defaults such as `DEFAULT_INITIAL_BALANCE`, `DEFAULT_CHECK_INTERVAL`, and risk tuning values live in
