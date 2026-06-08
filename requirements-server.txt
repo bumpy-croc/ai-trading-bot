@@ -1,6 +1,6 @@
 # Server requirements - lighter build without heavy libraries for training models
 # Production dependencies with pinned versions for stability
-python-binance==1.0.36
+python-binance==1.0.37
 pandas==2.1.4
 python-dotenv==1.0.0
 numpy==1.26.2
