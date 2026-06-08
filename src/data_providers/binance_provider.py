@@ -2077,9 +2077,85 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # loop has no run_until_complete nesting, so it does NOT reintroduce the
             # "cannot enter context" re-entrancy spam that #646 fixed.
             self._twm_loop = asyncio.new_event_loop()
+            # Intercept the benign teardown KeyError raised inside python-binance's
+            # start_listener task on socket stop (#716). The exception fires inside the
+            # library coroutine on THIS loop, so a try/except around stop_socket can't
+            # reach it — only the loop's own exception handler can.
+            self._twm_loop.set_exception_handler(self._twm_loop_exception_handler)
             twm_kwargs["loop"] = self._twm_loop
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
             self._twm.start()
+
+    def _twm_loop_exception_handler(
+        self, loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+    ) -> None:
+        """Suppress python-binance's benign socket-teardown ``KeyError`` (#716).
+
+        When a user/kline socket is stopped, ``stop_socket`` flips
+        ``self._socket_running[path]`` to ``False`` and the library's
+        ``start_listener`` coroutine then ``del``s that key on exit. A race in
+        the library re-evaluates ``while self._socket_running[path]`` after the
+        key is gone, raising ``KeyError(path)`` inside the listener task. The
+        socket is being torn down on purpose (e.g. the #616 circuit-open drop to
+        REST polling), so this is teardown noise — but it surfaces as
+        ``Task exception was never retrieved`` (3× per circuit-open) and trips
+        monitoring that greps ``Traceback``.
+
+        The exception is raised inside the library task on this loop, so it is
+        unreachable from a ``try/except`` around our ``stop_socket`` call; the
+        loop's exception handler is the only interception point. Only the
+        specific library teardown ``KeyError`` (one raised by the
+        ``while self._socket_running[path]`` subscript in python-binance's
+        ``threaded_stream.start_listener``) is downgraded to DEBUG — every other
+        loop exception, including a real ``KeyError`` raised by our user-data
+        callback that python-binance invokes *inside* ``start_listener``, is
+        delegated to asyncio's default handler so genuine errors keep their
+        normal ERROR visibility.
+        """
+        if self._is_socket_teardown_keyerror(context.get("exception")):
+            logger.debug(
+                "Suppressed python-binance socket-teardown KeyError(%s) on stop (#716)",
+                self._keyerror_path(context.get("exception")),
+            )
+            return
+        loop.default_exception_handler(context)
+
+    @staticmethod
+    def _is_socket_teardown_keyerror(exc: BaseException | None) -> bool:
+        """True iff ``exc`` is the library's ``start_listener`` teardown KeyError.
+
+        The teardown ``KeyError`` is raised directly by the
+        ``while self._socket_running[path]`` subscript, so its *deepest*
+        traceback frame is ``start_listener`` in python-binance's
+        ``binance/ws/threaded_stream.py``. A real ``KeyError`` raised by the
+        user-data callback (which the library invokes *inside* ``start_listener``
+        via ``callback(msg)``) has frames *below* ``start_listener`` and so is
+        NOT matched — checking only the deepest frame (plus the module path)
+        keeps a genuine live-trading failure from being silently swallowed.
+        """
+        if not isinstance(exc, KeyError):
+            return False
+        tb = exc.__traceback__
+        if tb is None:
+            return False
+        while tb.tb_next is not None:
+            tb = tb.tb_next  # Walk to the deepest (raise-site) frame.
+        code = tb.tb_frame.f_code
+        # Separator-agnostic path anchor (POSIX '/' and Windows '\\' both keep
+        # the 'binance' and 'threaded_stream.py' substrings intact).
+        filename = code.co_filename
+        return (
+            code.co_name == "start_listener"
+            and filename.endswith("threaded_stream.py")
+            and "binance" in filename
+        )
+
+    @staticmethod
+    def _keyerror_path(exc: BaseException | None) -> str:
+        """Best-effort socket path from a KeyError for diagnostic logging."""
+        if isinstance(exc, KeyError) and exc.args:
+            return str(exc.args[0])
+        return "unknown"
 
     def _socket_on_twm_loop(self, start_fn: Callable[[], Any]) -> Any:
         """Invoke a TWM ``start_*_socket`` call with the manager's own loop installed
