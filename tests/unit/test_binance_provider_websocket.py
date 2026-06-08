@@ -208,6 +208,199 @@ class TestStartUserStream:
         result = provider.start_user_stream(MagicMock())
         assert result is False
 
+    @pytest.mark.fast
+    def test_resets_event_received_flag_on_start(self, provider):
+        """start_user_stream resets _user_event_received to False so a stale True
+        from a prior generation can't read as healthy before the first real event
+        of the new socket (Defense A; mirrors kline) (#717)."""
+        mock_twm = MagicMock()
+        mock_twm.start_user_socket.return_value = "user_key"
+        provider._twm = mock_twm
+        provider._use_margin = False
+        provider._user_event_received = True  # leftover from a previous socket
+
+        provider.start_user_stream(MagicMock())
+        assert provider._user_event_received is False
+
+
+class TestUserStreamGeneration:
+    """#717: a monotonic generation token invalidates callbacks from a torn-down
+    user socket so a stale python-binance read_ready callback can't fake a recovery
+    (set _user_event_received / refresh freshness) the watchdog would act on."""
+
+    @staticmethod
+    def _capture_user_callback(provider):
+        """Start a margin user stream and return (callback, captured_events)."""
+        mock_twm = MagicMock()
+        captured: dict[str, object] = {}
+
+        def capture(**kwargs):
+            captured["cb"] = kwargs["callback"]
+            return "margin_key"
+
+        mock_twm.start_margin_socket.side_effect = capture
+        provider._twm = mock_twm
+        provider._use_margin = True
+        sink_events: list[dict] = []
+        provider.start_user_stream(sink_events.append)
+        return captured["cb"], sink_events
+
+    @pytest.mark.fast
+    def test_start_bumps_generation_and_captures_it(self, provider):
+        """Each (re)start advances the generation token."""
+        mock_twm = MagicMock()
+        mock_twm.start_user_socket.return_value = "k"
+        provider._twm = mock_twm
+        provider._use_margin = False
+
+        before = provider._user_stream_generation
+        provider.start_user_stream(MagicMock())
+        assert provider._user_stream_generation == before + 1
+
+    @pytest.mark.fast
+    def test_current_generation_callback_is_processed(self, provider):
+        """A callback whose generation is current updates freshness, sets the event
+        flag, and forwards the event."""
+        cb, sink = self._capture_user_callback(provider)
+        provider._user_event_received = False
+
+        cb({"e": "executionReport", "i": 42})
+
+        assert provider._user_event_received is True
+        assert sink == [{"e": "executionReport", "i": 42}]
+
+    @pytest.mark.fast
+    def test_stale_generation_callback_is_ignored(self, provider):
+        """A callback from a superseded generation (socket torn down + a newer start)
+        is dropped: no event forwarded, no freshness refresh, no event-flag flip —
+        so it cannot fake a recovery the watchdog acts on (#717)."""
+        cb, sink = self._capture_user_callback(provider)
+        # A later teardown/restart advances the generation past the captured one.
+        provider._user_stream_generation += 1
+        provider._user_event_received = False
+        provider._last_user_event_time = datetime.now(UTC) - timedelta(seconds=999)
+        stale_before = provider._last_user_event_time
+
+        cb({"e": "executionReport", "i": 7})
+
+        assert sink == []  # event dropped
+        assert provider._user_event_received is False  # no false recovery
+        assert provider._last_user_event_time == stale_before  # freshness untouched
+
+    @pytest.mark.fast
+    def test_stop_user_stream_invalidates_generation(self, provider):
+        """stop_user_stream bumps the generation FIRST so an in-flight callback
+        draining during teardown is dropped."""
+        cb, sink = self._capture_user_callback(provider)
+        provider._user_socket_key = "margin_key"
+
+        provider.stop_user_stream()
+        provider._user_event_received = False
+        cb({"e": "executionReport", "i": 1})  # late callback after stop
+
+        assert sink == []
+        assert provider._user_event_received is False
+
+    @pytest.mark.fast
+    def test_stop_streams_invalidates_generation(self, provider):
+        """stop_streams bumps the user generation before teardown so a callback
+        still draining on the loop during shutdown is dropped."""
+        cb, sink = self._capture_user_callback(provider)
+        before = provider._user_stream_generation
+
+        provider.stop_streams()
+        assert provider._user_stream_generation == before + 1
+
+        provider._user_event_received = False
+        cb({"e": "executionReport", "i": 2})
+        assert sink == []
+        assert provider._user_event_received is False
+
+    @pytest.mark.fast
+    def test_callback_generation_check_and_write_are_atomic(self, provider):
+        """Regression for the check-then-act TOCTOU: the callback's generation
+        check and its _user_event_received write share ONE locked critical section
+        with the generation bump in stop/start, so a stop that lands after the check
+        passed cannot leave a stale True under the new generation (#717).
+
+        We interpose on _user_stream_lock so that, the instant the callback acquires
+        it, a teardown (generation bump + flag reset) has already completed. The
+        callback must then observe the bumped generation and drop the event."""
+        cb, sink = self._capture_user_callback(provider)
+        captured_gen = provider._user_stream_generation
+        real_lock = provider._user_stream_lock
+
+        class _StopInjectingLock:
+            """Delegates to the real lock, but on the callback's acquire it first
+            simulates a concurrent stop having fully completed under the lock."""
+
+            def __init__(self, provider):
+                self._provider = provider
+                self._fired = False
+
+            def __enter__(self):
+                real_lock.acquire()
+                if not self._fired:
+                    self._fired = True
+                    # Concurrent teardown+restart that completed before the callback
+                    # got the lock: generation advanced, flag cleared.
+                    self._provider._user_stream_generation += 2
+                    self._provider._user_event_received = False
+                return self
+
+            def __exit__(self, *exc):
+                real_lock.release()
+                return False
+
+        provider._user_stream_lock = _StopInjectingLock(provider)
+        provider._user_event_received = False
+
+        # The callback (captured at captured_gen) now runs; on acquiring the lock the
+        # generation has already advanced past captured_gen → event dropped.
+        cb({"e": "executionReport", "i": 99})
+
+        assert provider._user_stream_generation == captured_gen + 2
+        assert provider._user_event_received is False  # no stale True under new gen
+        assert sink == []  # event not forwarded
+
+    @pytest.mark.fast
+    def test_concurrent_stop_and_callback_never_leave_stale_true(self, provider):
+        """Hammer the callback against stop_user_stream on two real threads. The
+        post-condition invariant: _user_event_received is True ONLY if the recorded
+        generation is the current one — a stale callback can never leave it True
+        after a stop bumped the generation (#717)."""
+        import threading
+
+        cb, _sink = self._capture_user_callback(provider)
+        provider._user_socket_key = "margin_key"
+        violations: list[str] = []
+
+        def fire_callbacks():
+            for _ in range(200):
+                cb({"e": "executionReport", "i": 1})
+
+        def stop_and_check():
+            for _ in range(200):
+                provider.stop_user_stream()
+                # After a stop (gen bumped, flag cleared under the lock), the flag may
+                # only be True if a CURRENT-generation callback set it post-stop. We
+                # can't observe gen-at-write directly, but the lock guarantees the
+                # callback's check+write is atomic with the bump; so immediately after
+                # stop returns, if no new start ran, the flag must be False.
+                with provider._user_stream_lock:
+                    if provider._user_event_received:
+                        violations.append("stale True after stop")
+                    provider._user_event_received = False  # reset for next round
+
+        t1 = threading.Thread(target=fire_callbacks)
+        t2 = threading.Thread(target=stop_and_check)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert violations == []
+
 
 class TestStopStreams:
     """Tests for stopping WebSocket streams."""
