@@ -374,11 +374,35 @@ DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_D
 # self-terminate and churn forever (#616). This is also the fast-phase boundary for
 # the self-healing user-stream probe (#717): below it, probe every health cycle.
 DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT = 3
-# User-stream self-heal throttle (#717): once past the circuit limit, attempt a user
-# reconnect only every Nth health cycle (≈ N × DEFAULT_WS_HEALTH_CHECK_INTERVAL ≈ 5 min)
-# so a persistently dead socket doesn't busy-loop — but never stop, so a return to
-# WS-primary is always possible. Bounds the #716 teardown noise to ~1 cycle per probe.
+# User-stream self-heal throttle (#717): the FIRST throttled-probe boundary, in
+# absolute failure-count. Past the circuit limit the watchdog probes on an
+# *exponential-backoff* schedule (not a fixed cadence) so a persistently dead socket
+# stops busy-looping yet never stops entirely — a return to WS-primary is always
+# possible. This is the initial boundary (10 ≈ 5 min at the 30 s health interval, so
+# the first degraded probe's latency is unchanged from the old fixed every-10 cadence);
+# subsequent boundaries grow geometrically (see the backoff knobs below). #723 widened
+# this from a fixed every-10 cadence to bound the unrecoverable-stream churn (#616):
+# python-binance 1.0.36 multiplexes the margin user stream over a shared ws_api socket
+# that an in-place re-subscribe can't restore, so the probe is effectively REST-primary
+# upkeep — backing it off cuts churn ~200/day → ~50-80/day. Reused as the schedule's
+# FIRST boundary so the first-probe latency stays coherent with the historical value.
 DEFAULT_WS_USER_DEGRADED_PROBE_EVERY = 10
+# Exponential-backoff knobs for the user degraded-probe schedule (#723). The gap
+# between consecutive probe boundaries starts at FIRST and is multiplied by BACKOFF_BASE
+# each step until it would exceed CEILING, after which it is fixed at CEILING forever —
+# giving the boundary sequence 10, 20, 40, 80, 160, 280, 400, 520, … (gaps 10, 20, 40,
+# 80, then 120-capped). Because the post-ramp gap is the constant CEILING, every window
+# of CEILING consecutive failures still contains a probe → the #717 never-permanently-
+# False invariant holds (a recovered network always returns to WS-primary). The schedule
+# is generated ITERATIVELY from these three constants (FIRST/BASE/CEILING), never
+# hardcoded, so retuning is a one-line constant change.
+DEFAULT_WS_USER_DEGRADED_PROBE_BACKOFF_BASE = 2  # Geometric growth factor for the gap.
+DEFAULT_WS_USER_DEGRADED_PROBE_FIRST_BOUNDARY = (
+    DEFAULT_WS_USER_DEGRADED_PROBE_EVERY  # First throttled-probe at absolute failure 10.
+)
+# Max spacing between probes once the geometric ramp saturates (120 cycles × 30 s health
+# interval ≈ 60 min ceiling). Drop to 60 for a ~30 min ceiling if churn is still too high.
+DEFAULT_WS_USER_DEGRADED_PROBE_CEILING = 120
 # Kline watchdog (#662): a *recovering* REST fallback, unlike the user-stream
 # breaker above. After this many consecutive unproductive kline reconnects
 # (socket re-opened but no real event confirms it — ws_healthy requires
