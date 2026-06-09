@@ -19,8 +19,11 @@ from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from sqlalchemy.exc import IntegrityError
+
 from src.config.constants import (
     BORROW_DUST_EPSILON,
+    DEFAULT_FEE_RATE,
     DEFAULT_MAX_PENDING_ORDERS_PER_RECONCILE,
     DEFAULT_ORPHANED_BORROW_REPAY_CAP_USD,
     DEFAULT_PENDING_SUBMIT_EXPIRY_MINUTES,
@@ -36,6 +39,7 @@ from src.config.constants import (
 from src.config.feature_flags import get_flag
 from src.data_providers.exchange_interface import SideEffectType
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
+from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
@@ -138,6 +142,7 @@ class PositionReconciler:
         session_id: int,
         max_position_size: float = 0.1,
         use_margin: bool = False,
+        fee_rate: float = DEFAULT_FEE_RATE,
     ) -> None:
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
@@ -145,6 +150,9 @@ class PositionReconciler:
         self.session_id = session_id
         self.max_position_size = max_position_size
         self._use_margin = use_margin
+        # Used to reconstruct the entry-fee leg when logging a Trade row for a
+        # reconciler-closed position (recovered positions carry no entry-fee metadata).
+        self._fee_rate = fee_rate
 
     def reconcile_startup(self, positions: dict[str, Any]) -> list[ReconciliationResult]:
         """Run full startup reconciliation.
@@ -1667,25 +1675,52 @@ class PositionReconciler:
                     position.symbol,
                     sl_order.average_price,
                 )
-                # Remove position from in-memory tracker
-                self.position_tracker.remove_position(position.order_id)
-                # Close the DB position with SL fill details
-                db_pos_id = getattr(position, "db_position_id", None)
-                exit_price = float(sl_order.average_price) if sl_order.average_price else None
-                if db_pos_id:
-                    try:
-                        self.db_manager.close_position(db_pos_id, exit_price=exit_price)
-                    except Exception as e:
-                        logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
-
-                # Realize P&L so session balance stays correct
-                sl_exit_fee = float(getattr(sl_order, "commission", 0.0) or 0.0)
-                self._realize_pnl_on_close(
-                    position, exit_price, "stop_loss_filled_offline", exit_fee=sl_exit_fee
-                )
+                self._close_position_from_filled_sl(position, sl_order)
 
         except Exception as e:
             logger.warning("Failed to verify stop-loss order %s: %s", sl_order_id, e)
+
+    def _close_position_from_filled_sl(self, position: Any, sl_order: Any) -> None:
+        """Close a position whose stop-loss filled offline: remove from tracker, close the
+        DB row, realize P&L, and persist a Trade row (commission + quantity).
+
+        The SL exit commission is normalized to USD via ``order_commission_usd`` (a SHORT's
+        stop-loss is a base-asset BUY, e.g. ETH), falling back to the modelled fee when the
+        asset is not convertible (e.g. BNB). The Trade is logged ONLY when the DB position
+        was actually closed — otherwise the row stays OPEN, is re-recovered, and would be
+        logged again — and uses a stable, non-NULL dedup key (the real exchange order id,
+        else a synthetic id derived from ``db_position_id``) so a re-run collides on
+        ``uq_trade_order_session`` rather than inserting a duplicate (NULL != NULL in
+        Postgres; #657/#668 phantom-trade class).
+        """
+        self.position_tracker.remove_position(position.order_id)
+        db_pos_id = getattr(position, "db_position_id", None)
+        exit_price = float(sl_order.average_price) if sl_order.average_price else None
+        db_closed = False
+        if db_pos_id:
+            try:
+                self.db_manager.close_position(db_pos_id, exit_price=exit_price)
+                db_closed = True
+            except Exception as e:
+                logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+
+        sl_fill_price = exit_price or 0.0
+        sl_exit_fee = order_commission_usd(sl_order, position.symbol, sl_fill_price)
+        if sl_exit_fee is None:
+            sl_qty = abs(float(getattr(position, "quantity", 0.0) or 0.0))
+            sl_exit_fee = self._fee_rate * sl_fill_price * sl_qty
+
+        sl_oid = getattr(sl_order, "order_id", None) or (
+            f"reconcile_sl_{db_pos_id}" if db_pos_id else None
+        )
+        self._realize_pnl_on_close(
+            position,
+            exit_price,
+            "stop_loss_filled_offline",
+            exit_fee=sl_exit_fee,
+            log_trade=db_closed,
+            exit_order_id=sl_oid,
+        )
 
     @staticmethod
     def _extract_base_asset(symbol: str) -> str:
@@ -2077,6 +2112,8 @@ class PositionReconciler:
         exit_price: float | None,
         reason: str,
         exit_fee: float = 0.0,
+        log_trade: bool = False,
+        exit_order_id: str | None = None,
     ) -> None:
         """Update session balance with realized P&L after reconciliation close.
 
@@ -2089,6 +2126,11 @@ class PositionReconciler:
             exit_price: Fill price at which the position was closed.
             reason: Human-readable reason for the audit trail.
             exit_fee: Trading fee charged on the exit order.
+            log_trade: When True, also insert a ``trades`` row for this closure
+                (commission + quantity populated). Opt-in per caller so paths whose
+                closure is recorded elsewhere are not double-logged.
+            exit_order_id: Exchange order id for the closing fill — used as the Trade's
+                ``order_id`` so a re-run dedups via ``uq_trade_order_session``.
         """
         if exit_price is None or exit_price <= 0:
             return
@@ -2201,11 +2243,110 @@ class PositionReconciler:
                 position.symbol,
                 reason,
             )
+
+            # Persist a Trade row for opted-in reconciler closures. Without this, the
+            # position is balance-corrected and DB-closed but leaves NO trades row, so
+            # commission/quantity/pnl go unrecorded for offline closures handled here.
+            if log_trade:
+                self._log_reconciliation_trade(
+                    position=position,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    qty=qty,
+                    gross_pnl=pnl,
+                    exit_fee=exit_fee,
+                    interest_cost=interest_cost,
+                    reason=reason,
+                    exit_order_id=exit_order_id,
+                )
         except Exception as e:
             logger.warning(
                 "Failed to realize P&L for position %s: %s",
                 getattr(position, "symbol", "unknown"),
                 e,
+            )
+
+    def _log_reconciliation_trade(
+        self,
+        *,
+        position: Any,
+        entry_price: float,
+        exit_price: float,
+        qty: float,
+        gross_pnl: float,
+        exit_fee: float,
+        interest_cost: float,
+        reason: str,
+        exit_order_id: str | None,
+    ) -> None:
+        """Insert a ``trades`` row for a reconciler-closed position, commission and
+        quantity populated.
+
+        Fault-isolated and deduped: a duplicate (same exit order id + session) raises
+        ``IntegrityError`` from ``log_trade`` and is swallowed; any other DB error is
+        logged, never raised, so reconciliation continues. ``Trade.pnl`` stays GROSS to
+        match the engine/backtest convention; ``commission`` (USD) is the closed slice's
+        entry fee — reconstructed from the fee model, since recovered positions carry no
+        entry-fee metadata — plus the exit fee. ``qty`` is already scaled to the closed
+        slice by the caller.
+        """
+        if self.session_id is None:
+            return
+        try:
+            side = getattr(position, "side", None)
+            # PositionSide enum -> its .value ("LONG"/"SHORT"); a str side passes through.
+            side_str = getattr(side, "value", None) or str(side or "long")
+            qty_abs = abs(float(qty))
+            entry_fee = qty_abs * float(entry_price) * float(self._fee_rate)
+            commission = entry_fee + max(0.0, float(exit_fee))
+            # Size as a fraction of balance: the remaining (closed) slice. Use explicit
+            # None checks — a current_size of 0.0 is a valid (flat) value, not "missing".
+            cs = getattr(position, "current_size", None)
+            sz = getattr(position, "size", None)
+            size = float(cs if cs is not None else (sz if sz is not None else 0.0))
+            if not math.isfinite(size) or size <= 0:
+                size = 1.0  # degenerate recovered sizing; log_trade requires size > 0
+            self.db_manager.log_trade(
+                symbol=getattr(position, "symbol", "UNKNOWN"),
+                side=side_str,
+                entry_price=float(entry_price),
+                exit_price=float(exit_price),
+                size=size,
+                entry_time=getattr(position, "entry_time", None) or datetime.now(UTC),
+                exit_time=datetime.now(UTC),
+                pnl=float(gross_pnl),
+                exit_reason=reason,
+                strategy_name=getattr(position, "strategy_name", None) or "reconciler",
+                session_id=self.session_id,
+                quantity=qty_abs,
+                commission=commission,
+                margin_interest_cost=max(0.0, float(interest_cost)),
+                exit_order_id=exit_order_id,
+            )
+            logger.info(
+                "Logged reconciliation trade for %s: pnl=%.2f commission=%.4f qty=%.8f",
+                getattr(position, "symbol", "?"),
+                float(gross_pnl),
+                commission,
+                qty_abs,
+            )
+        except IntegrityError:
+            logger.info(
+                "Reconciliation trade for %s already recorded (dedup); skipping",
+                getattr(position, "symbol", "?"),
+            )
+        except Exception as e:
+            # The balance was already corrected and the DB position closed by the caller,
+            # so a failure here leaves account_balances and trades diverged with no row to
+            # explain the delta. Escalate (CRITICAL + stack trace) rather than swallow at
+            # WARNING — "silent divergence is a bug" (CODE.md). Still do not re-raise:
+            # reconciliation must continue for the remaining positions.
+            logger.critical(
+                "Balance corrected for %s but FAILED to persist its trades row: %s — "
+                "account_balances and trades have DIVERGED; manual reconciliation required.",
+                getattr(position, "symbol", "?"),
+                e,
+                exc_info=True,
             )
 
     def _persist_position_correction(

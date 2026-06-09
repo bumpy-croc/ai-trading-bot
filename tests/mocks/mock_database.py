@@ -188,10 +188,15 @@ class MockDatabaseManager:
             "exit_reason": exit_reason,
             "strategy_name": strategy_name,
             "source": source,
-            "order_id": order_id,
+            # Mirror the real log_trade: Trade.order_id is set from exit_order_id (used by
+            # the uq_trade_order_session dedup), falling back to an explicit order_id arg.
+            "order_id": kwargs.get("exit_order_id", order_id),
             "fees": fees,
             "slippage": slippage,
             "session_id": session_id or self._current_session_id,
+            # Trade economics persisted by the live close path
+            "commission": kwargs.get("commission"),
+            "quantity": kwargs.get("quantity"),
             # Optional MFE/MAE fields if provided
             "mfe": kwargs.get("mfe"),
             "mae": kwargs.get("mae"),

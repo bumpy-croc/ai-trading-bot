@@ -113,6 +113,129 @@ Position = LivePosition
 Trade = BaseTrade
 
 
+def _closed_base_quantity(position: Position) -> float | None:
+    """Actual filled base-asset quantity represented by a closing ``Trade`` row.
+
+    ``position.quantity`` is the authoritative filled base quantity of the *original*
+    position (set from the entry fill, see LiveExecutionEngine.execute_entry). Partial
+    exits reduce ``current_size`` (a fraction of balance) but never mutate ``quantity``,
+    so the quantity actually being closed is ``position.quantity`` scaled by the fraction
+    of the original position remaining.
+
+    Returns ``None`` (so the Trade row stores NULL rather than a fabricated or negative
+    value) when the filled quantity is unknown or the sizing inputs are corrupt:
+    missing/non-positive/non-finite ``quantity``, ``original_size`` not finite-positive,
+    or ``current_size`` not finite-non-negative.
+    """
+    qty = getattr(position, "quantity", None)
+    if qty is None:
+        return None
+    try:
+        qty = float(qty)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(qty) or qty <= 0:
+        return None
+    # Fall back to ``size`` only when ``original_size`` was never set (None). An
+    # explicit 0 / negative / non-finite original_size is corrupt sizing state — return
+    # None rather than silently scaling against ``size`` and fabricating a quantity.
+    original = position.original_size if position.original_size is not None else position.size
+    current = position.current_size if position.current_size is not None else position.size
+    try:
+        original_f = float(original)
+        current_f = float(current)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(original_f) and original_f > 0):
+        return None
+    if not (math.isfinite(current_f) and current_f >= 0):
+        return None
+    if current_f > original_f:
+        # Scale-ins grow current_size beyond original_size but do NOT update
+        # ``quantity`` (the original entry fill), so the held base quantity cannot
+        # be derived by scaling. Store NULL rather than over-report the fill.
+        return None
+    return qty * (current_f / original_f)
+
+
+def _close_entry_fee_usd(position: Position, execution_engine: Any) -> float:
+    """Entry commission (USD) for a closing ``Trade`` row's ``commission``.
+
+    Prefer the exact value booked at open (``position.metadata['entry_fee']``, the same
+    amount deducted from ``account_balances`` as the ``entry_fee_<symbol>`` event).
+
+    Positions recovered after a restart lose that metadata (the ``positions`` table does
+    not persist entry fee), so fall back to an **approximate** reconstruction: the
+    execution engine's fee model applied to the recovered entry notional. This equals the
+    booked fee exactly in the common case (entries booked at the modelled rate) and is a
+    close estimate otherwise (e.g. a live fill booked at the actual exchange commission) —
+    preferred over dropping the entry leg, which would understate ``trades.commission``
+    versus the ledger. Never raises; returns ``0.0`` when neither the metadata nor a
+    usable notional is available.
+    """
+    meta = getattr(position, "metadata", None) or {}
+    if "entry_fee" in meta:
+        try:
+            fee = float(meta["entry_fee"])
+            if math.isfinite(fee):
+                return fee
+        except (TypeError, ValueError):
+            pass
+    # Recovered position: reconstruct from persisted entry economics (quantity * entry
+    # price, falling back to size * entry_balance), via the same USD fee model.
+    try:
+        qty = getattr(position, "quantity", None)
+        entry_price = float(position.entry_price) if position.entry_price else 0.0
+        if qty is not None and entry_price > 0:
+            notional = float(qty) * entry_price
+        elif position.entry_balance and position.size:
+            notional = float(position.entry_balance) * float(position.size)
+        else:
+            return 0.0
+        if notional > 0 and math.isfinite(notional):
+            fee = float(execution_engine.calculate_entry_fee(notional))
+            fee = fee if math.isfinite(fee) and fee >= 0 else 0.0
+            logger.info(
+                "Reconstructed approximate entry fee $%.4f for %s (no entry-fee "
+                "metadata; recovered position) from notional $%.2f",
+                fee,
+                getattr(position, "symbol", "?"),
+                notional,
+            )
+            return fee
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return 0.0
+
+
+def _close_position_portion(position: Position) -> float:
+    """Fraction of the ORIGINAL position represented by this close
+    (``current_size`` / ``original_size``).
+
+    Used to scale the **entry** fee onto a closing ``Trade`` row so its
+    ``commission`` matches the row's portion-level ``size``/``quantity``/``pnl``
+    (a partially-exited position's final close is only the remaining slice). Returns
+    ``1.0`` — i.e. do not scale — for a full close (the common case), for missing or
+    corrupt sizing, and for scale-in state (``current_size > original_size``), so the
+    entry fee is never inflated.
+    """
+    original = position.original_size if position.original_size is not None else position.size
+    current = position.current_size if position.current_size is not None else position.size
+    try:
+        original_f = float(original)
+        current_f = float(current)
+    except (TypeError, ValueError):
+        return 1.0
+    if not (
+        math.isfinite(original_f) and original_f > 0 and math.isfinite(current_f) and current_f >= 0
+    ):
+        return 1.0
+    ratio = current_f / original_f
+    if ratio <= 0 or ratio > 1:
+        return 1.0
+    return ratio
+
+
 def _create_exchange_provider(provider: str, config: dict, testnet: bool = False):
     """Factory to create exchange provider and return (provider_instance, provider_name).
 
@@ -4412,7 +4535,11 @@ class LiveTradingEngine:
             exit_slippage_cost = exit_result.slippage_cost
             pnl_percent = exit_result.realized_pnl_percent
 
-            entry_fee = float(position.metadata.get("entry_fee", 0.0))
+            # Prefer the exact fee booked at open; reconstruct from the fee model for
+            # positions recovered after a restart (no entry-fee metadata) so the trade's
+            # commission still includes the entry leg. Feeds both performance metrics and
+            # the persisted trades.commission below.
+            entry_fee = _close_entry_fee_usd(position, self.live_execution_engine)
             entry_slippage_cost = float(position.metadata.get("entry_slippage_cost", 0.0))
             total_fee = entry_fee + exit_fee
             total_slippage = entry_slippage_cost + exit_slippage_cost
@@ -4496,6 +4623,18 @@ class LiveTradingEngine:
                     mae_price=(metrics.mae_price if metrics else None),
                     mfe_time=(metrics.mfe_time if metrics else None),
                     mae_time=(metrics.mae_time if metrics else None),
+                    # trades.commission is the round-trip fee in USD (entry + exit),
+                    # the same values booked to account_balances: entry_fee as the
+                    # entry_fee_<symbol> ledger event, exit_fee folded into the
+                    # realized_pnl_<symbol> event. Deliberately NOT orders.actual_commission
+                    # (raw exchange commission in the received asset — ETH on buys, USDT on
+                    # sells — with no commission_asset column, populated asynchronously by
+                    # reconciliation, so unit-ambiguous and unreliable at close time).
+                    # The entry leg is scaled to the closed portion so a partial final
+                    # close's commission matches its portion-level size/quantity/pnl
+                    # (ratio is 1.0 for a full close).
+                    commission=entry_fee * _close_position_portion(position) + exit_fee,
+                    quantity=_closed_base_quantity(position),
                     margin_interest_cost=interest_cost,
                 )
 
@@ -5457,6 +5596,17 @@ class LiveTradingEngine:
                         pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
                     ),
                     quantity=pos_data.get("quantity"),
+                    # Hydrate partial-operation state so a position partially exited
+                    # before a restart closes at its REMAINING size (and logs the
+                    # remaining base quantity), not the full original. Without this,
+                    # current_size/original_size fall back to size and the close
+                    # over-reports size, pnl fraction, and trades.quantity.
+                    original_size=pos_data.get("original_size"),
+                    current_size=pos_data.get("current_size"),
+                    partial_exits_taken=pos_data.get("partial_exits_taken", 0) or 0,
+                    scale_ins_taken=pos_data.get("scale_ins_taken", 0) or 0,
+                    last_partial_exit_price=pos_data.get("last_partial_exit_price"),
+                    last_scale_in_price=pos_data.get("last_scale_in_price"),
                     order_id=tracker_key,  # Backward compat: used as _positions dict key
                     tracker_key=tracker_key,
                     exchange_order_id=entry_order_id,
@@ -5550,6 +5700,7 @@ class LiveTradingEngine:
                     session_id=self.trading_session_id,
                     max_position_size=self.max_position_size,
                     use_margin=use_margin,
+                    fee_rate=self.live_execution_engine.fee_rate,
                 )
 
                 if not positions_snapshot:
@@ -5827,6 +5978,17 @@ class LiveTradingEngine:
                             entry_time=position.entry_time,
                             exit_time=datetime.now(UTC),
                             session_id=self.trading_session_id,
+                            # Round-trip fee in USD: entry_fee (booked at open, or
+                            # reconstructed from the fee model for restart-recovered
+                            # positions; entry leg scaled to the closed portion) plus this
+                            # offline exit_fee. Same units as account_balances, where
+                            # realized_pnl above is already net of exit_fee.
+                            commission=(
+                                _close_entry_fee_usd(position, self.live_execution_engine)
+                                * _close_position_portion(position)
+                                + exit_fee
+                            ),
+                            quantity=_closed_base_quantity(position),
                             margin_interest_cost=offline_interest_cost,
                         )
 

@@ -61,6 +61,9 @@ class MockExchangeOrder:
     average_price: float | None = 50100.0
     filled_quantity: float = 0.001
     commission: float = 0.05
+    # Quote-asset commission (the common SELL case); converted to USD as-is by
+    # order_commission_usd. A base-asset (BUY/short-SL) commission would be priced in.
+    commission_asset: str = "USDT"
     quantity: float = 0.001
     side: object = None
     client_order_id: str | None = None

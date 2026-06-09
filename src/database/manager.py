@@ -65,14 +65,24 @@ MAX_PROFIT_FACTOR = 999999.99
 
 
 def _trade_net_pnl(trade: Any) -> float:
-    """Return trade PnL net of margin interest cost.
+    """Return trade PnL net of fees: gross ``pnl`` minus ``commission`` and
+    ``margin_interest_cost``.
 
-    Handles float, int, and Decimal types from SQLAlchemy Numeric columns.
-    Gracefully returns gross PnL when margin_interest_cost is missing or invalid.
+    ``trade.pnl`` is stored GROSS (price movement only), so true net P&L must
+    subtract both the round-trip commission (USD) and any margin borrow interest.
+    This matches the actual account balance, which had both deducted — so balance
+    reconstruction (``recover_last_balance``) and performance metrics stay accurate.
+    Historical rows predating commission persistence carry ``commission = 0`` and are
+    therefore unaffected.
+
+    Handles float, int, and Decimal types from SQLAlchemy Numeric columns, and
+    gracefully treats a missing/invalid commission or interest as 0.0.
     """
-    raw = getattr(trade, "margin_interest_cost", None)
-    interest = float(raw) if isinstance(raw, (int, float, Decimal)) else 0.0
-    return float(trade.pnl) - interest
+    raw_interest = getattr(trade, "margin_interest_cost", None)
+    interest = float(raw_interest) if isinstance(raw_interest, int | float | Decimal) else 0.0
+    raw_commission = getattr(trade, "commission", None)
+    commission = float(raw_commission) if isinstance(raw_commission, int | float | Decimal) else 0.0
+    return float(trade.pnl) - interest - commission
 
 
 # Connection pool configuration constants.
