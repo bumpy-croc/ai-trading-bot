@@ -12,6 +12,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Repo-wide static-analysis debt cleared — `atb dev quality` (black, ruff,
+  mypy, bandit) now passes from a red baseline of 26 unformatted files, 171
+  ruff errors, ~700 mypy errors across ~90 files, and 25 bandit findings.
+  All fixes are type/lint-level with no runtime behavior change: annotations
+  (`X | None` lazy-init attributes, honest container/dict types, SQLAlchemy
+  `Mapped[...]` column annotations), justified `cast()`s at untyped
+  numpy/onnx/keras/exchange boundaries, removal of ~45 stale `type: ignore`
+  comments, and isinstance tuples → PEP 604 unions. Bandit
+  try/except-pass/continue sites now log (breadth unchanged; debug in
+  per-candle hot loops, WARNING elsewhere); false positives carry justified
+  `# nosec` markers; the one `assert` in `src/` is an explicit raise.
+  Repaired silently-dead tooling config: `mypy.ini` per-module ignore
+  sections stopped matching after the `src/` layout migration (modules
+  gained the `src.` prefix) and its `exclude` regex had a trailing `|`
+  matching every path; `types-PyYAML` is now pinned so `yaml` imports
+  type-check. TensorFlow guarded imports use a `TYPE_CHECKING`-stable
+  pattern so mypy results match whether TF is installed or not.
+  Static analysis exposed several pre-existing behavioral defects which are
+  deliberately NOT fixed here — each is marked with a `KNOWN BUG` comment at
+  the site: backtest strategies never see open positions in
+  `RuntimeContext` (enum-vs-string side validation always raises, swallowed
+  per candle); risk tracking silently skipped for next-bar entries;
+  persisted `pnl_percent` uses the short formula for long backtest trades;
+  correlation control silently drops peer symbols on a missing-argument
+  `TypeError`; `build_time_exit_policy` can never produce a policy;
+  Coinbase enum order types map to lowercase keys that never match (limit
+  orders would submit as market); `atb data populate-dummy` crashes on a
+  nonexistent `log_trade(order_id=...)` kwarg.
 - Live trade recovery on the `emergency_sync` path no longer silently fails.
   `AccountSynchronizer.recover_missing_trades` called
   `DatabaseManager.log_trade(order_id=...)`, but `log_trade` has no `order_id`
