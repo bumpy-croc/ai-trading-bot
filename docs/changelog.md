@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (uppercase DB side, tracker key fallback to row id, partial-op state,
   reconciliation ids), skips invalid-entry-price rows with a CRITICAL log,
   and isolates per-row failures.
+- `TradeProtocol` members are now read-only properties (#767), so concrete
+  trade classes with narrower types (non-Optional datetimes, `PositionSide`
+  enum side) conform structurally — the three `cast("TradeProtocol", ...)`
+  workarounds at the engines' `record_trade` call sites are gone. The `side`
+  member is honestly typed `str | Enum | None` (record_trade stringifies it).
 - Backtest trailing-stop updates no longer crash the run when trailing
   activates without a stop improvement (#761): `TrailingStopManager.update`
   legitimately returns `updated=True, new_stop_price=None` (e.g. ATR
