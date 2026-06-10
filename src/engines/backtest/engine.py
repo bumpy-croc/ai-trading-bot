@@ -77,7 +77,6 @@ if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
     from src.data_providers.sentiment_provider import SentimentDataProvider
     from src.database.manager import DatabaseManager
-    from src.performance.tracker import TradeProtocol
     from src.strategies.components.runtime import SupportsRuntimeHooks
 
 logger = logging.getLogger(__name__)
@@ -1328,11 +1327,8 @@ class Backtester:
             total_fee = entry_fee_logged + float(exit_fee)
             total_slippage = entry_slippage_logged + float(slippage)
             # Update performance tracking.
-            # cast: BaseTrade satisfies TradeProtocol at runtime (record_trade reads
-            # via getattr); the static mismatch is mutable-attribute invariance only
-            # (protocol declares e.g. datetime | None, BaseTrade narrows to datetime).
             self.performance_tracker.record_trade(
-                trade=cast("TradeProtocol", completed_trade), fee=total_fee, slippage=total_slippage
+                trade=completed_trade, fee=total_fee, slippage=total_slippage
             )
             self.performance_tracker.update_balance(self.balance, timestamp=current_time)
 
