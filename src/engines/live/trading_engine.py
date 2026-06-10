@@ -1416,6 +1416,12 @@ class LiveTradingEngine:
             self.live_execution_engine.session_id = self.trading_session_id
             self.live_execution_engine.strategy_name = self._strategy_name()
 
+            # Wire the event logger so snapshot/daily-P&L logging is session
+            # scoped; on a clean restart also point day-start recovery at the
+            # prior session, where today's earlier snapshots live (#766).
+            self.event_logger.set_session_id(self.trading_session_id)
+            self.event_logger.set_recovery_session_id(self._recovered_inactive_session_id)
+
         # Carry OPEN positions forward on a clean restart (#668). The inactive
         # session recovered above (balance only) still owns any OPEN position via
         # Position.session_id, so _recover_active_positions() at line ~1281 saw a
@@ -4758,7 +4764,13 @@ class LiveTradingEngine:
         return extract_ml_predictions(df, index)
 
     def _log_account_snapshot(self):
-        """Log current account state to database"""
+        """Log current account state to database via the event logger.
+
+        ``LiveAccountMonitor`` routes through
+        ``LiveEventLogger.log_account_snapshot`` so daily P&L tracking — and
+        its day-start recovery across restarts (#766) — stays on the live
+        path.
+        """
         self.account_monitor.log_account_snapshot()
 
     def _log_status(self, symbol: str, current_price: float):

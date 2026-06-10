@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
     from src.engines.live.execution.execution_engine import LiveExecutionEngine
     from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
+    from src.engines.live.logging.event_logger import LiveEventLogger
     from src.engines.live.reconciliation import BaseAssetLockRegistry
     from src.performance.tracker import PerformanceTracker
     from src.risk.risk_manager import RiskManager
@@ -60,6 +61,7 @@ class RecoveryEngineState(Protocol):
     live_position_tracker: LivePositionTracker
     live_execution_engine: LiveExecutionEngine
     stop_loss_manager: LiveStopLossManager
+    event_logger: LiveEventLogger
     performance_tracker: PerformanceTracker
     risk_manager: RiskManager
     order_tracker: OrderTracker | None
@@ -179,6 +181,9 @@ class LiveSessionRecoverer:
                     # Wire session context to execution engine so journaling works
                     state.live_execution_engine.session_id = session_id
                     state.live_execution_engine.strategy_name = state._strategy_name()
+                    # Crash recovery reuses the session, so day-start snapshots
+                    # already live under it — no recovery fallback needed (#766).
+                    state.event_logger.set_session_id(session_id)
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,
