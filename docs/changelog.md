@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Live trading engine refactor, steps 1–3 of #486 (pure refactor, no behavior
+  change; verified by the full unit suite, the parity suite, and a
+  deterministic backtest fingerprint that is byte-identical before/after):
+  - Exchange-facing stop-loss lifecycle (placement with retry, cancellation,
+    fill/held-inventory queries, re-protection, offline-fill detection for the
+    legacy reconciliation fallback) moved from `LiveTradingEngine` into
+    `src/engines/live/execution/stop_loss_manager.py` (`LiveStopLossManager`).
+    The engine no longer calls `place_stop_loss_order`, `cancel_order`,
+    `get_open_orders`, or `get_order` directly — it orchestrates via thin
+    delegating wrappers.
+  - Account monitoring glue (balance/equity snapshots, status lines,
+    performance summaries, dataframe extraction helpers) moved to
+    `src/engines/live/monitoring/` (`LiveAccountMonitor`).
+  - The three byte-identical entry-handler methods (`_extract_entry_plan`,
+    `_apply_dynamic_risk`, `get_dynamic_risk_adjustments`) now live once in
+    `src/engines/shared/execution/entry_handler_mixin.py`
+    (`SharedEntryHandlerMixin`), inherited by both the backtest and live
+    entry handlers so this slice of backtest-live parity holds by
+    construction. Divergent orchestration (`process_runtime_decision`,
+    `execute_entry`, exit checks) is intentionally left engine-specific.
+
 ### Fixed
 - `TradeProtocol` members are now read-only properties (#767), so concrete
   trade classes with narrower types (non-Optional datetimes, `PositionSide`
