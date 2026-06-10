@@ -862,62 +862,91 @@ class LivePositionTracker:
         self,
         session_id: int,
     ) -> list[LivePosition]:
-        """Recover positions from database on restart.
+        """Recover open positions for a session from the database.
+
+        Maps the dict rows returned by ``DatabaseManager.get_active_positions``
+        (the same source the engine's ``_recover_active_positions`` uses) onto
+        tracked ``LivePosition`` objects. Rows with an invalid entry price are
+        skipped with a CRITICAL log; other corrupt rows are skipped per-row so
+        one bad record cannot abort recovery of the rest.
 
         Args:
             session_id: Trading session ID to recover from.
 
         Returns:
-            List of recovered positions.
+            List of recovered positions (already registered in the tracker).
         """
         if self.db_manager is None:
             logger.warning("Cannot recover positions without database manager")
             return []
 
-        recovered = []
         try:
-            # KNOWN GAP: DatabaseManager does not implement get_open_positions
-            # (it exposes get_active_positions returning dicts). Against the real
-            # manager this raises AttributeError, caught below, so recovery
-            # returns []. Kept as-is for behavior parity; engine recovery uses
-            # LiveTradingEngine._recover_active_positions instead.
-            db_positions = self.db_manager.get_open_positions(session_id)  # type: ignore[attr-defined]
-            for db_pos in db_positions:
-                entry_time = db_pos.entry_time
+            db_positions = self.db_manager.get_active_positions(session_id)
+        except Exception as e:
+            logger.error("Failed to load positions for recovery: %s", e)
+            return []
+
+        recovered: list[LivePosition] = []
+        for pos_data in db_positions:
+            try:
+                # DB enum values are uppercase ("LONG"); shared PositionSide
+                # uses lowercase — same normalization as the engine's
+                # _recover_active_positions.
+                side_value = pos_data["side"]
+                if isinstance(side_value, str):
+                    side_value = side_value.lower()
+
+                # Non-nullable column; subscript (not .get) so a missing key is
+                # a loud per-row failure rather than a None into LivePosition.
+                entry_time = pos_data["entry_time"]
                 if entry_time is not None and entry_time.tzinfo is None:
                     entry_time = entry_time.replace(tzinfo=UTC)
+
+                # Tracker key: prefer the exchange entry order id, fall back to
+                # the database row id (mirrors engine recovery).
+                entry_order_id = pos_data.get("entry_order_id")
+                tracker_key = entry_order_id or str(pos_data["id"])
+
+                entry_balance = pos_data.get("entry_balance")
+                quantity = pos_data.get("quantity")
                 position = LivePosition(
-                    symbol=db_pos.symbol,
-                    side=PositionSide(db_pos.side),
-                    size=float(db_pos.size),
-                    entry_price=float(db_pos.entry_price),
+                    symbol=pos_data["symbol"],
+                    side=PositionSide(side_value),
+                    size=float(pos_data["size"]),
+                    entry_price=float(pos_data["entry_price"]),
                     entry_time=entry_time,
-                    entry_balance=float(db_pos.entry_balance) if db_pos.entry_balance else None,
-                    quantity=float(db_pos.quantity) if db_pos.quantity is not None else None,
-                    stop_loss=float(db_pos.stop_loss) if db_pos.stop_loss else None,
-                    take_profit=float(db_pos.take_profit) if db_pos.take_profit else None,
-                    order_id=db_pos.entry_order_id,
-                    exchange_order_id=db_pos.entry_order_id,
-                    client_order_id=getattr(db_pos, "client_order_id", None),
-                    original_size=(
-                        float(db_pos.original_size) if db_pos.original_size is not None else None
-                    ),
-                    current_size=(
-                        float(db_pos.current_size) if db_pos.current_size is not None else None
-                    ),
-                    partial_exits_taken=int(db_pos.partial_exits_taken or 0),
-                    scale_ins_taken=int(db_pos.scale_ins_taken or 0),
-                    trailing_stop_activated=bool(db_pos.trailing_stop_activated),
-                    trailing_stop_price=(
-                        float(db_pos.trailing_stop_price) if db_pos.trailing_stop_price else None
-                    ),
-                    breakeven_triggered=bool(db_pos.breakeven_triggered),
+                    entry_balance=float(entry_balance) if entry_balance is not None else None,
+                    quantity=float(quantity) if quantity is not None else None,
+                    stop_loss=pos_data.get("stop_loss"),
+                    take_profit=pos_data.get("take_profit"),
+                    order_id=tracker_key,
+                    tracker_key=tracker_key,
+                    exchange_order_id=entry_order_id,
+                    client_order_id=pos_data.get("client_order_id"),
+                    db_position_id=pos_data.get("id"),
+                    stop_loss_order_id=pos_data.get("stop_loss_order_id"),
+                    original_size=pos_data.get("original_size"),
+                    current_size=pos_data.get("current_size"),
+                    partial_exits_taken=int(pos_data.get("partial_exits_taken", 0) or 0),
+                    scale_ins_taken=int(pos_data.get("scale_ins_taken", 0) or 0),
+                    trailing_stop_activated=bool(pos_data.get("trailing_stop_activated", False)),
+                    trailing_stop_price=pos_data.get("trailing_stop_price"),
+                    breakeven_triggered=bool(pos_data.get("breakeven_triggered", False)),
                 )
-                # Persisted rows carry the entry order id used as tracker key.
-                recovered_order_id = cast(str, position.order_id)
-                with self._positions_lock:
-                    self._positions[recovered_order_id] = position
-                    self._position_db_ids[recovered_order_id] = db_pos.id
+
+                # A position with an invalid entry price cannot be closed
+                # properly and would orphan in the tracker — skip loudly.
+                if position.entry_price <= 0 or not math.isfinite(position.entry_price):
+                    logger.critical(
+                        "SKIPPING recovery of position %s (%s): invalid entry_price %.8f. "
+                        "MANUAL RECONCILIATION REQUIRED.",
+                        position.symbol,
+                        tracker_key,
+                        position.entry_price,
+                    )
+                    continue
+
+                self.track_recovered_position(position, db_id=pos_data.get("id"))
                 recovered.append(position)
                 logger.info(
                     "Recovered position: %s %s @ %.2f",
@@ -926,7 +955,11 @@ class LivePositionTracker:
                     position.symbol,
                     position.entry_price,
                 )
-        except Exception as e:
-            logger.error("Failed to recover positions: %s", e)
+            except Exception as e:
+                # Per-row isolation: one corrupt row must not abort recovery
+                # of the remaining positions.
+                logger.error(
+                    "Failed to recover position %s: %s", pos_data.get("symbol", "<unknown>"), e
+                )
 
         return recovered

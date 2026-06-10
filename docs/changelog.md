@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `LivePositionTracker.recover_positions` actually recovers positions now
+  (#764): it called `DatabaseManager.get_open_positions`, a method that does
+  not exist, so the swallowed `AttributeError` made it always return `[]` —
+  a silent fail-open trap for any future recovery caller. It now maps the
+  dict rows from the real `get_active_positions` API with the same
+  normalization and hydration as the engine's `_recover_active_positions`
+  (uppercase DB side, tracker key fallback to row id, partial-op state,
+  reconciliation ids), skips invalid-entry-price rows with a CRITICAL log,
+  and isolates per-row failures.
 - `StrategyManager.update_model` with no strategy loaded now fails with the
   intended descriptive `ValueError` (#765) instead of an `AttributeError`
   raised while formatting the error message itself (`self.current_strategy.name`
