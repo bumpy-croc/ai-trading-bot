@@ -852,3 +852,39 @@ class TestPerformanceTrackerMetricsCache:
         final = tracker.get_metrics()
         assert final.total_trades == 100
         assert final.winning_trades == 100
+
+
+class TestTradeProtocolConformance:
+    """Regression for #767: TradeProtocol members are read-only properties so
+    concrete trade classes with narrower types conform without casts."""
+
+    @pytest.mark.fast
+    def test_base_trade_records_without_cast(self):
+        """A real BaseTrade (enum side, non-Optional datetimes) is accepted
+        directly and its side is stringified into the trade record."""
+        from src.engines.shared.models import BaseTrade, PositionSide
+        from src.performance.tracker import TradeProtocol
+
+        trade = BaseTrade(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            entry_price=100.0,
+            exit_price=110.0,
+            entry_time=datetime(2024, 1, 1, 10, tzinfo=UTC),
+            exit_time=datetime(2024, 1, 1, 12, tzinfo=UTC),
+            size=0.1,
+            pnl=10.0,
+        )
+
+        # Runtime structural check still holds with property members
+        assert isinstance(trade, TradeProtocol)
+
+        tracker = PerformanceTracker(initial_balance=1000.0)
+        tracker.record_trade(trade, fee=1.0, slippage=0.5)
+
+        metrics = tracker.get_metrics()
+        assert metrics.total_trades == 1
+        assert metrics.winning_trades == 1
+        trades = tracker.get_trade_history()
+        assert trades, "Expected at least one recorded trade"
+        assert "long" in str(trades[0]["side"]).lower()
