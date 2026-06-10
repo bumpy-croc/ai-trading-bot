@@ -43,6 +43,7 @@ from src.config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
+from src.config.feature_flags import is_enabled
 from src.data_providers.binance_provider import BinanceProvider, WebSocketState
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
@@ -306,7 +307,29 @@ class LiveTradingEngine:
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
         self.testnet = testnet
-        # Partial operations policy (enabled by default for better profit capture)
+        # Partial operations policy.
+        #
+        # DISABLED by default behind the `live_partial_operations` feature flag
+        # (#734): the live engine currently applies partial exits / scale-ins as
+        # BOOKKEEPING ONLY — no exchange order is placed — and with mismatched
+        # units (fraction-of-original-position applied to fraction-of-balance
+        # state). On a real account this desyncs tracked size from actual
+        # holdings (stranded inventory / un-repaid margin borrows / -2010 close
+        # failures), books phantom realized PnL, and frees risk budget that is
+        # still deployed. The flag exists only for development of the proper
+        # fix; do NOT enable it for live capital until #734 is resolved.
+        if (enable_partial_operations or partial_manager is not None) and not is_enabled(
+            "live_partial_operations", False
+        ):
+            logger.warning(
+                "Partial exits/scale-ins are DISABLED (#734): the live engine "
+                "executes them as bookkeeping only (no exchange order, mismatched "
+                "units), which desyncs tracked size from real holdings and books "
+                "phantom PnL. Set feature flag live_partial_operations=true only "
+                "for development of the fix."
+            )
+            enable_partial_operations = False
+            partial_manager = None
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager = partial_manager
@@ -6149,6 +6172,22 @@ class LiveTradingEngine:
         decisions on the next bar use the new configuration.
         """
         new_policy: PartialExitPolicy | None = None
+        if not is_enabled("live_partial_operations", False):
+            # Same guard as __init__ (#734): partial ops are bookkeeping-only in
+            # the live engine, so a hot-swapped strategy's partial_operations
+            # overrides must not re-enable them.
+            if isinstance(new_overrides, dict) and "partial_operations" in new_overrides:
+                logger.warning(
+                    "Ignoring partial_operations overrides from hot-swapped "
+                    "strategy: partial exits/scale-ins are disabled in the live "
+                    "engine (#734)."
+                )
+            self.partial_manager = None
+            self._partial_operations_opt_in = False
+            exit_handler = getattr(self, "live_exit_handler", None)
+            if exit_handler is not None:
+                exit_handler.partial_manager = None
+            return
         partial_cfg = (
             new_overrides.get("partial_operations") if isinstance(new_overrides, dict) else None
         )
