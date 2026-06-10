@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Correlation control no longer silently drops peer symbols (#759): the
+  no-window fallback omitted the required `start` argument, so every call
+  raised `TypeError` (swallowed) and the peer vanished from correlated-
+  exposure accounting in BOTH engines. A failed window computation now falls
+  back to the default correlation window; when no time window is derivable
+  at all (non-datetime index), peers are skipped with an explicit WARNING
+  instead of fabricating a wall-clock window (backtest lookahead).
 - `TradeProtocol` members are now read-only properties (#767), so concrete
   trade classes with narrower types (non-Optional datetimes, `PositionSide`
   enum side) conform structurally — the three `cast("TradeProtocol", ...)`
