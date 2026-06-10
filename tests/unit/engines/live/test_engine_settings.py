@@ -97,3 +97,13 @@ class TestEngineInjection:
             engine = self._make_engine()
 
         assert engine.settings.partial_operations_allowed is True
+
+
+class TestPostInitValidation:
+    def test_none_fill_policy_rejected_at_construction(self):
+        with pytest.raises(ValueError, match="execution_fill_policy"):
+            LiveEngineSettings(
+                partial_operations_allowed=False,
+                regime_detection_enabled=False,
+                execution_fill_policy=None,  # type: ignore[arg-type]
+            )

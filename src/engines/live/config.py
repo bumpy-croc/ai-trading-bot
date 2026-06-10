@@ -52,6 +52,11 @@ class LiveEngineSettings:
     regime_detection_enabled: bool
     execution_fill_policy: FillPolicy
 
+    def __post_init__(self) -> None:
+        """Reject invalid settings at construction (CODE.md Input Validation)."""
+        if self.execution_fill_policy is None:
+            raise ValueError("execution_fill_policy must not be None")
+
     @classmethod
     def resolve(
         cls,
