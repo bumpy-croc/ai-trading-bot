@@ -40,6 +40,7 @@ from src.strategies.components import (
     FixedFractionSizer,
     MLBasicSignalGenerator,
     MomentumSignalGenerator,
+    SignalGenerator,
     Strategy,
 )
 from src.strategies.components.leverage_manager import LeverageManager
@@ -206,7 +207,8 @@ def create_hyper_growth_strategy(
     Returns:
         Configured Strategy instance.
     """
-    # Signal generator
+    # Signal generator (declared up-front: branches assign different subtypes)
+    signal_generator: SignalGenerator
     if signal_source == "momentum":
         signal_generator = MomentumSignalGenerator(
             name=f"{name}_signals",

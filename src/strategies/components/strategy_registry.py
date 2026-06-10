@@ -11,7 +11,7 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from .position_sizer import PositionSizer
@@ -469,11 +469,20 @@ class StrategyRegistry:
 
         metadata = self._strategies[strategy_id]
 
-        # Reconstruct ComponentConfig objects from the version snapshot
+        # Reconstruct ComponentConfig objects from the version snapshot.
+        # casts: snapshot writers populate all four component configs
+        # together, so a record passing the signal_generator_config guard
+        # above carries the other three as well.
         signal_gen_config = ComponentConfig.from_dict(target_version_record.signal_generator_config)
-        risk_mgr_config = ComponentConfig.from_dict(target_version_record.risk_manager_config)
-        pos_sizer_config = ComponentConfig.from_dict(target_version_record.position_sizer_config)
-        regime_det_config = ComponentConfig.from_dict(target_version_record.regime_detector_config)
+        risk_mgr_config = ComponentConfig.from_dict(
+            cast("dict[str, Any]", target_version_record.risk_manager_config)
+        )
+        pos_sizer_config = ComponentConfig.from_dict(
+            cast("dict[str, Any]", target_version_record.position_sizer_config)
+        )
+        regime_det_config = ComponentConfig.from_dict(
+            cast("dict[str, Any]", target_version_record.regime_detector_config)
+        )
 
         # Use parameters from target version if available, otherwise use current
         reverted_parameters = (

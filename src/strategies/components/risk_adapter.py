@@ -294,7 +294,9 @@ class CoreRiskAdapter(RiskManager):
             return "normal"
         trend = getattr(regime, "trend", None)
         if hasattr(trend, "value"):
-            return str(trend.value)
+            # hasattr() guarantees the attribute; mypy cannot narrow
+            # ``Any | None`` through hasattr, hence the suppression.
+            return str(trend.value)  # type: ignore[union-attr]
         if isinstance(regime, str):
             return regime
         return "normal"
