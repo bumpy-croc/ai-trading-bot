@@ -22,7 +22,7 @@ import pytest
 from src.database.manager import DatabaseManager
 from src.engines.live.account_sync import AccountSynchronizer
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.fast
 
 
 def _make_exchange_trade():

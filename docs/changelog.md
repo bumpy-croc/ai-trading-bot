@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Live trade recovery on the `emergency_sync` path no longer silently fails.
+  `AccountSynchronizer.recover_missing_trades` called
+  `DatabaseManager.log_trade(order_id=...)`, but `log_trade` has no `order_id`
+  parameter (the field is `exit_order_id`) and no `**kwargs`, so every recovered
+  trade raised `TypeError` — swallowed by the per-trade `except` — and was never
+  persisted to the ledger. Maps `trade.order_id` onto `exit_order_id` (which feeds
+  the `Trade.order_id` column). Adds a regression test that drives
+  `recover_missing_trades` with an autospec'd `DatabaseManager`, so the real
+  `log_trade` signature is enforced. Also clears pre-existing mypy loop-variable
+  and ruff `UP038` debt on `account_sync.py` (behaviour-neutral).
 - Live position/trade recovery no longer crashes on `Decimal`-vs-`float`
   arithmetic. `DatabaseManager.get_active_positions` and `get_recent_trades`
   now coerce SQLAlchemy `Numeric(18,8)` columns (which read back from
