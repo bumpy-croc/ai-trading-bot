@@ -8,6 +8,11 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 logger = logging.getLogger(__name__)
 
+# Emit the vectorised-percentile fallback warning once per process: on an
+# environment where the fast path always fails (e.g. older numpy) the fallback
+# fires on every computation and per-call WARNINGs would flood the logs.
+_VECTORISED_RANK_FALLBACK_WARNED = False
+
 
 class TrendLabel(str, Enum):
     TREND_UP = "trend_up"
@@ -204,8 +209,21 @@ class RegimeDetector:
             result[lookback - 1 :] = ranks
             return pd.Series(result, index=series.index, dtype=float)
         except Exception as e:
-            # Fall back to rolling apply paths when sliding window is unavailable (e.g., older numpy)
-            logger.debug("Vectorised percentile rank failed, using rolling apply fallback: %s", e)
+            # Fall back to rolling apply paths when sliding window is unavailable
+            # (e.g., older numpy). WARN once so the degraded path is visible,
+            # then drop to debug to avoid per-computation flooding.
+            global _VECTORISED_RANK_FALLBACK_WARNED
+            if not _VECTORISED_RANK_FALLBACK_WARNED:
+                _VECTORISED_RANK_FALLBACK_WARNED = True
+                logger.warning(
+                    "Vectorised percentile rank failed, using rolling apply fallback "
+                    "(suppressing to debug for the rest of this process): %s",
+                    e,
+                )
+            else:
+                logger.debug(
+                    "Vectorised percentile rank failed, using rolling apply fallback: %s", e
+                )
 
         # Use engine='numba' for better performance if available
         try:

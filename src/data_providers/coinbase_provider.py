@@ -184,8 +184,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             try:
                 self._session.close()
             except Exception as e:
-                # Benign: the session is being discarded during cleanup anyway.
-                logger.debug("Ignoring error while closing session during cleanup: %s", e)
+                # The session is being discarded anyway, but cleanup runs rarely
+                # enough that a WARNING cannot flood and aids leak diagnosis.
+                logger.warning("Error closing session during cleanup: %s", e)
             self._session = None
 
     def __del__(self) -> None:

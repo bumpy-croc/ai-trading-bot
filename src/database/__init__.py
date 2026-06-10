@@ -18,9 +18,10 @@ try:  # pragma: no cover - defensive shim
     _sys.modules.setdefault("database.manager", _import_module("src.database.manager"))
     _sys.modules.setdefault("database.models", _import_module("src.database.models"))
 except Exception as exc:  # pragma: no cover - best-effort aliasing
-    # Expected/benign fallback: the aliases only serve tests that patch
-    # `database.*`; production code imports `src.database` directly.
-    logger.debug("Skipping back-compat 'database.*' module aliasing: %s", exc)
+    # Best-effort fallback: the aliases only serve tests that patch
+    # `database.*`; production code imports `src.database` directly. Runs once
+    # at import time, so a WARNING cannot flood and surfaces broken imports.
+    logger.warning("Skipping back-compat 'database.*' module aliasing: %s", exc)
 
 __all__: list[str] = [
     # Re-exports for convenience

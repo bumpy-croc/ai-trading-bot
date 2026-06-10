@@ -39,8 +39,9 @@ def find_project_root() -> Path:
                 if any((parent / m).exists() for m in markers):
                     return parent
             except Exception as exc:
-                # ! Filesystem edge cases (permissions, etc.)
-                logger.debug("Skipping %s during project-root search: %s", parent, exc)
+                # ! Filesystem edge cases (permissions, etc.) — startup-only
+                # path, so a WARNING cannot flood and surfaces FS problems.
+                logger.warning("Skipping %s during project-root search: %s", parent, exc)
                 continue
         return None
 

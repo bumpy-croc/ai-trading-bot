@@ -763,11 +763,20 @@ class Backtester:
                     )
                 )
             except Exception as exc:
-                # Debug level: per-candle hot loop while a position is open; the
-                # context falls back to current_positions=None on failure.
-                logger.debug(
-                    "Failed to translate active trade into runtime context position: %s", exc
-                )
+                # Per-candle hot loop while a position is open: WARN once per
+                # engine instance so the failure (see KNOWN BUG above) is
+                # visible, then drop to debug to avoid flooding the run.
+                if not getattr(self, "_runtime_position_translation_warned", False):
+                    self._runtime_position_translation_warned = True
+                    logger.warning(
+                        "Failed to translate active trade into runtime context position "
+                        "(suppressing to debug for the rest of this run): %s",
+                        exc,
+                    )
+                else:
+                    logger.debug(
+                        "Failed to translate active trade into runtime context position: %s", exc
+                    )
 
         return RuntimeContext(balance=float(balance), current_positions=positions or None)
 
