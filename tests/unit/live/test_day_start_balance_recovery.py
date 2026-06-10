@@ -78,10 +78,12 @@ class TestDayStartBalanceRecovery:
         event_logger._check_and_update_trading_date(current_balance=1080.0)
         assert event_logger._day_start_balance == 1000.0
 
-        # Simulate the date rolling over since the first call
-        from datetime import date, timedelta
+        # Simulate the date rolling over since the first call (UTC date —
+        # local date.today() here is flaky on UTC+N hosts during the window
+        # between local and UTC midnight, the exact skew this PR fixes)
+        from datetime import UTC, datetime, timedelta
 
-        event_logger._current_trading_date = date.today() - timedelta(days=1)
+        event_logger._current_trading_date = datetime.now(UTC).date() - timedelta(days=1)
         event_logger._check_and_update_trading_date(current_balance=1200.0)
 
         # Rollover re-anchors to the live balance; the DB is not re-queried
