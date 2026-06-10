@@ -15,6 +15,7 @@ from src.config.constants import (
     DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES,
     DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT,
     DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE,
+    DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT,
 )
 from src.data_providers.exchange_interface import (
     AccountBalance,
@@ -24,7 +25,8 @@ from src.data_providers.exchange_interface import (
 )
 from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
 from src.database.manager import DatabaseManager
-from src.database.models import PositionSide, TradeSource
+from src.database.models import EventType, PositionSide, TradeSource
+from src.engines.live.reconciliation import Severity
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +71,7 @@ class AccountSynchronizer:
         self._use_margin = use_margin
         self.last_sync_time: datetime | None = None
 
-    def sync_account_data(
-        self, force: bool = False, symbol: str | None = None
-    ) -> SyncResult:
+    def sync_account_data(self, force: bool = False, symbol: str | None = None) -> SyncResult:
         """
         Synchronize all account data from the exchange.
 
@@ -125,12 +125,8 @@ class AccountSynchronizer:
             # Balance/position sync remains skipped in margin mode because USDT
             # netAsset doesn't reflect true equity when shorts are open.
             if not self._use_margin:
-                balance_sync_result = self._sync_balances(
-                    exchange_data.get("balances", [])
-                )
-                position_sync_result = self._sync_positions(
-                    exchange_data.get("positions", [])
-                )
+                balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
+                position_sync_result = self._sync_positions(exchange_data.get("positions", []))
             else:
                 # Margin: reconcile the tracked balance against true net equity
                 # (assets minus liabilities), not USDT alone. Position sync stays
@@ -196,7 +192,20 @@ class AccountSynchronizer:
         if equity is None or equity <= 0:
             return {"synced": False, "reason": "equity unavailable"}
 
-        current_db_balance = self.db_manager.get_current_balance(self.session_id)
+        # Resolve the session id exactly as update_balance does (it falls back to the
+        # DB manager's _current_session_id). During the INITIAL startup sync this
+        # synchronizer's own session_id is still None — trading_engine assigns it only
+        # AFTER sync_account_data() returns — yet the session already exists on the DB
+        # manager. Without this fallback a real startup correction would persist (via
+        # update_balance's own fallback) while the audit/event were silently skipped,
+        # re-opening the exact gap this path exists to close.
+        effective_session_id = (
+            self.session_id
+            if self.session_id is not None
+            else getattr(self.db_manager, "_current_session_id", None)
+        )
+
+        current_db_balance = self.db_manager.get_current_balance(effective_session_id)
         diff_pct = (
             abs(equity - current_db_balance) / current_db_balance * 100
             if current_db_balance > 0
@@ -206,9 +215,7 @@ class AccountSynchronizer:
         # Flat iff net equity matches USDT cash (no position value or liability).
         usdt_bal = self.exchange.get_balance("USDT")
         usdt_total = (
-            float(usdt_bal.total)
-            if usdt_bal is not None and usdt_bal.total is not None
-            else None
+            float(usdt_bal.total) if usdt_bal is not None and usdt_bal.total is not None else None
         )
         flat_tolerance = max(1.0, equity * 0.01)
         if usdt_total is None or abs(equity - usdt_total) > flat_tolerance:
@@ -237,15 +244,138 @@ class AccountSynchronizer:
             equity,
             diff_pct,
         )
-        self.db_manager.update_balance(
-            equity, "margin_equity_sync_correction", "system", self.session_id
+        balance_updated = self.db_manager.update_balance(
+            equity, "margin_equity_sync_correction", "system", effective_session_id
         )
+        if not balance_updated:
+            # update_balance swallows its own errors and returns False; don't emit
+            # an audit trail or alert claiming a correction that never persisted.
+            logger.error(
+                "Margin equity correction did NOT persist (update_balance returned "
+                "False): tracked $%.2f vs true equity $%.2f — skipping audit/event",
+                current_db_balance,
+                equity,
+            )
+            return {
+                "synced": False,
+                "corrected": False,
+                "reason": "balance update failed",
+                "old_balance": current_db_balance,
+                "new_balance": equity,
+            }
+
+        # This book-down is the largest capital event a margin session can produce
+        # and was historically invisible to auditing/alerting (the prod gap behind
+        # this fix). Record the immutable audit trail + an operator alert; the 1%
+        # correction gate above guarantees the move is already material. Pass the
+        # resolved session id so the audit binds to the same session the balance
+        # write used (critical for the startup sync where self.session_id is None).
+        self._record_equity_correction_audit(
+            current_db_balance, equity, diff_pct, effective_session_id
+        )
+
         return {
             "synced": True,
             "corrected": True,
             "old_balance": current_db_balance,
             "new_balance": equity,
         }
+
+    def _record_equity_correction_audit(
+        self,
+        old_balance: float,
+        new_equity: float,
+        diff_pct: float,
+        session_id: int | None,
+    ) -> None:
+        """Persist the audit trail and operator alert for a margin-equity book-down.
+
+        A ``margin_equity_sync_correction`` can be the single largest capital event
+        of a session, so every correction MUST leave a ``reconciliation_audit_events``
+        row (before/after values) and — because the 1% correction gate guarantees the
+        move is already material — a warning+ ``system_events`` row so monitoring and
+        alerting can see large book-downs.
+
+        Both writes are best-effort and independently guarded: per CODE.md ("wrap
+        callback invocations in try/except so failures don't block state updates"),
+        an observability failure must neither raise into the sync loop nor unwind the
+        already-persisted balance correction.
+
+        Args:
+            old_balance: Tracked balance before the correction.
+            new_equity: True cross-margin equity the balance was corrected to.
+            diff_pct: Absolute divergence as a percentage of the old balance.
+            session_id: The session the balance write was bound to (the caller's
+                resolved effective id, which falls back to the DB manager's current
+                session). Must be the same id update_balance used.
+        """
+        if session_id is None:
+            # Defensive only: the caller resolves session_id the same way
+            # update_balance does, so a persisted correction always has a non-None
+            # id here. Kept so a degenerate call logs rather than crashes.
+            logger.error(
+                "Cannot audit margin-equity correction (tracked $%.2f -> $%.2f): "
+                "no active session_id",
+                old_balance,
+                new_equity,
+            )
+            return
+
+        delta = new_equity - old_balance
+        # ``diff_pct`` is a percentage (0-100); the shared CRITICAL threshold
+        # constant is a fraction (0.05 == 5%), so scale it to percent to compare.
+        is_critical = diff_pct >= DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT * 100
+        # Reuse the reconciler's severity vocabulary so this audit row matches every
+        # other log_audit_event call site. SystemEvent uses its own lowercase scale.
+        audit_severity = (Severity.CRITICAL if is_critical else Severity.HIGH).value
+        event_severity = "critical" if is_critical else "warning"
+        reason = (
+            f"Margin equity sync correction: tracked balance ${old_balance:.2f} vs "
+            f"true cross-margin equity ${new_equity:.2f} "
+            f"(Δ ${delta:+.2f}, {diff_pct:.2f}%) while flat"
+        )
+
+        try:
+            self.db_manager.log_audit_event(
+                session_id=session_id,
+                entity_type="balance",
+                entity_id=None,
+                field="total_balance",
+                old_value=f"{old_balance:.8f}",
+                new_value=f"{new_equity:.8f}",
+                reason=reason,
+                severity=audit_severity,
+            )
+        except Exception as e:
+            # Best-effort: degraded observability must not break the sync loop.
+            logger.error(
+                "Failed to record margin-equity reconciliation audit event: %s",
+                e,
+                exc_info=True,
+            )
+
+        try:
+            self.db_manager.log_event(
+                event_type=EventType.BALANCE_ADJUSTMENT,
+                message=reason,
+                severity=event_severity,
+                component="account_sync.margin_equity",
+                details={
+                    "old_balance": old_balance,
+                    "new_balance": new_equity,
+                    "delta": delta,
+                    "diff_pct": diff_pct,
+                    "update_reason": "margin_equity_sync_correction",
+                },
+                session_id=session_id,
+            )
+        except Exception as e:
+            # Best-effort: degraded observability must not break the sync loop.
+            logger.error(
+                "Failed to record margin-equity reconciliation system event: %s",
+                e,
+                exc_info=True,
+            )
 
     def _sync_balances(self, exchange_balances: list[AccountBalance]) -> dict[str, Any]:
         """Synchronize account balances"""
