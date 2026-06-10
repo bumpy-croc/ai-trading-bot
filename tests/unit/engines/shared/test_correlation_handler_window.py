@@ -10,7 +10,7 @@ would be lookahead in a backtest).
 """
 
 import logging
-from unittest.mock import Mock
+from unittest.mock import Mock, create_autospec
 
 import pandas as pd
 import pytest
@@ -22,26 +22,36 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 
 def _datetime_df(periods: int = 10) -> pd.DataFrame:
+    """Primary-symbol frame with a datetime index (windows derivable)."""
     idx = pd.date_range("2024-01-10", periods=periods, freq="1h")
     return pd.DataFrame({"close": [100.0 + i for i in range(periods)]}, index=idx)
 
 
 def _int_index_df(periods: int = 10) -> pd.DataFrame:
+    """Primary-symbol frame with an integer index (no derivable window)."""
     return pd.DataFrame({"close": [100.0 + i for i in range(periods)]})
 
 
 def _peer_history() -> pd.DataFrame:
+    """History frame the mocked provider returns for peer symbols."""
     idx = pd.date_range("2024-01-01", periods=10, freq="1h")
     return pd.DataFrame({"close": [50.0 + i for i in range(10)]}, index=idx)
 
 
 def _make_handler(correlation_window_days=30) -> tuple[CorrelationHandler, Mock]:
-    risk_manager = Mock()
+    """Handler with autospecced collaborators and a stubbed history provider."""
+    from src.data_providers.data_provider import DataProvider
+    from src.position_management.correlation_engine import CorrelationEngine
+    from src.risk.risk_manager import RiskManager, RiskParameters
+
+    risk_manager = create_autospec(RiskManager, instance=True)
+    # params is created in __init__, invisible to autospec — attach a real one
+    risk_manager.params = RiskParameters()
     risk_manager.params.correlation_window_days = correlation_window_days
-    data_provider = Mock()
-    data_provider.get_historical_data = Mock(return_value=_peer_history())
+    data_provider = create_autospec(DataProvider, instance=True)
+    data_provider.get_historical_data.return_value = _peer_history()
     handler = CorrelationHandler(
-        correlation_engine=Mock(),
+        correlation_engine=create_autospec(CorrelationEngine, instance=True),
         risk_manager=risk_manager,
         data_provider=data_provider,
         strategy=None,
