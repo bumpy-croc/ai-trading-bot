@@ -1,9 +1,12 @@
+import logging
 from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
+
+logger = logging.getLogger(__name__)
 
 
 class TrendLabel(str, Enum):
@@ -200,9 +203,9 @@ class RegimeDetector:
             result = np.full(n, np.nan, dtype=float)
             result[lookback - 1 :] = ranks
             return pd.Series(result, index=series.index, dtype=float)
-        except Exception:
+        except Exception as e:
             # Fall back to rolling apply paths when sliding window is unavailable (e.g., older numpy)
-            pass
+            logger.debug("Vectorised percentile rank failed, using rolling apply fallback: %s", e)
 
         # Use engine='numba' for better performance if available
         try:

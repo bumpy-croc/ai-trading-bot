@@ -13,12 +13,8 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None  # type: ignore
-
-if TYPE_CHECKING:
-    from tensorflow.data import Dataset as DatasetType
-else:
-    DatasetType = Any  # type: ignore
+    if not TYPE_CHECKING:
+        tf = None
 
 # Training dataset constants
 DEFAULT_SHUFFLE_BUFFER_SIZE = (

@@ -85,7 +85,9 @@ class MockDataProvider(DataProvider):
             data_start, data_end = self.data.index.min(), self.data.index.max()
             if start < data_start or (end and end > data_end):
                 self._ensure_data(start=start, end=end, timeframe=timeframe)
-            return self.data.loc[start:end] if end is not None else self.data.loc[start:]
+            # pandas .loc supports datetime label slices; without pandas-stubs mypy
+            # only accepts int-like slice components, hence the targeted ignore.
+            return self.data.loc[start:end] if end is not None else self.data.loc[start:]  # type: ignore[misc]
         return pd.DataFrame()
 
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:

@@ -42,6 +42,8 @@ class CachedDataProvider(DataProvider):
         self.cache: dict[str, pd.DataFrame] = {}
 
         # Try to use the provided cache directory or get the default one
+        # None means caching is disabled (no writable directory available).
+        self.cache_dir: str | None
         if cache_dir:
             self.cache_dir = cache_dir
         else:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import platform
+from typing import TYPE_CHECKING
 
 try:
     import tensorflow as tf
@@ -11,7 +12,8 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None  # type: ignore
+    if not TYPE_CHECKING:
+        tf = None
 
 # Check for tensorflow-metal plugin (required for Apple Silicon GPU support)
 try:

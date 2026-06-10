@@ -7,8 +7,9 @@ in specific market regimes, with regime filtering and regime-specific performanc
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -67,7 +68,7 @@ class RegimeTestResults:
     position_sizing_optimality: float | None = None
 
     # Regime transition analysis
-    transition_performance: dict[str, float] = None  # Performance during regime changes
+    transition_performance: dict[str, float] | None = None  # Performance during regime changes
 
     # Error tracking
     error_count: int = 0
@@ -626,23 +627,28 @@ class RegimeTester:
 
         # Find best and worst regimes
         regime_scores = {k: v.sharpe_ratio for k, v in regime_results.items()}
-        best_regime = max(regime_scores, key=regime_scores.get)
-        worst_regime = min(regime_scores, key=regime_scores.get)
+        # cast: max/min iterate the dict's own keys, so .get never returns None here
+        score_of = cast(Callable[[str], float], regime_scores.get)
+        best_regime = max(regime_scores, key=score_of)
+        worst_regime = min(regime_scores, key=score_of)
 
         # Calculate regime consistency
         returns = [r.total_return for r in regime_results.values()]
-        regime_consistency = 1 - (np.std(returns) / (abs(np.mean(returns)) + 0.1))
+        # cast: np.std/np.mean reductions yield np.float64, a float subclass at runtime
+        regime_consistency = cast(float, 1 - (np.std(returns) / (abs(np.mean(returns)) + 0.1)))
         regime_consistency = max(0.0, min(1.0, regime_consistency))
 
         # Calculate adaptation score
         sharpe_ratios = [r.sharpe_ratio for r in regime_results.values()]
-        adaptation_score = np.mean(
-            [max(0, s) for s in sharpe_ratios]
+        # cast: np.mean yields np.float64, a float subclass at runtime
+        adaptation_score = cast(
+            float, np.mean([max(0, s) for s in sharpe_ratios])
         )  # Average positive Sharpe ratios
 
         # Calculate transition handling score
         transition_scores = [r.regime_exit_timing for r in regime_results.values()]
-        transition_handling_score = np.mean(transition_scores)
+        # cast: np.mean yields np.float64, a float subclass at runtime
+        transition_handling_score = cast(float, np.mean(transition_scores))
 
         # Overall performance (weighted by regime coverage)
         total_coverage = sum(r.regime_coverage for r in regime_results.values())
@@ -652,7 +658,10 @@ class RegimeTester:
                 / total_coverage
             )
         else:
-            overall_performance = np.mean([r.total_return for r in regime_results.values()])
+            # cast: np.mean yields np.float64, a float subclass at runtime
+            overall_performance = cast(
+                float, np.mean([r.total_return for r in regime_results.values()])
+            )
 
         # Regime diversification benefit (compare to single-regime performance)
         single_regime_performance = max(r.total_return for r in regime_results.values())
@@ -741,7 +750,9 @@ class RegimeTester:
                     confidence=regime_data.iloc[i]["regime_confidence"],
                     duration=duration,
                     strength=regime_data.iloc[i]["regime_strength"],
-                    metadata={"regime_type": regime_type},
+                    # RegimeContext.metadata is annotated dict[str, float], but runtime
+                    # validation accepts any dict values; widening it lives outside this module
+                    metadata={"regime_type": regime_type},  # type: ignore[dict-item]
                 )
 
                 signal = generator.generate_signal(regime_data, i, regime_context)
@@ -829,7 +840,7 @@ class RegimeTester:
 
     def create_regime_transition_analysis(self) -> dict[str, Any]:
         """Analyze regime transitions in the data"""
-        transitions = []
+        transitions: list[dict[str, Any]] = []
 
         prev_regime = None
         for i, regime in enumerate(self.regime_data["regime_type"]):
@@ -845,7 +856,7 @@ class RegimeTester:
             prev_regime = regime
 
         # Analyze transition patterns
-        transition_matrix = {}
+        transition_matrix: dict[str, dict[str, int]] = {}
         for transition in transitions:
             from_regime = transition["from_regime"]
             to_regime = transition["to_regime"]

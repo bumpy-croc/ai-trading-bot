@@ -77,8 +77,9 @@ class FallbackProvider(DataProvider):
         # Maximum depth to traverse exception chain (prevent infinite loops)
         MAX_EXCEPTION_DEPTH = 10
 
-        # Check for HTTP status code in exception chain
-        current_exception = exception
+        # Check for HTTP status code in exception chain.
+        # __cause__/__context__ are BaseException | None, so the walker must be too.
+        current_exception: BaseException | None = exception
         depth = 0
         while current_exception is not None and depth < MAX_EXCEPTION_DEPTH:
             # Check for requests.HTTPError with status code

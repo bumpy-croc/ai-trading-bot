@@ -61,7 +61,7 @@ class FinancialStatisticalTests:
         Returns:
             List of statistical test results
         """
-        results = []
+        results: list[StatisticalTestResult] = []
 
         # Clean data
         returns1_clean = returns1.dropna()
@@ -127,7 +127,7 @@ class FinancialStatisticalTests:
         Returns:
             List of statistical test results
         """
-        results = []
+        results: list[StatisticalTestResult] = []
 
         returns1_clean = returns1.dropna()
         returns2_clean = returns2.dropna()
@@ -193,7 +193,7 @@ class FinancialStatisticalTests:
         Returns:
             List of statistical test results
         """
-        results = []
+        results: list[StatisticalTestResult] = []
 
         returns1_clean = returns1.dropna()
         returns2_clean = returns2.dropna()
@@ -254,7 +254,7 @@ class FinancialStatisticalTests:
         Returns:
             List of statistical test results
         """
-        results = []
+        results: list[StatisticalTestResult] = []
 
         returns_clean = returns.dropna()
 
@@ -396,7 +396,7 @@ class FinancialStatisticalTests:
         Returns:
             List of statistical test results
         """
-        results = []
+        results: list[StatisticalTestResult] = []
 
         series_clean = series.dropna()
 

@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import pandas as pd
 
@@ -285,7 +285,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.api_key = api_key
             self.api_secret = api_secret
             self.testnet = testnet
-            self._client = None
+            # Untyped boundary: holds a python-binance Client or the offline stub
+            # after _initialize_client(); None only during construction.
+            self._client: Any = None
             logger.info("Binance provider initialized in read-only mode (no credentials)")
             self._initialize_client()
 
@@ -2234,8 +2236,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 on_kline(msg)
 
             self._kline_event_received = False  # Reset until first event confirms
+            # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
+            # an attribute inside the closure.
             self._kline_socket_key = self._socket_on_twm_loop(
-                lambda: self._twm.start_kline_socket(
+                lambda: cast(Any, self._twm).start_kline_socket(
                     callback=_kline_callback, symbol=symbol, interval=timeframe
                 )
             )
@@ -2295,13 +2299,15 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     return
                 on_user_event(msg)
 
+            # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
+            # an attribute inside the closures.
             if self._use_margin:
                 self._user_socket_key = self._socket_on_twm_loop(
-                    lambda: self._twm.start_margin_socket(callback=_user_callback)
+                    lambda: cast(Any, self._twm).start_margin_socket(callback=_user_callback)
                 )
             else:
                 self._user_socket_key = self._socket_on_twm_loop(
-                    lambda: self._twm.start_user_socket(callback=_user_callback)
+                    lambda: cast(Any, self._twm).start_user_socket(callback=_user_callback)
                 )
             self._last_user_event_time = datetime.now(UTC)
             self._user_ws_state = WebSocketState.PRIMARY
@@ -2452,8 +2458,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 if self._kline_socket_key and self._twm:
                     self._twm.stop_socket(self._kline_socket_key)
                     self._kline_socket_key = None
+                # cast: reconnect only runs after start_kline_stream() stored these;
+                # mypy cannot prove that cross-method invariant.
                 if self.start_kline_stream(
-                    self._active_symbol, self._active_timeframe, self._on_kline_cb
+                    cast(str, self._active_symbol),
+                    cast(str, self._active_timeframe),
+                    cast(Callable[[dict], None], self._on_kline_cb),
                 ):
                     return True
             except Exception as e:

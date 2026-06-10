@@ -7,6 +7,7 @@ cooling-off periods, audit trails, and performance impact analysis.
 
 import unittest
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from unittest.mock import Mock
 
 from src.strategies.components.performance_monitor import (
@@ -52,7 +53,7 @@ class TestStrategySwitcher(unittest.TestCase):
 
         # Mock performance tracker
         self.performance_tracker = Mock(spec=PerformanceTracker)
-        self.available_strategies = {
+        self.available_strategies: dict[str, PerformanceTracker] = {
             self.current_strategy: self.performance_tracker,
             self.alternative_strategy: Mock(spec=PerformanceTracker),
         }
@@ -128,10 +129,12 @@ class TestStrategySwitcher(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertIsInstance(result, SwitchRequest)
-        self.assertEqual(result.from_strategy, self.current_strategy)
-        self.assertEqual(result.to_strategy, self.alternative_strategy)
-        self.assertEqual(result.trigger, SwitchTrigger.PERFORMANCE_DEGRADATION)
-        self.assertEqual(result.priority, 2)  # Moderate severity
+        # cast: assertIsNotNone/assertIsInstance above prove this, but unittest asserts don't narrow for mypy
+        request = cast(SwitchRequest, result)
+        self.assertEqual(request.from_strategy, self.current_strategy)
+        self.assertEqual(request.to_strategy, self.alternative_strategy)
+        self.assertEqual(request.trigger, SwitchTrigger.PERFORMANCE_DEGRADATION)
+        self.assertEqual(request.priority, 2)  # Moderate severity
 
     def test_evaluate_switch_need_manual_override_active(self):
         """Test switch evaluation when manual override is active"""
@@ -233,7 +236,8 @@ class TestStrategySwitcher(unittest.TestCase):
         result = self.switcher.execute_switch(request, activation_callback)
 
         self.assertEqual(result.status, SwitchStatus.FAILED)
-        self.assertIn("Strategy activation failed", result.error_message)
+        # cast: a FAILED switch record always carries an error_message string
+        self.assertIn("Strategy activation failed", cast(str, result.error_message))
 
     def test_execute_switch_validation_rejected(self):
         """Test strategy switch execution with validation rejection"""

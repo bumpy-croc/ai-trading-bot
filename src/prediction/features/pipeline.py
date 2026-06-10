@@ -57,8 +57,8 @@ class FeaturePipeline:
         self.extractors: dict[str, FeatureExtractor] = {}
         self._initialize_extractors(custom_extractors)
 
-        # Performance tracking
-        self.stats = {
+        # Performance tracking (heterogeneous values: counters, timings dict, totals)
+        self.stats: dict[str, Any] = {
             "total_extractions": 0,
             "cache_hits": 0,
             "cache_misses": 0,
@@ -307,7 +307,7 @@ class FeaturePipeline:
         """
         return self.cache.get_stats() if self.cache else None
 
-    def validate_features(self, data: pd.DataFrame) -> dict[str, dict[str, bool]]:
+    def validate_features(self, data: pd.DataFrame) -> dict[str, dict[str, bool | str | None]]:
         """
         Validate features from all extractors.
 
@@ -317,13 +317,15 @@ class FeaturePipeline:
         Returns:
             Validation results for each extractor
         """
-        results = {}
+        results: dict[str, dict[str, bool | str | None]] = {}
         for name, extractor in self.extractors.items():
             # Check if extractor has enabled attribute, otherwise assume it's enabled
             is_enabled = extractor.enabled if hasattr(extractor, "enabled") else True
             if is_enabled:
                 try:
-                    extractor.validate_features(data)
+                    # Duck-typed: only some extractors implement validate_features;
+                    # the except below records missing implementations as invalid.
+                    extractor.validate_features(data)  # type: ignore[attr-defined]
                     results[name] = {"valid": True, "error": None}
                 except Exception as e:
                     results[name] = {"valid": False, "error": str(e)}
