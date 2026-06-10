@@ -13,7 +13,7 @@ try:
         BinanceProvider,
         with_rate_limit_retry,
     )
-    from src.data_providers.exchange_interface import OrderSide
+    from src.data_providers.exchange_interface import OrderLookupError, OrderSide
 
     BINANCE_AVAILABLE = True
 except ImportError:
@@ -22,6 +22,7 @@ except ImportError:
     with_rate_limit_retry = None
     STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005
     OrderSide = Mock
+    OrderLookupError = Exception
 
 
 @pytest.mark.unit
@@ -1382,6 +1383,108 @@ class TestGetOrderIdRouting:
 
         # Assert
         assert result is None
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
+class TestGetOrderChecked:
+    """Fail-closed order lookup (#713).
+
+    get_order_checked must return None ONLY when Binance confirms the order
+    does not exist (-2013); any unconfirmed lookup raises OrderLookupError so
+    safety logic (reconciler stop-loss re-placement) never mistakes a transient
+    API failure for a missing order.
+    """
+
+    ORDER_PAYLOAD = {
+        "orderId": 12345,
+        "symbol": "BTCUSDT",
+        "status": "NEW",
+        "side": "SELL",
+        "type": "STOP_LOSS_LIMIT",
+        "origQty": "1.0",
+        "executedQty": "0.0",
+        "price": "50000.0",
+        "time": 1640995200000,
+        "updateTime": 1640995200000,
+    }
+
+    @staticmethod
+    def _make_provider(mock_config, mock_client_class):
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        return BinanceProvider(), mock_client
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_returns_order_when_found(self, mock_config, mock_client_class):
+        provider, mock_client = self._make_provider(mock_config, mock_client_class)
+        mock_client.get_order.return_value = dict(self.ORDER_PAYLOAD)
+
+        order = provider.get_order_checked("12345", "BTCUSDT")
+
+        assert order is not None
+        assert order.order_id == "12345"
+        mock_client.get_order.assert_called_once_with(symbol="BTCUSDT", orderId="12345")
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_returns_none_only_on_confirmed_not_found(self, mock_config, mock_client_class):
+        from binance.exceptions import BinanceAPIException
+
+        provider, mock_client = self._make_provider(mock_config, mock_client_class)
+        mock_client.get_order.side_effect = BinanceAPIException(
+            Mock(), 400, '{"code": -2013, "msg": "Order does not exist."}'
+        )
+
+        assert provider.get_order_checked("12345", "BTCUSDT") is None
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_raises_on_api_error(self, mock_config, mock_client_class):
+        from binance.exceptions import BinanceAPIException
+
+        provider, mock_client = self._make_provider(mock_config, mock_client_class)
+        mock_client.get_order.side_effect = BinanceAPIException(
+            Mock(), 429, '{"code": -1003, "msg": "Too many requests."}'
+        )
+
+        with pytest.raises(OrderLookupError):
+            provider.get_order_checked("12345", "BTCUSDT")
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_raises_on_network_error(self, mock_config, mock_client_class):
+        provider, mock_client = self._make_provider(mock_config, mock_client_class)
+        mock_client.get_order.side_effect = ConnectionError("connection reset")
+
+        with pytest.raises(OrderLookupError):
+            provider.get_order_checked("12345", "BTCUSDT")
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_raises_when_client_unavailable(self, mock_config, mock_client_class):
+        provider, _ = self._make_provider(mock_config, mock_client_class)
+        provider._client = None
+
+        with pytest.raises(OrderLookupError):
+            provider.get_order_checked("12345", "BTCUSDT")
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_alphanumeric_id_routes_to_client_order_id(self, mock_config, mock_client_class):
+        provider, mock_client = self._make_provider(mock_config, mock_client_class)
+        mock_client.get_order.return_value = dict(self.ORDER_PAYLOAD)
+
+        order = provider.get_order_checked("atb_19d360981ab_3a4b0d5a", "BTCUSDT")
+
+        assert order is not None
+        mock_client.get_order.assert_called_once_with(
+            symbol="BTCUSDT", origClientOrderId="atb_19d360981ab_3a4b0d5a"
+        )
 
 
 # ========================================
