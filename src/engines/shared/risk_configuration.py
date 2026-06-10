@@ -9,7 +9,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from src.config.constants import DEFAULT_BREAKEVEN_BUFFER, DEFAULT_BREAKEVEN_THRESHOLD
+from src.config.constants import (
+    DEFAULT_BREAKEVEN_BUFFER,
+    DEFAULT_BREAKEVEN_THRESHOLD,
+    DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_MARKET_TIMEZONE,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
+)
 
 if TYPE_CHECKING:
     from src.position_management.dynamic_risk import DynamicRiskConfig
@@ -182,14 +190,21 @@ def build_time_exit_policy(
 ) -> TimeExitPolicy | None:
     """Build time exit policy from strategy/risk overrides.
 
+    Maps the same ``time_exits`` config shape as both engines' builders
+    (``Backtester._build_time_exit_policy`` and the live engine's inline
+    construction): ``max_holding_hours``, ``end_of_day_flat``, ``weekend_flat``,
+    ``market_timezone``, ``time_restrictions``.
+
     Args:
         strategy: Strategy with optional get_risk_overrides() method.
-        risk_manager: Risk manager with optional params attribute.
+        risk_manager: Risk manager with optional params attribute. Both the
+            engines' ``params.time_exits`` dict and the legacy
+            ``params.max_holding_hours`` attribute are honored as fallbacks.
 
     Returns:
         TimeExitPolicy if configuration exists, None otherwise.
     """
-    from src.position_management.time_exits import TimeExitPolicy
+    from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 
     # Get overrides from strategy
     try:
@@ -207,34 +222,39 @@ def build_time_exit_policy(
     if not time_cfg and risk_manager:
         params = getattr(risk_manager, "params", None)
         if params:
-            # Check if params has time exit settings
-            max_holding = getattr(params, "max_holding_hours", None)
-            if max_holding is not None:
-                time_cfg = {"max_holding_hours": max_holding}
+            time_cfg = getattr(params, "time_exits", None)
+            if not time_cfg:
+                # Legacy single-setting fallback
+                max_holding = getattr(params, "max_holding_hours", None)
+                if max_holding is not None:
+                    time_cfg = {"max_holding_hours": max_holding}
 
-    if time_cfg:
-        max_holding = time_cfg.get("max_holding_hours")
-        exit_time_str = time_cfg.get("exit_time")
-        exit_days = time_cfg.get("exit_days")
+    if not time_cfg:
+        return None
+    if not isinstance(time_cfg, dict):
+        logger.warning("Ignoring non-dict time_exits config: %r", time_cfg)
+        return None
 
-        if max_holding is not None:
-            try:
-                # KNOWN BUG (typing surfaced, behavior preserved): TimeExitPolicy has no
-                # exit_time/exit_days parameters, so this call always raises TypeError,
-                # is caught below, and the function returns None. Removing the kwargs
-                # would change runtime behavior; tracked for a separate behavioral fix.
-                return TimeExitPolicy(  # type: ignore[call-arg]
-                    max_holding_hours=int(max_holding),
-                    exit_time=exit_time_str,
-                    exit_days=exit_days,
-                )
-            except (TypeError, ValueError) as e:
-                logger.warning(
-                    "Failed to build TimeExitPolicy due to invalid max_holding_hours: %s", e
-                )
-                return None
+    try:
+        restrictions_cfg = time_cfg.get("time_restrictions")
+        if restrictions_cfg is None:
+            restrictions_cfg = DEFAULT_TIME_RESTRICTIONS
+        restrictions = TimeRestrictions(
+            no_overnight=bool(restrictions_cfg.get("no_overnight", False)),
+            no_weekend=bool(restrictions_cfg.get("no_weekend", False)),
+            trading_hours_only=bool(restrictions_cfg.get("trading_hours_only", False)),
+        )
 
-    return None
+        return TimeExitPolicy(
+            max_holding_hours=time_cfg.get("max_holding_hours", DEFAULT_MAX_HOLDING_HOURS),
+            end_of_day_flat=time_cfg.get("end_of_day_flat", DEFAULT_END_OF_DAY_FLAT),
+            weekend_flat=time_cfg.get("weekend_flat", DEFAULT_WEEKEND_FLAT),
+            market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
+            time_restrictions=restrictions,
+        )
+    except (TypeError, ValueError, AttributeError) as e:
+        logger.warning("Failed to build TimeExitPolicy from config %r: %s", time_cfg, e)
+        return None
 
 
 def extract_risk_overrides(strategy: Any) -> dict[str, Any]:
