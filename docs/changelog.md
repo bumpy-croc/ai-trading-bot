@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `build_time_exit_policy` (engines/shared) can now actually build a policy
+  (#760): it passed `exit_time`/`exit_days` kwargs that `TimeExitPolicy` does
+  not accept, so it always raised `TypeError` internally and returned `None`.
+  It now maps the same `time_exits` config shape as both engines' builders
+  (max holding, end-of-day/weekend flat, timezone, restrictions) and honors
+  both `params.time_exits` and the legacy `params.max_holding_hours` fallback.
 - A REJECTED stop-loss is now re-placed and an unexpected stop-loss
   termination escalates (#741). The reconciler's re-placement branches
   (periodic loop and startup `_verify_stop_loss`) matched only
