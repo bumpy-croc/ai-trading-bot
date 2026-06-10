@@ -129,6 +129,7 @@ class TestEngineSnapshotRouting:
         event logger (which owns daily P&L tracking and recovery)."""
         from unittest.mock import MagicMock
 
+        from src.engines.live.monitoring import LiveAccountMonitor
         from src.engines.live.trading_engine import LiveTradingEngine
 
         mock_engine = MagicMock()
@@ -138,6 +139,9 @@ class TestEngineSnapshotRouting:
         perf.peak_balance = 1100.0
         mock_engine.performance_tracker.get_metrics.return_value = perf
         mock_engine.live_position_tracker.positions = {}
+        # The engine delegates to LiveAccountMonitor (#486); bind a real one so
+        # the full engine -> monitor -> event-logger chain is exercised.
+        mock_engine.account_monitor = LiveAccountMonitor(engine_state=mock_engine)
 
         LiveTradingEngine._log_account_snapshot(mock_engine)
 
@@ -152,9 +156,11 @@ class TestEngineSnapshotRouting:
         """Snapshot failures must never crash the trading loop."""
         from unittest.mock import MagicMock
 
+        from src.engines.live.monitoring import LiveAccountMonitor
         from src.engines.live.trading_engine import LiveTradingEngine
 
         mock_engine = MagicMock()
         mock_engine.performance_tracker.get_metrics.side_effect = RuntimeError("boom")
+        mock_engine.account_monitor = LiveAccountMonitor(engine_state=mock_engine)
 
         LiveTradingEngine._log_account_snapshot(mock_engine)

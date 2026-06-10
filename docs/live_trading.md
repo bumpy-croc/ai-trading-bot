@@ -1,6 +1,6 @@
 # Live trading
 
-> **Last Updated**: 2025-12-26
+> **Last Updated**: 2026-06-10
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
 `src/engines/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
@@ -20,6 +20,21 @@ continuous polling, account synchronisation, and resilience features required fo
   known state.
 - **Sentiment and regime inputs** – pass a `SentimentDataProvider` (Fear & Greed) or enable the `RegimeStrategySwitcher` to swap
   strategies when market conditions change.
+
+## Handler decomposition & lock ownership (#486)
+
+`LiveTradingEngine` orchestrates; exchange- and observability-facing work is delegated:
+
+| Component | Module | Responsibility | Lock ownership |
+|-----------|--------|----------------|----------------|
+| `LiveStopLossManager` | `engines/live/execution/stop_loss_manager.py` | All exchange-facing stop-loss calls: placement (with retry), cancel, fill/held queries, re-protect, offline-fill detection | None — stateless; reads `enable_live_trading`/`exchange_interface`/`order_tracker` off the engine at call time; position mutations go through `LivePositionTracker`'s internal lock |
+| `LiveAccountMonitor` | `engines/live/monitoring/account_monitor.py` | Balance/equity snapshots, status lines, performance summaries | None — stateless; reads positions via `LivePositionTracker.positions` (thread-safe snapshot) |
+| `LivePositionTracker` | `engines/live/execution/position_tracker.py` | Position state | Owns `_positions_lock`; `positions` property returns a defensive copy |
+| `OrderTracker` | `engines/live/order_tracker.py` | Order fill polling + callbacks | Owns its internal lock; engine callbacks defer closes to the trading loop via `_pending_fill_exits` |
+| `SharedEntryHandlerMixin` | `engines/shared/execution/entry_handler_mixin.py` | Entry-plan extraction + dynamic-risk sizing, identical for backtest and live | None — delegates to shared `DynamicRiskHandler` |
+
+The engine itself keeps thin private wrappers (`_cancel_stop_loss_order`, `_check_stop_loss_filled`, `_log_account_snapshot`, …) so
+call sites and test mock points are stable while the implementations live in the modules above.
 
 ## State recovery & account sync
 

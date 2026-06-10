@@ -24,10 +24,8 @@ from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
-from src.engines.shared.entry_utils import (
-    extract_entry_plan,
-    resolve_stop_loss_take_profit_pct,
-)
+from src.engines.shared.entry_utils import resolve_stop_loss_take_profit_pct
+from src.engines.shared.execution.entry_handler_mixin import SharedEntryHandlerMixin
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -77,7 +75,7 @@ class LiveEntryResult:
     ambiguous: bool = False
 
 
-class LiveEntryHandler:
+class LiveEntryHandler(SharedEntryHandlerMixin):
     """Processes entry signals and coordinates entry execution for live trading.
 
     This class encapsulates entry-related logic including:
@@ -417,25 +415,6 @@ class LiveEntryHandler:
             ambiguous=exec_result.ambiguous,
         )
 
-    def _extract_entry_plan(
-        self,
-        decision: Any,
-        balance: float,
-    ) -> tuple[PositionSide | None, float]:
-        """Extract entry side and size from runtime decision.
-
-        Args:
-            decision: Runtime decision from strategy.
-            balance: Current account balance.
-
-        Returns:
-            Tuple of (side, size_fraction).
-        """
-        plan = extract_entry_plan(decision, balance)
-        if plan is None:
-            return None, 0.0
-        return plan.side, plan.size_fraction
-
     def _calculate_sl_tp(
         self,
         current_price: float,
@@ -488,44 +467,3 @@ class LiveEntryHandler:
         )
 
         return stop_loss, take_profit
-
-    def _apply_dynamic_risk(
-        self,
-        original_size: float,
-        current_time: datetime,
-        balance: float,
-        peak_balance: float,
-        trading_session_id: int | None,
-    ) -> float:
-        """Apply dynamic risk adjustments to position size.
-
-        Delegates to shared DynamicRiskHandler for consistent logic
-        between backtest and live engines.
-
-        Args:
-            original_size: Original position size fraction.
-            current_time: Current timestamp.
-            balance: Current account balance.
-            peak_balance: Peak account balance.
-            trading_session_id: Session ID for logging.
-
-        Returns:
-            Adjusted position size fraction.
-        """
-        # Update handler's manager in case it changed
-        self._dynamic_risk_handler.set_manager(self.dynamic_risk_manager)
-        return self._dynamic_risk_handler.apply_dynamic_risk(
-            original_size=original_size,
-            current_time=current_time,
-            balance=balance,
-            peak_balance=peak_balance,
-            trading_session_id=trading_session_id,
-        )
-
-    def get_dynamic_risk_adjustments(self) -> list[dict]:
-        """Get and clear dynamic risk adjustments tracked by this handler.
-
-        Returns:
-            List of dynamic risk adjustment records.
-        """
-        return self._dynamic_risk_handler.get_adjustments(clear=True)
