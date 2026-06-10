@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
@@ -42,6 +42,7 @@ from src.utils.price_targets import PriceTargetCalculator
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
     from src.engines.backtest.execution.position_tracker import PositionTracker
+    from src.engines.shared.entry_utils import StopLossStrategyLike
     from src.position_management.dynamic_risk import DynamicRiskManager
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
@@ -531,9 +532,16 @@ class EntryHandler:
 
             # Update risk manager
             try:
+                # KNOWN BUG (typing surfaced, behavior preserved): result.trade.side
+                # is a PositionSide enum after __post_init__ normalization, but
+                # update_position validates `side in VALID_SIDES` (strings), so this
+                # call always raises ValueError and is swallowed by the except below,
+                # skipping risk tracking for pending (next-bar) entries. Converting
+                # via to_side_string here would change runtime behavior; tracked for
+                # a separate behavioral fix.
                 self.risk_manager.update_position(
                     symbol=symbol,
-                    side=result.trade.side,
+                    side=result.trade.side,  # type: ignore[arg-type]
                     size=result.trade.size,
                     entry_price=result.trade.entry_price,
                 )
@@ -594,7 +602,10 @@ class EntryHandler:
             current_price=current_price,
             entry_side=entry_side,
             runtime_decision=runtime_decision,
-            component_strategy=self.component_strategy,
+            # cast: Strategy provides take_profit_pct/get_stop_loss_price but fails
+            # the protocol on parameter naming/optionality; the resolver accesses
+            # both defensively (getattr + broad except), so this is runtime-safe.
+            component_strategy=cast("StopLossStrategyLike | None", self.component_strategy),
             default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
             default_take_profit_pct=self.default_take_profit_pct,
             min_stop_loss_pct=DEFAULT_MIN_STOP_LOSS_PCT,

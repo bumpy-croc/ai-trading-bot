@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from src.config.constants import DEFAULT_CONFIDENCE_SCORE
 
@@ -98,8 +98,10 @@ class EventLogger:
         if not self.enabled:
             return
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.log_strategy_execution(
+            db_manager.log_strategy_execution(
                 strategy_name=strategy_name,
                 symbol=symbol,
                 signal_type="entry",
@@ -158,8 +160,10 @@ class EventLogger:
         if not self.enabled:
             return
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.log_strategy_execution(
+            db_manager.log_strategy_execution(
                 strategy_name=strategy_name,
                 symbol=symbol,
                 signal_type="exit",
@@ -217,10 +221,17 @@ class EventLogger:
         except (TypeError, ValueError):
             margin_interest_cost = None
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.log_trade(
+            # KNOWN BUG (typing surfaced, behavior preserved): trade.side is the
+            # shared engines PositionSide enum, while log_trade expects str or the
+            # database PositionSide enum. The cross-enum comparison inside log_trade
+            # misclassifies the side (see report); normalizing here would change
+            # persisted values, so it is left for a separate behavioral fix.
+            db_manager.log_trade(
                 symbol=symbol,
-                side=trade.side,
+                side=trade.side,  # type: ignore[arg-type]
                 entry_price=trade.entry_price,
                 exit_price=trade.exit_price,
                 size=trade.size,
@@ -270,8 +281,10 @@ class EventLogger:
         if not self.enabled:
             return
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.log_strategy_execution(
+            db_manager.log_strategy_execution(
                 strategy_name=strategy_name,
                 symbol=symbol,
                 signal_type="risk_adjustment",
@@ -315,10 +328,12 @@ class EventLogger:
         if not self.enabled:
             return None
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
             date_str = start_time.strftime("%Y%m%d") if start_time else "unknown"
             session_name = f"Backtest_{symbol}_{date_str}"
-            session_id = self.db_manager.create_trading_session(
+            session_id = db_manager.create_trading_session(
                 strategy_name=strategy_name,
                 symbol=symbol,
                 timeframe=timeframe,
@@ -342,8 +357,10 @@ class EventLogger:
         if not self.enabled or self.session_id is None:
             return
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.end_trading_session(
+            db_manager.end_trading_session(
                 session_id=self.session_id,
                 final_balance=final_balance,
             )

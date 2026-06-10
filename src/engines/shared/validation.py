@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
+from typing import cast
 
 from src.config.constants import DEFAULT_EPSILON
 
@@ -366,13 +367,15 @@ def is_same_bar_entry(entry_time: datetime | None, candle_time: object | None) -
 
     try:
         entry_cmp = entry_time
-        candle_cmp = candle_time
+        # cast: candle_time ducks as datetime (pandas Timestamp subclasses it);
+        # non-datetime inputs raise TypeError/AttributeError, handled below.
+        candle_cmp = cast(datetime, candle_time)
         entry_aware = getattr(entry_cmp, "tzinfo", None) is not None
         candle_aware = getattr(candle_cmp, "tzinfo", None) is not None
         if entry_aware and not candle_aware:
-            candle_cmp = candle_cmp.replace(tzinfo=UTC)  # type: ignore[union-attr]
+            candle_cmp = candle_cmp.replace(tzinfo=UTC)
         elif candle_aware and not entry_aware:
             entry_cmp = entry_cmp.replace(tzinfo=UTC)
-        return entry_cmp >= candle_cmp  # type: ignore[return-value]
+        return entry_cmp >= candle_cmp
     except (TypeError, ValueError, AttributeError):
         return False

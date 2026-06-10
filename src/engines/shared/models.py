@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from src.config.constants import DEFAULT_EPSILON
 
@@ -201,8 +201,11 @@ class BasePosition:
         if isinstance(self.side, str):
             self.side = PositionSide.from_string(self.side)
 
-        self.entry_price = _coerce_float(self.entry_price, "entry_price", required=True)
-        self.size = _coerce_float(self.size, "size", required=True)
+        # cast: _coerce_float with required=True raises on None, so the result is always float
+        self.entry_price = cast(
+            float, _coerce_float(self.entry_price, "entry_price", required=True)
+        )
+        self.size = cast(float, _coerce_float(self.size, "size", required=True))
         self.stop_loss = _coerce_float(self.stop_loss, "stop_loss")
         self.take_profit = _coerce_float(self.take_profit, "take_profit")
         self.entry_balance = _coerce_float(self.entry_balance, "entry_balance")

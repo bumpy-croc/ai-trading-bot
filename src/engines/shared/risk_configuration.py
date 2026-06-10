@@ -219,7 +219,11 @@ def build_time_exit_policy(
 
         if max_holding is not None:
             try:
-                return TimeExitPolicy(
+                # KNOWN BUG (typing surfaced, behavior preserved): TimeExitPolicy has no
+                # exit_time/exit_days parameters, so this call always raises TypeError,
+                # is caught below, and the function returns None. Removing the kwargs
+                # would change runtime behavior; tracked for a separate behavioral fix.
+                return TimeExitPolicy(  # type: ignore[call-arg]
                     max_holding_hours=int(max_holding),
                     exit_time=exit_time_str,
                     exit_days=exit_days,
