@@ -3268,3 +3268,105 @@ class TestPeriodicSLFillBooksPnl:
 
         mock_position_tracker.remove_position.assert_not_called()
         mock_db.close_position.assert_not_called()
+
+
+class TestSpotSLFillNotExternalClose:
+    """Spot variant of the step-1b misclassification: a filled stop-loss also
+    empties the held balance, which the holdings heuristic alone cannot tell
+    apart from an external close."""
+
+    def test_spot_long_sl_fill_books_pnl_not_external_close(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_spot",
+            stop_loss_order_id="sl_spot",
+            exchange_order_id="entry_spot",
+            db_position_id=90,
+        )
+        mock_position_tracker.positions = {"entry_spot": pos}
+        mock_position_tracker.get_position.side_effect = [pos, None, None]
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_spot", status=ExOS.FILLED, average_price=48000.0, commission=0.05
+        )
+        mock_exchange.get_order.side_effect = lambda oid, sym: (
+            sl_order if oid == "sl_spot" else entry_order
+        )
+        # Held base emptied by the SL sale
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=1000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.0, free=0.0, locked=0.0)
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_db.get_current_balance.return_value = 1000.0
+        mock_db.close_position.return_value = True
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        # Closed as an SL fill with the real price, P&L booked...
+        mock_db.close_position.assert_called_once_with(90, exit_price=48000.0)
+        pnl_calls = [
+            c
+            for c in mock_db.update_balance.call_args_list
+            if str(c.args[1]).startswith("reconciliation_close")
+        ]
+        assert len(pnl_calls) == 1
+        # ...and NOT misclassified as an external close (no-PnL row)
+        external = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if "CLOSED_EXTERNALLY" in str(c)
+        ]
+        assert external == []
+
+    def test_spot_unconfirmed_sl_defers_classification(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_spot2",
+            stop_loss_order_id="sl_spot2",
+            exchange_order_id="entry_spot2",
+            db_position_id=91,
+        )
+        mock_position_tracker.positions = {"entry_spot2": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+
+        def checked(oid, sym):
+            if oid == "sl_spot2":
+                raise OrderLookupError("timeout")
+            return entry_order
+
+        mock_exchange.get_order.return_value = entry_order
+        mock_exchange.get_order_checked.side_effect = checked
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=1000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.0, free=0.0, locked=0.0)
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()

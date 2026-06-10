@@ -652,9 +652,18 @@ class TestReconciliationIntegration:
             position_tracker,
             stop_loss_order_id="sl_active_001",
         )
-        # Entry order is FILLED (valid)
+        # Entry order is FILLED (valid); the stop-loss was CANCELLED by the
+        # external actor before they market-sold the inventory. (A FILLED
+        # stop here would — correctly — classify as a stop-loss close and
+        # book P&L instead of an external close.)
         mock_exchange.get_order.side_effect = lambda oid, sym: (
             MockExchangeOrder(
+                order_id=oid,
+                status=ExOrderStatus.CANCELLED,
+                filled_quantity=0.0,
+            )
+            if oid == "sl_active_001"
+            else MockExchangeOrder(
                 order_id=oid,
                 status=ExOrderStatus.FILLED,
                 average_price=50000.0,

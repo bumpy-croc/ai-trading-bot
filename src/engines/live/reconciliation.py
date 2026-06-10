@@ -3052,6 +3052,36 @@ class PeriodicReconciler:
                     held_qty = balance.total
 
                     if held_qty < position_qty * 0.5:
+                        # A just-filled stop-loss also empties the held balance
+                        # (the SL sold the inventory) — indistinguishable from an
+                        # external close by holdings alone. Check the tracked stop
+                        # order first so an SL fill books its real P&L instead of
+                        # the row being closed with no exit price and no balance
+                        # update (mirrors the margin branch above).
+                        sl_id = getattr(position, "stop_loss_order_id", None)
+                        if sl_id:
+                            from src.data_providers.exchange_interface import (
+                                OrderStatus as ExOrderStatus,
+                            )
+
+                            sl_order, confirmed = lookup_order_fail_closed(
+                                self.exchange, sl_id, position.symbol
+                            )
+                            if not confirmed:
+                                logger.warning(
+                                    "Position %s looks closed but its stop-loss %s "
+                                    "could not be verified — deferring classification.",
+                                    position.symbol,
+                                    sl_id,
+                                )
+                                continue
+                            if sl_order is not None and sl_order.status == ExOrderStatus.FILLED:
+                                if self._close_position_from_filled_sl(
+                                    order_key, position, sl_order
+                                ):
+                                    if Severity.HIGH > max_severity:
+                                        max_severity = Severity.HIGH
+                                continue
                         severity = Severity.HIGH
                         self.db_manager.log_audit_event(
                             session_id=self.session_id,
