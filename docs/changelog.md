@@ -271,6 +271,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recover_missing_trades` with an autospec'd `DatabaseManager`, so the real
   `log_trade` signature is enforced. Also clears pre-existing mypy loop-variable
   and ruff `UP038` debt on `account_sync.py` (behaviour-neutral).
+- Reconciler `trades` rows now cover two more close paths that previously corrected state
+  but recorded no trade row (extending #731's offline stop-loss trade-row logging). (1) The **crash-recovery
+  FULL_EXIT** path (`_reconcile_filled_exit`) opts into `log_trade=True` with a stable dedup
+  key — the real exchange exit order id, else a synthetic `reconcile_exit_<position_id>` — and
+  realizes P&L **only after** the DB position is actually closed (a failed close no longer
+  double-corrects the balance on the next reconcile pass). (2) **External/manual closes**
+  (operator sells on the exchange UI, or a liquidation) detected by `_verify_asset_holdings`
+  (spot) and `_remove_phantom_position` (margin) now persist a **balance-neutral** audit trade
+  row — commission (reconstructed entry leg) + quantity + GROSS pnl, priced mark-to-market via
+  the data provider (degrading to entry price → pnl 0 when no price source) — deduped by a
+  synthetic `reconcile_ext_<position_id>` key, gated on the DB close succeeding. These paths
+  deliberately do **not** realize P&L: a spot external close's capital is already reconciled by
+  startup Step C (`_reconcile_balance`), and a margin external close's by
+  `AccountSynchronizer._sync_margin_equity`, so writing the balance here too would double-book
+  the `account_balances` ledger. `PositionReconciler` now accepts an optional `data_provider`
+  for the mark-to-market estimate. Hardening on all reconciler close paths: the DB-close gate now
+  reads `close_position`'s actual return (it returns `False` **without raising** on a missing row
+  or a rolled-back commit, so "did not raise" was not "closed"); the external-close paths use
+  `pop_position` so a position already reconciled earlier in the same run is not logged twice (the
+  `reconcile_exit_`/`reconcile_ext_` keys do not collide); and a failed trade-row write on a
+  balance-neutral path now escalates as a missing-audit-row alert rather than a false
+  "account_balances/trades DIVERGED" page. (Known follow-up: `PeriodicReconciler._reconcile_cycle`
+  has parallel inline external-close detection that still records no trade row — its capital is
+  reconciled each cycle by the periodic balance step (notional check, like startup Step C), so this
+  is an audit-row gap, not a balance gap.)
 - Margin-equity balance corrections are now audited and alertable.
   `margin_equity_sync_correction` book-downs (written by
   `AccountSynchronizer._sync_margin_equity`) previously updated the balance ledger
