@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `StrategyManager.update_model` with no strategy loaded now fails with the
+  intended descriptive `ValueError` (#765) instead of an `AttributeError`
+  raised while formatting the error message itself (`self.current_strategy.name`
+  on `None`), which surfaced as a misleading generic failed update.
 - `atb data populate-dummy` works again (#763): `log_trade` was called with the
   nonexistent `order_id` kwarg (the parameter is `exit_order_id`), so the first
   generated trade raised `TypeError` and the command always failed. Same bug

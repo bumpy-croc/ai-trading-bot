@@ -271,12 +271,9 @@ class StrategyManager:
                     not self.current_strategy
                     or self.current_strategy.name.lower() != strategy_name.lower()
                 ):
-                    # Latent bug kept as-is for behavior parity: when
-                    # current_strategy is None this f-string raises
-                    # AttributeError instead of ValueError; both are caught by
-                    # the outer except and surface as a failed update.
+                    current_name = self.current_strategy.name if self.current_strategy else "<none>"
                     raise ValueError(
-                        f"Current strategy {self.current_strategy.name} doesn't match {strategy_name}"  # type: ignore[union-attr]
+                        f"Current strategy {current_name} doesn't match {strategy_name}"
                     )
 
                 # Validate model if requested
