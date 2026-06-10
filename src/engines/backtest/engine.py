@@ -58,6 +58,7 @@ from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
+from src.engines.shared.side_utils import to_side_string
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
@@ -746,15 +747,10 @@ class Backtester:
                 positions.append(
                     ComponentPosition(
                         symbol=trade.symbol,
-                        # KNOWN BUG (typing surfaced, behavior preserved): trade.side
-                        # is a PositionSide enum after __post_init__ normalization,
-                        # but ComponentPosition validates side against the strings
-                        # 'long'/'short', so construction always raises ValueError
-                        # and is swallowed below — the runtime context never sees
-                        # open positions (live passes side.value; parity gap).
-                        # Converting here would change strategy inputs; tracked for
-                        # a separate behavioral fix.
-                        side=trade.side,  # type: ignore[arg-type]
+                        # ComponentPosition validates side against the strings
+                        # "long"/"short"; convert the PositionSide enum exactly
+                        # like the live engine does (parity, #756).
+                        side=to_side_string(trade.side),
                         size=float(notional),
                         entry_price=float(trade.entry_price),
                         current_price=float(current_price),
@@ -763,7 +759,7 @@ class Backtester:
                 )
             except Exception as exc:
                 # Per-candle hot loop while a position is open: WARN once per
-                # engine instance so the failure (see KNOWN BUG above) is
+                # engine instance so an unexpected translation failure is
                 # visible, then drop to debug to avoid flooding the run.
                 if not getattr(self, "_runtime_position_translation_warned", False):
                     self._runtime_position_translation_warned = True
