@@ -126,7 +126,6 @@ def test_registry_concurrent_reload_thread_safety(tmp_path: Path, monkeypatch):
 
     reg = PredictionModelRegistry(cfg)
 
-    num_threads = 5
     iterations = 10
     errors = []
     reload_count = [0]  # Use list to share across threads

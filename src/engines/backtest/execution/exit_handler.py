@@ -10,7 +10,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
@@ -19,7 +19,7 @@ from src.config.constants import (
     DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
-from src.engines.backtest.models import Trade
+from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -54,7 +54,7 @@ MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 ZERO_VALUE = 0.0
 
 
-def _resolve_basis_balance(trade: Trade, balance: float | None) -> float:
+def _resolve_basis_balance(trade: ActiveTrade, balance: float | None) -> float:
     """Resolve the basis balance for P&L and notional calculations.
 
     Prefers entry_balance stored on the trade; falls back to the
@@ -208,13 +208,13 @@ class ExitHandler:
             default_volume=ZERO_VALUE,
         )
 
-    def _map_exit_order_side(self, trade: Trade) -> OrderSide:
+    def _map_exit_order_side(self, trade: ActiveTrade) -> OrderSide:
         """Map a position side to an exit order side."""
         return map_exit_order_side_from_trade(trade)
 
     def _build_exit_intent(
         self,
-        trade: Trade,
+        trade: ActiveTrade,
         exit_reason: str,
         order_side: OrderSide,
     ) -> OrderIntent:
@@ -279,9 +279,14 @@ class ExitHandler:
         new_activated = result.trailing_activated or trade.trailing_stop_activated
         new_breakeven = result.breakeven_triggered or trade.breakeven_triggered
 
-        # Apply update via position tracker
+        # Apply update via position tracker.
+        # KNOWN LATENT BUG (typing surfaced, behavior preserved): new_stop_price can
+        # be None when result.updated is True but trailing only just activated
+        # without a stop improvement; PositionTracker.update_trailing_stop would
+        # then compare None against the current stop (TypeError if a stop exists).
+        # Guarding here would change runtime behavior; tracked for a separate fix.
         changed = self.position_tracker.update_trailing_stop(
-            new_stop_loss=result.new_stop_price,
+            new_stop_loss=result.new_stop_price,  # type: ignore[arg-type]
             activated=new_activated,
             breakeven_triggered=new_breakeven,
         )
@@ -343,12 +348,17 @@ class ExitHandler:
                 if not result.should_exit:
                     break
 
-                # Calculate exit size from fraction of original
-                exit_size_of_original = result.exit_fraction
+                # Calculate exit size from fraction of original.
+                # cast: exit_fraction is always set when should_exit is True
+                exit_size_of_original = cast(float, result.exit_fraction)
+                # cast: BasePosition.__post_init__ auto-initializes current/original
+                # size from size, so they are never None after construction.
+                current_size = cast(float, trade.current_size)
+                original_size = cast(float, trade.original_size)
                 # Convert from fraction-of-original to fraction-of-current
                 if is_position_fully_closed(
-                    trade.current_size,
-                    trade.original_size,
+                    current_size,
+                    original_size,
                     epsilon=EPSILON,
                 ):
                     logger.debug("Position fully closed, skipping further partial exits")
@@ -356,8 +366,8 @@ class ExitHandler:
 
                 exit_size_of_current = convert_exit_fraction_to_current(
                     exit_fraction_of_original=exit_size_of_original,
-                    current_size=trade.current_size,
-                    original_size=trade.original_size,
+                    current_size=current_size,
+                    original_size=original_size,
                     epsilon=EPSILON,
                 )
                 if exit_size_of_current is None:
@@ -386,8 +396,12 @@ class ExitHandler:
                     self.risk_manager.adjust_position_after_partial_exit(
                         trade.symbol, exit_size_of_current
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to adjust risk manager after partial exit for %s: %s",
+                        trade.symbol,
+                        exc,
+                    )
 
                 # Increment after execution to match live engine behavior
                 iteration_count += 1
@@ -400,11 +414,14 @@ class ExitHandler:
             )
 
             if scale_result.should_scale:
-                add_size_of_original = scale_result.scale_fraction
+                # cast: scale_fraction is always set when should_scale is True
+                add_size_of_original = cast(float, scale_result.scale_fraction)
 
                 if add_size_of_original > 0:
-                    # Calculate effective size respecting risk limits
-                    delta_add = add_size_of_original * trade.original_size
+                    # Calculate effective size respecting risk limits.
+                    # cast: BasePosition.__post_init__ auto-initializes original_size
+                    # from size, so it is never None after construction.
+                    delta_add = add_size_of_original * cast(float, trade.original_size)
                     remaining_daily = max(
                         0.0,
                         self.risk_manager.params.max_daily_risk - self.risk_manager.daily_risk_used,
@@ -438,8 +455,12 @@ class ExitHandler:
                             self.risk_manager.adjust_position_after_scale_in(
                                 trade.symbol, add_effective
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to adjust risk manager after scale-in for %s: %s",
+                                trade.symbol,
+                                exc,
+                            )
 
         except (AttributeError, ValueError, KeyError, ZeroDivisionError) as e:
             logger.warning("Partial ops evaluation failed: %s", e)

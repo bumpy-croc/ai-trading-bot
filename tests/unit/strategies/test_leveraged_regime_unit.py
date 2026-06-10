@@ -11,7 +11,6 @@ from src.strategies.components.regime_context import RegimeContext, TrendLabel, 
 from src.strategies.components.signal_generator import Signal, SignalDirection
 from src.strategies.leveraged_regime import create_leveraged_regime_strategy
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -496,7 +496,7 @@ class TestMACDSignalGenerator:
         assert signal.direction == SignalDirection.BUY
         assert signal.strength > 0.0
         assert signal.confidence > 0.0
-        assert signal.metadata["crossover_detected"] == True
+        assert signal.metadata["crossover_detected"] is True
         assert signal.metadata["macd_value"] == 0.1
         assert signal.metadata["macd_signal_value"] == 0.0
 
@@ -517,7 +517,7 @@ class TestMACDSignalGenerator:
         assert signal.direction == SignalDirection.SELL
         assert signal.strength > 0.0
         assert signal.confidence > 0.0
-        assert signal.metadata["crossover_detected"] == True
+        assert signal.metadata["crossover_detected"] is True
 
     def test_generate_signal_no_crossover(self):
         """Test signal generation when no crossover occurs"""
@@ -535,7 +535,7 @@ class TestMACDSignalGenerator:
 
         assert signal.direction == SignalDirection.HOLD
         assert signal.strength == 0.0
-        assert signal.metadata["crossover_detected"] == False
+        assert signal.metadata["crossover_detected"] is False
 
     def test_confidence_based_on_histogram(self):
         """Test confidence calculation based on MACD histogram strength"""

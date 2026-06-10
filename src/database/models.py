@@ -5,7 +5,8 @@ Database models for trade logging and performance tracking
 import enum
 import math
 from datetime import UTC, datetime
-from typing import Any
+from decimal import Decimal
+from typing import Any, cast
 
 from sqlalchemy import (
     JSON,
@@ -23,7 +24,7 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
 )
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import Mapped, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
 
 
@@ -35,7 +36,7 @@ class PortableJSON(TypeDecorator):
     def load_dialect_impl(self, dialect):
         if dialect.name == "postgresql":
             try:  # pragma: no cover - depends on installed dialect
-                from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
+                from sqlalchemy.dialects.postgresql import JSONB
 
                 return dialect.type_descriptor(JSONB())
             except Exception:
@@ -47,6 +48,15 @@ JSONType = PortableJSON
 
 # Type Base as Any to allow mypy to accept dynamic SQLAlchemy base class
 Base: Any = declarative_base()
+
+# Typing note for annotated columns below: SQLAlchemy 2.0 accepts ``Mapped[...]``
+# annotations on legacy ``Column(...)`` attributes (the documented interim
+# migration form — identical mapper/table behavior), but its stubs do not declare
+# ``Column`` assignable to ``Mapped``. Each ``cast(Mapped[...], Column(...))``
+# bridges that gap for static analysis only; ``cast`` returns the Column object
+# unchanged at runtime. Numeric columns annotated ``float`` are read back as
+# Decimal by the driver and are only consumed via float() conversions or
+# Numeric-vs-Numeric arithmetic.
 
 
 def utc_now() -> datetime:
@@ -126,13 +136,19 @@ class Trade(Base):
 
     __tablename__ = "trades"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     symbol = Column(String(20), nullable=False, index=True)
-    side = Column(Enum(PositionSide, native_enum=False, create_type=False), nullable=False)
-    source = Column(
-        Enum(TradeSource, native_enum=False, create_type=False),
-        nullable=False,
-        default=TradeSource.LIVE,
+    side: Mapped[PositionSide] = cast(
+        Mapped[PositionSide],
+        Column(Enum(PositionSide, native_enum=False, create_type=False), nullable=False),
+    )
+    source: Mapped[TradeSource] = cast(
+        Mapped[TradeSource],
+        Column(
+            Enum(TradeSource, native_enum=False, create_type=False),
+            nullable=False,
+            default=TradeSource.LIVE,
+        ),
     )
 
     # Trade details
@@ -142,8 +158,12 @@ class Trade(Base):
     quantity = Column(Numeric(18, 8))  # Actual quantity traded
 
     # Timestamps
-    entry_time = Column(DateTime, nullable=False, index=True)
-    exit_time = Column(DateTime, nullable=False, index=True)
+    entry_time: Mapped[datetime] = cast(
+        Mapped[datetime], Column(DateTime, nullable=False, index=True)
+    )
+    exit_time: Mapped[datetime] = cast(
+        Mapped[datetime], Column(DateTime, nullable=False, index=True)
+    )
 
     # Performance
     pnl = Column(Numeric(18, 8), nullable=False)  # Dollar P&L (GROSS, pre-fee)
@@ -199,52 +219,75 @@ class Position(Base):
 
     __tablename__ = "positions"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     symbol = Column(String(20), nullable=False, index=True)
-    side = Column(Enum(PositionSide, native_enum=False, create_type=False), nullable=False)
-    status = Column(
-        Enum(PositionStatus, name="positionstatus", native_enum=False, create_type=False),
-        nullable=False,
-        default=PositionStatus.OPEN,
+    side: Mapped[PositionSide] = cast(
+        Mapped[PositionSide],
+        Column(Enum(PositionSide, native_enum=False, create_type=False), nullable=False),
+    )
+    status: Mapped[PositionStatus] = cast(
+        Mapped[PositionStatus],
+        Column(
+            Enum(PositionStatus, name="positionstatus", native_enum=False, create_type=False),
+            nullable=False,
+            default=PositionStatus.OPEN,
+        ),
     )
 
     # Position details
     entry_price = Column(Numeric(18, 8), nullable=False)
-    size = Column(Numeric(18, 8), nullable=False)
+    size: Mapped[Decimal] = cast(Mapped[Decimal], Column(Numeric(18, 8), nullable=False))
     quantity = Column(Numeric(18, 8))
     entry_balance = Column(Numeric(18, 8))
     # Partial operations tracking
-    original_size = Column(Numeric(18, 8))  # initial position size fraction
-    current_size = Column(Numeric(18, 8))  # remaining size fraction
-    partial_exits_taken = Column(Integer, default=0)
-    scale_ins_taken = Column(Integer, default=0)
-    last_partial_exit_price = Column(Numeric(18, 8))
-    last_scale_in_price = Column(Numeric(18, 8))
+    original_size: Mapped[Decimal | None] = cast(
+        Mapped[Decimal | None], Column(Numeric(18, 8))
+    )  # initial position size fraction
+    current_size: Mapped[Decimal | None] = cast(
+        Mapped[Decimal | None], Column(Numeric(18, 8))
+    )  # remaining size fraction
+    partial_exits_taken: Mapped[int | None] = cast(Mapped[int | None], Column(Integer, default=0))
+    scale_ins_taken: Mapped[int | None] = cast(Mapped[int | None], Column(Integer, default=0))
+    last_partial_exit_price: Mapped[Decimal | None] = cast(
+        Mapped[Decimal | None], Column(Numeric(18, 8))
+    )
+    last_scale_in_price: Mapped[Decimal | None] = cast(
+        Mapped[Decimal | None], Column(Numeric(18, 8))
+    )
 
     # Risk management
-    stop_loss = Column(Numeric(18, 8))
-    take_profit = Column(Numeric(18, 8))
+    stop_loss: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
+    take_profit: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
     trailing_stop = Column(Boolean, default=False)
-    trailing_stop_activated = Column(Boolean, default=False)
-    trailing_stop_price = Column(Numeric(18, 8))
-    breakeven_triggered = Column(Boolean, default=False)
+    trailing_stop_activated: Mapped[bool] = cast(Mapped[bool], Column(Boolean, default=False))
+    trailing_stop_price: Mapped[Decimal | None] = cast(
+        Mapped[Decimal | None], Column(Numeric(18, 8))
+    )
+    breakeven_triggered: Mapped[bool] = cast(Mapped[bool], Column(Boolean, default=False))
 
     # Timestamps
     entry_time = Column(DateTime, nullable=False, index=True)
-    last_update = Column(DateTime, default=utc_now)
+    last_update: Mapped[datetime] = cast(Mapped[datetime], Column(DateTime, default=utc_now))
 
-    # Current state
-    current_price = Column(Numeric(18, 8))
-    unrealized_pnl = Column(Numeric(18, 8), default=0.0)
-    unrealized_pnl_percent = Column(Numeric(18, 8), default=0.0)
+    # Current state (live updates write float, DB-side recalculations write Decimal;
+    # Numeric reads return Decimal)
+    current_price: Mapped[Decimal | float | None] = cast(
+        Mapped[Decimal | float | None], Column(Numeric(18, 8))
+    )
+    unrealized_pnl: Mapped[Decimal | float | None] = cast(
+        Mapped[Decimal | float | None], Column(Numeric(18, 8), default=0.0)
+    )
+    unrealized_pnl_percent: Mapped[Decimal | float | None] = cast(
+        Mapped[Decimal | float | None], Column(Numeric(18, 8), default=0.0)
+    )
 
     # Rolling MFE/MAE for active positions (percent decimals)
-    mfe = Column(Numeric(18, 8), default=0.0)
-    mae = Column(Numeric(18, 8), default=0.0)
-    mfe_price = Column(Numeric(18, 8))
-    mae_price = Column(Numeric(18, 8))
-    mfe_time = Column(DateTime)
-    mae_time = Column(DateTime)
+    mfe: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8), default=0.0))
+    mae: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8), default=0.0))
+    mfe_price: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
+    mae_price: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
+    mfe_time: Mapped[datetime | None] = cast(Mapped[datetime | None], Column(DateTime))
+    mae_time: Mapped[datetime | None] = cast(Mapped[datetime | None], Column(DateTime))
 
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
@@ -255,14 +298,18 @@ class Position(Base):
 
     # Order tracking for live trading
     entry_order_id = Column(String(100))  # Exchange order ID for entry
-    stop_loss_order_id = Column(String(100))  # Exchange order ID for server-side stop-loss
+    stop_loss_order_id: Mapped[str | None] = cast(
+        Mapped[str | None], Column(String(100))
+    )  # Exchange order ID for server-side stop-loss
     client_order_id = Column(String(100), index=True)  # Our atb_... idempotency key
 
     # Relationships
     trades = relationship("Trade", backref="position")
     partial_trades = relationship("PartialTrade", backref="position")
     orders = relationship("Order", backref="position", cascade="all, delete-orphan")
-    session_id = Column(Integer, ForeignKey("trading_sessions.id"))
+    session_id: Mapped[int | None] = cast(
+        Mapped[int | None], Column(Integer, ForeignKey("trading_sessions.id"))
+    )
 
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
@@ -279,44 +326,65 @@ class Order(Base):
 
     __tablename__ = "orders"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     # Nullable: entry orders are journaled before position creation, linked later via UPDATE
-    position_id = Column(Integer, ForeignKey("positions.id"), nullable=True, index=True)
-    order_type = Column(Enum(OrderType, native_enum=False, create_type=False), nullable=False)
-    status = Column(Enum(OrderStatus, native_enum=False, create_type=False), nullable=False)
+    position_id: Mapped[int | None] = cast(
+        Mapped[int | None], Column(Integer, ForeignKey("positions.id"), nullable=True, index=True)
+    )
+    order_type: Mapped[OrderType] = cast(
+        Mapped[OrderType],
+        Column(Enum(OrderType, native_enum=False, create_type=False), nullable=False),
+    )
+    status: Mapped[OrderStatus] = cast(
+        Mapped[OrderStatus],
+        Column(Enum(OrderStatus, native_enum=False, create_type=False), nullable=False),
+    )
 
     # Order identification
-    exchange_order_id = Column(String(100), unique=True, index=True)  # From exchange
+    exchange_order_id: Mapped[str | None] = cast(
+        Mapped[str | None], Column(String(100), unique=True, index=True)
+    )  # From exchange
     internal_order_id = Column(String(100), nullable=False, index=True)  # Our reference
     client_order_id = Column(String(100), index=True)  # Our atb_... idempotency key
 
     # Order details
     symbol = Column(String(20), nullable=False)
-    side = Column(
-        Enum(PositionSide, native_enum=False, create_type=False), nullable=False
+    side: Mapped[PositionSide] = cast(
+        Mapped[PositionSide],
+        Column(Enum(PositionSide, native_enum=False, create_type=False), nullable=False),
     )  # BUY/SELL
     quantity = Column(Numeric(18, 8), nullable=False)
     price = Column(Numeric(18, 8))  # Limit price (null for market orders)
 
     # Execution details (simulated/estimated)
-    filled_quantity = Column(Numeric(18, 8), default=0)
-    filled_price = Column(Numeric(18, 8))
-    commission = Column(Numeric(18, 8), default=0)
+    filled_quantity: Mapped[Decimal | None] = cast(
+        Mapped[Decimal | None], Column(Numeric(18, 8), default=0)
+    )
+    filled_price: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
+    commission: Mapped[Decimal | None] = cast(
+        Mapped[Decimal | None], Column(Numeric(18, 8), default=0)
+    )
 
     # Authoritative fill data from exchange (reconciliation source of truth)
-    actual_fill_price = Column(Numeric(18, 8))
-    actual_fill_quantity = Column(Numeric(18, 8))
-    actual_commission = Column(Numeric(18, 8))
+    actual_fill_price: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
+    actual_fill_quantity: Mapped[Decimal | None] = cast(
+        Mapped[Decimal | None], Column(Numeric(18, 8))
+    )
+    actual_commission: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
 
     # Timestamps
     created_at = Column(DateTime, default=utc_now, index=True)
-    filled_at = Column(DateTime)
-    cancelled_at = Column(DateTime)
-    last_update = Column(DateTime, default=utc_now, onupdate=utc_now)
+    filled_at: Mapped[datetime | None] = cast(Mapped[datetime | None], Column(DateTime))
+    cancelled_at: Mapped[datetime | None] = cast(Mapped[datetime | None], Column(DateTime))
+    last_update: Mapped[datetime] = cast(
+        Mapped[datetime], Column(DateTime, default=utc_now, onupdate=utc_now)
+    )
 
     # Strategy context
     strategy_name = Column(String(100), nullable=False)
-    session_id = Column(Integer, ForeignKey("trading_sessions.id"))
+    session_id: Mapped[int | None] = cast(
+        Mapped[int | None], Column(Integer, ForeignKey("trading_sessions.id"))
+    )
 
     # Partial operation context (if applicable)
     target_level = Column(Integer)  # For partial exits/scale-ins
@@ -341,10 +409,11 @@ class PartialOperationType(enum.Enum):
 class PartialTrade(Base):
     __tablename__ = "partial_trades"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     position_id = Column(Integer, ForeignKey("positions.id"), index=True, nullable=False)
-    operation_type = Column(
-        Enum(PartialOperationType, native_enum=False, create_type=False), nullable=False
+    operation_type: Mapped[PartialOperationType] = cast(
+        Mapped[PartialOperationType],
+        Column(Enum(PartialOperationType, native_enum=False, create_type=False), nullable=False),
     )
     size = Column(Numeric(18, 8), nullable=False)  # Fraction of original size executed
     price = Column(Numeric(18, 8), nullable=False)
@@ -376,7 +445,9 @@ class AccountHistory(Base):
     timestamp = Column(DateTime, nullable=False, index=True)
 
     # Balances
-    balance = Column(Numeric(18, 8), nullable=False)
+    # Typed float for read-side drawdown arithmetic in DatabaseManager; the driver
+    # returns Decimal at runtime and values only combine with other Numeric reads.
+    balance: Mapped[float] = cast(Mapped[float], Column(Numeric(18, 8), nullable=False))
     equity = Column(Numeric(18, 8), nullable=False)  # Balance + unrealized P&L
     margin_used = Column(Numeric(18, 8), default=0.0)
     margin_available = Column(Numeric(18, 8))
@@ -474,18 +545,24 @@ class TradingSession(Base):
 
     __tablename__ = "trading_sessions"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     session_name = Column(String(100))
 
     # Session details
-    start_time = Column(DateTime, nullable=False, index=True)
-    end_time = Column(DateTime)
-    is_active = Column(Boolean, default=True)
+    start_time: Mapped[datetime] = cast(
+        Mapped[datetime], Column(DateTime, nullable=False, index=True)
+    )
+    end_time: Mapped[datetime | None] = cast(Mapped[datetime | None], Column(DateTime))
+    is_active: Mapped[bool] = cast(Mapped[bool], Column(Boolean, default=True))
 
     # Configuration
-    mode = Column(Enum(TradeSource, native_enum=False, create_type=False), nullable=False)
-    initial_balance = Column(Numeric(18, 8), nullable=False)
-    final_balance = Column(Numeric(18, 8))
+    mode: Mapped[TradeSource] = cast(
+        Mapped[TradeSource],
+        Column(Enum(TradeSource, native_enum=False, create_type=False), nullable=False),
+    )
+    # Typed float for read-side P&L arithmetic; Numeric reads return Decimal at runtime.
+    initial_balance: Mapped[float] = cast(Mapped[float], Column(Numeric(18, 8), nullable=False))
+    final_balance: Mapped[float | None] = cast(Mapped[float | None], Column(Numeric(18, 8)))
 
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
@@ -501,10 +578,10 @@ class TradingSession(Base):
     market_timezone = Column(String(50))
 
     # Performance summary
-    total_pnl = Column(Numeric(18, 8))
-    total_trades = Column(Integer, default=0)
-    win_rate = Column(Numeric(18, 8))
-    max_drawdown = Column(Numeric(18, 8))
+    total_pnl: Mapped[float | None] = cast(Mapped[float | None], Column(Numeric(18, 8)))
+    total_trades: Mapped[int | None] = cast(Mapped[int | None], Column(Integer, default=0))
+    win_rate: Mapped[float | None] = cast(Mapped[float | None], Column(Numeric(18, 8)))
+    max_drawdown: Mapped[float | None] = cast(Mapped[float | None], Column(Numeric(18, 8)))
 
     # Relationships
     trades = relationship("Trade", backref="session")
@@ -522,9 +599,12 @@ class SystemEvent(Base):
 
     __tablename__ = "system_events"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     timestamp = Column(DateTime, nullable=False, index=True)
-    event_type = Column(Enum(EventType, native_enum=False, create_type=False), nullable=False)
+    event_type: Mapped[EventType] = cast(
+        Mapped[EventType],
+        Column(Enum(EventType, native_enum=False, create_type=False), nullable=False),
+    )
     severity = Column(String(20), default="info")  # 'info', 'warning', 'error', 'critical'
 
     # Event details
@@ -561,7 +641,7 @@ class ReconciliationAuditEvent(Base):
 
     __tablename__ = "reconciliation_audit_events"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     session_id = Column(Integer, ForeignKey("trading_sessions.id"), index=True)
     timestamp = Column(DateTime, default=utc_now, nullable=False, index=True)
     entity_type = Column(String(20), nullable=False)  # position, order, balance
@@ -739,7 +819,7 @@ class DynamicPerformanceMetrics(Base):
 
     __tablename__ = "dynamic_performance_metrics"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     timestamp = Column(DateTime, nullable=False, index=True)
 
     # Rolling performance metrics
@@ -774,7 +854,7 @@ class RiskAdjustment(Base):
 
     __tablename__ = "risk_adjustments"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
     timestamp = Column(DateTime, nullable=False, index=True)
 
     # Adjustment type and trigger
@@ -904,10 +984,13 @@ class StrategyRegistry(Base):
     created_by = Column(String(100), nullable=False)
     description = Column(Text)
     tags = Column(JSONType, default=lambda: [])
-    status = Column(
-        Enum(StrategyStatus, native_enum=False, create_type=False),
-        nullable=False,
-        default=StrategyStatus.EXPERIMENTAL,
+    status: Mapped[StrategyStatus] = cast(
+        Mapped[StrategyStatus],
+        Column(
+            Enum(StrategyStatus, native_enum=False, create_type=False),
+            nullable=False,
+            default=StrategyStatus.EXPERIMENTAL,
+        ),
     )
 
     # Component configurations

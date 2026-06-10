@@ -35,7 +35,9 @@ from src.experiments.runner import ExperimentRunner  # noqa: E402
 from src.experiments.schemas import ExperimentConfig, ParameterSet  # noqa: E402
 
 
-def build_cfg(name: str, overrides: dict[str, Any], start: datetime, end: datetime) -> ExperimentConfig:
+def build_cfg(
+    name: str, overrides: dict[str, Any], start: datetime, end: datetime
+) -> ExperimentConfig:
     parameters = ParameterSet(name=name, values=overrides) if overrides else None
     return ExperimentConfig(
         strategy_name="hyper_growth",
@@ -51,7 +53,9 @@ def build_cfg(name: str, overrides: dict[str, Any], start: datetime, end: dateti
     )
 
 
-def run_suite(suite_name: str, variants: list[tuple[str, dict[str, Any]]], start: datetime, end: datetime) -> None:
+def run_suite(
+    suite_name: str, variants: list[tuple[str, dict[str, Any]]], start: datetime, end: datetime
+) -> None:
     runner = ExperimentRunner()
     print(f"\n=== {suite_name} ({start.date()} → {end.date()}) ===")
     header = f"{'variant':<28} {'trades':>6} {'winR%':>6} {'return%':>9} {'annual%':>9} {'maxDD%':>7} {'sharpe':>7} {'final$':>9}"

@@ -57,9 +57,7 @@ class TestGetPositionInterestCost:
         self, tracker: MarginInterestTracker, mock_exchange: MagicMock
     ) -> None:
         """Return 0.0 when exchange raises an exception."""
-        mock_exchange.get_margin_interest_history.side_effect = Exception(
-            "API error"
-        )
+        mock_exchange.get_margin_interest_history.side_effect = Exception("API error")
         entry_time = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
 
         result = tracker.get_position_interest_cost("BTC", entry_time)
@@ -155,9 +153,7 @@ class TestGetPositionInterestCost:
 
         assert math.isclose(result, 0.003, rel_tol=1e-9)
 
-    def test_retries_on_api_failure(
-        self, mock_exchange: MagicMock
-    ) -> None:
+    def test_retries_on_api_failure(self, mock_exchange: MagicMock) -> None:
         """Retry once on API failure before returning results."""
         mock_exchange.get_margin_interest_history.side_effect = [
             Exception("Transient error"),
@@ -171,9 +167,7 @@ class TestGetPositionInterestCost:
         assert math.isclose(result, 0.005, rel_tol=1e-9)
         assert mock_exchange.get_margin_interest_history.call_count == 2
 
-    def test_returns_zero_after_exhausted_retries(
-        self, mock_exchange: MagicMock
-    ) -> None:
+    def test_returns_zero_after_exhausted_retries(self, mock_exchange: MagicMock) -> None:
         """Return 0.0 after all retry attempts fail."""
         mock_exchange.get_margin_interest_history.side_effect = Exception("Persistent error")
         tracker = MarginInterestTracker(exchange=mock_exchange)

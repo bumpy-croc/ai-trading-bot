@@ -32,7 +32,7 @@ References:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -43,7 +43,8 @@ try:
     _LIGHTGBM_AVAILABLE = True
 except ImportError:
     _LIGHTGBM_AVAILABLE = False
-    lgb = None  # type: ignore
+    if not TYPE_CHECKING:
+        lgb = None
 
 logger = logging.getLogger(__name__)
 

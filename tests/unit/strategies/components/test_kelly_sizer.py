@@ -499,7 +499,7 @@ class TestRingBuffer:
         lookback = 10
         sizer = KellyCriterionSizer(min_trades=5, lookback_trades=lookback)
 
-        for i in range(20):
+        for _i in range(20):
             sizer.record_trade(win=True, profit_pct=0.03, loss_risk_pct=0.02)
 
         assert sizer.trade_count == lookback
@@ -528,7 +528,7 @@ class TestRingBuffer:
         """Test has_sufficient_history flag at exact threshold."""
         sizer = KellyCriterionSizer(min_trades=5, lookback_trades=10)
 
-        for i in range(4):
+        for _i in range(4):
             sizer.record_trade(win=True, profit_pct=0.03, loss_risk_pct=0.02)
         assert not sizer.has_sufficient_history
 

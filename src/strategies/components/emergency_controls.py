@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum, IntEnum
-from typing import Any
+from typing import Any, cast
 
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
@@ -424,7 +424,10 @@ class EmergencyControls:
             if approval_request.switch_request:
                 switch_request_id = self.strategy_switcher.request_manual_switch(
                     approval_request.switch_request.from_strategy,
-                    approval_request.switch_request.to_strategy,
+                    # cast: approval requests are only built by
+                    # request_manual_strategy_switch, which always sets a
+                    # concrete (str) switch target.
+                    cast(str, approval_request.switch_request.to_strategy),
                     f"Approved: {approval_request.switch_request.reason}",
                     approved_by,
                 )

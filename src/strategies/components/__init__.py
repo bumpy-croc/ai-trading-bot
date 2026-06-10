@@ -15,6 +15,8 @@ Components:
 
 from src.database.models import StrategyExecution
 
+from .adaptive_trend_signal_generator import AdaptiveTrendSignalGenerator
+from .leverage_manager import LeverageManager
 from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
 from .momentum_signal_generator import MomentumSignalGenerator
 from .performance_tracker import PerformanceTracker
@@ -33,7 +35,6 @@ from .position_sizer import (
     PositionSizer,
     RegimeAdaptiveSizer,
 )
-from .leverage_manager import LeverageManager
 from .regime_context import EnhancedRegimeDetector, RegimeContext, TrendLabel, VolLabel
 from .risk_adapter import CoreRiskAdapter
 from .risk_manager import (
@@ -66,7 +67,6 @@ from .strategy_factory import StrategyBuilder, StrategyFactory
 from .strategy_lineage import StrategyLineageTracker
 from .strategy_manager import ComponentStrategyManager
 from .strategy_registry import StrategyRegistry, StrategyVersion
-from .adaptive_trend_signal_generator import AdaptiveTrendSignalGenerator
 from .technical_signal_generator import (
     MACDSignalGenerator,
     RSISignalGenerator,

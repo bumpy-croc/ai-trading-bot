@@ -357,7 +357,6 @@ class TestEndToEndTradingWorkflows:
 
         # Validate regime detection worked
         regime_trends = [r.trend.value if r else None for r in regimes]
-        regime_vols = [r.volatility.value if r else None for r in regimes]
 
         # Should detect different regimes
         unique_trends = set(filter(None, regime_trends))
@@ -540,7 +539,7 @@ class TestEndToEndTradingWorkflows:
         # Validate all strategies produced decisions
         assert len(all_decisions) == 3
 
-        for strategy_name, decisions in all_decisions.items():
+        for _strategy_name, decisions in all_decisions.items():
             assert len(decisions) == 5
             assert all(isinstance(d, TradingDecision) for d in decisions)
 

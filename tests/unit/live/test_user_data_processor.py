@@ -1,10 +1,8 @@
 """Tests for UserDataProcessor — dedicated thread for WebSocket user data events."""
 
 import logging
-import queue
-import threading
 import time
-from unittest.mock import MagicMock, create_autospec
+from unittest.mock import MagicMock
 
 import pytest
 

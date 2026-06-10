@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
@@ -40,6 +40,7 @@ from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
     from src.engines.shared.correlation_handler import CorrelationHandler
+    from src.engines.shared.entry_utils import StopLossStrategyLike
     from src.position_management.dynamic_risk import DynamicRiskManager
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
@@ -387,8 +388,8 @@ class LiveEntryHandler:
         actual_qty = getattr(exec_result, "quantity", 0.0) or 0.0
         requested_qty = getattr(exec_result, "requested_quantity", 0.0) or 0.0
         if (
-            isinstance(actual_qty, (int, float))
-            and isinstance(requested_qty, (int, float))
+            isinstance(actual_qty, int | float)
+            and isinstance(requested_qty, int | float)
             and actual_qty > 0
             and requested_qty > 0
         ):
@@ -467,7 +468,9 @@ class LiveEntryHandler:
             current_price=current_price,
             entry_side=entry_side,
             runtime_decision=runtime_decision,
-            component_strategy=self.component_strategy,
+            # Strategy satisfies StopLossStrategyLike structurally at runtime;
+            # mutable-attribute invariance rejects its narrower take_profit_pct.
+            component_strategy=cast("StopLossStrategyLike | None", self.component_strategy),
             default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
             default_take_profit_pct=self.default_take_profit_pct,
             min_stop_loss_pct=DEFAULT_MIN_STOP_LOSS_PCT,

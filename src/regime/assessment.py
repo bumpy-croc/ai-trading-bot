@@ -289,7 +289,7 @@ class RegimeAssessment:
         transition_matrix: dict[str, dict[str, int]] = {
             r: {r2: 0 for r2 in regimes} for r in regimes
         }
-        transitions = []
+        transitions: list[tuple[str, str]] = []
 
         prev_regime = None
         for regime in regime_col:

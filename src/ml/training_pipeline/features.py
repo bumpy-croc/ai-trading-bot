@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -50,7 +51,8 @@ def normalize_timezone(ts1: pd.Timestamp, ts2: pd.Timestamp) -> tuple[pd.Timesta
 def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:
     """Assess coverage and freshness of sentiment data relative to price data."""
 
-    assessment = {
+    # Values are heterogeneous (counts, ratios, strings, period lists)
+    assessment: dict[str, Any] = {
         "total_sentiment_points": len(sentiment_df),
         "total_price_points": len(price_df),
         "coverage_ratio": 0.0,

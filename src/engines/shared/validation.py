@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
+from typing import cast
 
 from src.config.constants import DEFAULT_EPSILON
 
@@ -50,7 +51,7 @@ def validate_price(price: float, name: str = "price") -> None:
         >>> validate_price(0, "entry_price")  # Raises ValueError
         >>> validate_price(float('nan'), "price")  # Raises ValueError
     """
-    if not isinstance(price, (int, float)):
+    if not isinstance(price, int | float):
         raise ValueError(f"{name} must be a number, got {type(price).__name__}")
 
     if price <= 0:
@@ -75,7 +76,7 @@ def validate_notional(notional: float, name: str = "notional") -> None:
         >>> validate_notional(0.0)  # OK (zero is allowed)
         >>> validate_notional(-100.0)  # Raises ValueError
     """
-    if not isinstance(notional, (int, float)):
+    if not isinstance(notional, int | float):
         raise ValueError(f"{name} must be a number, got {type(notional).__name__}")
 
     if notional < 0:
@@ -102,7 +103,7 @@ def validate_fraction(fraction: float, name: str = "fraction", allow_zero: bool 
         >>> validate_fraction(1.5)  # Raises ValueError
         >>> validate_fraction(0.0, allow_zero=False)  # Raises ValueError
     """
-    if not isinstance(fraction, (int, float)):
+    if not isinstance(fraction, int | float):
         raise ValueError(f"{name} must be a number, got {type(fraction).__name__}")
 
     if not math.isfinite(fraction):
@@ -269,11 +270,11 @@ def convert_exit_fraction_to_current(
     Returns:
         Fraction of current size to exit, or None if conversion is invalid.
     """
-    if not isinstance(exit_fraction_of_original, (int, float)):
+    if not isinstance(exit_fraction_of_original, int | float):
         return None
     if exit_fraction_of_original <= 0 or not math.isfinite(exit_fraction_of_original):
         return None
-    if not isinstance(current_size, (int, float)) or not isinstance(original_size, (int, float)):
+    if not isinstance(current_size, int | float) or not isinstance(original_size, int | float):
         return None
     if not math.isfinite(current_size) or not math.isfinite(original_size):
         return None
@@ -366,13 +367,15 @@ def is_same_bar_entry(entry_time: datetime | None, candle_time: object | None) -
 
     try:
         entry_cmp = entry_time
-        candle_cmp = candle_time
+        # cast: candle_time ducks as datetime (pandas Timestamp subclasses it);
+        # non-datetime inputs raise TypeError/AttributeError, handled below.
+        candle_cmp = cast(datetime, candle_time)
         entry_aware = getattr(entry_cmp, "tzinfo", None) is not None
         candle_aware = getattr(candle_cmp, "tzinfo", None) is not None
         if entry_aware and not candle_aware:
-            candle_cmp = candle_cmp.replace(tzinfo=UTC)  # type: ignore[union-attr]
+            candle_cmp = candle_cmp.replace(tzinfo=UTC)
         elif candle_aware and not entry_aware:
             entry_cmp = entry_cmp.replace(tzinfo=UTC)
-        return entry_cmp >= candle_cmp  # type: ignore[return-value]
+        return entry_cmp >= candle_cmp
     except (TypeError, ValueError, AttributeError):
         return False

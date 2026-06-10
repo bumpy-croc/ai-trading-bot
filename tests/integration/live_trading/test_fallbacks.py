@@ -58,8 +58,8 @@ class TestLiveTradingFallbacks:
                 position_sizer=position_sizer,
             )
 
-            # Create engine with component strategy
-            engine = LiveTradingEngine(
+            # Engine construction must accept a component strategy
+            LiveTradingEngine(
                 strategy=strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,

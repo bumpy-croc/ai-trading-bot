@@ -8,9 +8,9 @@ import math
 
 import pytest
 
+from src.position_management.correlation_engine import CorrelationEngine
 from src.position_management.mfe_mae_analyzer import MFEMAEAnalyzer
 from src.position_management.partial_manager import PartialExitPolicy, PositionState
-from src.position_management.correlation_engine import CorrelationEngine
 
 
 class TestSafeFloat:

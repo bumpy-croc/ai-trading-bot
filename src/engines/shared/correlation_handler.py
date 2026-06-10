@@ -8,7 +8,7 @@ backtesting and live trading.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
@@ -90,8 +90,10 @@ class CorrelationHandler:
             try:
                 corr_cfg = overrides.get("correlation_control", {})
                 max_exposure_override = corr_cfg.get("max_correlated_exposure")
-            except Exception:
-                pass
+            except Exception as exc:
+                # Debug level: runs on every entry evaluation (per-candle hot loop
+                # in backtests); malformed overrides fall back to engine defaults.
+                logger.debug("Failed to read correlation_control overrides for %s: %s", symbol, exc)
 
         # Build price series for correlation calculation
         price_series = self._build_price_series(symbol, timeframe, df, index, positions_snapshot)
@@ -130,8 +132,10 @@ class CorrelationHandler:
         try:
             if hasattr(self.strategy, "get_risk_overrides"):
                 return self.strategy.get_risk_overrides()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Debug level: called on every entry evaluation (per-candle hot loop
+            # in backtests); a failing override hook falls back to engine defaults.
+            logger.debug("Strategy get_risk_overrides() failed: %s", exc)
 
         return None
 
@@ -173,8 +177,10 @@ class CorrelationHandler:
         except Exception:
             try:
                 end_ts = df.index[-1]
-            except Exception:
-                pass
+            except Exception as exc:
+                # Debug level: per-candle hot loop; missing index bounds simply
+                # skip the windowed history fetch below.
+                logger.debug("Failed to resolve end timestamp for %s: %s", symbol, exc)
 
         start_ts = None
         if isinstance(end_ts, pd.Timestamp):
@@ -182,16 +188,20 @@ class CorrelationHandler:
                 start_ts = end_ts - pd.Timedelta(
                     days=self.risk_manager.params.correlation_window_days
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # Debug level: per-candle hot loop; without start_ts the fetch
+                # below falls back to the unwindowed call.
+                logger.debug("Failed to compute correlation window start for %s: %s", symbol, exc)
 
         # Get currently open positions from snapshot (thread-safe)
         open_symbols = set()
         try:
             if positions_snapshot:
                 open_symbols = set(map(str, positions_snapshot.keys()))
-        except Exception:
-            pass
+        except Exception as exc:
+            # Debug level: per-candle hot loop; unreadable snapshot means no
+            # peer symbols are added to the correlation series.
+            logger.debug("Failed to read open positions snapshot for %s: %s", symbol, exc)
 
         # Fetch price series for open positions
         for sym in open_symbols:
@@ -207,8 +217,22 @@ class CorrelationHandler:
                         end=end_ts.to_pydatetime(),
                     )
                 else:
-                    hist = self.data_provider.get_historical_data(sym, timeframe=timeframe)
-            except Exception:
+                    # KNOWN BUG (typing surfaced, behavior preserved): DataProvider
+                    # .get_historical_data requires `start`, so this fallback call
+                    # always raises TypeError and is swallowed by the except below,
+                    # silently skipping this symbol. Passing `start` here would
+                    # change runtime behavior; tracked for a separate behavioral fix.
+                    hist = self.data_provider.get_historical_data(  # type: ignore[call-arg]
+                        sym, timeframe=timeframe
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch correlation history for %s (window %s -> %s): %s",
+                    sym,
+                    start_ts,
+                    end_ts,
+                    exc,
+                )
                 continue
 
             if hist is None or hist.empty or "close" not in hist.columns:
@@ -235,8 +259,11 @@ class CorrelationHandler:
         Returns:
             Correlation matrix DataFrame, or None on failure.
         """
+        # cast: only reached from apply_correlation_control after its None-guard on
+        # correlation_engine; a None would raise AttributeError, handled below.
+        engine = cast("CorrelationEngine", self.correlation_engine)
         try:
-            return self.correlation_engine.calculate_position_correlations(price_series)
+            return engine.calculate_position_correlations(price_series)
         except Exception as e:
             logger.debug("Failed to calculate correlation matrix for %s: %s", symbol, e)
             return None
@@ -261,9 +288,12 @@ class CorrelationHandler:
         Returns:
             Reduction factor (0.0 to 1.0).
         """
+        # cast: only reached from apply_correlation_control after its None-guard on
+        # correlation_engine; a None would raise AttributeError, handled below.
+        engine = cast("CorrelationEngine", self.correlation_engine)
         try:
             return float(
-                self.correlation_engine.compute_size_reduction_factor(
+                engine.compute_size_reduction_factor(
                     positions=positions_snapshot,
                     corr_matrix=corr_matrix,
                     candidate_symbol=str(symbol),
@@ -297,13 +327,17 @@ class CorrelationHandler:
         Returns:
             Position size respecting exposure limits.
         """
+        # cast: only reached from apply_correlation_control after its None-guard on
+        # correlation_engine; a None would raise AttributeError, handled below.
+        engine = cast("CorrelationEngine", self.correlation_engine)
+
         # Determine max allowed exposure
         max_allowed = None
         try:
             if overrides and max_exposure_override is not None:
                 max_allowed = float(max_exposure_override)
             else:
-                max_allowed = float(self.correlation_engine.config.max_correlated_exposure)
+                max_allowed = float(engine.config.max_correlated_exposure)
         except Exception:
             return adjusted
 
@@ -312,7 +346,7 @@ class CorrelationHandler:
 
         # Get correlation groups
         try:
-            groups = self.correlation_engine.get_correlation_groups(corr_matrix)
+            groups = engine.get_correlation_groups(corr_matrix)
         except Exception as e:
             logger.debug("Failed to derive correlation groups for %s: %s", symbol, e)
             return adjusted

@@ -11,13 +11,13 @@ from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy as sa
-from sqlalchemy import and_, create_engine, text  # type: ignore
-from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # type: ignore
-from sqlalchemy.orm import Session, sessionmaker  # type: ignore
-from sqlalchemy.pool import QueuePool  # type: ignore
+from sqlalchemy import and_, create_engine, text
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import QueuePool
 
 from src.config.config_manager import get_config
 
@@ -92,11 +92,12 @@ MAX_OVERFLOW = 20  # Burst capacity above pool_size for peak load
 
 
 if TYPE_CHECKING:  # pragma: no cover
-    # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
-    # Import only for static analysis; guarded to avoid hard runtime dependency.
-    from sqlalchemy.engine import Result as _Result  # type: ignore
+    # Import engine types only for static analysis; guarded to avoid any
+    # runtime import coupling.
+    from sqlalchemy.engine import CursorResult as _CursorResult
+    from sqlalchemy.engine import Result as _Result
     from sqlalchemy.engine.base import Connection as _Connection
-    from sqlalchemy.engine.base import Engine as _Engine  # type: ignore
+    from sqlalchemy.engine.base import Engine as _Engine
 
 
 class DatabaseManager:
@@ -121,7 +122,7 @@ class DatabaseManager:
         """
         self.database_url = database_url
         self.engine: _Engine | None = None
-        self.session_factory = None
+        self.session_factory: sessionmaker[Session] | None = None
         self._current_session_id: int | None = None
         self._is_postgres: bool = False  # Set during _init_database
 
@@ -219,7 +220,7 @@ class DatabaseManager:
 
         # Helper for creating a SQLite engine config
         def _sqlite_engine_config(url: str) -> tuple[str, dict[str, Any]]:
-            from sqlalchemy.pool import StaticPool  # type: ignore
+            from sqlalchemy.pool import StaticPool
 
             engine_kwargs: dict[str, Any] = {
                 "pool_pre_ping": True,
@@ -433,11 +434,12 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def check_pool_health(self) -> dict[str, int]:
+    def check_pool_health(self) -> dict[str, int] | dict[str, str]:
         """Check database connection pool health and warn if near exhaustion.
 
         Returns:
             Dictionary with pool statistics (size, checked_out, overflow, etc.)
+            or a string diagnostic when pool metrics are unavailable.
 
         Note:
             Only works with QueuePool (PostgreSQL). StaticPool (SQLite) doesn't
@@ -453,11 +455,17 @@ class DatabaseManager:
         if not hasattr(pool, "size") or not hasattr(pool, "checkedout"):
             return {"skipped": "Pool type does not support health checks"}
 
+        # Past the guard only QueuePool (the PostgreSQL engine config) remains, but
+        # the base Pool stubs lack overflow(); cast for static analysis only.
+        queue_pool = cast(QueuePool, pool)
+
         stats = {
             "size": pool.size(),
             "checked_out": pool.checkedout(),
-            "overflow": pool.overflow(),
-            "total_available": pool.size() - pool.checkedout() + (MAX_OVERFLOW - pool.overflow()),
+            "overflow": queue_pool.overflow(),
+            "total_available": pool.size()
+            - pool.checkedout()
+            + (MAX_OVERFLOW - queue_pool.overflow()),
         }
 
         # Warn if pool is >80% utilized (high contention risk)
@@ -496,20 +504,21 @@ class DatabaseManager:
         Returns:
             Dictionary with database connection details
         """
+        if self.engine is None:
+            raise ValueError("Database engine not initialized")
+        # Bind to a local so the closure below sees the narrowed non-None engine.
+        engine = self.engine
 
         def _get_pool_attr(*names, default=0):
             try:
                 for nm in names:
-                    if hasattr(self.engine.pool, nm):
-                        val = getattr(self.engine.pool, nm)
+                    if hasattr(engine.pool, nm):
+                        val = getattr(engine.pool, nm)
                         return val() if callable(val) else val
             except Exception as e:
                 logger.debug(f"Failed to get pool attribute {nm}: {e}")
                 pass
             return default
-
-        if self.engine is None:
-            raise ValueError("Database engine not initialized")
 
         try:
             # Support multiple attribute name variants across SQLAlchemy/mocks
@@ -678,7 +687,7 @@ class DatabaseManager:
 
                 if account_history:
                     peak_balance = trading_session.initial_balance
-                    max_drawdown = 0
+                    max_drawdown: float = 0
 
                     for record in account_history:
                         if record.balance > peak_balance:
@@ -1352,8 +1361,11 @@ class DatabaseManager:
                 )
                 raise
 
+            # session.execute() on a textual UPDATE returns a CursorResult at runtime;
+            # the TextClause overload in the stubs types it as Result, which lacks
+            # rowcount. Cast for static analysis only.
             fixes_applied = {
-                "orphaned_to_closed": result_orphaned.rowcount,
+                "orphaned_to_closed": cast("_CursorResult[Any]", result_orphaned).rowcount,
             }
 
             if fixes_applied["orphaned_to_closed"] > 0:
@@ -1623,9 +1635,9 @@ class DatabaseManager:
         def _sanitize_scalar(val):
             import numpy as np
 
-            if isinstance(val, (np.integer,)):
+            if isinstance(val, np.integer):
                 return int(val)
-            elif isinstance(val, (np.floating,)):
+            elif isinstance(val, np.floating):
                 return float(val)
             elif hasattr(val, "item") and callable(val.item):
                 return val.item()
@@ -2039,7 +2051,7 @@ class DatabaseManager:
 
             # Some unit tests mock the session and return a MagicMock instead of
             # a list.  Gracefully degrade when the result is not list-like.
-            if not isinstance(account_history, (list, tuple)):
+            if not isinstance(account_history, list | tuple):
                 account_history = []
 
             max_drawdown = 0.0
@@ -2178,7 +2190,7 @@ class DatabaseManager:
 
             logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
 
-    def execute_query(self, query: str, params: tuple | None = None) -> list[dict[str, Any]]:  # type: ignore[override]
+    def execute_query(self, query: str, params: tuple | None = None) -> list[dict[str, Any]]:
         """Run a raw SQL query and return list of dict rows.
 
         Uses SQLAlchemy 2.x ``exec_driver_sql`` API so plain SQL strings work
@@ -2191,26 +2203,26 @@ class DatabaseManager:
             return []
 
         # Local import to avoid top-level circular dependencies and keep stubs optional
-        from sqlalchemy import text as _sql_text  # type: ignore
+        from sqlalchemy import text as _sql_text
 
-        engine_typed: _Engine = self.engine  # type: ignore[assignment]
+        engine_typed: _Engine = self.engine
         connection_raw = engine_typed.connect()
-        conn: _Connection = connection_raw  # type: ignore[assignment]
+        conn: _Connection = connection_raw
 
         try:
             with conn as connection:
                 # Prefer SQLAlchemy 2.x driver-level exec
                 try:
-                    result: _Result = connection.exec_driver_sql(query, params)  # type: ignore[arg-type]
+                    result: _Result = connection.exec_driver_sql(query, params)
                 except AttributeError:
                     # Fallback for <1.4
-                    result = connection.execute(_sql_text(query), params)  # type: ignore[arg-type]
+                    result = connection.execute(_sql_text(query), params)
 
                 # Map rows to plain dictionaries
                 try:
-                    rows: list[dict[str, Any]] = [dict(row) for row in result.mappings()]  # type: ignore[attr-defined]
+                    rows: list[dict[str, Any]] = [dict(row) for row in result.mappings()]
                 except AttributeError:
-                    rows = [dict(row.items()) for row in result]  # type: ignore[attr-defined]
+                    rows = [dict(row.items()) for row in result]
                 return rows
         except SQLAlchemyError as exc:
             logger.error(f"Raw query error: {exc}")
@@ -2823,9 +2835,9 @@ class DatabaseManager:
             if math.isnan(obj) or math.isinf(obj):
                 return None
             return obj
-        elif isinstance(obj, (np.integer,)):
+        elif isinstance(obj, np.integer):
             return int(obj)
-        elif isinstance(obj, (np.floating,)):
+        elif isinstance(obj, np.floating):
             val = float(obj)
             # Check for NaN/Inf after converting numpy float to Python float
             if math.isnan(val) or math.isinf(val):
@@ -3795,7 +3807,9 @@ class DatabaseManager:
                 ),
                 {"now": now, "sid": session_id, "cutoff": cutoff},
             )
-            failed = int(result.rowcount or 0)
+            # Textual UPDATE returns a CursorResult at runtime; the stubs type it as
+            # Result, which lacks rowcount. Cast for static analysis only.
+            failed = int(cast("_CursorResult[Any]", result).rowcount or 0)
             session.commit()
         if failed:
             logger.info(

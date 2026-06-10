@@ -4,7 +4,9 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 # Ensure project root and src are in sys.path for absolute imports
 from src.infrastructure.runtime.paths import get_project_root
@@ -28,6 +30,7 @@ from src.strategies import (
     create_ml_sentiment_strategy,
     create_momentum_leverage_strategy,
 )
+from src.strategies.components import Strategy
 from src.trading.symbols.factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")
@@ -35,7 +38,7 @@ logger = logging.getLogger("atb.backtest")
 
 def _load_strategy(strategy_name: str):
     # Define available strategies with their import paths and classes
-    available_strategies = {
+    available_strategies: dict[str, Callable[..., Strategy]] = {
         "ml_basic": create_ml_basic_strategy,
         "ml_sentiment": create_ml_sentiment_strategy,
         "ml_adaptive": create_ml_adaptive_strategy,
@@ -100,12 +103,20 @@ def _handle(ns: argparse.Namespace) -> int:
             from src.data_providers.cached_data_provider import CachedDataProvider
 
             # Determine appropriate cache TTL based on provider state
-            from src.infrastructure.runtime.cache import get_cache_ttl_for_provider
+            from src.infrastructure.runtime.cache import (
+                DataProviderProtocol,
+                get_cache_ttl_for_provider,
+            )
 
-            cache_ttl = get_cache_ttl_for_provider(provider, ns.cache_ttl)
-            data_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)
+            # cast: get_cache_ttl_for_provider only reads _client behind a hasattr guard,
+            # so any provider instance is safe even if it lacks the attribute
+            cache_ttl = get_cache_ttl_for_provider(
+                cast(DataProviderProtocol, provider), ns.cache_ttl
+            )
+            cached_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)
+            data_provider = cached_provider
             logger.info(f"Using cached data provider (TTL: {cache_ttl} hours)")
-            cache_info = data_provider.get_cache_info()
+            cache_info = cached_provider.get_cache_info()
             logger.info(
                 f"Cache info: {cache_info['total_files']} files, {cache_info['total_size_mb']} MB"
             )
@@ -209,7 +220,9 @@ def _handle(ns: argparse.Namespace) -> int:
             print("=" * 50)
 
         if not ns.no_cache:
-            final_cache_info = data_provider.get_cache_info()
+            # cached_provider is always bound here: it is assigned on the same
+            # `not ns.no_cache` branch above.
+            final_cache_info = cached_provider.get_cache_info()
             logger.info(
                 f"Final cache info: {final_cache_info['total_files']} files, {final_cache_info['total_size_mb']} MB"
             )

@@ -22,49 +22,6 @@ from unittest.mock import Mock
 # runners that don't set ENV.
 os.environ.setdefault("ENV", "test")
 
-if sys.version_info < (3, 10):
-    try:
-        import src.prediction  # noqa: F401  # ensure real package is loaded
-    except Exception:
-        stub_prediction = ModuleType("src.prediction")
-        stub_prediction.__path__ = []  # mark as package so submodules can be imported lazily
-
-        class _StubPredictionConfig:
-            """Minimal stub for PredictionConfig used in unit tests."""
-
-            enable_sentiment: bool
-            enable_market_microstructure: bool
-
-            def __init__(self):
-                self.enable_sentiment = False
-                self.enable_market_microstructure = False
-
-            @classmethod
-            def from_config_manager(cls):
-                return cls()
-
-        class _StubRegistry:
-            def select_bundle(self, **_):
-                raise RuntimeError("registry unavailable in unit tests")
-
-        class _StubPredictionEngine:
-            """Minimal stub for PredictionEngine used in unit tests."""
-
-            def __init__(self, config):
-                self.config = config
-                self.feature_pipeline = None
-                self.model_registry = _StubRegistry()
-
-            def health_check(self):
-                return {"status": "healthy"}
-
-            def predict(self, window_df, model_name=None):
-                return SimpleNamespace(price=float(window_df["close"].iloc[-1]))
-
-        stub_prediction.PredictionConfig = _StubPredictionConfig
-        stub_prediction.PredictionEngine = _StubPredictionEngine
-        sys.modules["src.prediction"] = stub_prediction
-
 if "onnxruntime" not in sys.modules:
     stub_onnx = ModuleType("onnxruntime")
 

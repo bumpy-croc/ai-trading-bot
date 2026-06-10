@@ -241,9 +241,7 @@ def phase_journal(
                 logger.info("PASS: No reconciliation audit events (clean run)")
         except ProgrammingError:
             db.rollback()  # Reset session after SQL error to avoid poisoning later phases
-            logger.warning(
-                "reconciliation_audit_events table not present (PR #576 not merged yet)"
-            )
+            logger.warning("reconciliation_audit_events table not present (PR #576 not merged yet)")
 
         return True
     finally:
@@ -288,9 +286,7 @@ def phase_crash(
         baseline_trades = 0
         if session:
             baseline_trades = (
-                db.query(func.count(Trade.id))
-                .filter(Trade.session_id == session.id)
-                .scalar()
+                db.query(func.count(Trade.id)).filter(Trade.session_id == session.id).scalar()
             ) or 0
         logger.info("Railway baseline: %d trades before restart", baseline_trades)
         logger.info(
@@ -335,9 +331,7 @@ def phase_crash(
 
         pre_crash_session_id = open_pos.session_id
         pre_crash_trade_count = (
-            db.query(func.count(Trade.id))
-            .filter(Trade.session_id == pre_crash_session_id)
-            .scalar()
+            db.query(func.count(Trade.id)).filter(Trade.session_id == pre_crash_session_id).scalar()
         ) or 0
         logger.info(
             "Pre-crash state: position=%s symbol=%s entry=%.2f session=%s trades=%d",
@@ -400,17 +394,13 @@ def _validate_crash_recovery(
             return False
 
         trade_count = (
-            db.query(func.count(Trade.id))
-            .filter(Trade.session_id == session.id)
-            .scalar()
+            db.query(func.count(Trade.id)).filter(Trade.session_id == session.id).scalar()
         ) or 0
 
         # Prove progress: more trades than before the crash
         return trade_count > pre_crash_trade_count
 
-    if not _poll_until(
-        _post_restart_progress, timeout, description="post-restart trade progress"
-    ):
+    if not _poll_until(_post_restart_progress, timeout, description="post-restart trade progress"):
         logger.error("Bot did not complete new trades after restart")
         return False
 

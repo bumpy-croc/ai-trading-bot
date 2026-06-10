@@ -49,4 +49,5 @@ testcontainers[postgresql]==3.7.1
 ruff==0.5.7
 black==24.8.0
 mypy==1.11.1
+types-PyYAML==6.0.12.20240808
 bandit==1.7.9

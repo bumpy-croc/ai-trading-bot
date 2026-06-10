@@ -8,9 +8,12 @@ regime-aware threshold adjustments and confidence calculations.
 
 import logging
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.prediction.models.registry import PredictionModelRegistry
 
 from src.config.config_manager import get_config
 from src.prediction import PredictionConfig, PredictionEngine
@@ -76,6 +79,12 @@ class MLSignalGenerator(SignalGenerator):
     SHORT_THRESHOLD_HIGH_VOL = -0.0004  # Less conservative in high volatility (-0.04%)
     SHORT_THRESHOLD_LOW_VOL = -0.0006  # More conservative in low volatility (-0.06%)
     SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER = 0.2  # Adjust threshold based on regime confidence
+
+    # Registry-selection hints optionally attached by strategy factories
+    # (e.g. create_ml_sentiment_strategy). Bare annotations so hasattr()
+    # behavior is unchanged until a factory assigns them.
+    model_type: str
+    model_timeframe: str
 
     def __init__(
         self,
@@ -181,7 +190,7 @@ class MLSignalGenerator(SignalGenerator):
         if self.model_name is None:
             self.model_name = cfg.get("PREDICTION_ENGINE_MODEL_NAME", default=None)
 
-        self.prediction_engine = None
+        self.prediction_engine: PredictionEngine | None = None
         self._engine_warning_emitted = False
         self.use_engine_batch = get_config().get_bool("ENGINE_BATCH_INFERENCE", default=False)
 
@@ -215,14 +224,14 @@ class MLSignalGenerator(SignalGenerator):
             engine = PredictionEngine(config)
 
             # Setup feature pipeline for engine
-            config = {
+            pipeline_config = {
                 "technical_features": {"enabled": False},
                 "sentiment_features": {"enabled": False},
                 "market_features": {"enabled": False},
                 "price_only_features": {"enabled": False},
             }
             engine.feature_pipeline = FeaturePipeline(
-                config=config,
+                config=pipeline_config,
                 custom_extractors=[
                     PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
                 ],
@@ -590,8 +599,8 @@ class MLBasicSignalGenerator(SignalGenerator):
         if self.model_name is None:
             self.model_name = cfg.get("PREDICTION_ENGINE_MODEL_NAME", default=None)
 
-        self.prediction_engine = None
-        self._registry = None
+        self.prediction_engine: PredictionEngine | None = None
+        self._registry: PredictionModelRegistry | None = None
         self._engine_warning_emitted = False
         self.use_engine_batch = get_config().get_bool("ENGINE_BATCH_INFERENCE", default=False)
 
@@ -625,14 +634,14 @@ class MLBasicSignalGenerator(SignalGenerator):
             engine = PredictionEngine(config)
 
             # Setup feature pipeline for engine
-            config = {
+            pipeline_config = {
                 "technical_features": {"enabled": False},
                 "sentiment_features": {"enabled": False},
                 "market_features": {"enabled": False},
                 "price_only_features": {"enabled": False},
             }
             engine.feature_pipeline = FeaturePipeline(
-                config=config,
+                config=pipeline_config,
                 custom_extractors=[
                     PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
                 ],

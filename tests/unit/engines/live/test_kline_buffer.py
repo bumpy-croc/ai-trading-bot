@@ -1,9 +1,8 @@
 """Tests for KlineBuffer — thread-safe rolling kline history for WebSocket events."""
 
 import threading
-import time
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -15,9 +14,7 @@ from src.engines.live.kline_buffer import KlineBuffer
 
 def _make_seed_df(n: int = 5, start_ms: int = 1_700_000_000_000, interval_ms: int = 3_600_000):
     """Build a DataFrame matching BinanceProvider.get_live_data() output format."""
-    timestamps = [
-        pd.Timestamp(start_ms + i * interval_ms, unit="ms") for i in range(n)
-    ]
+    timestamps = [pd.Timestamp(start_ms + i * interval_ms, unit="ms") for i in range(n)]
     data = {
         "open": [100.0 + i for i in range(n)],
         "high": [110.0 + i for i in range(n)],
@@ -37,14 +34,16 @@ def _make_provider(seed_df: pd.DataFrame) -> MagicMock:
     return provider
 
 
-def _make_kline_event(ts_ms: int, o: float, h: float, l: float, c: float, v: float, closed: bool) -> dict:
+def _make_kline_event(
+    ts_ms: int, o: float, h: float, low: float, c: float, v: float, closed: bool
+) -> dict:
     """Build a kline WebSocket event dict."""
     return {
         "k": {
             "t": ts_ms,
             "o": str(o),
             "h": str(h),
-            "l": str(l),
+            "l": str(low),
             "c": str(c),
             "v": str(v),
             "x": closed,

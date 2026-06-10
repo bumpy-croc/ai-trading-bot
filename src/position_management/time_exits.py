@@ -44,7 +44,7 @@ class MarketSessionDef:
 
     def __post_init__(self):
         """Validate timezone string to prevent runtime errors."""
-        if ZoneInfo and self.timezone != "UTC":
+        if ZoneInfo is not None and self.timezone != "UTC":
             try:
                 ZoneInfo(self.timezone)
             except Exception as e:
@@ -59,7 +59,7 @@ class MarketSessionDef:
         if not self.open_time or not self.close_time:
             return True  # If undefined, assume always open
 
-        tz = ZoneInfo(self.timezone) if ZoneInfo else None
+        tz = ZoneInfo(self.timezone) if ZoneInfo is not None else None
         local_dt = dt_utc.astimezone(tz) if tz else dt_utc
         dow = local_dt.isoweekday()
         if self.days_of_week and dow not in self.days_of_week:
@@ -78,7 +78,7 @@ class MarketSessionDef:
         # while accommodating weekly schedules with holidays (2 weeks = ~10 trading days)
         MAX_DAYS_TO_SCAN = 14
 
-        tz = ZoneInfo(self.timezone) if ZoneInfo else None
+        tz = ZoneInfo(self.timezone) if ZoneInfo is not None else None
         local_dt = dt_utc.astimezone(tz) if tz else dt_utc
 
         # Start from today; if already past close, start from next day
@@ -143,8 +143,8 @@ class TimeExitPolicy:
     def _as_utc(self, dt: datetime) -> datetime:
         # Normalize any naive datetime to UTC; assume already-UTC if tz-aware
         if dt.tzinfo is None:
-            return dt.replace(tzinfo=ZoneInfo("UTC")) if ZoneInfo else dt
-        return dt.astimezone(ZoneInfo("UTC")) if ZoneInfo else dt
+            return dt.replace(tzinfo=ZoneInfo("UTC")) if ZoneInfo is not None else dt
+        return dt.astimezone(ZoneInfo("UTC")) if ZoneInfo is not None else dt
 
     def check_time_exit_conditions(
         self, entry_time: datetime, now_time: datetime

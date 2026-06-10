@@ -34,25 +34,18 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    # Create placeholder types for type checking
-    tf = None  # type: ignore
-    callbacks = None  # type: ignore
-    Conv1D = None  # type: ignore
-    Dense = None  # type: ignore
-    Dropout = None  # type: ignore
-    Input = None  # type: ignore
-    GRU = None  # type: ignore
-    MaxPooling1D = None  # type: ignore
-    Model = None  # type: ignore
-    BatchNormalization = None  # type: ignore
-    LayerNormalization = None  # type: ignore
-
-if TYPE_CHECKING:
-    from tensorflow.keras import callbacks as CallbacksType
-    from tensorflow.keras.models import Model as ModelType
-else:
-    ModelType = Any  # type: ignore
-    CallbacksType = Any  # type: ignore
+    if not TYPE_CHECKING:
+        tf = None
+        callbacks = None
+        Conv1D = None
+        Dense = None
+        Dropout = None
+        Input = None
+        GRU = None
+        MaxPooling1D = None
+        Model = None
+        BatchNormalization = None
+        LayerNormalization = None
 
 
 def _ensure_tensorflow_available() -> None:
@@ -262,6 +255,8 @@ def create_model(
         try:
             from src.ml.training_pipeline.models_tft import (
                 RECOMMENDED_HYPERPARAMETERS as TFT_HYPERPARAMS,
+            )
+            from src.ml.training_pipeline.models_tft import (
                 create_tft_model,
             )
         except ImportError:
@@ -271,7 +266,8 @@ def create_model(
             ) from None
 
         if variant != "default" and variant in TFT_HYPERPARAMS:
-            variant_params = {
+            # Hyperparameter values are heterogeneous (int and float)
+            variant_params: dict[str, Any] = {
                 k: v
                 for k, v in TFT_HYPERPARAMS[variant].items()
                 if k not in ("batch_size", "epochs", "patience")

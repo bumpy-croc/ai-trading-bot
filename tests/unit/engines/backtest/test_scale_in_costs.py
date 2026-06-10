@@ -95,9 +95,7 @@ class TestCalculateScaleInCosts:
         initial_fees = engine.total_fees_paid
 
         # Act
-        engine.calculate_scale_in_costs(
-            price=50000.0, notional=1000.0, side="long"
-        )
+        engine.calculate_scale_in_costs(price=50000.0, notional=1000.0, side="long")
 
         # Assert
         assert engine.total_fees_paid > initial_fees

@@ -345,7 +345,7 @@ class TestPerformanceTracker:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Add some trades and balance updates
-        for i in range(3):
+        for _i in range(3):
             trade = Mock()
             trade.pnl = 100.0
             trade.entry_time = datetime.now(UTC)

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from sqlalchemy.exc import IntegrityError
 
@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from src.data_providers.exchange_interface import ExchangeInterface, Order
     from src.database.manager import DatabaseManager
     from src.engines.live.execution.position_tracker import LivePositionTracker
+    from src.engines.live.margin_interest_tracker import _ExchangeWithInterestHistory
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ class PositionReconciler:
         results.extend(self.resolve_pending_orders())
 
         # Step B: Verify each recovered position
-        for order_id, position in positions.items():
+        for _order_id, position in positions.items():
             result = self.reconcile_position(position)
             results.append(result)
 
@@ -1828,7 +1829,12 @@ class PositionReconciler:
         original = getattr(position, "original_size", None)
         current = getattr(position, "current_size", None)
         try:
-            if original not in (None, 0) and current is not None and float(original) > 0:
+            if (
+                original is not None
+                and original != 0
+                and current is not None
+                and float(original) > 0
+            ):
                 return qty * (float(current) / float(original))
         except (TypeError, ValueError):
             pass
@@ -2276,7 +2282,11 @@ class PositionReconciler:
         interest_cost = 0.0
         if self._use_margin and side_is_short:
             try:
-                interest_tracker = MarginInterestTracker(self.exchange)
+                # Margin mode implies a provider with interest history; a
+                # missing method raises AttributeError, caught below.
+                interest_tracker = MarginInterestTracker(
+                    cast("_ExchangeWithInterestHistory", self.exchange)
+                )
                 base_asset = PositionReconciler._extract_base_asset(position.symbol)
                 entry_time = getattr(position, "entry_time", None)
                 if entry_time is not None:
@@ -2429,7 +2439,8 @@ class PositionReconciler:
             current = getattr(position, "current_size", None)
             try:
                 scaled_in = (
-                    original not in (None, 0)
+                    original is not None
+                    and original != 0
                     and current is not None
                     and float(current) > float(original)
                 )
@@ -2964,7 +2975,11 @@ class PeriodicReconciler:
             # Uses a per-position cache (5-minute TTL) to avoid hitting the
             # SAPI endpoint every reconciliation cycle (default 60s).
             now = time.time()
-            interest_tracker = MarginInterestTracker(self.exchange)
+            # Margin mode implies a provider with interest history; a missing
+            # method raises AttributeError, caught per-position below.
+            interest_tracker = MarginInterestTracker(
+                cast("_ExchangeWithInterestHistory", self.exchange)
+            )
             interest_cache_ttl = 300  # seconds
 
             for _key, position in list(positions_snapshot.items()):
@@ -3598,7 +3613,9 @@ def run_orphaned_borrow_sweep(
     results: list[ReconciliationResult] = []
     if not use_margin or not symbols:
         return results
-    mode = get_flag("orphaned_borrow_sweep_mode", "off")
+    # get_flag is typed bool | str | None; the membership guard below rejects
+    # everything except the two str literals, so the cast holds downstream.
+    mode = cast(str, get_flag("orphaned_borrow_sweep_mode", "off"))
     if mode not in ("dry_run", "active"):
         return results
     # Fail-closed: a live repay MUST be serialised against entry/exit. Never repay

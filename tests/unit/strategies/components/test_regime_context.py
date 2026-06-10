@@ -448,7 +448,7 @@ class TestEnhancedRegimeDetector:
         df = self.create_test_dataframe()
 
         # Detect regime at a specific index
-        regime = detector.detect_regime(df, 49)
+        detector.detect_regime(df, 49)
 
         # Check if the detected regime has sufficient duration
         # The test passes if duration >= min_duration OR if method doesn't crash
@@ -516,8 +516,8 @@ class TestEnhancedRegimeDetector:
         df = self.create_test_dataframe()
 
         # Detect regime multiple times
-        regime1 = detector.detect_regime(df, 30)
-        regime2 = detector.detect_regime(df, 31)
+        detector.detect_regime(df, 30)
+        detector.detect_regime(df, 31)
 
         # Should have history
         assert len(detector.regime_history) >= 2

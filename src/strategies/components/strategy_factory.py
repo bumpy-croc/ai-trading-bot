@@ -436,7 +436,7 @@ class StrategyFactory:
             Configured Ensemble Weighted strategy
         """
         # Create individual signal generators
-        generators = {}
+        generators: dict[SignalGenerator, float] = {}
         if use_ml_basic:
             generators[MLBasicSignalGenerator(name="ml_basic_signals")] = 0.30
         if use_ml_adaptive:
@@ -617,7 +617,7 @@ def create_strategy_template(template_name: str, **kwargs) -> dict[str, Any]:
     Returns:
         Strategy template configuration
     """
-    templates = {
+    templates: dict[str, dict[str, Any]] = {
         "conservative": {
             "signal_generator": {"type": "HoldSignalGenerator"},
             "risk_manager": {

@@ -12,7 +12,7 @@ from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -198,8 +198,8 @@ class PerformanceTracker:
         # Regime-specific tracking
         self.regime_performance: dict[str, list[TradeResult]] = defaultdict(list)
 
-        # Running statistics
-        self.running_stats = {
+        # Running statistics (mixed value types: floats, counters, streak label)
+        self.running_stats: dict[str, Any] = {
             "total_pnl": 0.0,
             "total_pnl_pct": 0.0,
             "winning_trades": 0,
@@ -648,7 +648,8 @@ class PerformanceTracker:
         sortino_ratio = self._calculate_sortino_ratio(pnl_pct_values)
         max_drawdown = self._calculate_max_drawdown(pnl_values)
         calmar_ratio = annualized_return / max_drawdown if max_drawdown > 0 else 0.0
-        var_95 = np.percentile(pnl_pct_values, 5) if pnl_pct_values else 0.0
+        # cast: np.percentile returns np.float64, a runtime subclass of float
+        var_95 = cast(float, np.percentile(pnl_pct_values, 5)) if pnl_pct_values else 0.0
 
         # Trade statistics
         win_rate = len(winning_trades) / len(trades) if trades else 0.0

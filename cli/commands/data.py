@@ -5,6 +5,7 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TypedDict, cast
 
 # Ensure project root and src are in sys.path for absolute imports
 from src.infrastructure.runtime.paths import get_project_root
@@ -141,10 +142,12 @@ def _parse_date_string(date_str: str) -> datetime:
 
 def _download(ns: argparse.Namespace) -> int:
     """Download historical price data using automatic Binance → CoinGecko failover."""
+    from src.data_providers.fallback_provider import FallbackProvider
     from src.data_providers.provider_factory import create_data_provider
 
     # Use auto provider (Binance → CoinGecko failover)
-    provider = create_data_provider(provider_type="auto")
+    # cast: provider_type="auto" always constructs a FallbackProvider, which has close()
+    provider = cast(FallbackProvider, create_data_provider(provider_type="auto"))
 
     try:
         # Parse dates (UTC-aware to match provider expectations)
@@ -358,9 +361,9 @@ def _preload_offline(ns: argparse.Namespace) -> int:
 
     # Check cache directory size
     try:
-        cache_path = Path(cache_dir)
-        if cache_path.exists():
-            total_size = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
+        cache_dir_path = Path(cache_dir)
+        if cache_dir_path.exists():
+            total_size = sum(f.stat().st_size for f in cache_dir_path.rglob("*") if f.is_file())
             logger.info(f"Total cache size: {total_size / (1024*1024):.1f} MB")
     except Exception as e:
         logger.warning(f"Could not calculate cache size: {e}")
@@ -416,6 +419,15 @@ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str
         return False
 
 
+class _CacheFileInfo(TypedDict):
+    """Metadata for one cache file listed by the cache-manager CLI."""
+
+    name: str
+    size: int
+    modified: datetime
+    path: str
+
+
 def _cache_manager(ns: argparse.Namespace) -> int:
     from src.config.paths import get_cache_dir
     from src.data_providers.binance_provider import BinanceProvider
@@ -452,17 +464,17 @@ def _cache_manager(ns: argparse.Namespace) -> int:
             print("No cache files found.")
             return 0
         print(f"\nCache Files ({len(files)} total):\n" + "=" * 60)
-        file_info = []
+        file_info: list[_CacheFileInfo] = []
         for filename in files:
             path = os.path.join(cache_dir, filename)
             size = os.path.getsize(path)
             mtime = datetime.fromtimestamp(os.path.getmtime(path))
             file_info.append({"name": filename, "size": size, "modified": mtime, "path": path})
         file_info.sort(key=lambda x: x["modified"], reverse=True)
-        for info in file_info:
+        for entry in file_info:
             if ns.detailed:
                 try:
-                    with open(info["path"], "rb") as f:
+                    with open(entry["path"], "rb") as f:
                         data = _safe_pickle_load(f)
                     data_info = ""
                     if hasattr(data, "shape"):
@@ -472,15 +484,15 @@ def _cache_manager(ns: argparse.Namespace) -> int:
                         end_date = data.index.max().strftime("%Y-%m-%d")
                         data_info += f" ({start_date} to {end_date})"
                     print(
-                        f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')}{data_info}"
+                        f"{entry['name'][:20]:<20} {_format_size(entry['size']):<8} {entry['modified'].strftime('%Y-%m-%d %H:%M')}{data_info}"
                     )
                 except Exception as e:
                     print(
-                        f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')} - Error reading: {e}"
+                        f"{entry['name'][:20]:<20} {_format_size(entry['size']):<8} {entry['modified'].strftime('%Y-%m-%d %H:%M')} - Error reading: {e}"
                     )
             else:
                 print(
-                    f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')}"
+                    f"{entry['name'][:20]:<20} {_format_size(entry['size']):<8} {entry['modified'].strftime('%Y-%m-%d %H:%M')}"
                 )
         return 0
     if cmd == "clear":
@@ -602,7 +614,11 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
                 if side == PositionSide.LONG
                 else (entry_price - exit_price) * quantity
             )
-            db.log_trade(
+            # NOTE: suspected bug — log_trade() has no `order_id` parameter (only
+            # `exit_order_id`), so this call raises TypeError at runtime and the
+            # except below reports a failed population. Left unchanged (type-level
+            # cleanup only); tracked for a separate behavioral fix.
+            db.log_trade(  # type: ignore[call-arg]
                 session_id=sid,
                 symbol=sym,
                 side=side,

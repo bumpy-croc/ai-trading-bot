@@ -26,6 +26,7 @@ from src.strategies.components import (
     EnhancedRegimeDetector,
     MLBasicSignalGenerator,
     MLSignalGenerator,
+    SignalGenerator,
     Strategy,
     VolatilityRiskManager,
     WeightedVotingSignalGenerator,
@@ -67,7 +68,7 @@ def create_ensemble_weighted_strategy(
         )
 
     # Create individual signal generators with weights
-    generators = {}
+    generators: dict[SignalGenerator, float] = {}
 
     if use_ml_basic:
         generators[MLBasicSignalGenerator()] = 0.30
