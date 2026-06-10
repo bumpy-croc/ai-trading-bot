@@ -104,6 +104,13 @@ was a **phantom**: no such SL order existed, account sync showed `0 open orders`
 sub-threshold dust. **Rule:** treat automated/stale context as a hypothesis; confirm against live
 state (`get_open_orders`, account sync, the actual order id) before acting or alarming.
 
+### 2.6 Conflicted PRs run NO CI — and that looks like "CI is stuck"
+A push to a PR branch whose merge with the base is conflicted (`mergeable_state: dirty`)
+produces **zero** check runs: `pull_request`-triggered workflows run on the merge ref, which
+GitHub cannot create. Nothing fails — checks simply never appear. **Rule:** when a PR push
+shows no checks after a few minutes, check `mergeable_state` first (the base may have moved),
+rebase onto the fresh base, and force-push; don't wait on or re-trigger phantom CI.
+
 ---
 
 ## 3. Operational / tooling gotchas
