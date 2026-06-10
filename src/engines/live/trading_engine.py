@@ -580,6 +580,7 @@ class LiveTradingEngine:
                         on_fill=self._handle_order_fill,
                         on_partial_fill=self._handle_partial_fill,
                         on_cancel=self._handle_order_cancel,
+                        on_tracking_lost=self._handle_order_tracking_lost,
                     )
                     logger.info(
                         f"{provider_name} exchange interface and account synchronizer initialized"
@@ -4322,6 +4323,40 @@ class LiveTradingEngine:
                             )
                     else:
                         self.current_balance += refund_amount
+
+    def _handle_order_tracking_lost(self, order_id: str, symbol: str, failures: int) -> None:
+        """Handle the OrderTracker giving up on an order whose state is UNKNOWN.
+
+        Fail-closed counterpart to :meth:`_handle_order_cancel`: after
+        ``failures`` consecutive failed/None polls the order's exchange state
+        could not be confirmed, so the position (if any) is deliberately KEPT
+        tracked — removing it and refunding its entry fee here would vaporize a
+        possibly-live position from the books (untracked exposure, corrupted
+        balance, double-entry on the next signal). The periodic reconciler
+        resolves the true state from the exchange: it removes ghosts whose
+        entry order is confirmed cancelled and books offline stop-loss fills.
+        """
+        position = self.live_position_tracker.get_position(order_id)
+        message = (
+            f"Order {order_id} on {symbol} state UNKNOWN after {failures} consecutive "
+            f"failed polls — tracking abandoned (NOT treated as cancelled). "
+            f"{'Position kept tracked' if position is not None else 'No tracked position'}; "
+            f"reconciler will resolve from exchange truth."
+        )
+        logger.critical("CRITICAL: %s", message)
+        log_order_event(
+            "order_tracking_lost",
+            order_id=order_id,
+            symbol=symbol,
+        )
+        self._record_event(
+            EventType.ERROR,
+            message,
+            severity="critical",
+            component="order_tracker",
+            error_code="ORDER_TRACKING_LOST",
+            alert=True,
+        )
 
     def _execute_exit(
         self,
