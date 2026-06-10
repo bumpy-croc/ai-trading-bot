@@ -3324,9 +3324,7 @@ class TestSpotSLFillNotExternalClose:
         assert len(pnl_calls) == 1
         # ...and NOT misclassified as an external close (no-PnL row)
         external = [
-            c
-            for c in mock_db.log_audit_event.call_args_list
-            if "CLOSED_EXTERNALLY" in str(c)
+            c for c in mock_db.log_audit_event.call_args_list if "CLOSED_EXTERNALLY" in str(c)
         ]
         assert external == []
 
