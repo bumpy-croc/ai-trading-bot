@@ -31,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     SL-based fallback) moved to `src/engines/live/recovery.py`
     (`LiveSessionRecoverer`). Close-accounting helpers shared by the exit and
     recovery paths moved to `src/engines/live/trade_close_accounting.py`
-    (re-exported from `trading_engine`). Engine: 6,558 → 5,368 lines total.
+    (re-exported from `trading_engine`). Engine across all four extractions:
+    6,558 → 5,368 lines.
   - The three byte-identical entry-handler methods (`_extract_entry_plan`,
     `_apply_dynamic_risk`, `get_dynamic_risk_adjustments`) now live once in
     `src/engines/shared/execution/entry_handler_mixin.py`
