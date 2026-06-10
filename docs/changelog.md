@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Account monitoring glue (balance/equity snapshots, status lines,
     performance summaries, dataframe extraction helpers) moved to
     `src/engines/live/monitoring/` (`LiveAccountMonitor`).
+  - Session/crash-recovery startup sequence (balance recovery, persisted
+    position reload with stale-OPEN self-healing, risk-manager
+    re-registration, startup exchange reconciliation incl. the legacy
+    SL-based fallback) moved to `src/engines/live/recovery.py`
+    (`LiveSessionRecoverer`). Close-accounting helpers shared by the exit and
+    recovery paths moved to `src/engines/live/trade_close_accounting.py`
+    (re-exported from `trading_engine`). Engine: 6,558 → 5,368 lines total.
   - The three byte-identical entry-handler methods (`_extract_entry_plan`,
     `_apply_dynamic_risk`, `get_dynamic_risk_adjustments`) now live once in
     `src/engines/shared/execution/entry_handler_mixin.py`
