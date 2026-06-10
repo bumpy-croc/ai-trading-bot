@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry. Backtests could take position sequences a correctly-accounted run
   would have rejected. The side now converts via `to_side_string`, like the
   immediate-entry path.
+- Backtest trades persist the correct `pnl_percent` for longs (#758):
+  the backtest event logger passed the engines' `PositionSide` enum into
+  `log_trade`, which compares against the **database** `PositionSide` —
+  cross-enum equality is always False, so every long backtest trade was
+  stored with the short formula (sign-flipped). `log_trade` now normalizes
+  any Enum side/source by value before classification (hardens all callers)
+  and the backtest call site converts via `to_side_string`.
 - Correlation control no longer silently drops peer symbols (#759): the
   no-window fallback omitted the required `start` argument, so every call
   raised `TypeError` (swallowed) and the peer vanished from correlated-
