@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Backtest strategies can finally see their open position (#756):
+  `_build_runtime_context` passed the `PositionSide` enum into
+  `ComponentPosition`, whose validation expects "long"/"short" strings, so
+  construction raised `ValueError` on every candle (swallowed) and component
+  strategies always received `current_positions=None` — while live populated
+  it correctly. Position-aware logic (pyramiding guards, exposure checks) was
+  silently inert in backtests. The side now converts via `to_side_string`,
+  exactly like live.
 - `TradeProtocol` members are now read-only properties (#767), so concrete
   trade classes with narrower types (non-Optional datetimes, `PositionSide`
   enum side) conform structurally — the three `cast("TradeProtocol", ...)`
