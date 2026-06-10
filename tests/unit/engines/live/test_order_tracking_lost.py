@@ -14,11 +14,13 @@ critical system event + alert so the reconciler resolves exchange truth.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 
+from src.database.manager import DatabaseManager
 from src.database.models import EventType
+from src.engines.live.execution.position_tracker import LivePositionTracker
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
 
@@ -32,7 +34,8 @@ def make_engine() -> LiveTradingEngine:
             data_provider=MagicMock(),
             initial_balance=1000.0,
         )
-    engine.db_manager = MagicMock()
+    # autospec catches signature mismatches on every db_manager call
+    engine.db_manager = create_autospec(DatabaseManager, instance=True)
     return engine
 
 
@@ -40,8 +43,11 @@ def _track_fake_position(engine: LiveTradingEngine, order_id: str = "entry_1") -
     position = MagicMock()
     position.symbol = "BTCUSDT"
     position.order_id = order_id
-    engine.live_position_tracker.get_position = MagicMock(return_value=position)
-    engine.live_position_tracker.pop_position = MagicMock(return_value=position)
+    # autospec'd tracker: get_position/pop_position calls are signature-checked
+    tracker = create_autospec(LivePositionTracker, instance=True)
+    tracker.get_position.return_value = position
+    tracker.pop_position.return_value = position
+    engine.live_position_tracker = tracker
     return position
 
 
@@ -74,7 +80,9 @@ class TestHandleOrderTrackingLost:
 
     def test_no_position_still_escalates_without_error(self):
         engine = make_engine()
-        engine.live_position_tracker.get_position = MagicMock(return_value=None)
+        tracker = create_autospec(LivePositionTracker, instance=True)
+        tracker.get_position.return_value = None
+        engine.live_position_tracker = tracker
 
         with patch.object(engine, "_record_event") as record:
             engine._handle_order_tracking_lost("orphan_1", "ETHUSDT", 10)
