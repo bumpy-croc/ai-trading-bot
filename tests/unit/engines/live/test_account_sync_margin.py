@@ -223,3 +223,36 @@ def test_margin_equity_correction_audited_during_startup_session_handoff():
     assert db.log_audit_event.call_args.kwargs["session_id"] == 7
     db.log_event.assert_called_once()
     assert db.log_event.call_args.kwargs["session_id"] == 7
+
+
+def test_margin_equity_system_event_failure_does_not_break_correction():
+    """The system-event (log_event) write is best-effort and guarded independently of
+    the audit write: a log_event failure must neither raise into the sync loop nor flip
+    the already-persisted correction. Companion to the log_audit_event-failure test —
+    pins the SECOND of the two independently wrapped observability writes so a future
+    refactor of that try/except can't let a system_events fault escape into
+    sync_account_data() and report success=False after a real book-down.
+    """
+    sync, db = _make_sync(equity=84.14, db_balance=99.89, usdt_total=84.14)
+    db.log_event.side_effect = RuntimeError("system_events table unavailable")
+
+    res = sync._sync_margin_equity()  # must not raise
+
+    assert res["corrected"] is True
+    db.update_balance.assert_called_once()
+    db.log_audit_event.assert_called_once()  # audit still written despite the event failure
+
+
+def test_margin_equity_exactly_five_percent_divergence_is_critical():
+    """The CRITICAL boundary is inclusive (>=): an exactly-5.0% book-down is
+    CRITICAL/critical, not HIGH/warning. 100.00 -> 95.00 makes diff_pct land exactly on
+    DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT * 100 (verified float-exact), so a
+    >= -> > regression would silently demote boundary book-downs and this test catches it.
+    """
+    sync, db = _make_sync(equity=95.0, db_balance=100.0, usdt_total=95.0)
+
+    res = sync._sync_margin_equity()
+
+    assert res["corrected"] is True
+    assert db.log_audit_event.call_args.kwargs["severity"] == "CRITICAL"
+    assert db.log_event.call_args.kwargs["severity"] == "critical"
