@@ -885,6 +885,6 @@ class TestTradeProtocolConformance:
         metrics = tracker.get_metrics()
         assert metrics.total_trades == 1
         assert metrics.winning_trades == 1
-        recorded = tracker.get_trades()[0] if hasattr(tracker, "get_trades") else None
-        if recorded is not None:
-            assert "long" in str(recorded["side"]).lower()
+        trades = tracker.get_trade_history()
+        assert trades, "Expected at least one recorded trade"
+        assert "long" in str(trades[0]["side"]).lower()
