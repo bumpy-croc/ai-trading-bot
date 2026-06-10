@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now maps the same `time_exits` config shape as both engines' builders
   (max holding, end-of-day/weekend flat, timezone, restrictions) and honors
   both `params.time_exits` and the legacy `params.max_holding_hours` fallback.
+- `atb data populate-dummy` works again (#763): `log_trade` was called with the
+  nonexistent `order_id` kwarg (the parameter is `exit_order_id`), so the first
+  generated trade raised `TypeError` and the command always failed. Same bug
+  class as #732; an autospec'd regression test now enforces the real signature.
 - A REJECTED stop-loss is now re-placed and an unexpected stop-loss
   termination escalates (#741). The reconciler's re-placement branches
   (periodic loop and startup `_verify_stop_loss`) matched only

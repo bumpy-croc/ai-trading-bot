@@ -363,3 +363,34 @@ class TestSafePickleLoad:
 
         with pytest.raises(pickle.UnpicklingError):
             _safe_pickle_load(io.BytesIO(pickle.dumps(_Evil())))
+
+
+class TestDataPopulateDummy:
+    """Tests for the populate-dummy command (regression for #763)."""
+
+    @pytest.mark.fast
+    def test_log_trade_called_with_exit_order_id(self):
+        """``log_trade`` must be invoked with ``exit_order_id`` — the autospec
+        enforces the real ``DatabaseManager.log_trade`` signature, so a
+        regression to the nonexistent ``order_id`` kwarg raises ``TypeError``
+        and the command exits 1."""
+        from unittest.mock import create_autospec
+
+        from cli.commands.data import _populate_dummy
+        from src.database.manager import DatabaseManager
+
+        ns = argparse.Namespace(database_url=None, trades=3, confirm=True)
+
+        mock_db = create_autospec(DatabaseManager, instance=True)
+        mock_db.create_trading_session.return_value = 1
+        mock_db.log_trade.return_value = 1
+
+        with patch("src.database.manager.DatabaseManager", return_value=mock_db):
+            result = _populate_dummy(ns)
+
+        assert result == 0
+        assert mock_db.log_trade.call_count == 3
+        for call in mock_db.log_trade.call_args_list:
+            assert "exit_order_id" in call.kwargs
+            assert call.kwargs["exit_order_id"].startswith("order_")
+            assert "order_id" not in call.kwargs
