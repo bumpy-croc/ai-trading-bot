@@ -20,10 +20,12 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 @pytest.fixture
 def db() -> DatabaseManager:
+    """In-memory SQLite-backed manager exercising the real log_trade path."""
     return DatabaseManager("sqlite:///:memory:")
 
 
 def _log_trade(db: DatabaseManager, side, entry_price: float, exit_price: float) -> int:
+    """Log a minimal trade with the given side representation; returns row id."""
     return db.log_trade(
         symbol="BTCUSDT",
         side=side,
@@ -40,6 +42,7 @@ def _log_trade(db: DatabaseManager, side, entry_price: float, exit_price: float)
 
 
 def _fetch_trade(db: DatabaseManager, trade_id: int):
+    """Load the persisted Trade row back, detached from the session."""
     from src.database.models import Trade
 
     with db.get_session() as session:
@@ -60,6 +63,7 @@ class TestLogTradeSideNormalization:
         assert float(trade.pnl_percent) == pytest.approx(10.0)
 
     def test_shared_enum_short_uses_short_formula(self, db):
+        """A profitable short logged with the shared enum keeps the short formula."""
         trade_id = _log_trade(db, SharedPositionSide.SHORT, entry_price=100.0, exit_price=90.0)
 
         trade = _fetch_trade(db, trade_id)

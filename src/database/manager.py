@@ -12,7 +12,7 @@ from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import sqlalchemy as sa
 from sqlalchemy import and_, create_engine, text
@@ -47,6 +47,9 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Database enum type for _normalize_db_enum
+_DbEnumT = TypeVar("_DbEnumT", bound=Enum)
 
 
 # Query timeout categories for differentiated timeout handling
@@ -719,6 +722,22 @@ class DatabaseManager:
 
             logger.info(f"Ended trading session #{session_id}")
 
+    @staticmethod
+    def _normalize_db_enum(value: str | Enum, enum_cls: type[_DbEnumT]) -> _DbEnumT:
+        """Normalize a string or foreign-enum value onto a database enum.
+
+        Engines pass their own enums (e.g. ``engines/shared`` ``PositionSide``)
+        whose members never compare equal to the database enums — values are
+        therefore matched by their string value, case-insensitively (#758).
+
+        Raises:
+            KeyError: If the value does not name a member of ``enum_cls``.
+        """
+        if isinstance(value, enum_cls):
+            return value
+        raw = str(value.value) if isinstance(value, Enum) else value
+        return enum_cls[raw.upper()]
+
     def log_trade(
         self,
         symbol: str,
@@ -800,30 +819,24 @@ class DatabaseManager:
 
         # Use WRITE timeout - trade logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
-            # Normalize sides/sources to the DATABASE enums. Engines pass their
-            # own PositionSide (engines/shared), and cross-enum equality is
-            # always False — that misclassified every long backtest trade onto
-            # the short pnl_percent formula (#758). Compare by value, not enum
-            # identity, so any side representation classifies correctly.
-            if isinstance(side, Enum) and not isinstance(side, PositionSide):
-                side = str(side.value)
-            if isinstance(side, str):
-                side = PositionSide[side.upper()]
-            if isinstance(source, Enum) and not isinstance(source, TradeSource):
-                source = str(source.value)
-            if isinstance(source, str):
-                source = TradeSource[source.upper()]
+            # Normalize sides/sources to the DATABASE enums (fresh locals, no
+            # argument reassignment). Engines pass their own PositionSide
+            # (engines/shared), and cross-enum equality is always False — that
+            # misclassified every long backtest trade onto the short
+            # pnl_percent formula (#758).
+            db_side = self._normalize_db_enum(side, PositionSide)
+            db_source = self._normalize_db_enum(source, TradeSource)
 
             # Calculate percentage P&L (entry_price validated positive above)
-            if side == PositionSide.LONG:
+            if db_side == PositionSide.LONG:
                 pnl_percent = ((exit_price - entry_price) / entry_price) * 100
             else:
                 pnl_percent = ((entry_price - exit_price) / entry_price) * 100
 
             trade = Trade(
                 symbol=symbol,
-                side=side,
-                source=source,
+                side=db_side,
+                source=db_source,
                 entry_price=entry_price,
                 exit_price=exit_price,
                 size=size,
@@ -904,7 +917,7 @@ class DatabaseManager:
                 raise
 
             logger.info(
-                f"Logged trade #{trade.id}: {symbol} {side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
+                f"Logged trade #{trade.id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
             )
 
             # Update performance metrics - handle None session_id
