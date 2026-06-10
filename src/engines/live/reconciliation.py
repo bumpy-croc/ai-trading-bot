@@ -1694,8 +1694,9 @@ class PositionReconciler:
             logger.warning("Failed to verify stop-loss order %s: %s", sl_order_id, e)
 
     def _close_position_from_filled_sl(self, position: Any, sl_order: Any) -> None:
-        """Close a position whose stop-loss filled offline: remove from tracker, close the
-        DB row, realize P&L, and persist a Trade row (commission + quantity).
+        """Close a position whose stop-loss filled offline: close the DB row, then (only on
+        success) remove it from the tracker, realize P&L, and persist a Trade row
+        (commission + quantity).
 
         The SL exit commission is normalized to USD via ``order_commission_usd`` (a SHORT's
         stop-loss is a base-asset BUY, e.g. ETH), falling back to the modelled fee when the
@@ -1706,7 +1707,6 @@ class PositionReconciler:
         ``uq_trade_order_session`` rather than inserting a duplicate (NULL != NULL in
         Postgres; #657/#668 phantom-trade class).
         """
-        self.position_tracker.remove_position(position.order_id)
         db_pos_id = getattr(position, "db_position_id", None)
         exit_price = float(sl_order.average_price) if sl_order.average_price else None
         db_closed = False
@@ -1721,13 +1721,19 @@ class PositionReconciler:
         # _realize_pnl_on_close corrects the balance unconditionally, so doing it when the
         # close failed (row still OPEN) would double-subtract the P&L on the next reconcile.
         if not db_closed:
+            # Leave the position in the in-memory tracker (consistent with its still-OPEN DB
+            # row) so it is re-reconciled on a later pass — removing it while the DB row stays
+            # OPEN would diverge memory from the DB (CODE.md: no silent divergence).
             logger.warning(
-                "Skipping P&L realization for %s — DB position %s was not closed; it will "
-                "be re-reconciled on a later pass.",
+                "Skipping close for %s — DB position %s was not closed; left in tracker for "
+                "re-reconciliation on a later pass.",
                 getattr(position, "symbol", "?"),
                 db_pos_id,
             )
             return
+
+        # Position confirmed closed in the DB — now safe to drop it from the in-memory tracker.
+        self.position_tracker.remove_position(position.order_id)
 
         sl_fill_price = exit_price or 0.0
         if sl_fill_price <= 0:
@@ -2411,7 +2417,7 @@ class PositionReconciler:
                 getattr(position, "symbol", "?"),
                 float(gross_pnl),
                 commission,
-                "NULL" if logged_quantity is None else f"{logged_quantity:.8f}",
+                "NULL" if logged_quantity is None else format(logged_quantity, ".8f"),
             )
         except IntegrityError:
             logger.info(

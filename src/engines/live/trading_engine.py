@@ -187,10 +187,10 @@ def _close_entry_fee_usd(position: Position, execution_engine: Any) -> float:
     # price, falling back to size * entry_balance), via the same USD fee model.
     try:
         qty = getattr(position, "quantity", None)
-        entry_price = float(position.entry_price) if position.entry_price else 0.0
+        entry_price = float(position.entry_price) if position.entry_price is not None else 0.0
         if qty is not None and entry_price > 0:
             notional = float(qty) * entry_price
-        elif position.entry_balance and position.size:
+        elif position.entry_balance is not None and position.size is not None:
             notional = float(position.entry_balance) * float(position.size)
         else:
             return 0.0
