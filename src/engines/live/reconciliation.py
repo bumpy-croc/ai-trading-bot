@@ -39,14 +39,28 @@ from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
-    from src.data_providers.exchange_interface import ExchangeInterface
+    from src.data_providers.exchange_interface import ExchangeInterface, Order
     from src.database.manager import DatabaseManager
     from src.engines.live.execution.position_tracker import LivePositionTracker
 
 logger = logging.getLogger(__name__)
 
 
-def lookup_order_fail_closed(exchange: Any, order_id: str, symbol: str) -> tuple[Any, bool]:
+@runtime_checkable
+class _OrderLookup(Protocol):
+    """Structural type for exchanges that can look up an order by id.
+
+    ``get_order_checked`` (the fail-closed variant) is optional and probed via
+    ``getattr`` in :func:`lookup_order_fail_closed`, so it is not part of the
+    protocol.
+    """
+
+    def get_order(self, order_id: str, symbol: str) -> Order | None: ...
+
+
+def lookup_order_fail_closed(
+    exchange: _OrderLookup, order_id: str, symbol: str
+) -> tuple[Order | None, bool]:
     """Look up an order distinguishing "confirmed absent" from "lookup failed".
 
     Returns ``(order, confirmed)``. ``confirmed=False`` means the lookup could
