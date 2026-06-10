@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
+from src.config.constants import DEFAULT_CORRELATION_WINDOW_DAYS
+
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
     from src.position_management.correlation_engine import CorrelationEngine
@@ -190,7 +192,7 @@ class CorrelationHandler:
                 )
             except Exception as exc:
                 # Debug level: per-candle hot loop; without start_ts the fetch
-                # below falls back to the unwindowed call.
+                # below falls back to the default correlation window.
                 logger.debug("Failed to compute correlation window start for %s: %s", symbol, exc)
 
         # Get currently open positions from snapshot (thread-safe)
@@ -203,33 +205,47 @@ class CorrelationHandler:
             # peer symbols are added to the correlation series.
             logger.debug("Failed to read open positions snapshot for %s: %s", symbol, exc)
 
+        # Peer symbols still needing a price series
+        peers = sorted(open_symbols - set(price_series.keys()) - {str(symbol)})
+        if not peers:
+            return price_series
+
+        if not isinstance(end_ts, pd.Timestamp):
+            # Without a real end timestamp (e.g. a non-datetime index) no
+            # history window can be derived. Skip peers loudly rather than
+            # fabricate a wall-clock window: in a backtest that would fetch
+            # data from the future relative to the simulated candle
+            # (lookahead). Correlation control degrades to the symbols
+            # already in the series (fail-open, but visible).
+            logger.warning(
+                "Correlation control degraded for %s: no derivable history window "
+                "(end timestamp unavailable); skipping peer symbols %s",
+                symbol,
+                peers,
+            )
+            return price_series
+
         # Fetch price series for open positions
-        for sym in open_symbols:
-            if sym == str(symbol) or sym in price_series:
-                continue
+        for sym in peers:
+            # If the configured window computation failed, fall back to the
+            # default window so the peer is still included rather than
+            # silently dropped (#759).
+            window_start = start_ts
+            if window_start is None:
+                window_start = end_ts - pd.Timedelta(days=DEFAULT_CORRELATION_WINDOW_DAYS)
 
             try:
-                if start_ts is not None and isinstance(end_ts, pd.Timestamp):
-                    hist = self.data_provider.get_historical_data(
-                        sym,
-                        timeframe=timeframe,
-                        start=start_ts.to_pydatetime(),
-                        end=end_ts.to_pydatetime(),
-                    )
-                else:
-                    # KNOWN BUG (typing surfaced, behavior preserved): DataProvider
-                    # .get_historical_data requires `start`, so this fallback call
-                    # always raises TypeError and is swallowed by the except below,
-                    # silently skipping this symbol. Passing `start` here would
-                    # change runtime behavior; tracked for a separate behavioral fix.
-                    hist = self.data_provider.get_historical_data(  # type: ignore[call-arg]
-                        sym, timeframe=timeframe
-                    )
+                hist = self.data_provider.get_historical_data(
+                    sym,
+                    timeframe=timeframe,
+                    start=window_start.to_pydatetime(),
+                    end=end_ts.to_pydatetime(),
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to fetch correlation history for %s (window %s -> %s): %s",
                     sym,
-                    start_ts,
+                    window_start,
                     end_ts,
                     exc,
                 )
