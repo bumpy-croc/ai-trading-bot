@@ -35,3 +35,18 @@ Refs: #668, #677, #679, #671, #648/#15, #28 (booking-while-held), #674 (margin D
 - Reviews: code-reviewer (no findings), architecture-reviewer (no blockers; P2+nits applied), risk-officer **APPROVE, high confidence** (all UNPROTECTED paths verified equivalent to origin/develop).
 - Residual pre-existing risks noted by risk-officer (refactor-neutral): webhook alert delivery is fire-and-forget; SL retry budget hardcoded (3×, 1s backoff) in two places; `position_still_held` defers to ~120s reconciler on API errors.
 Commits: 0e3c0c5, 9a8a1c0, d49b3d5, a5729d3, d12eb12. Remaining #486 scope (recovery extraction, config dataclass, <1,500-line target) intentionally deferred to follow-up PRs.
+
+## 2026-06-10 00:00 · track-record · risk-officer
+Branch review (recovery extraction #486): verdict=approve, confidence=high
+Scenarios checked: corrupt-balance fail-fast propagation, offline-SL balance-basis + double/zero-booking, atomic_balance_update parity, phantom/orphan reload (#657/#668/#677), close-only escalation variants (write vs _enter_close_only_mode), Protocol-mutation aliasing to engine object, init-before-start lifecycle, eager-capture window. Method/helper diffs byte-identical modulo self.->state. + one cosmetic wrap. Ref: src/engines/live/recovery.py, src/engines/live/trade_close_accounting.py
+
+---
+
+## 2026-06-10 · refactor · claude(session, human-directed)
+**#486 step 4: startup recovery extracted to `engines/live/recovery.py` on stacked branch `claude/live-trading-engine-refactor-09koj9-recovery`; PR #796 opened for steps 1–3.**
+- PR #796 (steps 1–3) opened against develop; first CI run failed on the new paper-session smoke (hardcoded SQLite URL rejected in CI) — fixed in 5cf5862 (conftest-provisioned DATABASE_URL + recovery disabled in the smoke to avoid shared-CI-DB session leakage); re-run pending.
+- `LiveSessionRecoverer`: session balance recovery (#668/#681 fail-fast preserved), persisted-position reload with #657 self-heal, risk-manager re-registration, startup reconciliation incl. legacy offline-SL bookkeeping. Close-accounting helpers → `trade_close_accounting.py` (re-exported). Engine cumulative: 6,558 → 5,368 lines.
+- Parity proof repeated: full unit suite green, 82 integration (parity+live) green, backtest fingerprint byte-identical, 5 new recoverer wiring contract tests.
+- Reviews: code-reviewer *correct* (normalized diff of all 4 methods = zero semantic differences); risk-officer **APPROVE high confidence** (condition: CI green before merge).
+- Remaining #486 scope: (d) config dataclass + <1,500-line target — next stacked PR after these merge.
+Commits: 2ec7a8b, 2e5eb75, 2487564 (+ 5cf5862 on the PR branch).
