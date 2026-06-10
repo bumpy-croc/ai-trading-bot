@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A REJECTED stop-loss is now re-placed and an unexpected stop-loss
+  termination escalates (#741). The reconciler's re-placement branches
+  (periodic loop and startup `_verify_stop_loss`) matched only
+  CANCELLED/EXPIRED/missing, so a triggered STOP_LOSS_LIMIT whose limit
+  leg was rejected by margin checks (-2010 class) fell through every
+  cycle — position permanently unprotected, no escalation. Both branches
+  now treat REJECTED as terminal. The engine's `_handle_order_cancel`
+  also no longer ignores stop-loss order ids: when a tracked position's
+  stop terminates unexpectedly it clears the stale id (so the
+  reconciler's missing-stop path re-protects next cycle), logs CRITICAL,
+  and emits a `system_events` row (`STOP_LOSS_CANCELLED`) with webhook
+  alert. Deliberate close-path cancels are unaffected (they stop
+  tracking the order before the callback can fire).
 - Repo-wide static-analysis debt cleared — `atb dev quality` (black, ruff,
   mypy, bandit) now passes from a red baseline of 26 unformatted files, 171
   ruff errors, ~700 mypy errors across ~90 files, and 25 bandit findings.

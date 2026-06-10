@@ -3366,3 +3366,69 @@ class TestSpotSLFillNotExternalClose:
 
         mock_position_tracker.remove_position.assert_not_called()
         mock_db.close_position.assert_not_called()
+
+
+class TestRejectedStopLossReplaced:
+    """#741: a REJECTED stop-loss is terminal (e.g. triggered limit leg hit a
+    -2010 margin reject) and must be re-placed like CANCELLED/EXPIRED — it
+    previously fell through every cycle, leaving the position unprotected."""
+
+    def test_periodic_cycle_replaces_rejected_sl(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_rejected",
+            exchange_order_id="entry_rej",
+            db_position_id=80,
+            quantity=0.5,
+        )
+        pos.stop_loss = 46000.0
+        mock_position_tracker.positions = {"entry_rej": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_rejected", status=ExOS.REJECTED, filled_quantity=0.0
+        )
+        mock_exchange.get_order.side_effect = lambda oid, sym: (
+            sl_order if oid == "sl_rejected" else entry_order
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_after_reject"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert pos.stop_loss_order_id == "new_sl_after_reject"
+
+    def test_startup_verify_replaces_rejected_sl(self, reconciler, mock_exchange, mock_db):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_rej_startup",
+            db_position_id=81,
+        )
+        sl_order = MockExchangeOrder(
+            order_id="sl_rej_startup", status=ExOS.REJECTED, filled_quantity=0.0
+        )
+        mock_exchange.get_order.return_value = sl_order
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_startup"
+
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=81,
+            status="verified",
+            severity=Severity.LOW,
+        )
+        reconciler._verify_stop_loss(position, "sl_rej_startup", result)
+
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert position.stop_loss_order_id == "new_sl_startup"

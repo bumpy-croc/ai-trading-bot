@@ -4290,6 +4290,48 @@ class LiveTradingEngine:
                 )
                 return
 
+    def _handle_stop_loss_cancelled(self, order_id: str, symbol: str) -> bool:
+        """Escalate when a tracked position's stop-loss order terminates unexpectedly.
+
+        Previously this case was a silent no-op: ``_handle_order_cancel`` only
+        popped positions by ENTRY order id, so a stop-loss whose terminal state
+        (CANCELED/REJECTED/EXPIRED) arrived via the OrderTracker left the
+        position believed-protected with no re-protection and no alert (#741).
+
+        Clears the stale in-memory ``stop_loss_order_id`` so the periodic
+        reconciler's missing-stop path re-places protection on its next cycle
+        (which also persists the NEW id over the stale DB value), and emits a
+        critical ``system_events`` row + webhook alert. Deliberate cancels from
+        the close path don't reach here — that path stops tracking the SL order
+        before the callback can fire.
+
+        Returns True when ``order_id`` matched a tracked position's stop-loss.
+        """
+        matched_key: str | None = None
+        for pos_key, position in self.live_position_tracker.positions.items():
+            if getattr(position, "stop_loss_order_id", None) == order_id:
+                matched_key = pos_key
+                break
+        if matched_key is None:
+            return False
+
+        self.live_position_tracker.set_stop_loss_order_id(matched_key, None)
+        message = (
+            f"Stop-loss order {order_id} for OPEN {symbol} position {matched_key} was "
+            f"cancelled/rejected/expired on the exchange — position is UNPROTECTED until "
+            f"the reconciler re-places it (next cycle)."
+        )
+        logger.critical("CRITICAL: %s", message)
+        self._record_event(
+            EventType.ERROR,
+            message,
+            severity="critical",
+            component="order_tracker",
+            error_code="STOP_LOSS_CANCELLED",
+            alert=True,
+        )
+        return True
+
     def _handle_order_cancel(self, order_id: str, symbol: str, filled_qty: float = 0.0) -> None:
         """Handle an order cancellation/rejection notification from OrderTracker.
 
@@ -4309,6 +4351,14 @@ class LiveTradingEngine:
             order_id=order_id,
             symbol=symbol,
         )
+        # Not an entry order? Check whether a tracked position's STOP-LOSS was
+        # cancelled/rejected/expired out from under it (#741). Must run before
+        # pop_position: popping by an SL order id can never match (positions
+        # are keyed by entry order id), but the position it protects must not
+        # be left silently unprotected.
+        if self._handle_stop_loss_cancelled(order_id, symbol):
+            return
+
         # Check if this was an entry order for a position we thought we had.
         # Use atomic pop_position() for thread safety - combines get + remove
         # in a single lock acquisition (called from OrderTracker background thread).

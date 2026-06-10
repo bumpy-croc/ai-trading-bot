@@ -1567,8 +1567,15 @@ class PositionReconciler:
 
                 return
 
-            if sl_order.status in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED):
-                # SL was cancelled or expired — position is unprotected
+            if sl_order.status in (
+                ExOrderStatus.CANCELLED,
+                ExOrderStatus.EXPIRED,
+                ExOrderStatus.REJECTED,
+            ):
+                # SL was cancelled/expired/rejected — position is unprotected.
+                # REJECTED matters: a triggered STOP_LOSS_LIMIT whose limit leg
+                # is rejected by margin checks (-2010 class) is terminal too —
+                # without it here the stop is never re-placed (#741).
                 filled_qty = getattr(sl_order, "filled_quantity", None) or 0.0
 
                 # If the SL partially executed before cancellation/expiry,
@@ -3173,9 +3180,19 @@ class PeriodicReconciler:
                             max_severity = Severity.HIGH
 
                 elif (
-                    sl_order and sl_order.status in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED)
+                    sl_order
+                    and sl_order.status
+                    in (
+                        ExOrderStatus.CANCELLED,
+                        ExOrderStatus.EXPIRED,
+                        # A triggered stop whose limit leg was rejected by margin
+                        # checks (-2010 class) is terminal: without REJECTED here
+                        # it fell through every cycle and the position stayed
+                        # unprotected with no escalation (#741).
+                        ExOrderStatus.REJECTED,
+                    )
                 ) or sl_order is None:
-                    # SL cancelled/expired/missing — attempt re-placement
+                    # SL cancelled/expired/rejected/missing — attempt re-placement
                     status_desc = sl_order.status.value if sl_order else "MISSING"
                     logger.warning(
                         "Stop-loss %s for %s is %s — attempting re-placement",
