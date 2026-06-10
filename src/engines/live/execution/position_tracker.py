@@ -11,7 +11,7 @@ import math
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from src.config.constants import (
     DEFAULT_EPSILON,
@@ -191,12 +191,14 @@ class LivePositionTracker:
             return None
 
         order_id = position.order_id
+        # BasePosition.__post_init__ normalizes str sides to PositionSide enum.
+        position_side = cast(PositionSide, position.side)
         with self._positions_lock:
             self._positions[order_id] = position
 
         logger.debug(
             "Opened %s position at %.2f, size=%.4f, order_id=%s",
-            position.side.value,
+            position_side.value,
             position.entry_price,
             position.size,
             order_id,
@@ -223,7 +225,7 @@ class LivePositionTracker:
                         quantity = 0.0
                 db_id = self.db_manager.log_position(
                     symbol=position.symbol,
-                    side=position.side.value,
+                    side=position_side.value,
                     entry_price=position.entry_price,
                     size=position.size,
                     entry_balance=position.entry_balance,
@@ -400,6 +402,8 @@ class LivePositionTracker:
         metrics = self.mfe_mae_tracker.get_position_metrics(order_id)
         # Clear MFE/MAE tracker outside position lock to avoid nested locks
         self.mfe_mae_tracker.clear(order_id)
+        # BasePosition.__post_init__ normalizes str sides to PositionSide enum.
+        position_side = cast(PositionSide, position.side)
 
         # Calculate P&L (all inputs pre-validated, but wrap to catch unexpected errors)
         try:
@@ -428,7 +432,7 @@ class LivePositionTracker:
 
         logger.info(
             "Closed %s at %.2f, PnL=%.2f (%.2f%%), reason=%s",
-            position.side.value,
+            position_side.value,
             exit_price,
             realized_pnl,
             trade_pnl_pct * 100,
@@ -511,7 +515,8 @@ class LivePositionTracker:
                 position_key=order_id,
                 entry_price=float(position.entry_price),
                 current_price=float(current_price),
-                side=position.side.value,
+                # __post_init__ guarantees side is a PositionSide enum.
+                side=cast(PositionSide, position.side).value,
                 position_fraction=float(position.size),
                 current_time=now,
             )
@@ -795,7 +800,7 @@ class LivePositionTracker:
 
             # Capture db_id and state snapshot for DB update outside lock
             db_id = self._position_db_ids.get(order_id)
-            db_update_params = {
+            db_update_params: dict[str, Any] = {
                 "trailing_stop_activated": position.trailing_stop_activated,
                 "trailing_stop_price": position.trailing_stop_price,
                 "breakeven_triggered": position.breakeven_triggered,
@@ -828,7 +833,8 @@ class LivePositionTracker:
         return {
             "order_id": order_id,
             "symbol": position.symbol,
-            "side": position.side.value,
+            # __post_init__ guarantees side is a PositionSide enum.
+            "side": cast(PositionSide, position.side).value,
             "entry_price": position.entry_price,
             "entry_time": position.entry_time,
             "size": position.size,
@@ -863,7 +869,12 @@ class LivePositionTracker:
 
         recovered = []
         try:
-            db_positions = self.db_manager.get_open_positions(session_id)
+            # KNOWN GAP: DatabaseManager does not implement get_open_positions
+            # (it exposes get_active_positions returning dicts). Against the real
+            # manager this raises AttributeError, caught below, so recovery
+            # returns []. Kept as-is for behavior parity; engine recovery uses
+            # LiveTradingEngine._recover_active_positions instead.
+            db_positions = self.db_manager.get_open_positions(session_id)  # type: ignore[attr-defined]
             for db_pos in db_positions:
                 entry_time = db_pos.entry_time
                 if entry_time is not None and entry_time.tzinfo is None:
@@ -895,13 +906,16 @@ class LivePositionTracker:
                     ),
                     breakeven_triggered=bool(db_pos.breakeven_triggered),
                 )
+                # Persisted rows carry the entry order id used as tracker key.
+                recovered_order_id = cast(str, position.order_id)
                 with self._positions_lock:
-                    self._positions[position.order_id] = position
-                    self._position_db_ids[position.order_id] = db_pos.id
+                    self._positions[recovered_order_id] = position
+                    self._position_db_ids[recovered_order_id] = db_pos.id
                 recovered.append(position)
                 logger.info(
                     "Recovered position: %s %s @ %.2f",
-                    position.side.value,
+                    # __post_init__ guarantees side is a PositionSide enum.
+                    cast(PositionSide, position.side).value,
                     position.symbol,
                     position.entry_price,
                 )

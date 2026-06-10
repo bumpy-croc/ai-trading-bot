@@ -131,8 +131,10 @@ class LiveEventLogger:
 
         try:
             today = date.today()
-            # Query first snapshot of current day for this session
-            snapshot = self.db_manager.get_first_snapshot_of_day(
+            # Query first snapshot of current day for this session.
+            # DatabaseManager does not implement this method yet; the
+            # AttributeError handler below provides the graceful fallback.
+            snapshot = self.db_manager.get_first_snapshot_of_day(  # type: ignore[attr-defined]
                 session_id=self.session_id,
                 target_date=today,
             )
@@ -164,6 +166,9 @@ class LiveEventLogger:
         if not self.enabled or self.session_id is None:
             if self.log_to_database and self.session_id is None:
                 logger.warning("Cannot log account snapshot - no trading session ID available")
+            return
+        # Unreachable when enabled is True; explicit check narrows the type for mypy.
+        if self.db_manager is None:
             return
 
         try:
@@ -346,6 +351,9 @@ class LiveEventLogger:
         """
         if not self.enabled:
             return
+        # Unreachable when enabled is True; explicit check narrows the type for mypy.
+        if self.db_manager is None:
+            return
 
         try:
             self.db_manager.log_trade(
@@ -406,6 +414,9 @@ class LiveEventLogger:
         """
         if not self.enabled:
             return
+        # Unreachable when enabled is True; explicit check narrows the type for mypy.
+        if self.db_manager is None:
+            return
 
         try:
             self.db_manager.log_strategy_execution(
@@ -462,6 +473,9 @@ class LiveEventLogger:
         """
         if not self.enabled:
             return
+        # Unreachable when enabled is True; explicit check narrows the type for mypy.
+        if self.db_manager is None:
+            return
 
         try:
             self.db_manager.log_strategy_execution(
@@ -509,6 +523,9 @@ class LiveEventLogger:
         """
         if not self.enabled:
             return None
+        # Unreachable when enabled is True; explicit check narrows the type for mypy.
+        if self.db_manager is None:
+            return None
 
         try:
             date_str = datetime.now(UTC).strftime("%Y%m%d_%H%M")
@@ -535,6 +552,9 @@ class LiveEventLogger:
             final_balance: Final account balance.
         """
         if not self.enabled or self.session_id is None:
+            return
+        # Unreachable when enabled is True; explicit check narrows the type for mypy.
+        if self.db_manager is None:
             return
 
         try:

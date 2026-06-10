@@ -12,7 +12,7 @@ import time
 import traceback
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
@@ -104,6 +104,13 @@ from src.strategies.components import Strategy as ComponentStrategy
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
 
+if TYPE_CHECKING:
+    from src.config.config_manager import ConfigManager
+    from src.engines.live.kline_buffer import KlineBuffer
+    from src.engines.live.reconciliation import PeriodicReconciler
+    from src.engines.live.user_data_processor import UserDataProcessor
+    from src.performance.tracker import TradeProtocol
+
 logger = logging.getLogger(__name__)
 
 # Type aliases for backward compatibility - use shared models
@@ -113,12 +120,12 @@ Position = LivePosition
 Trade = BaseTrade
 
 
-def _create_exchange_provider(provider: str, config: dict, testnet: bool = False):
+def _create_exchange_provider(provider: str, config: ConfigManager, testnet: bool = False):
     """Factory to create exchange provider and return (provider_instance, provider_name).
 
     Args:
         provider: Exchange provider name ('binance' or 'coinbase')
-        config: Configuration dict containing API credentials
+        config: Configuration manager containing API credentials
         testnet: If True, use testnet credentials and endpoint
     """
     if provider == "coinbase":
@@ -232,7 +239,8 @@ class LiveTradingEngine:
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
 
-        component_risk = None
+        # Duck-typed component risk adapter; attribute access is hasattr-guarded.
+        component_risk: Any = None
         component_risk_params = None
         if isinstance(self.strategy, ComponentStrategy):
             component_risk = getattr(self.strategy, "risk_manager", None)
@@ -309,7 +317,7 @@ class LiveTradingEngine:
         # Partial operations policy (enabled by default for better profit capture)
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
-            self.partial_manager = partial_manager
+            self.partial_manager: PartialExitPolicy | None = partial_manager
         elif enable_partial_operations:
             # Check strategy overrides first, then fall back to risk parameters
             strategy_overrides = (
@@ -349,7 +357,7 @@ class LiveTradingEngine:
                 max_correlated_exposure=self.risk_manager.params.max_correlated_exposure,
                 correlation_update_frequency_hours=self.risk_manager.params.correlation_update_frequency_hours,
             )
-            self.correlation_engine = CorrelationEngine(config=corr_cfg)
+            self.correlation_engine: CorrelationEngine | None = CorrelationEngine(config=corr_cfg)
         except Exception:
             self.correlation_engine = None
 
@@ -407,15 +415,17 @@ class LiveTradingEngine:
                 self.dynamic_risk_manager = None
         self._dynamic_risk_handler = DynamicRiskHandler(self.dynamic_risk_manager)
 
-        # Initialize exchange interface, account synchronizer, and order tracker
-        self.exchange_interface = None
+        # Initialize exchange interface, account synchronizer, and order tracker.
+        # Typed Any: the provider factory is untyped and concrete providers expose
+        # duck-typed margin/WS extensions beyond the base interface.
+        self.exchange_interface: Any = None
         self.account_synchronizer = None
         self.order_tracker: OrderTracker | None = None
         if enable_live_trading:
             try:
-                config = get_config()
+                app_config = get_config()
                 self.exchange_interface, provider_name = _create_exchange_provider(
-                    provider, config, testnet
+                    provider, app_config, testnet
                 )
                 if self.exchange_interface:
                     use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
@@ -490,7 +500,8 @@ class LiveTradingEngine:
         # Trading state
         self.is_running = False
         self._close_only_mode = False  # No new entries when True; exits still run
-        self._periodic_reconciler = None  # Set during start() for live trading
+        # Set during start() for live trading
+        self._periodic_reconciler: PeriodicReconciler | None = None
         # Shared per-base-asset cooldown for the orphaned-borrow sweep, so the
         # startup sweep and the periodic reconciler don't both act in one window.
         self._orphan_sweep_cooldown: dict[str, float] = {}
@@ -501,17 +512,19 @@ class LiveTradingEngine:
 
         self._base_asset_locks = BaseAssetLockRegistry()
         self.completed_trades: list[Trade] = []
-        self.last_data_update = None
-        self.last_account_snapshot = None  # Track when we last logged account state
+        self.last_data_update: datetime | None = None
+        # Track when we last logged account state
+        self.last_account_snapshot: datetime | None = None
         self.timeframe: str | None = None  # Will be set when trading starts
         self._active_symbol: str | None = None
 
         # WebSocket stream state (populated during start() if provider supports it)
-        self._kline_buffer = None
-        self._user_data_processor = None
+        self._kline_buffer: KlineBuffer | None = None
+        self._user_data_processor: UserDataProcessor | None = None
         self._ws_kline_active = False
-        self._ws_kline_provider = None
-        self._ws_health_thread = None
+        # Duck-typed: the unwrapped provider exposing WS kline extensions.
+        self._ws_kline_provider: Any = None
+        self._ws_health_thread: threading.Thread | None = None
         # Consecutive unproductive user-stream reconnects; trips a circuit breaker
         # that stops the futile reconnect loop and runs REST-only (#616).
         self._user_reconnect_failures = 0
@@ -584,7 +597,7 @@ class LiveTradingEngine:
                 self.time_exit_policy = None
 
         # Threading
-        self.main_thread = None
+        self.main_thread: threading.Thread | None = None
         # Set when the trading loop dies abnormally (unhandled crash or error
         # exhaustion) so start() can exit non-zero for an orchestrator restart (#630).
         self._loop_crashed = False
@@ -693,8 +706,9 @@ class LiveTradingEngine:
             session_id=self.trading_session_id,
         )
 
-        # Position tracker
-        self.live_position_tracker = position_tracker or LivePositionTracker(
+        # Position tracker (explicit annotation: the positions property reads
+        # this attribute before mypy can infer it through the init cycle)
+        self.live_position_tracker: LivePositionTracker = position_tracker or LivePositionTracker(
             db_manager=self.db_manager,
             fee_rate=self.fee_rate,
             slippage_rate=self.slippage_rate,
@@ -967,7 +981,7 @@ class LiveTradingEngine:
                 logger.debug("Failed to clear risk context provider on previous strategy: %s", exc)
 
         if runtime is not None:
-            self._runtime = runtime
+            self._runtime: StrategyRuntime | None = runtime
         elif self._component_strategy is not None:
             self._runtime = StrategyRuntime(self._component_strategy)
         else:
@@ -1098,8 +1112,11 @@ class LiveTradingEngine:
                     dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
                     if dynamic_descriptor is not None:
                         self._component_dynamic_risk_config = dynamic_descriptor.to_config()
-                except Exception:
-                    pass  # Ignore - shared function handles the main logic
+                except Exception as exc:
+                    # Benign: shared hydration above already applied the policy;
+                    # only the live-engine state cache misses this descriptor.
+                    # Debug level: runs per decision in the trading loop.
+                    logger.debug("Dynamic risk config cache update skipped: %s", exc)
 
     # Runtime integration helpers -------------------------------------------------
 
@@ -1135,7 +1152,8 @@ class LiveTradingEngine:
             # They compute indicators on-demand in process_candle()
             return df
 
-        dataset = self._runtime.prepare_data(df)
+        # _is_runtime_strategy() guard above ensures _runtime is not None.
+        dataset = cast(StrategyRuntime, self._runtime).prepare_data(df)
         self._runtime_dataset = dataset
         self._runtime_warmup = max(0, int(dataset.warmup_period or 0))
         return dataset.data
@@ -1158,7 +1176,8 @@ class LiveTradingEngine:
                 quantity = self._compute_component_quantity(position)
                 component_position = ComponentPosition(
                     symbol=position.symbol,
-                    side=position.side.value,
+                    # __post_init__ guarantees side is a PositionSide enum.
+                    side=cast(PositionSide, position.side).value,
                     size=quantity,
                     entry_price=float(position.entry_price),
                     current_price=float(current_price),
@@ -1221,7 +1240,8 @@ class LiveTradingEngine:
 
         context = self._build_runtime_context(balance, current_price, current_time)
         try:
-            decision = self._runtime.process(index, context)
+            # _is_runtime_strategy() guard above ensures _runtime is not None.
+            decision = cast(StrategyRuntime, self._runtime).process(index, context)
             self._apply_policies_from_decision(decision)
             return decision
         except (ValueError, KeyError, IndexError, AttributeError) as exc:
@@ -1231,7 +1251,8 @@ class LiveTradingEngine:
     def _finalize_runtime(self) -> None:
         if self._is_runtime_strategy():
             try:
-                self._runtime.finalize()
+                # _is_runtime_strategy() guard ensures _runtime is not None.
+                cast(StrategyRuntime, self._runtime).finalize()
             finally:
                 self._runtime_dataset = None
                 self._runtime_warmup = 0
@@ -2125,8 +2146,11 @@ class LiveTradingEngine:
         # recovering the WS or keep serving the loop from REST in the meantime.
         if self._kline_buffer:
             try:
+                # start() sets _active_symbol/timeframe before the buffer exists.
                 self._kline_buffer.resync_from_rest(
-                    self.data_provider, self._active_symbol, self.timeframe
+                    self.data_provider,
+                    cast(str, self._active_symbol),
+                    cast(str, self.timeframe),
                 )
             except Exception as e:
                 logger.error("Kline REST resync failed: %s", e)
@@ -2293,7 +2317,8 @@ class LiveTradingEngine:
                         logger.error(
                             "Failed to close position %s: %s", position.order_id, e, exc_info=True
                         )
-                        self.live_position_tracker.remove_position(position.order_id)
+                        # Tracked positions always carry a non-None order_id.
+                        self.live_position_tracker.remove_position(cast(str, position.order_id))
             else:
                 # PAPER: preserve open positions in DB so they survive restart.
                 # _recover_active_positions() will reload them on next start().
@@ -2379,7 +2404,8 @@ class LiveTradingEngine:
         cfg = get_config()
         self._active_symbol = symbol
         try:
-            heartbeat_every = int(cfg.get("ENGINE_HEARTBEAT_STEPS", "60"))
+            # get() with a non-None default always returns str.
+            heartbeat_every = int(cast(str, cfg.get("ENGINE_HEARTBEAT_STEPS", "60")))
         except Exception:
             heartbeat_every = 60
         while self.is_running and not self.stop_event.is_set():
@@ -2549,7 +2575,9 @@ class LiveTradingEngine:
                     if (not self._is_runtime_strategy()) and callable(
                         getattr(self.strategy, "check_short_entry_conditions", None)
                     ):
-                        short_entry_signal = self.strategy.check_short_entry_conditions(
+                        # Legacy duck-typed hook; presence is verified by the
+                        # callable(getattr(...)) guard above.
+                        short_entry_signal = cast(Any, self.strategy).check_short_entry_conditions(
                             df, current_index
                         )
                         if short_entry_signal:
@@ -2925,25 +2953,25 @@ class LiveTradingEngine:
         consume a sequence_length window saw materially different inputs
         between the two engines.
         """
+        # The trading loop calls this only when sentiment_provider is set.
+        sentiment_provider = cast(SentimentDataProvider, self.sentiment_provider)
         try:
             # Step 1: backfill historical sentiment over the buffer if the
             # provider supports it. Mirrors backtest's `_merge_sentiment_data`
             # join + ffill so older candles carry real sentiment values.
-            if hasattr(self.sentiment_provider, "get_historical_sentiment") and not df.empty:
+            if hasattr(sentiment_provider, "get_historical_sentiment") and not df.empty:
                 try:
                     start = df.index.min().to_pydatetime()
                     end = df.index.max().to_pydatetime()
-                    sentiment_df = self.sentiment_provider.get_historical_sentiment(
-                        symbol, start, end
-                    )
+                    sentiment_df = sentiment_provider.get_historical_sentiment(symbol, start, end)
                     if sentiment_df is not None and not sentiment_df.empty:
                         # Aggregate when the provider supports it. Fall back
                         # to "1h" when self.timeframe is not yet set (e.g.
                         # warmup paths) so the join shape is well-defined
                         # rather than producing NaN-padded raw rows that
                         # silently diverge from backtest.
-                        if hasattr(self.sentiment_provider, "aggregate_sentiment"):
-                            sentiment_df = self.sentiment_provider.aggregate_sentiment(
+                        if hasattr(sentiment_provider, "aggregate_sentiment"):
+                            sentiment_df = sentiment_provider.aggregate_sentiment(
                                 sentiment_df, window=self.timeframe or "1h"
                             )
                         # Restrict the merge to the sentiment namespace and
@@ -2995,8 +3023,8 @@ class LiveTradingEngine:
             # The 4h window matches the live sentiment provider's
             # freshness contract — bars older than that rely on the
             # historical backfill above.
-            if hasattr(self.sentiment_provider, "get_live_sentiment"):
-                live_sentiment = self.sentiment_provider.get_live_sentiment()
+            if hasattr(sentiment_provider, "get_live_sentiment"):
+                live_sentiment = sentiment_provider.get_live_sentiment()
                 if live_sentiment and not df.empty:
                     # 4h: live sentiment freshness window (see step-2 comment).
                     recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
@@ -3040,8 +3068,13 @@ class LiveTradingEngine:
             if symbol:
                 try:
                     price_series[str(symbol)] = df["close"].copy()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "Failed to seed candidate price series for %s from current "
+                        "frame: %s — correlation sizing degrades to history-only.",
+                        symbol,
+                        e,
+                    )
             for sym in symbols_to_check:
                 s = str(sym)
                 if s in price_series:
@@ -3058,7 +3091,15 @@ class LiveTradingEngine:
                         )
                         if not hist.empty and "close" in hist:
                             price_series[s] = hist["close"]
-                except Exception:
+                except Exception as e:
+                    # Best-effort per-symbol history fetch inside a per-candle
+                    # loop; transient provider errors are expected, so log at
+                    # debug to avoid flooding while keeping the trace visible.
+                    logger.debug(
+                        "Skipping %s in correlation matrix — history fetch failed: %s",
+                        s,
+                        e,
+                    )
                     continue
             corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
             return {
@@ -3541,7 +3582,7 @@ class LiveTradingEngine:
 
     def _resolve_execution_fill_policy(self) -> FillPolicy:
         """Resolve execution fill policy from configuration."""
-        policy_name = DEFAULT_EXECUTION_FILL_POLICY
+        policy_name: str | None = DEFAULT_EXECUTION_FILL_POLICY
         try:
             cfg = get_config()
             policy_name = cfg.get("EXECUTION_FILL_POLICY", DEFAULT_EXECUTION_FILL_POLICY)
@@ -3748,8 +3789,9 @@ class LiveTradingEngine:
                         close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
 
                         # Use quantity from position - LiveEntryResult.position.quantity
-                        # No need to recalculate from entry_price which could introduce errors
-                        if result.position.quantity <= 0:
+                        # No need to recalculate from entry_price which could introduce errors.
+                        # Live executed entries always carry the filled quantity.
+                        if cast(float, result.position.quantity) <= 0:
                             logger.critical(
                                 "CRITICAL: Cannot place emergency close for %s - "
                                 "invalid quantity %.8f. MANUAL INTERVENTION REQUIRED.",
@@ -3933,7 +3975,9 @@ class LiveTradingEngine:
                         sl_order_id,
                     )
                     self.live_position_tracker.set_stop_loss_order_id(
-                        position.order_id, sl_order_id
+                        # Executed entries carry the exchange order id.
+                        cast(str, position.order_id),
+                        sl_order_id,
                     )
                     if self.order_tracker:
                         self.order_tracker.track_order(sl_order_id, symbol)
@@ -4235,9 +4279,12 @@ class LiveTradingEngine:
                 )
                 return
 
+            # Tracked positions always carry a non-None order_id; __post_init__
+            # guarantees side is a PositionSide enum.
             metrics = self.live_position_tracker.mfe_mae_tracker.get_position_metrics(
-                position.order_id
+                cast(str, position.order_id)
             )
+            position_side = cast(PositionSide, position.side)
 
             sl_already_filled = False
             sl_fill_price: float | None = None
@@ -4439,8 +4486,10 @@ class LiveTradingEngine:
 
             # Include margin interest in performance tracker fees so
             # reported PnL, win rate, and net metrics account for financing.
+            # BaseTrade satisfies TradeProtocol at runtime; mutable-attribute
+            # invariance rejects its narrower non-Optional datetime fields.
             self.performance_tracker.record_trade(
-                trade=trade,
+                trade=cast("TradeProtocol", trade),
                 fee=total_fee + interest_cost,
                 slippage=total_slippage,
             )
@@ -4475,7 +4524,7 @@ class LiveTradingEngine:
                     )
                 self.db_manager.log_trade(
                     symbol=position.symbol,
-                    side=position.side.value,
+                    side=position_side.value,
                     entry_price=position.entry_price,
                     exit_price=exit_price,
                     size=float(
@@ -4506,7 +4555,7 @@ class LiveTradingEngine:
             # exit handler.
             logger.info(
                 "📈 Closed %s position for %s: PnL=$%.2f, Reason=%s, Balance=$%.2f",
-                position.side.value,
+                position_side.value,
                 position.symbol,
                 gross_pnl,
                 reason,
@@ -4516,7 +4565,7 @@ class LiveTradingEngine:
                 "close_position",
                 order_id=position.order_id,
                 symbol=position.symbol,
-                side=position.side.value,
+                side=position_side.value,
                 exit_price=exit_price,
                 pnl=gross_pnl,
                 pnl_percent=trade.pnl_percent,
@@ -4892,7 +4941,7 @@ class LiveTradingEngine:
             equity = float(self.current_balance) + unrealized_pnl
 
             # Calculate current drawdown percentage
-            current_drawdown = 0
+            current_drawdown: float = 0
             perf_metrics = self.performance_tracker.get_metrics()
             if perf_metrics.peak_balance > 0:
                 current_drawdown = (
@@ -4950,7 +4999,8 @@ class LiveTradingEngine:
             trade_data = {
                 "timestamp": trade.exit_time.isoformat(),
                 "symbol": trade.symbol,
-                "side": trade.side.value,
+                # BaseTrade.__post_init__ normalizes str sides to PositionSide.
+                "side": cast(PositionSide, trade.side).value,
                 "size": trade.size,
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
@@ -5034,7 +5084,7 @@ class LiveTradingEngine:
             return False
 
         try:
-            import requests
+            import requests  # type: ignore[import-untyped]  # types-requests not installed
 
             payload = {
                 "text": f"🤖 Trading Bot: {message}",
@@ -5061,8 +5111,8 @@ class LiveTradingEngine:
 
     def _calculate_adaptive_interval(self, current_price: float | None = None) -> int:
         """Calculate adaptive check interval based on recent trading activity and market conditions"""
-        # Base interval from configuration
-        interval = self.base_check_interval
+        # Base interval from configuration (float: off-hours scaling is fractional)
+        interval: float = self.base_check_interval
 
         # Factor in recent trading activity — use naive UTC for comparison
         # since positions from the database store naive UTC timestamps
@@ -5363,7 +5413,8 @@ class LiveTradingEngine:
                     continue
                 self.risk_manager.update_position(
                     symbol=position.symbol,
-                    side=position.side.value,
+                    # __post_init__ guarantees side is a PositionSide enum.
+                    side=cast(PositionSide, position.side).value,
                     size=effective_size,
                     entry_price=position.entry_price,
                 )
@@ -5496,7 +5547,8 @@ class LiveTradingEngine:
                     try:
                         self.risk_manager.update_position(
                             symbol=position.symbol,
-                            side=position.side.value,
+                            # __post_init__ guarantees side is a PositionSide enum.
+                            side=cast(PositionSide, position.side).value,
                             size=position.size,
                             entry_price=position.entry_price,
                         )
@@ -5804,8 +5856,10 @@ class LiveTradingEngine:
                         pnl_percent=pnl_pct_sized,
                         exit_reason="stop_loss_offline",
                     )
+                    # BaseTrade satisfies TradeProtocol at runtime; mutable-attribute
+                    # invariance rejects its narrower non-Optional datetime fields.
                     self.performance_tracker.record_trade(
-                        trade=trade,
+                        trade=cast("TradeProtocol", trade),
                         fee=exit_fee + offline_interest_cost,
                         slippage=exit_slippage_cost,
                     )
@@ -5817,7 +5871,8 @@ class LiveTradingEngine:
                     if self.trading_session_id is not None:
                         self.db_manager.log_trade(
                             symbol=position.symbol,
-                            side=position.side.value,
+                            # __post_init__ guarantees side is a PositionSide enum.
+                            side=cast(PositionSide, position.side).value,
                             entry_price=position.entry_price,
                             exit_price=exit_price,
                             size=fraction,
@@ -5849,7 +5904,8 @@ class LiveTradingEngine:
 
                 # Close in database
                 db_ids = self.live_position_tracker.position_db_ids
-                position_db_id = db_ids.get(position.order_id)
+                # Tracked positions always carry a non-None order_id.
+                position_db_id = db_ids.get(cast(str, position.order_id))
                 if position_db_id:
                     self.db_manager.close_position(position_id=position_db_id)
 
@@ -6002,7 +6058,8 @@ class LiveTradingEngine:
             return False
 
         self._finalize_runtime()
-        updated_strategy = self.strategy_manager.current_strategy
+        # apply_pending_update() success guarantees a current strategy is set.
+        updated_strategy = cast(ComponentStrategy, self.strategy_manager.current_strategy)
         self._configure_strategy(updated_strategy)
         self._runtime_dataset = None
         self._runtime_warmup = 0

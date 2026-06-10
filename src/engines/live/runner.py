@@ -18,6 +18,7 @@ from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MAX_RISK_PER_TRADE,
 )
+from src.data_providers.data_provider import DataProvider
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.infrastructure.logging.config import configure_logging
@@ -221,13 +222,15 @@ def main():
         # Initialize data provider
         logger.info("Initializing data providers...")
         if args.mock_data:
-            data_provider = MockDataProvider(interval_seconds=5)  # 5s candles for rapid testing
+            data_provider: DataProvider = MockDataProvider(
+                interval_seconds=5  # 5s candles for rapid testing
+            )
             logger.info("Using MockDataProvider for rapid testing")
         else:
             if args.provider == "coinbase":
                 from src.data_providers.coinbase_provider import CoinbaseProvider
 
-                provider = CoinbaseProvider()
+                provider: DataProvider = CoinbaseProvider()
             else:
                 from src.data_providers.binance_provider import BinanceProvider
 
