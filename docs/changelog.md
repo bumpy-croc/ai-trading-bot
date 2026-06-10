@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- OrderTracker no longer converts an API outage into a position deletion.
+  After `MAX_API_ERROR_RETRIES` (10) consecutive failed/`None` polls
+  (~50 s at the live 5 s interval) the tracker fired `on_cancel`, and
+  `_handle_order_cancel` popped the (possibly live) position from the
+  tracker and refunded its entry fee — manufacturing untracked exchange
+  exposure, a corrupted balance, and room for a double entry on the next
+  signal, exactly during exchange API degradations (LESSONS §1.8 fail-open
+  class). Polling give-up now routes to a new `on_tracking_lost` callback;
+  the engine's `_handle_order_tracking_lost` keeps the position tracked,
+  leaves the balance untouched, and escalates with a critical
+  `system_events` row (`ORDER_TRACKING_LOST`) + webhook alert so the
+  periodic reconciler resolves the order's true state from the exchange.
+  `on_cancel` now fires only for exchange-confirmed terminal states.
 - Closed live `trades` rows now persist `commission` and `quantity` (previously
   always `0` / `NULL`). The live close path (`LiveTradingEngine._close_position`
   and the offline stop-loss reconciliation path) now passes `commission` and
