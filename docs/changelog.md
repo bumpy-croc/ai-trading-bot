@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (uppercase DB side, tracker key fallback to row id, partial-op state,
   reconciliation ids), skips invalid-entry-price rows with a CRITICAL log,
   and isolates per-row failures.
+- `build_time_exit_policy` (engines/shared) can now actually build a policy
+  (#760): it passed `exit_time`/`exit_days` kwargs that `TimeExitPolicy` does
+  not accept, so it always raised `TypeError` internally and returned `None`.
+  It now maps the same `time_exits` config shape as both engines' builders
+  (max holding, end-of-day/weekend flat, timezone, restrictions) and honors
+  both `params.time_exits` and the legacy `params.max_holding_hours` fallback.
 - `StrategyManager.update_model` with no strategy loaded now fails with the
   intended descriptive `ValueError` (#765) instead of an `AttributeError`
   raised while formatting the error message itself (`self.current_strategy.name`
