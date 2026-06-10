@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wired into the first snapshot after engine start. Trading-day semantics are
   explicitly UTC throughout the event logger (was local `date.today()`,
   skewing day boundaries on non-UTC hosts).
+- Backtest strategies can finally see their open position (#756):
+  `_build_runtime_context` passed the `PositionSide` enum into
+  `ComponentPosition`, whose validation expects "long"/"short" strings, so
+  construction raised `ValueError` on every candle (swallowed) and component
+  strategies always received `current_positions=None` — while live populated
+  it correctly. Position-aware logic (pyramiding guards, exposure checks) was
+  silently inert in backtests. The side now converts via `to_side_string`,
+  exactly like live.
 - CoinbaseProvider no longer submits every order as MARKET (#762):
   `_convert_to_cb_type` was keyed by lowercase strings while `OrderType`
   enum values are uppercase, so the lookup always fell back to "market" —
