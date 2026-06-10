@@ -401,7 +401,7 @@ class AccountSynchronizer:
 
             if usdt_balance:
                 # Validate total is numeric
-                if usdt_balance.total is None or not isinstance(usdt_balance.total, (int, float)):
+                if usdt_balance.total is None or not isinstance(usdt_balance.total, int | float):
                     logger.error(
                         "Invalid USDT balance total: %s (type=%s) - skipping sync",
                         usdt_balance.total,
@@ -466,9 +466,12 @@ class AccountSynchronizer:
             for exchange_pos in exchange_positions:
                 # Find matching position in database
                 db_pos = None
-                for pos in db_positions:
-                    if pos["symbol"] == exchange_pos.symbol and pos["side"] == exchange_pos.side:
-                        db_pos = pos
+                for position_row in db_positions:
+                    if (
+                        position_row["symbol"] == exchange_pos.symbol
+                        and position_row["side"] == exchange_pos.side
+                    ):
+                        db_pos = position_row
                         break
 
                 if db_pos:
@@ -477,8 +480,8 @@ class AccountSynchronizer:
                     exchange_size = exchange_pos.size
                     db_size = db_pos["size"]
 
-                    if not isinstance(exchange_size, (int, float)) or not isinstance(
-                        db_size, (int, float)
+                    if not isinstance(exchange_size, int | float) or not isinstance(
+                        db_size, int | float
                     ):
                         logger.warning(
                             "Skipping position sync with non-numeric size: "
@@ -538,13 +541,13 @@ class AccountSynchronizer:
 
             # Check for positions that exist in database but not in exchange
             for db_pos in db_positions:
-                exchange_pos = None
+                matching_exchange_pos = None
                 for pos in exchange_positions:
                     if pos.symbol == db_pos["symbol"] and pos.side == db_pos["side"]:
-                        exchange_pos = pos
+                        matching_exchange_pos = pos
                         break
 
-                if not exchange_pos:
+                if not matching_exchange_pos:
                     # Position exists in database but not on exchange
                     logger.warning(
                         f"Position closed on exchange: {db_pos['symbol']} {db_pos['side']}"
@@ -591,10 +594,10 @@ class AccountSynchronizer:
             for exchange_order in exchange_orders:
                 # Find matching order in database
                 db_order = None
-                for order in db_orders:
-                    order_id = order["exchange_order_id"] or order["internal_order_id"]
+                for order_row in db_orders:
+                    order_id = order_row["exchange_order_id"] or order_row["internal_order_id"]
                     if order_id == exchange_order.order_id:
-                        db_order = order
+                        db_order = order_row
                         break
 
                 if db_order:
@@ -654,14 +657,14 @@ class AccountSynchronizer:
 
             # Check for orders that exist in database but not in exchange
             for db_order in db_orders:
-                exchange_order = None
+                matching_exchange_order = None
                 order_id = db_order["exchange_order_id"] or db_order["internal_order_id"]
                 for order in exchange_orders:
                     if order.order_id == order_id:
-                        exchange_order = order
+                        matching_exchange_order = order
                         break
 
-                if not exchange_order:
+                if not matching_exchange_order:
                     # Order exists in database but not on exchange
                     logger.warning("Order cancelled on exchange: %s", order_id)
 
@@ -749,7 +752,7 @@ class AccountSynchronizer:
                             exit_reason="recovered_from_exchange",
                             strategy_name="exchange_recovery",
                             source=TradeSource.LIVE,
-                            order_id=trade.order_id,
+                            exit_order_id=trade.order_id,
                             session_id=self.session_id,
                         )
 
