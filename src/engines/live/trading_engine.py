@@ -4293,11 +4293,6 @@ class LiveTradingEngine:
     def _handle_stop_loss_cancelled(self, order_id: str, symbol: str) -> bool:
         """Escalate when a tracked position's stop-loss order terminates unexpectedly.
 
-        Previously this case was a silent no-op: ``_handle_order_cancel`` only
-        popped positions by ENTRY order id, so a stop-loss whose terminal state
-        (CANCELED/REJECTED/EXPIRED) arrived via the OrderTracker left the
-        position believed-protected with no re-protection and no alert (#741).
-
         Clears the stale in-memory ``stop_loss_order_id`` so the periodic
         reconciler's missing-stop path re-places protection on its next cycle
         (which also persists the NEW id over the stale DB value), and emits a
