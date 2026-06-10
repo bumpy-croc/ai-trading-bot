@@ -2648,6 +2648,16 @@ class PeriodicReconciler:
         )
         # Shared per-base-asset exchange-mutation lock (serialises sweep vs entry/exit).
         self._lock_registry = lock_registry
+        # Reuses the startup reconciler's P&L realization (balance + audit) so a
+        # stop-loss fill detected by the periodic cycle books money identically
+        # to one detected at startup. Construction is side-effect-free.
+        self._position_reconciler = PositionReconciler(
+            exchange_interface=exchange_interface,
+            position_tracker=position_tracker,
+            db_manager=db_manager,
+            session_id=session_id,
+            use_margin=use_margin,
+        )
 
     def start(self) -> None:
         """Start the periodic reconciliation daemon thread."""
@@ -2702,6 +2712,59 @@ class PeriodicReconciler:
                 if not self._running:
                     break
                 time.sleep(1)
+
+    def _close_position_from_filled_sl(self, order_key: str, position: Any, sl_order: Any) -> bool:
+        """Book and close a position whose stop-loss filled on the exchange.
+
+        Delegates to the startup reconciler's filled-SL handler so the
+        periodic path books money identically: DB close FIRST (a failed close
+        leaves the position tracked for re-reconciliation), then realized P&L
+        into the session balance with the commission normalized to USD, plus
+        a deduplicated ``trades`` row. The periodic path previously closed
+        the DB row with NO balance update and no trade record, so every SL
+        loss the reconciler detected before the engine's deferred-exit drain
+        silently never hit tracked capital → overstated balance → oversized
+        subsequent positions.
+
+        Skips when the position is no longer tracked — the engine's
+        deferred SL-exit drain already processed this fill — so the P&L is
+        not double-booked. A residual race with an engine exit already in
+        flight remains until the reconciler is base-lock-aware (#714).
+
+        Returns True when this call closed the position.
+        """
+        if self.position_tracker.get_position(order_key) is None:
+            logger.info(
+                "Stop-loss fill for %s already processed elsewhere — skipping (periodic)",
+                order_key,
+            )
+            return False
+
+        self._position_reconciler._close_position_from_filled_sl(position, sl_order)
+
+        if self.position_tracker.get_position(order_key) is not None:
+            # DB close failed inside the handler — position intentionally left
+            # tracked (and the DB row OPEN) for the next cycle to retry.
+            return False
+
+        exit_price = float(sl_order.average_price) if sl_order.average_price else None
+        self.db_manager.log_audit_event(
+            session_id=self.session_id,
+            entity_type="position",
+            entity_id=getattr(position, "db_position_id", None),
+            field="status",
+            old_value="OPEN",
+            new_value="CLOSED_BY_SL",
+            reason=f"Stop-loss filled @ {exit_price} (periodic check)",
+            severity=Severity.HIGH.value,
+        )
+        logger.warning(
+            "Stop-loss filled for %s @ %s (periodic check) — removed position %s",
+            position.symbol,
+            exit_price,
+            order_key,
+        )
+        return True
 
     def _reconcile_cycle(self) -> None:
         """Execute one reconciliation cycle."""
@@ -2838,13 +2901,44 @@ class PeriodicReconciler:
                             position_gone = True
 
                     if position_gone:
+                        # A just-filled stop-loss also zeroes borrowed/held
+                        # (AUTO_REPAY repays the borrow on fill), which this
+                        # balance heuristic cannot tell apart from an external
+                        # close. Check the tracked stop order first so an SL
+                        # fill books its real P&L instead of the row being
+                        # closed with no exit price and no balance update.
+                        sl_id = getattr(position, "stop_loss_order_id", None)
+                        if sl_id:
+                            from src.data_providers.exchange_interface import (
+                                OrderStatus as ExOrderStatus,
+                            )
+
+                            sl_order, confirmed = lookup_order_fail_closed(
+                                self.exchange, sl_id, symbol
+                            )
+                            if not confirmed:
+                                # Unknown SL state — do not classify the close
+                                # this cycle (fail-closed); re-check next run.
+                                logger.warning(
+                                    "Margin position %s looks closed but its stop-loss "
+                                    "%s could not be verified — deferring classification.",
+                                    symbol,
+                                    sl_id,
+                                )
+                                continue
+                            if sl_order is not None and sl_order.status == ExOrderStatus.FILLED:
+                                if self._close_position_from_filled_sl(
+                                    order_key, position, sl_order
+                                ):
+                                    if Severity.HIGH > max_severity:
+                                        max_severity = Severity.HIGH
+                                continue
                         logger.warning(
                             "Margin position %s appears externally closed — "
                             "cancelling SL and removing from tracker",
                             symbol,
                         )
                         # Cancel exchange SL to prevent orphaned order
-                        sl_id = getattr(position, "stop_loss_order_id", None)
                         if sl_id:
                             try:
                                 self.exchange.cancel_order(sl_id, symbol)
@@ -2958,6 +3052,36 @@ class PeriodicReconciler:
                     held_qty = balance.total
 
                     if held_qty < position_qty * 0.5:
+                        # A just-filled stop-loss also empties the held balance
+                        # (the SL sold the inventory) — indistinguishable from an
+                        # external close by holdings alone. Check the tracked stop
+                        # order first so an SL fill books its real P&L instead of
+                        # the row being closed with no exit price and no balance
+                        # update (mirrors the margin branch above).
+                        sl_id = getattr(position, "stop_loss_order_id", None)
+                        if sl_id:
+                            from src.data_providers.exchange_interface import (
+                                OrderStatus as ExOrderStatus,
+                            )
+
+                            sl_order, confirmed = lookup_order_fail_closed(
+                                self.exchange, sl_id, position.symbol
+                            )
+                            if not confirmed:
+                                logger.warning(
+                                    "Position %s looks closed but its stop-loss %s "
+                                    "could not be verified — deferring classification.",
+                                    position.symbol,
+                                    sl_id,
+                                )
+                                continue
+                            if sl_order is not None and sl_order.status == ExOrderStatus.FILLED:
+                                if self._close_position_from_filled_sl(
+                                    order_key, position, sl_order
+                                ):
+                                    if Severity.HIGH > max_severity:
+                                        max_severity = Severity.HIGH
+                                continue
                         severity = Severity.HIGH
                         self.db_manager.log_audit_event(
                             session_id=self.session_id,
@@ -3027,30 +3151,11 @@ class PeriodicReconciler:
                     continue
 
                 if sl_order and sl_order.status == ExOrderStatus.FILLED:
-                    # SL triggered — remove position from tracker + close in DB
-                    exit_price = float(sl_order.average_price) if sl_order.average_price else None
-                    self.db_manager.log_audit_event(
-                        session_id=self.session_id,
-                        entity_type="position",
-                        entity_id=getattr(position, "db_position_id", None),
-                        field="status",
-                        old_value="OPEN",
-                        new_value="CLOSED_BY_SL",
-                        reason=f"Stop-loss filled @ {exit_price} (periodic check)",
-                        severity=Severity.HIGH.value,
-                    )
-                    self.position_tracker.remove_position(order_key)
-                    db_pos_id = getattr(position, "db_position_id", None)
-                    if db_pos_id is not None:
-                        self.db_manager.close_position(db_pos_id, exit_price=exit_price)
-                    logger.warning(
-                        "Stop-loss filled for %s @ %s (periodic check) — " "removed position %s",
-                        position.symbol,
-                        exit_price,
-                        order_key,
-                    )
-                    if Severity.HIGH > max_severity:
-                        max_severity = Severity.HIGH
+                    # SL triggered — book realized P&L, remove from tracker,
+                    # close in DB (all in the shared handler).
+                    if self._close_position_from_filled_sl(order_key, position, sl_order):
+                        if Severity.HIGH > max_severity:
+                            max_severity = Severity.HIGH
 
                 elif (
                     sl_order and sl_order.status in (ExOrderStatus.CANCELLED, ExOrderStatus.EXPIRED)

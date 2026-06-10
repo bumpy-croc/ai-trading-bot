@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Periodic reconciler now books realized P&L when it detects a filled
+  stop-loss. Both detection paths previously corrupted tracked capital:
+  the stop-verification branch closed the DB row with NO balance update
+  (and no trade record), and the margin holdings check misclassified a
+  just-filled short stop-loss (AUTO_REPAY zeroes the borrow) as
+  "externally closed" (the spot holdings check had the identical flaw:
+  a filled stop also empties the held balance), closing the row with no
+  exit price at all. Every
+  SL loss the reconciler processed before the engine's deferred-exit
+  drain (~equal ~2-minute cadences, so a large fraction) silently never
+  hit the balance → overstated capital → oversized subsequent positions.
+  Both the margin and spot holdings checks now consult the tracked stop
+  order before classifying an external close.
+  Both paths now delegate to the startup reconciler's filled-SL handler
+  (#731): DB close first (a failed close leaves the position tracked for
+  retry), P&L with USD-normalized commission and margin interest, plus a
+  deduplicated `trades` row. The periodic wrapper skips when the engine's
+  deferred-exit drain already processed the fill (no double-booking) and
+  defers classification (fail-closed) when the stop's state cannot be
+  confirmed.
 - OrderTracker no longer converts an API outage into a position deletion.
   After `MAX_API_ERROR_RETRIES` (10) consecutive failed/`None` polls
   (~50 s at the live 5 s interval) the tracker fired `on_cancel`, and
