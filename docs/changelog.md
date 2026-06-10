@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wired into the first snapshot after engine start. Trading-day semantics are
   explicitly UTC throughout the event logger (was local `date.today()`,
   skewing day boundaries on non-UTC hosts).
+- Backtest trades persist the correct `pnl_percent` for longs (#758):
+  the backtest event logger passed the engines' `PositionSide` enum into
+  `log_trade`, which compares against the **database** `PositionSide` —
+  cross-enum equality is always False, so every long backtest trade was
+  stored with the short formula (sign-flipped). `log_trade` now normalizes
+  any Enum side/source by value before classification (hardens all callers)
+  and the backtest call site converts via `to_side_string`.
 - Correlation control no longer silently drops peer symbols (#759): the
   no-window fallback omitted the required `start` argument, so every call
   raised `TypeError` (swallowed) and the peer vanished from correlated-
