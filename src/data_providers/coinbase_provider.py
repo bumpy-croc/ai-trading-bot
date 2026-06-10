@@ -471,6 +471,14 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         """
         try:
             cb_type = self._convert_to_cb_type(order_type)
+            if cb_type != "market" and time_in_force == "GTD":
+                # Coinbase requires an end_time for GTD orders; this client has
+                # no parameter for it, so the API would reject the order with a
+                # less actionable error.
+                raise ValueError(
+                    "GTD time_in_force requires an end_time, which CoinbaseProvider "
+                    "does not support — use GTC or IOC"
+                )
             body: dict[str, Any] = {
                 "product_id": SymbolFactory.to_exchange_symbol(symbol, "coinbase"),
                 "side": side.value.lower(),
@@ -758,15 +766,36 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             return OrderStatus.PENDING
 
     def _convert_to_cb_type(self, order_type: OrderType | str) -> str:
-        """Convert internal order type to Coinbase order type."""
+        """Convert internal order type to a Coinbase order type string.
+
+        Raises:
+            ValueError: For order types this provider cannot place. Defaulting
+                to "market" here (the old behavior) silently stripped price
+                protection: ``OrderType.LIMIT.value`` is ``"LIMIT"``, which
+                never matched the lowercase mapping keys, so every order —
+                including limit and stop orders — was submitted as a market
+                order (#762).
+        """
         mapping = {
-            "market": "market",
-            "limit": "limit",
-            "stop": "stop",
+            OrderType.MARKET: "market",
+            OrderType.LIMIT: "limit",
+            OrderType.STOP_LOSS: "stop",
         }
-        if isinstance(order_type, OrderType):
-            order_type = order_type.value
-        return mapping.get(order_type, "market")
+        if isinstance(order_type, str):
+            by_name = {
+                "market": OrderType.MARKET,
+                "limit": OrderType.LIMIT,
+                "stop": OrderType.STOP_LOSS,
+                "stop_loss": OrderType.STOP_LOSS,
+            }
+            normalized = by_name.get(order_type.strip().lower())
+            if normalized is None:
+                raise ValueError(f"Unsupported Coinbase order type: {order_type!r}")
+            order_type = normalized
+        cb_type = mapping.get(order_type)
+        if cb_type is None:
+            raise ValueError(f"Unsupported Coinbase order type: {order_type!r}")
+        return cb_type
 
 
 # Aliases for convenience

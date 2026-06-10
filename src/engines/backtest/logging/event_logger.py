@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from src.config.constants import DEFAULT_CONFIDENCE_SCORE
+from src.engines.shared.side_utils import to_side_string
 
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
@@ -228,14 +229,12 @@ class EventLogger:
         # cast: the enabled guard above guarantees db_manager is not None
         db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            # KNOWN BUG (typing surfaced, behavior preserved): trade.side is the
-            # shared engines PositionSide enum, while log_trade expects str or the
-            # database PositionSide enum. The cross-enum comparison inside log_trade
-            # misclassifies the side (see report); normalizing here would change
-            # persisted values, so it is left for a separate behavioral fix.
             db_manager.log_trade(
                 symbol=symbol,
-                side=trade.side,  # type: ignore[arg-type]
+                # log_trade expects str or the database PositionSide; convert
+                # the shared engines enum so long/short classifies correctly
+                # and pnl_percent persists with the right formula (#758).
+                side=to_side_string(trade.side),
                 entry_price=trade.entry_price,
                 exit_price=trade.exit_price,
                 size=trade.size,

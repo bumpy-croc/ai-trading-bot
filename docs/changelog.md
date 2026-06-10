@@ -34,6 +34,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `execute_entry`, exit checks) is intentionally left engine-specific.
 
 ### Fixed
+- Backtest risk tracking now covers next-bar (pending) entries (#757):
+  the post-fill `RiskManager.update_position` call passed the `PositionSide`
+  enum, whose string validation (`side in VALID_SIDES`) raised `ValueError`
+  on every call — swallowed with a warning — so `daily_risk_used` and
+  position tracking for correlation control silently omitted every pending
+  entry. Backtests could take position sequences a correctly-accounted run
+  would have rejected. The side now converts via `to_side_string`, like the
+  immediate-entry path.
+- Live daily P&L survives restarts now (#766): day-start balance recovery
+  queried `DatabaseManager.get_first_snapshot_of_day`, which was never
+  implemented (`AttributeError` swallowed as a "graceful fallback"), and the
+  recovery helper itself was never invoked — so every intraday restart reset
+  the daily P&L baseline to the restart-time balance. The method now exists
+  (earliest `account_history` row of the UTC day for the session) and is
+  wired into the first snapshot after engine start. Trading-day semantics are
+  explicitly UTC throughout the event logger (was local `date.today()`,
+  skewing day boundaries on non-UTC hosts).
+- Backtest trades persist the correct `pnl_percent` for longs (#758):
+  the backtest event logger passed the engines' `PositionSide` enum into
+  `log_trade`, which compares against the **database** `PositionSide` —
+  cross-enum equality is always False, so every long backtest trade was
+  stored with the short formula (sign-flipped). `log_trade` now normalizes
+  any Enum side/source by value before classification (hardens all callers)
+  and the backtest call site converts via `to_side_string`.
+- Correlation control no longer silently drops peer symbols (#759): the
+  no-window fallback omitted the required `start` argument, so every call
+  raised `TypeError` (swallowed) and the peer vanished from correlated-
+  exposure accounting in BOTH engines. A failed window computation now falls
+  back to the default correlation window; when no time window is derivable
+  at all (non-datetime index), peers are skipped with an explicit WARNING
+  instead of fabricating a wall-clock window (backtest lookahead).
+- Backtest strategies can finally see their open position (#756):
+  `_build_runtime_context` passed the `PositionSide` enum into
+  `ComponentPosition`, whose validation expects "long"/"short" strings, so
+  construction raised `ValueError` on every candle (swallowed) and component
+  strategies always received `current_positions=None` — while live populated
+  it correctly. Position-aware logic (pyramiding guards, exposure checks) was
+  silently inert in backtests. The side now converts via `to_side_string`,
+  exactly like live.
+- CoinbaseProvider no longer submits every order as MARKET (#762):
+  `_convert_to_cb_type` was keyed by lowercase strings while `OrderType`
+  enum values are uppercase, so the lookup always fell back to "market" —
+  limit orders lost price protection and stop orders fired immediately.
+  Mapping is now enum-keyed, unknown types raise instead of defaulting to
+  the most dangerous order type, and GTD time_in_force is rejected before
+  the API call (it requires an end_time this client cannot send).
+- `LivePositionTracker.recover_positions` actually recovers positions now
+  (#764): it called `DatabaseManager.get_open_positions`, a method that does
+  not exist, so the swallowed `AttributeError` made it always return `[]` —
+  a silent fail-open trap for any future recovery caller. It now maps the
+  dict rows from the real `get_active_positions` API with the same
+  normalization and hydration as the engine's `_recover_active_positions`
+  (uppercase DB side, tracker key fallback to row id, partial-op state,
+  reconciliation ids), skips invalid-entry-price rows with a CRITICAL log,
+  and isolates per-row failures.
 - `TradeProtocol` members are now read-only properties (#767), so concrete
   trade classes with narrower types (non-Optional datetimes, `PositionSide`
   enum side) conform structurally — the three `cast("TradeProtocol", ...)`

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from src.engines.live.execution.position_tracker import LivePositionTracker
 
 if TYPE_CHECKING:
-    from src.database.manager import DatabaseManager
+    from src.engines.live.logging.event_logger import LiveEventLogger
     from src.engines.shared.models import BaseTrade
     from src.performance.tracker import PerformanceTracker
 
@@ -35,13 +35,12 @@ class MonitoringEngineState(Protocol):
 
     initial_balance: float
     current_balance: float
-    trading_session_id: int | None
     completed_trades: list[BaseTrade]
     last_data_update: datetime | None
     is_running: bool
     live_position_tracker: LivePositionTracker
     performance_tracker: PerformanceTracker
-    db_manager: DatabaseManager
+    event_logger: LiveEventLogger
 
 
 class LiveAccountMonitor:
@@ -60,57 +59,27 @@ class LiveAccountMonitor:
         state.performance_tracker.update_balance(state.current_balance, timestamp=datetime.now(UTC))
 
     def log_account_snapshot(self) -> None:
-        """Log current account state to database"""
+        """Log current account state to database via the event logger.
+
+        Routing through ``LiveEventLogger.log_account_snapshot`` keeps daily
+        P&L tracking — and its day-start recovery across restarts (#766) — on
+        the live path. The engine previously duplicated the exposure/equity/
+        drawdown math here and wrote snapshots directly with a
+        ``daily_pnl = 0`` placeholder, so live snapshots never carried daily
+        P&L and the recovery wiring was dead code.
+        """
         state = self._state
         try:
-            # Calculate total exposure using the active fraction per position
-            positions_snapshot = state.live_position_tracker.positions
-            total_exposure = sum(
-                float(pos.current_size if pos.current_size is not None else pos.size)
-                * (
-                    float(pos.entry_balance)
-                    if pos.entry_balance is not None and pos.entry_balance > 0
-                    else float(state.current_balance)
-                )
-                for pos in positions_snapshot.values()
-            )
-
-            # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in positions_snapshot.values())
-            equity = float(state.current_balance) + unrealized_pnl
-
-            # Calculate current drawdown percentage
-            current_drawdown: float = 0
             perf_metrics = state.performance_tracker.get_metrics()
-            if perf_metrics.peak_balance > 0:
-                current_drawdown = (
-                    (perf_metrics.peak_balance - state.current_balance)
-                    / perf_metrics.peak_balance
-                    * 100
-                )
-
-            # TODO: Calculate daily P&L (requires tracking of day start balance)
-            daily_pnl = 0  # Placeholder
-
-            # Log snapshot to database
-            if state.trading_session_id is not None:
-                state.db_manager.log_account_snapshot(
-                    balance=state.current_balance,
-                    equity=equity,
-                    total_pnl=perf_metrics.total_pnl,
-                    open_positions=state.live_position_tracker.position_count,
-                    total_exposure=total_exposure,
-                    drawdown=current_drawdown,
-                    daily_pnl=daily_pnl,
-                    session_id=state.trading_session_id,
-                )
-            else:
-                logger.warning(
-                    "⚠️ Cannot log account snapshot to database - no trading session ID available"
-                )
-
+            state.event_logger.log_account_snapshot(
+                balance=float(state.current_balance),
+                positions=state.live_position_tracker.positions,
+                total_pnl=perf_metrics.total_pnl,
+                peak_balance=perf_metrics.peak_balance,
+            )
         except Exception as e:
-            logger.error("Failed to log account snapshot: %s", e)
+            # Snapshot logging must never crash the trading loop.
+            logger.error("Failed to log account snapshot: %s", e, exc_info=True)
 
     def log_status(self, symbol: str, current_price: float) -> None:
         """Log current trading status"""
