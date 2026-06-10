@@ -1829,7 +1829,12 @@ class PositionReconciler:
         original = getattr(position, "original_size", None)
         current = getattr(position, "current_size", None)
         try:
-            if original not in (None, 0) and current is not None and float(original) > 0:
+            if (
+                original is not None
+                and original != 0
+                and current is not None
+                and float(original) > 0
+            ):
                 return qty * (float(current) / float(original))
         except (TypeError, ValueError):
             pass
@@ -2434,7 +2439,8 @@ class PositionReconciler:
             current = getattr(position, "current_size", None)
             try:
                 scaled_in = (
-                    original not in (None, 0)
+                    original is not None
+                    and original != 0
                     and current is not None
                     and float(current) > float(original)
                 )
