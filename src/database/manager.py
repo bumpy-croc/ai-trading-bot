@@ -9,7 +9,7 @@ import math
 import os
 from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, cast
 
@@ -2264,6 +2264,54 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to update balance: {e}")
             return False
+
+    def get_first_snapshot_of_day(
+        self, session_id: int | None = None, target_date: date | None = None
+    ) -> AccountHistory | None:
+        """Get the earliest account snapshot of a UTC calendar day for a session.
+
+        Used by the live event logger to recover the day-start balance after a
+        restart, so daily P&L remains anchored to the day's first snapshot
+        rather than the restart-time balance.
+
+        Day semantics are UTC: snapshots are written with ``datetime.now(UTC)``
+        timestamps, so the day window is ``[00:00 UTC, 24:00 UTC)`` of
+        ``target_date``.
+
+        Args:
+            session_id: Trading session ID (defaults to the current session).
+            target_date: UTC calendar date (defaults to today in UTC).
+
+        Returns:
+            The day's earliest ``AccountHistory`` row, or None when the session
+            has no snapshot that day.
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return None
+
+        if target_date is None:
+            target_date = datetime.now(UTC).date()
+
+        day_start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=UTC)
+        day_end = day_start + timedelta(days=1)
+
+        # Use ANALYTICS timeout - day-start recovery is a non-critical read
+        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
+            snapshot = (
+                session.query(AccountHistory)
+                .filter(
+                    AccountHistory.session_id == session_id,
+                    AccountHistory.timestamp >= day_start,
+                    AccountHistory.timestamp < day_end,
+                )
+                .order_by(AccountHistory.timestamp.asc())
+                .first()
+            )
+            if snapshot is not None:
+                # Detach so attributes stay readable after the session closes.
+                session.expunge(snapshot)
+            return snapshot
 
     def get_balance_history(self, session_id: int | None = None, limit: int = 100) -> list[dict]:
         """Get balance change history"""

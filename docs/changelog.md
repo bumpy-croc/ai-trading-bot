@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Live daily P&L survives restarts now (#766): day-start balance recovery
+  queried `DatabaseManager.get_first_snapshot_of_day`, which was never
+  implemented (`AttributeError` swallowed as a "graceful fallback"), and the
+  recovery helper itself was never invoked — so every intraday restart reset
+  the daily P&L baseline to the restart-time balance. The method now exists
+  (earliest `account_history` row of the UTC day for the session) and is
+  wired into the first snapshot after engine start. Trading-day semantics are
+  explicitly UTC throughout the event logger (was local `date.today()`,
+  skewing day boundaries on non-UTC hosts).
 - `build_time_exit_policy` (engines/shared) can now actually build a policy
   (#760): it passed `exit_time`/`exit_days` kwargs that `TimeExitPolicy` does
   not accept, so it always raised `TypeError` internally and returned `None`.

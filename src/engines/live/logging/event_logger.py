@@ -74,16 +74,26 @@ class LiveEventLogger:
         """
         self.session_id = session_id
 
+    @staticmethod
+    def _utc_today() -> date:
+        """Current UTC calendar date.
+
+        Trading-day semantics are UTC throughout (snapshots are written with
+        ``datetime.now(UTC)`` timestamps); a local-time date here would skew
+        day boundaries on non-UTC hosts.
+        """
+        return datetime.now(UTC).date()
+
     def set_day_start_balance(self, balance: float) -> None:
         """Set the day start balance for daily P&L calculation.
 
         Called during session recovery to restore day start balance from database.
 
         Args:
-            balance: The balance at the start of the current trading day.
+            balance: The balance at the start of the current trading day (UTC).
         """
         self._day_start_balance = balance
-        self._current_trading_date = date.today()
+        self._current_trading_date = self._utc_today()
 
     def _check_and_update_trading_date(self, current_balance: float) -> None:
         """Check if the trading date has changed and update day start balance.
@@ -94,15 +104,19 @@ class LiveEventLogger:
         Args:
             current_balance: The current account balance.
         """
-        today = date.today()
+        today = self._utc_today()
         if self._current_trading_date is None:
-            # First call - initialize with current balance
+            # First call (engine start or restart): anchor to the day's first
+            # persisted snapshot when one exists, so an intraday restart does
+            # not reset the daily P&L baseline to the restart-time balance.
+            recovered = self._get_day_start_balance_from_db()
             self._current_trading_date = today
-            self._day_start_balance = current_balance
+            self._day_start_balance = recovered if recovered is not None else current_balance
             logger.debug(
-                "Initialized daily P&L tracking: date=%s, day_start_balance=%.2f",
+                "Initialized daily P&L tracking: date=%s, day_start_balance=%.2f (%s)",
                 today,
-                current_balance,
+                self._day_start_balance,
+                "recovered from DB" if recovered is not None else "current balance",
             )
         elif today != self._current_trading_date:
             # Date rolled over - log previous day and reset
@@ -121,7 +135,7 @@ class LiveEventLogger:
         """Recover day start balance from database on session restart.
 
         Enables continuous daily P&L tracking across restarts by retrieving
-        the starting balance from the first snapshot of the current trading day.
+        the starting balance from the first snapshot of the current UTC day.
 
         Returns:
             The day start balance if found, None otherwise.
@@ -130,21 +144,16 @@ class LiveEventLogger:
             return None
 
         try:
-            today = date.today()
-            # Query first snapshot of current day for this session.
-            # DatabaseManager does not implement this method yet; the
-            # AttributeError handler below provides the graceful fallback.
-            snapshot = self.db_manager.get_first_snapshot_of_day(  # type: ignore[attr-defined]
+            snapshot = self.db_manager.get_first_snapshot_of_day(
                 session_id=self.session_id,
-                target_date=today,
+                target_date=self._utc_today(),
             )
             if snapshot is not None:
                 return float(snapshot.balance)
-        except AttributeError:
-            # Method not available on db_manager - graceful fallback
-            logger.debug("get_first_snapshot_of_day not available on db_manager")
-        except (ValueError, TypeError, KeyError) as e:
-            logger.debug("Failed to recover day start balance: %s", e)
+        except Exception as e:
+            # Degraded but non-fatal: daily P&L baseline falls back to the
+            # restart-time balance.
+            logger.warning("Failed to recover day start balance: %s", e)
 
         return None
 
