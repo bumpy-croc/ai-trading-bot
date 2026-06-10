@@ -614,11 +614,7 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
                 if side == PositionSide.LONG
                 else (entry_price - exit_price) * quantity
             )
-            # NOTE: suspected bug — log_trade() has no `order_id` parameter (only
-            # `exit_order_id`), so this call raises TypeError at runtime and the
-            # except below reports a failed population. Left unchanged (type-level
-            # cleanup only); tracked for a separate behavioral fix.
-            db.log_trade(  # type: ignore[call-arg]
+            db.log_trade(
                 session_id=sid,
                 symbol=sym,
                 side=side,
@@ -634,7 +630,7 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
                 ),
                 strategy_name=random.choice(strategies),
                 confidence_score=random.uniform(0.3, 0.95),
-                order_id=f"order_{i}_{random.randint(1000, 9999)}",
+                exit_order_id=f"order_{i}_{random.randint(1000, 9999)}",
                 stop_loss=entry_price * 0.95,
                 take_profit=entry_price * 1.05,
                 strategy_config={},
