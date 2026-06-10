@@ -26,6 +26,7 @@ from src.data_providers.exchange_interface import (
     OrderType,
     SideEffectType,
 )
+from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 from src.trading.precision import quantize_to_step
@@ -386,10 +387,14 @@ class LiveExecutionEngine:
                         if filled_qty > 0:
                             quantity = filled_qty
                             position_value = quantity * executed_price
-                        fee_from_order = float(order_details.commission or 0.0)
-                        if fee_from_order > 0:
-                            fee_delta = fee_from_order - entry_fee
-                            entry_fee = fee_from_order
+                        # Convert the exchange commission to USD via its commission_asset
+                        # (base-asset on a BUY, e.g. ETH, must be priced into USD); None
+                        # means it could not be reliably converted (e.g. BNB) so fall back
+                        # to the modelled USD fee rather than book a wrong-unit value.
+                        fee_usd = order_commission_usd(order_details, symbol, executed_price)
+                        if fee_usd is not None and fee_usd > 0:
+                            fee_delta = fee_usd - entry_fee
+                            entry_fee = fee_usd
                             slippage_cost = self._calculate_slippage_from_fill(
                                 base_price, executed_price, position_value
                             )
@@ -424,9 +429,7 @@ class LiveExecutionEngine:
             # duplicate entries. The order may or may not have filled on the exchange,
             # so mark the result as ambiguous for the caller to handle safely.
             is_ambiguous = (
-                client_order_id is not None
-                and order_id is not None
-                and order_id == client_order_id
+                client_order_id is not None and order_id is not None and order_id == client_order_id
             )
 
             return EntryExecutionResult(
@@ -542,10 +545,14 @@ class LiveExecutionEngine:
                         filled_qty = float(order_details.filled_quantity or 0.0)
                         if filled_qty > 0:
                             position_notional = filled_qty * executed_price
-                        fee_from_order = float(order_details.commission or 0.0)
-                        if fee_from_order > 0:
-                            fee_delta = fee_from_order - exit_fee
-                            exit_fee = fee_from_order
+                        # Convert the exchange commission to USD via its commission_asset
+                        # (a SELL is normally quote/USDT already; a base-asset commission
+                        # is priced into USD). None -> not reliably convertible (e.g. BNB),
+                        # so fall back to the modelled USD fee.
+                        fee_usd = order_commission_usd(order_details, symbol, executed_price)
+                        if fee_usd is not None and fee_usd > 0:
+                            fee_delta = fee_usd - exit_fee
+                            exit_fee = fee_usd
                             slippage_cost = self._calculate_slippage_from_fill(
                                 base_price, executed_price, position_notional
                             )
@@ -675,7 +682,9 @@ class LiveExecutionEngine:
                         logger.error(
                             "Cannot open short for %s — failed to check %s balance: %s. "
                             "Rejecting to prevent false short.",
-                            symbol, base_asset, e,
+                            symbol,
+                            base_asset,
+                            e,
                         )
                         return None, None
                     if balance is None:
@@ -683,7 +692,8 @@ class LiveExecutionEngine:
                         logger.error(
                             "Cannot open short for %s — get_balance(%s) returned None. "
                             "Rejecting to prevent false short.",
-                            symbol, base_asset,
+                            symbol,
+                            base_asset,
                         )
                         return None, None
                     if balance.free > 0:
@@ -695,7 +705,10 @@ class LiveExecutionEngine:
                                 "%.8f %s (~$%.2f free). MARGIN_BUY would sell "
                                 "existing inventory instead of borrowing. "
                                 "Transfer %s out of Cross Margin first.",
-                                symbol, balance.free, base_asset, free_value,
+                                symbol,
+                                balance.free,
+                                base_asset,
+                                free_value,
                                 base_asset,
                             )
                             return None, None
@@ -969,9 +982,7 @@ class LiveExecutionEngine:
                     # to the step's decimal count so the sent value has no excess decimals.
                     quantity = quantize_to_step(normalized, step_size)
             except (ArithmeticError, ValueError) as e:
-                logger.error(
-                    "Step_size normalization failed for %s: %s", symbol, e, exc_info=True
-                )
+                logger.error("Step_size normalization failed for %s: %s", symbol, e, exc_info=True)
 
         # Validate min_qty constraint
         min_qty = symbol_info.get("min_qty")

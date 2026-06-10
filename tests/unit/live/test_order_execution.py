@@ -289,6 +289,38 @@ class TestExecuteEntry:
         assert result.entry_fee == pytest.approx(expected_fee)
         assert engine.total_fees_paid == pytest.approx(expected_fee)
 
+    def test_execute_entry_converts_base_asset_commission_to_usd(self, mock_exchange):
+        """A BUY's base-asset (ETH) commission is priced into USD, not booked as raw ETH.
+
+        Exercises the order_commission_usd WIRING inside execute_entry (not just the
+        standalone helper): with commission 0.001 ETH @ a 2000 fill, the entry fee must be
+        2.0 USD, not 0.001 (which is what booking the raw base-asset commission would give).
+        """
+        engine = LiveExecutionEngine(
+            fee_rate=0.001,
+            slippage_rate=0.0,
+            enable_live_trading=True,
+            exchange_interface=mock_exchange,
+        )
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.FILLED
+        order_details.average_price = 2000.0
+        order_details.filled_quantity = 0.05
+        order_details.commission = 0.001  # 0.001 ETH (base asset received on a BUY)
+        order_details.commission_asset = "ETH"
+        mock_exchange.get_order.return_value = order_details
+
+        result = engine.execute_entry(
+            symbol="ETHUSDT",
+            side=PositionSide.LONG,
+            size_fraction=0.1,
+            base_price=2000.0,
+            balance=1000.0,
+        )
+
+        # 0.001 ETH * 2000 USD/ETH = 2.0 USD, NOT the raw 0.001.
+        assert result.entry_fee == pytest.approx(2.0)
+
 
 # ============================================================================
 # Tests for _normalize_quantity step-size precision (51077 guard)

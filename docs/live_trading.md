@@ -99,6 +99,42 @@ All performance metrics are persisted to PostgreSQL tables:
 
 The database schema supports historical analysis and comparison with backtest results.
 
+### Trade fee accounting (`trades.commission` unit convention)
+
+Each closed `trades` row stores fees so consumers can compute true net P&L:
+
+- **`trades.pnl`** — GROSS dollar P&L (price movement only), for parity with the
+  backtest engine. Fees are **not** netted into `pnl`.
+- **`trades.commission`** — total round-trip fee in **USD**, equal to
+  `entry_fee + exit_fee`. These are the **same values booked to
+  `account_balances`**: the entry leg is the `entry_fee_<symbol>` ledger event
+  (deducted at open), and the exit leg is folded into the `realized_pnl_<symbol>`
+  balance update at close. The entry leg is reconciled to the actual exchange fill
+  commission where available (`LiveExecutionEngine.execute_entry/_exit`). For a
+  position **recovered after a restart** (the `positions` table does not persist entry
+  fee), the entry leg is reconstructed from the fee model applied to the recovered
+  entry notional, so it is not silently dropped.
+- **`trades.margin_interest_cost`** — borrow interest in USD (short margin
+  positions), from `MarginInterestTracker`.
+- **`trades.quantity`** — actual filled base-asset quantity for the closed portion.
+
+**Net P&L = `pnl - commission - margin_interest_cost`.**
+
+> `trades.commission` is deliberately **not** the raw `orders.actual_commission`.
+> That column stores the exchange commission in the *received asset* (base on buys,
+> quote on sells) with no `commission_asset` column to disambiguate, and it is
+> populated asynchronously by reconciliation — so it is both unit-ambiguous and
+> unreliable at close time. Booking `commission` from the engine's USD fee
+> accounting keeps `trades` consistent with the `account_balances` ledger.
+
+> **Known limitation — partial exits.** Partial exits book their realized P&L to the
+> `account_balances` ledger but do **not** write a `trades` row (only the final close
+> does, recording the remaining slice). So `recover_last_balance` — the degraded
+> fallback that reconstructs balance as `initial_balance + Σ _trade_net_pnl` when the
+> ledger is unavailable — reconciles *exactly* for full round trips but is **approximate**
+> for positions that took partial exits (their intermediate P&L and fees are in the ledger,
+> not in `trades`). Logging partial-exit trade rows is tracked as a follow-up.
+
 ## CLI usage
 
 `atb live` forwards arguments to `src/engines/live/runner.py`:
