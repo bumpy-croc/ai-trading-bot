@@ -234,7 +234,9 @@ class TestCoinbaseOrderTypeMapping:
         from src.data_providers.exchange_interface import OrderSide, OrderType
 
         provider = self._provider()
-        with patch.object(provider, "_request", return_value={"id": "ord-1"}) as mock_request:
+        with patch.object(
+            provider, "_request", autospec=True, return_value={"id": "ord-1"}
+        ) as mock_request:
             order = provider.place_order(
                 symbol="BTC-USD",
                 side=OrderSide.BUY,
@@ -254,7 +256,7 @@ class TestCoinbaseOrderTypeMapping:
         from src.data_providers.exchange_interface import OrderSide, OrderType
 
         provider = self._provider()
-        with patch.object(provider, "_request") as mock_request:
+        with patch.object(provider, "_request", autospec=True) as mock_request:
             order = provider.place_order(
                 symbol="BTC-USD",
                 side=OrderSide.BUY,
