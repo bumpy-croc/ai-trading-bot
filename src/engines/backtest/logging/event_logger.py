@@ -194,6 +194,7 @@ class EventLogger:
         symbol: str,
         strategy_name: str,
         source: TradeSource,
+        commission: float | None = None,
     ) -> None:
         """Log a completed trade to the database.
 
@@ -202,6 +203,9 @@ class EventLogger:
             symbol: Trading symbol.
             strategy_name: Name of the strategy.
             source: Trade source (BACKTEST).
+            commission: Round-trip fee in USD (entry + exit). Persisted so backtest
+                `trades` rows carry `commission`/`quantity` like live ones (Backtest-Live
+                Parity) — consumers can compute net P&L consistently across both engines.
         """
         if not self.enabled:
             return
@@ -251,6 +255,8 @@ class EventLogger:
                 mfe_time=trade.mfe_time,
                 mae_time=trade.mae_time,
                 margin_interest_cost=margin_interest_cost,
+                commission=commission,
+                quantity=getattr(trade, "quantity", None),
             )
         except Exception as e:
             if not self._logging_error_warned:

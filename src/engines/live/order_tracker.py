@@ -82,6 +82,7 @@ class OrderTracker:
         on_fill: Callable[[str, str, float, float], None] | None = None,
         on_partial_fill: Callable[[str, str, float, float], None] | None = None,
         on_cancel: Callable[[str, str, float], None] | None = None,
+        on_tracking_lost: Callable[[str, str, int], None] | None = None,
         event_deduplicator: EventDeduplicator | None = None,
     ):
         """
@@ -94,6 +95,14 @@ class OrderTracker:
             on_partial_fill: Callback(order_id, symbol, new_filled_qty, avg_price) for partial fills
             on_cancel: Callback(order_id, symbol, filled_qty) for cancelled/rejected orders.
                 filled_qty is the cumulative quantity filled before cancellation (0.0 if unfilled).
+                Invoked ONLY when the exchange confirmed the terminal state — never
+                for a lookup that merely failed.
+            on_tracking_lost: Callback(order_id, symbol, consecutive_failures) when the
+                tracker gives up polling an order whose state could NOT be confirmed
+                (persistent API errors/None lookups). The order may still be live on
+                the exchange, so the handler must NOT treat this as a cancellation
+                (no position removal, no fee refund) — escalate/alert and let the
+                reconciler resolve from exchange truth.
             event_deduplicator: Optional deduplicator for WebSocket events. A default
                 instance is created if not provided.
         """
@@ -102,6 +111,7 @@ class OrderTracker:
         self.on_fill = on_fill
         self.on_partial_fill = on_partial_fill
         self.on_cancel = on_cancel
+        self.on_tracking_lost = on_tracking_lost
         self._dedup = event_deduplicator or EventDeduplicator()
         self._polling_enabled = True  # Controls whether _poll_loop runs checks
 
@@ -231,24 +241,16 @@ class OrderTracker:
                         if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
                             logger.critical(
                                 "CRITICAL: Order %s on %s returned None for %d consecutive "
-                                "polls. Force-removing to prevent infinite polling. "
-                                "MANUAL RECONCILIATION REQUIRED.",
+                                "polls. Abandoning tracking to prevent infinite polling. "
+                                "Order state is UNKNOWN (NOT a confirmed cancel) — the "
+                                "reconciler must resolve it from exchange truth.",
                                 order_id,
                                 tracked.symbol,
                                 tracked.api_error_count,
                             )
-                            if self.on_cancel:
-                                try:
-                                    self.on_cancel(
-                                        order_id, tracked.symbol, tracked.last_filled_qty
-                                    )
-                                except Exception as cb_err:
-                                    logger.error(
-                                        "Cancel callback failed for force-removed order %s: %s",
-                                        order_id,
-                                        cb_err,
-                                        exc_info=True,
-                                    )
+                            self._notify_tracking_lost(
+                                order_id, tracked.symbol, tracked.api_error_count
+                            )
                             self.stop_tracking(order_id)
                         elif tracked.callback_failure_count > 0:
                             logger.critical(
@@ -278,26 +280,20 @@ class OrderTracker:
                     if tracked.api_error_count >= MAX_API_ERROR_RETRIES:
                         logger.critical(
                             "CRITICAL: Order %s on %s failed %d consecutive API calls: %s. "
-                            "Force-removing to prevent infinite error loop. "
-                            "MANUAL RECONCILIATION REQUIRED.",
+                            "Abandoning tracking to prevent infinite error loop. "
+                            "Order state is UNKNOWN (NOT a confirmed cancel) — the "
+                            "reconciler must resolve it from exchange truth.",
                             order_id,
                             tracked.symbol,
                             tracked.api_error_count,
                             e,
                             exc_info=True,
                         )
-                        # Call cancel callback BEFORE stop_tracking so the callback
-                        # can still access order metadata if needed
-                        if self.on_cancel:
-                            try:
-                                self.on_cancel(order_id, tracked.symbol, tracked.last_filled_qty)
-                            except Exception as cb_err:
-                                logger.error(
-                                    "Cancel callback failed for force-removed order %s: %s",
-                                    order_id,
-                                    cb_err,
-                                    exc_info=True,
-                                )
+                        # Notify BEFORE stop_tracking so the callback can still
+                        # access order metadata if needed
+                        self._notify_tracking_lost(
+                            order_id, tracked.symbol, tracked.api_error_count
+                        )
                         self.stop_tracking(order_id)
                     else:
                         logger.warning(
@@ -307,6 +303,27 @@ class OrderTracker:
                             MAX_API_ERROR_RETRIES,
                             e,
                         )
+
+    def _notify_tracking_lost(self, order_id: str, symbol: str, failures: int) -> None:
+        """Invoke ``on_tracking_lost`` for an order whose state could not be confirmed.
+
+        Deliberately distinct from ``on_cancel`` (LESSONS §1.8 fail-open class): a
+        polling give-up is a fail-open lookup, not an exchange-confirmed cancel.
+        Routing it to the cancel handler used to delete a possibly-live position
+        and refund its entry fee — manufacturing untracked exposure and a
+        corrupted balance during any ~50s API degradation.
+        """
+        if not self.on_tracking_lost:
+            return
+        try:
+            self.on_tracking_lost(order_id, symbol, failures)
+        except Exception as cb_err:
+            logger.error(
+                "Tracking-lost callback failed for abandoned order %s: %s",
+                order_id,
+                cb_err,
+                exc_info=True,
+            )
 
     def _process_order_status(self, order_id: str, tracked: TrackedOrder, order: Order) -> None:
         """

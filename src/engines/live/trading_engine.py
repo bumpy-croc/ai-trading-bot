@@ -43,6 +43,7 @@ from src.config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
+from src.config.feature_flags import is_enabled
 from src.data_providers.binance_provider import BinanceProvider, WebSocketState
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
@@ -118,6 +119,131 @@ logger = logging.getLogger(__name__)
 Position = LivePosition
 # Trade uses BaseTrade which has all required fields plus MFE/MAE tracking
 Trade = BaseTrade
+
+
+def _closed_base_quantity(position: Position) -> float | None:
+    """Actual filled base-asset quantity represented by a closing ``Trade`` row.
+
+    ``position.quantity`` is the authoritative filled base quantity of the *original*
+    position (set from the entry fill, see LiveExecutionEngine.execute_entry). Partial
+    exits reduce ``current_size`` (a fraction of balance) but never mutate ``quantity``,
+    so the quantity actually being closed is ``position.quantity`` scaled by the fraction
+    of the original position remaining.
+
+    Returns ``None`` (so the Trade row stores NULL rather than a fabricated or negative
+    value) when the filled quantity is unknown or the sizing inputs are corrupt:
+    missing/non-positive/non-finite ``quantity``, ``original_size`` not finite-positive,
+    or ``current_size`` not finite-non-negative.
+    """
+    qty = getattr(position, "quantity", None)
+    if qty is None:
+        return None
+    try:
+        qty = float(qty)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(qty) or qty <= 0:
+        return None
+    # Fall back to ``size`` only when ``original_size`` was never set (None). An
+    # explicit 0 / negative / non-finite original_size is corrupt sizing state — return
+    # None rather than silently scaling against ``size`` and fabricating a quantity.
+    original = position.original_size if position.original_size is not None else position.size
+    current = position.current_size if position.current_size is not None else position.size
+    try:
+        original_f = float(original)
+        current_f = float(current)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(original_f) and original_f > 0):
+        return None
+    if not (math.isfinite(current_f) and current_f > 0):
+        # current_size <= 0 is a degenerate/flat slice — store NULL rather than a fabricated
+        # 0.0 quantity (which _close_position_portion would still pair with the full fee).
+        return None
+    if current_f > original_f:
+        # Scale-ins grow current_size beyond original_size but do NOT update
+        # ``quantity`` (the original entry fill), so the held base quantity cannot
+        # be derived by scaling. Store NULL rather than over-report the fill.
+        return None
+    return qty * (current_f / original_f)
+
+
+def _close_entry_fee_usd(position: Position, execution_engine: Any) -> float:
+    """Entry commission (USD) for a closing ``Trade`` row's ``commission``.
+
+    Prefer the exact value booked at open (``position.metadata['entry_fee']``, the same
+    amount deducted from ``account_balances`` as the ``entry_fee_<symbol>`` event).
+
+    Positions recovered after a restart lose that metadata (the ``positions`` table does
+    not persist entry fee), so fall back to an **approximate** reconstruction: the
+    execution engine's fee model applied to the recovered entry notional. This equals the
+    booked fee exactly in the common case (entries booked at the modelled rate) and is a
+    close estimate otherwise (e.g. a live fill booked at the actual exchange commission) —
+    preferred over dropping the entry leg, which would understate ``trades.commission``
+    versus the ledger. Never raises; returns ``0.0`` when neither the metadata nor a
+    usable notional is available.
+    """
+    meta = getattr(position, "metadata", None) or {}
+    if "entry_fee" in meta:
+        try:
+            fee = float(meta["entry_fee"])
+            if math.isfinite(fee):
+                return fee
+        except (TypeError, ValueError):
+            pass
+    # Recovered position: reconstruct from persisted entry economics (quantity * entry
+    # price, falling back to size * entry_balance), via the same USD fee model.
+    try:
+        qty = getattr(position, "quantity", None)
+        entry_price = float(position.entry_price) if position.entry_price is not None else 0.0
+        if qty is not None and entry_price > 0:
+            notional = float(qty) * entry_price
+        elif position.entry_balance is not None and position.size is not None:
+            notional = float(position.entry_balance) * float(position.size)
+        else:
+            return 0.0
+        if notional > 0 and math.isfinite(notional):
+            fee = float(execution_engine.calculate_entry_fee(notional))
+            fee = fee if math.isfinite(fee) and fee >= 0 else 0.0
+            logger.info(
+                "Reconstructed approximate entry fee $%.4f for %s (no entry-fee "
+                "metadata; recovered position) from notional $%.2f",
+                fee,
+                getattr(position, "symbol", "?"),
+                notional,
+            )
+            return fee
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return 0.0
+
+
+def _close_position_portion(position: Position) -> float:
+    """Fraction of the ORIGINAL position represented by this close
+    (``current_size`` / ``original_size``).
+
+    Used to scale the **entry** fee onto a closing ``Trade`` row so its
+    ``commission`` matches the row's portion-level ``size``/``quantity``/``pnl``
+    (a partially-exited position's final close is only the remaining slice). Returns
+    ``1.0`` — i.e. do not scale — for a full close (the common case), for missing or
+    corrupt sizing, and for scale-in state (``current_size > original_size``), so the
+    entry fee is never inflated.
+    """
+    original = position.original_size if position.original_size is not None else position.size
+    current = position.current_size if position.current_size is not None else position.size
+    try:
+        original_f = float(original)
+        current_f = float(current)
+    except (TypeError, ValueError):
+        return 1.0
+    if not (
+        math.isfinite(original_f) and original_f > 0 and math.isfinite(current_f) and current_f >= 0
+    ):
+        return 1.0
+    ratio = current_f / original_f
+    if ratio <= 0 or ratio > 1:
+        return 1.0
+    return ratio
 
 
 def _create_exchange_provider(provider: str, config: ConfigManager, testnet: bool = False):
@@ -314,7 +440,29 @@ class LiveTradingEngine:
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
         self.testnet = testnet
-        # Partial operations policy (enabled by default for better profit capture)
+        # Partial operations policy.
+        #
+        # DISABLED by default behind the `live_partial_operations` feature flag
+        # (#734): the live engine currently applies partial exits / scale-ins as
+        # BOOKKEEPING ONLY — no exchange order is placed — and with mismatched
+        # units (fraction-of-original-position applied to fraction-of-balance
+        # state). On a real account this desyncs tracked size from actual
+        # holdings (stranded inventory / un-repaid margin borrows / -2010 close
+        # failures), books phantom realized PnL, and frees risk budget that is
+        # still deployed. The flag exists only for development of the proper
+        # fix; do NOT enable it for live capital until #734 is resolved.
+        if (enable_partial_operations or partial_manager is not None) and not is_enabled(
+            "live_partial_operations", False
+        ):
+            logger.warning(
+                "Partial exits/scale-ins are DISABLED (#734): the live engine "
+                "executes them as bookkeeping only (no exchange order, mismatched "
+                "units), which desyncs tracked size from real holdings and books "
+                "phantom PnL. Set feature flag live_partial_operations=true only "
+                "for development of the fix."
+            )
+            enable_partial_operations = False
+            partial_manager = None
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager: PartialExitPolicy | None = partial_manager
@@ -442,6 +590,7 @@ class LiveTradingEngine:
                         on_fill=self._handle_order_fill,
                         on_partial_fill=self._handle_partial_fill,
                         on_cancel=self._handle_order_cancel,
+                        on_tracking_lost=self._handle_order_tracking_lost,
                     )
                     logger.info(
                         f"{provider_name} exchange interface and account synchronizer initialized"
@@ -4219,6 +4368,40 @@ class LiveTradingEngine:
                     else:
                         self.current_balance += refund_amount
 
+    def _handle_order_tracking_lost(self, order_id: str, symbol: str, failures: int) -> None:
+        """Handle the OrderTracker giving up on an order whose state is UNKNOWN.
+
+        Fail-closed counterpart to :meth:`_handle_order_cancel`: after
+        ``failures`` consecutive failed/None polls the order's exchange state
+        could not be confirmed, so the position (if any) is deliberately KEPT
+        tracked — removing it and refunding its entry fee here would vaporize a
+        possibly-live position from the books (untracked exposure, corrupted
+        balance, double-entry on the next signal). The periodic reconciler
+        resolves the true state from the exchange: it removes ghosts whose
+        entry order is confirmed cancelled and books offline stop-loss fills.
+        """
+        position = self.live_position_tracker.get_position(order_id)
+        message = (
+            f"Order {order_id} on {symbol} state UNKNOWN after {failures} consecutive "
+            f"failed polls — tracking abandoned (NOT treated as cancelled). "
+            f"{'Position kept tracked' if position is not None else 'No tracked position'}; "
+            f"reconciler will resolve from exchange truth."
+        )
+        logger.critical("CRITICAL: %s", message)
+        log_order_event(
+            "order_tracking_lost",
+            order_id=order_id,
+            symbol=symbol,
+        )
+        self._record_event(
+            EventType.ERROR,
+            message,
+            severity="critical",
+            component="order_tracker",
+            error_code="ORDER_TRACKING_LOST",
+            alert=True,
+        )
+
     def _execute_exit(
         self,
         position: Position,
@@ -4459,7 +4642,11 @@ class LiveTradingEngine:
             exit_slippage_cost = exit_result.slippage_cost
             pnl_percent = exit_result.realized_pnl_percent
 
-            entry_fee = float(position.metadata.get("entry_fee", 0.0))
+            # Prefer the exact fee booked at open; reconstruct from the fee model for
+            # positions recovered after a restart (no entry-fee metadata) so the trade's
+            # commission still includes the entry leg. Feeds both performance metrics and
+            # the persisted trades.commission below.
+            entry_fee = _close_entry_fee_usd(position, self.live_execution_engine)
             entry_slippage_cost = float(position.metadata.get("entry_slippage_cost", 0.0))
             total_fee = entry_fee + exit_fee
             total_slippage = entry_slippage_cost + exit_slippage_cost
@@ -4545,6 +4732,18 @@ class LiveTradingEngine:
                     mae_price=(metrics.mae_price if metrics else None),
                     mfe_time=(metrics.mfe_time if metrics else None),
                     mae_time=(metrics.mae_time if metrics else None),
+                    # trades.commission is the round-trip fee in USD (entry + exit),
+                    # the same values booked to account_balances: entry_fee as the
+                    # entry_fee_<symbol> ledger event, exit_fee folded into the
+                    # realized_pnl_<symbol> event. Deliberately NOT orders.actual_commission
+                    # (raw exchange commission in the received asset — ETH on buys, USDT on
+                    # sells — with no commission_asset column, populated asynchronously by
+                    # reconciliation, so unit-ambiguous and unreliable at close time).
+                    # The entry leg is scaled to the closed portion so a partial final
+                    # close's commission matches its portion-level size/quantity/pnl
+                    # (ratio is 1.0 for a full close).
+                    commission=entry_fee * _close_position_portion(position) + exit_fee,
+                    quantity=_closed_base_quantity(position),
                     margin_interest_cost=interest_cost,
                 )
 
@@ -5508,6 +5707,17 @@ class LiveTradingEngine:
                         pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
                     ),
                     quantity=pos_data.get("quantity"),
+                    # Hydrate partial-operation state so a position partially exited
+                    # before a restart closes at its REMAINING size (and logs the
+                    # remaining base quantity), not the full original. Without this,
+                    # current_size/original_size fall back to size and the close
+                    # over-reports size, pnl fraction, and trades.quantity.
+                    original_size=pos_data.get("original_size"),
+                    current_size=pos_data.get("current_size"),
+                    partial_exits_taken=pos_data.get("partial_exits_taken", 0) or 0,
+                    scale_ins_taken=pos_data.get("scale_ins_taken", 0) or 0,
+                    last_partial_exit_price=pos_data.get("last_partial_exit_price"),
+                    last_scale_in_price=pos_data.get("last_scale_in_price"),
                     order_id=tracker_key,  # Backward compat: used as _positions dict key
                     tracker_key=tracker_key,
                     exchange_order_id=entry_order_id,
@@ -5602,6 +5812,7 @@ class LiveTradingEngine:
                     session_id=self.trading_session_id,
                     max_position_size=self.max_position_size,
                     use_margin=use_margin,
+                    fee_rate=self.live_execution_engine.fee_rate,
                 )
 
                 if not positions_snapshot:
@@ -5882,6 +6093,17 @@ class LiveTradingEngine:
                             entry_time=position.entry_time,
                             exit_time=datetime.now(UTC),
                             session_id=self.trading_session_id,
+                            # Round-trip fee in USD: entry_fee (booked at open, or
+                            # reconstructed from the fee model for restart-recovered
+                            # positions; entry leg scaled to the closed portion) plus this
+                            # offline exit_fee. Same units as account_balances, where
+                            # realized_pnl above is already net of exit_fee.
+                            commission=(
+                                _close_entry_fee_usd(position, self.live_execution_engine)
+                                * _close_position_portion(position)
+                                + exit_fee
+                            ),
+                            quantity=_closed_base_quantity(position),
                             margin_interest_cost=offline_interest_cost,
                         )
 
@@ -6206,6 +6428,22 @@ class LiveTradingEngine:
         decisions on the next bar use the new configuration.
         """
         new_policy: PartialExitPolicy | None = None
+        if not is_enabled("live_partial_operations", False):
+            # Same guard as __init__ (#734): partial ops are bookkeeping-only in
+            # the live engine, so a hot-swapped strategy's partial_operations
+            # overrides must not re-enable them.
+            if isinstance(new_overrides, dict) and "partial_operations" in new_overrides:
+                logger.warning(
+                    "Ignoring partial_operations overrides from hot-swapped "
+                    "strategy: partial exits/scale-ins are disabled in the live "
+                    "engine (#734)."
+                )
+            self.partial_manager = None
+            self._partial_operations_opt_in = False
+            exit_handler = getattr(self, "live_exit_handler", None)
+            if exit_handler is not None:
+                exit_handler.partial_manager = None
+            return
         partial_cfg = (
             new_overrides.get("partial_operations") if isinstance(new_overrides, dict) else None
         )

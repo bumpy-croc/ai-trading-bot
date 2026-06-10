@@ -43,6 +43,11 @@ class SimpleMockProvider(MockDataProvider):
 
 @pytest.mark.live_trading
 def test_partial_exits_and_scale_ins_execution(monkeypatch):
+    # Partial ops are disabled by default (#734: bookkeeping-only execution);
+    # this test exercises the dev-flagged simulation path explicitly.
+    monkeypatch.setattr(
+        "src.engines.live.trading_engine.is_enabled", lambda key, default=False: True
+    )
     # Prices go up steadily to trigger scale-in and partial exits
     prices = [100, 101, 102, 103, 104, 105, 106, 107]
     provider = SimpleMockProvider(prices)

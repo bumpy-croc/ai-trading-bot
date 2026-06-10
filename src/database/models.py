@@ -166,10 +166,15 @@ class Trade(Base):
     )
 
     # Performance
-    pnl = Column(Numeric(18, 8), nullable=False)  # Dollar P&L
+    pnl = Column(Numeric(18, 8), nullable=False)  # Dollar P&L (GROSS, pre-fee)
     pnl_percent = Column(Numeric(18, 8), nullable=False)  # Percentage P&L
+    # Total round-trip fee in USD (entry_fee + exit_fee), the SAME values booked to
+    # account_balances (entry as the entry_fee_<symbol> ledger event; exit folded into
+    # realized_pnl_<symbol>). NOT the raw orders.actual_commission, which is denominated
+    # in the received asset (base on buys, quote on sells) with no commission_asset column.
+    # Net P&L = pnl - commission - margin_interest_cost.
     commission = Column(Numeric(18, 8), default=0.0)
-    margin_interest_cost = Column(Numeric(18, 8), default=0.0)  # Margin borrow interest deducted
+    margin_interest_cost = Column(Numeric(18, 8), default=0.0)  # Margin borrow interest (USD)
 
     # Risk management
     stop_loss = Column(Numeric(18, 8))

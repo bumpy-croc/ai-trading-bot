@@ -1342,6 +1342,9 @@ class Backtester:
                 symbol=symbol,
                 strategy_name=self.strategy.__class__.__name__,
                 source=TradeSource.BACKTEST,
+                # USD round-trip fee (entry + exit) so backtest trades carry commission like
+                # live (parity); quantity is read from the trade inside log_completed_trade.
+                commission=total_fee,
             )
 
             return True, completed_trade

@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from src.data_providers.exchange_interface import OrderLookupError
 from src.engines.live.reconciliation import (
     AuditEvent,
     PeriodicReconciler,
@@ -59,6 +60,9 @@ class MockExchangeOrder:
     average_price: float | None = 50100.0
     filled_quantity: float = 0.001
     commission: float = 0.05
+    # Quote-asset commission (the common SELL case); converted to USD as-is by
+    # order_commission_usd. A base-asset (BUY/short-SL) commission would be priced in.
+    commission_asset: str = "USDT"
     quantity: float = 0.001
     side: object = None
     client_order_id: str | None = None
@@ -77,6 +81,11 @@ class MockBalance:
 def mock_exchange():
     exchange = MagicMock()
     exchange.get_order.return_value = None
+    # Fail-closed lookup (#713) delegates to get_order by default so tests can
+    # keep driving order responses through get_order (.return_value or
+    # .side_effect) for both accessors; fail-closed tests override this with
+    # side_effect = OrderLookupError(...).
+    exchange.get_order_checked.side_effect = lambda oid, sym: exchange.get_order(oid, sym)
     exchange.get_order_by_client_id.return_value = None
     exchange.get_all_orders.return_value = []
     exchange.get_my_trades.return_value = []
@@ -3012,3 +3021,95 @@ class TestReconciliationFeeAccounting:
         mock_pnl.assert_called_once()
         call_kwargs = mock_pnl.call_args
         assert call_kwargs[1]["exit_fee"] == pytest.approx(0.35)
+
+
+class TestFailClosedSLLookup:
+    """#713: a transient order-lookup failure must NOT be treated as a missing stop.
+
+    Treating an unconfirmed lookup as "missing" clears the tracked stop-loss
+    order id and places a DUPLICATE stop while the original may still rest on
+    the exchange — reserving balance (later -2010) and able to flip the
+    position if both fill.
+    """
+
+    def test_periodic_cycle_skips_sl_replace_on_unconfirmed_lookup(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Periodic cycle: OrderLookupError -> no re-placement, SL id retained."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_transient_1",
+            exchange_order_id="entry_t1",
+            db_position_id=60,
+            quantity=0.5,
+        )
+        pos.stop_loss = 46000.0
+        mock_position_tracker.positions = {"entry_t1": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        # SL lookup cannot be confirmed (transient API failure)
+        mock_exchange.get_order_checked.side_effect = OrderLookupError("timeout")
+        mock_exchange.get_open_orders.return_value = []
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "sl_transient_1"
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+
+    def test_startup_verify_stop_loss_skips_on_unconfirmed_lookup(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """Startup _verify_stop_loss: OrderLookupError -> no audit, no re-place."""
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_transient_2",
+            db_position_id=61,
+        )
+        mock_exchange.get_order_checked.side_effect = OrderLookupError("rate limited")
+
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=61,
+            status="verified",
+            severity=Severity.LOW,
+        )
+        reconciler._verify_stop_loss(position, "sl_transient_2", result)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert position.stop_loss_order_id == "sl_transient_2"
+        # No MISSING audit event persisted for an unconfirmed lookup
+        mock_db.log_audit_event.assert_not_called()
+        assert result.severity == Severity.LOW
+
+    def test_startup_verify_stop_loss_replaces_on_confirmed_missing(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """Regression guard: a CONFIRMED-absent stop is still re-placed."""
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_gone_1",
+            db_position_id=62,
+        )
+        mock_exchange.get_order.return_value = None  # delegation -> confirmed absent
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_replaced"
+
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=62,
+            status="verified",
+            severity=Severity.LOW,
+        )
+        reconciler._verify_stop_loss(position, "sl_gone_1", result)
+
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert position.stop_loss_order_id == "new_sl_replaced"

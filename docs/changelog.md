@@ -40,6 +40,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Coinbase enum order types map to lowercase keys that never match (limit
   orders would submit as market); `atb data populate-dummy` crashes on a
   nonexistent `log_trade(order_id=...)` kwarg.
+- OrderTracker no longer converts an API outage into a position deletion.
+  After `MAX_API_ERROR_RETRIES` (10) consecutive failed/`None` polls
+  (~50 s at the live 5 s interval) the tracker fired `on_cancel`, and
+  `_handle_order_cancel` popped the (possibly live) position from the
+  tracker and refunded its entry fee — manufacturing untracked exchange
+  exposure, a corrupted balance, and room for a double entry on the next
+  signal, exactly during exchange API degradations (LESSONS §1.8 fail-open
+  class). Polling give-up now routes to a new `on_tracking_lost` callback;
+  the engine's `_handle_order_tracking_lost` keeps the position tracked,
+  leaves the balance untouched, and escalates with a critical
+  `system_events` row (`ORDER_TRACKING_LOST`) + webhook alert so the
+  periodic reconciler resolves the order's true state from the exchange.
+  `on_cancel` now fires only for exchange-confirmed terminal states.
+- Closed live `trades` rows now persist `commission` and `quantity` (previously
+  always `0` / `NULL`). The live close path (`LiveTradingEngine._close_position`
+  and the offline stop-loss reconciliation path) now passes `commission` and
+  `quantity` to `DatabaseManager.log_trade`, which already supported both.
+  `trades.commission` is the round-trip fee in **USD** (`entry_fee + exit_fee`) —
+  the same values booked to `account_balances` (entry as the `entry_fee_<symbol>`
+  ledger event, exit folded into `realized_pnl_<symbol>`), **not** the raw
+  `orders.actual_commission` (which is denominated in the received asset and
+  populated asynchronously, so unit-ambiguous and unreliable at close time).
+  `trades.quantity` is the actual filled base quantity, scaled by
+  `current_size/original_size` for partially-exited positions (NULL for scale-in
+  positions, whose held quantity is not derivable, and for corrupt sizing).
+  `DatabaseManager._trade_net_pnl` now also subtracts `commission`, so true net P&L
+  (`pnl - commission - margin_interest_cost`) flows through performance metrics and
+  `recover_last_balance` reconstruction — correcting a latent overstatement now that
+  commission is populated (historical rows carry `commission = 0` and are unaffected).
+  For positions recovered after a restart, the entry-fee leg is reconstructed from the
+  fee model (the `positions` table does not persist entry fee) rather than dropped, and
+  scaled to the closed portion so a partial final close's commission matches its
+  portion-level pnl/quantity. The `PositionReconciler` offline stop-loss path
+  (`_realize_pnl_on_close`) now also inserts a `trades` row — previously it
+  balance-corrected and DB-closed the position but recorded **no trade at all** (deduped
+  via the exit order id + `uq_trade_order_session`). `LiveExecutionEngine` now converts an
+  exchange fill commission to USD via its `commission_asset` (a base-asset commission on a
+  buy, e.g. ETH, is priced into USD; an unconvertible asset like BNB falls back to the
+  modelled fee) — fixing a latent bug where a base-asset commission could be booked as if
+  it were USD. Relatedly, `_recover_active_positions` now hydrates
+  `original_size`/`current_size` and partial-operation counters from the DB, so a position
+  partially exited before a restart closes at its remaining size. The commission→USD
+  conversion is shared via `src/engines/shared/commission.py` and applied on the
+  reconciler offline-SL path too (a short's stop-loss is a base-asset buy), so it is
+  never booked wrong-unit. The reconciler logs its trade row only after the DB position
+  is actually closed and with a stable, non-NULL dedup key (real exit order id, else a
+  synthetic id from the position) so a re-run cannot insert a duplicate
+  (`uq_trade_order_session`; NULL≠NULL in Postgres) — guarding the #657/#668 phantom-trade
+  class; a failure to persist the row after the balance was corrected now escalates to
+  CRITICAL rather than a silent warning. See the "Trade fee accounting" note in
+  `docs/live_trading.md`.
+- Reconciler accounting hardening (review follow-ups): the offline stop-loss close now
+  realizes P&L **only after** the DB position is actually closed (a failed close no longer
+  double-subtracts P&L on the next reconcile), and a failed balance write skips the audit +
+  trade row (no `trades`/`account_balances` divergence). Fees route through the shared
+  `CostCalculator` (no duplicated fee modelling); the SL exit-fee fallback and the recovered
+  entry/exit reconciler bookings now normalize commission to USD via `commission_asset` like
+  the rest of the change. A scaled-in position closed by the reconciler stores NULL quantity
+  and an un-inflated entry fee, matching the engine close path. `_extract_base_asset` now
+  delegates to the shared `split_base_quote`. The mock DB enforces `uq_trade_order_session`
+  so the dedup path is unit-tested.
+- Live engine hard-disables partial exits / scale-ins behind the default-OFF
+  `live_partial_operations` feature flag (#734). The live engine executed
+  partial operations as bookkeeping only — `_execute_partial_exit` /
+  `_execute_scale_in` mutate the tracker/DB but **never place an exchange
+  order** — and with mismatched units (policy fractions of the original
+  position applied to fraction-of-balance state), so on a real account a
+  winner reaching the default +2%/+3% triggers desynced tracked size from
+  actual holdings (stranded inventory, un-repaid margin borrows, -2010 close
+  failures), booked phantom realized PnL, and freed daily-risk budget that
+  was still deployed. All three activation paths are gated (constructor,
+  strategy hot-swap overrides, runtime policy hydration via the existing
+  opt-in state). Re-enable only for development of the #734 fix.
+- Reconciler no longer places a DUPLICATE stop-loss when an order lookup
+  fails transiently (#713). `BinanceProvider.get_order` swallows every
+  exception into `None`, and both stop-loss verifiers (startup
+  `PositionReconciler._verify_stop_loss` and the periodic reconciler's
+  stop-verification loop) treated `None` as "stop missing" — clearing the
+  tracked `stop_loss_order_id` and re-placing a new stop while the original
+  could still be resting on the exchange (reserving base/margin, able to
+  cause -2010 on a later close, and able to flip the position if both
+  stops fill). Added a fail-closed `ExchangeInterface.get_order_checked`
+  (Binance override returns `None` only on a confirmed -2013
+  "order does not exist" and raises `OrderLookupError` on any unconfirmed
+  lookup), and both verifiers now skip the cycle on an unconfirmed lookup
+  instead of re-placing. Confirmed-missing stops are still re-placed.
 - Live trade recovery on the `emergency_sync` path no longer silently fails.
   `AccountSynchronizer.recover_missing_trades` called
   `DatabaseManager.log_trade(order_id=...)`, but `log_trade` has no `order_id`

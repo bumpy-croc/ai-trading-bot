@@ -44,6 +44,16 @@ class SideEffectType:
     AUTO_REPAY = "AUTO_REPAY"  # Auto-repay on close (exits, stop-losses)
 
 
+class OrderLookupError(Exception):
+    """An order lookup could not be confirmed (transient API/network failure).
+
+    Raised by :meth:`ExchangeInterface.get_order_checked` so callers making
+    safety decisions can distinguish "order confirmed absent on the exchange"
+    (``None``) from "lookup failed — the order may still exist". Treating the
+    two the same is how a transient timeout turns into a duplicate stop-loss.
+    """
+
+
 @dataclass
 class AccountBalance:
     """Represents account balance information"""
@@ -188,6 +198,29 @@ class ExchangeInterface(ABC):
     def get_order(self, order_id: str, symbol: str) -> Order | None:
         """Get specific order by ID"""
         pass
+
+    def get_order_checked(self, order_id: str, symbol: str) -> Order | None:
+        """Fail-closed order lookup for safety decisions.
+
+        Returns the ``Order`` if found, ``None`` only when the exchange
+        *confirmed* the order does not exist, and raises
+        :class:`OrderLookupError` when the lookup could not be confirmed
+        (network error, rate limit, API failure).
+
+        The default fails CLOSED by raising: most ``get_order``
+        implementations swallow errors into ``None``, so delegating to them
+        would silently report "confirmed absent" on a transient failure —
+        exactly the bug this accessor exists to prevent (#713). Every
+        provider used for live trading must override this with an
+        implementation that distinguishes the exchange's "order does not
+        exist" response from other failures (see ``BinanceProvider`` /
+        ``CoinbaseProvider``).
+        """
+        raise OrderLookupError(
+            f"get_order_checked is not implemented for {type(self).__name__} — "
+            f"cannot confirm absence of order {order_id} on {symbol}; treating "
+            "the lookup as unconfirmed. Override this method for live trading."
+        )
 
     @abstractmethod
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:
