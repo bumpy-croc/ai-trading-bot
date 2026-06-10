@@ -50,7 +50,7 @@ def validate_price(price: float, name: str = "price") -> None:
         >>> validate_price(0, "entry_price")  # Raises ValueError
         >>> validate_price(float('nan'), "price")  # Raises ValueError
     """
-    if not isinstance(price, (int, float)):
+    if not isinstance(price, int | float):
         raise ValueError(f"{name} must be a number, got {type(price).__name__}")
 
     if price <= 0:
@@ -75,7 +75,7 @@ def validate_notional(notional: float, name: str = "notional") -> None:
         >>> validate_notional(0.0)  # OK (zero is allowed)
         >>> validate_notional(-100.0)  # Raises ValueError
     """
-    if not isinstance(notional, (int, float)):
+    if not isinstance(notional, int | float):
         raise ValueError(f"{name} must be a number, got {type(notional).__name__}")
 
     if notional < 0:
@@ -102,7 +102,7 @@ def validate_fraction(fraction: float, name: str = "fraction", allow_zero: bool 
         >>> validate_fraction(1.5)  # Raises ValueError
         >>> validate_fraction(0.0, allow_zero=False)  # Raises ValueError
     """
-    if not isinstance(fraction, (int, float)):
+    if not isinstance(fraction, int | float):
         raise ValueError(f"{name} must be a number, got {type(fraction).__name__}")
 
     if not math.isfinite(fraction):
@@ -269,11 +269,11 @@ def convert_exit_fraction_to_current(
     Returns:
         Fraction of current size to exit, or None if conversion is invalid.
     """
-    if not isinstance(exit_fraction_of_original, (int, float)):
+    if not isinstance(exit_fraction_of_original, int | float):
         return None
     if exit_fraction_of_original <= 0 or not math.isfinite(exit_fraction_of_original):
         return None
-    if not isinstance(current_size, (int, float)) or not isinstance(original_size, (int, float)):
+    if not isinstance(current_size, int | float) or not isinstance(original_size, int | float):
         return None
     if not math.isfinite(current_size) or not math.isfinite(original_size):
         return None

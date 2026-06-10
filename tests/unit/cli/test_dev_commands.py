@@ -337,7 +337,7 @@ class TestVenvCommand:
         with (
             patch("cli.commands.dev.subprocess.run") as mock_run,
             patch("cli.commands.dev.PROJECT_ROOT") as mock_root,
-            patch("cli.commands.dev.Path") as mock_path_class,
+            patch("cli.commands.dev.Path"),
         ):
 
             mock_venv_path = Mock()

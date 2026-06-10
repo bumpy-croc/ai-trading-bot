@@ -457,8 +457,8 @@ class TestFeatureSchemas:
 
             # Check value constraints
             if feature_def.min_value is not None:
-                assert isinstance(feature_def.min_value, (int, float))
+                assert isinstance(feature_def.min_value, int | float)
             if feature_def.max_value is not None:
-                assert isinstance(feature_def.max_value, (int, float))
+                assert isinstance(feature_def.max_value, int | float)
             if feature_def.default_value is not None:
-                assert isinstance(feature_def.default_value, (int, float))
+                assert isinstance(feature_def.default_value, int | float)

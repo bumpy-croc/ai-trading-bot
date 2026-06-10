@@ -8,13 +8,6 @@ import pytest
 pytestmark = pytest.mark.fast
 
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
-from src.strategies.components import (
-    FixedFractionSizer,
-    FixedRiskManager,
-    HoldSignalGenerator,
-    Strategy,
-    StrategyRuntime,
-)
 from tests.mocks import MockDatabaseManager
 
 
@@ -252,9 +245,6 @@ class TestLogTradePersistence:
         """Verify log_trade() accepts margin_interest_cost and passes it to Trade."""
         from src.database.manager import DatabaseManager
 
-        # Capture kwargs passed to Trade constructor
-        captured_kwargs = {}
-
         with patch.object(DatabaseManager, "__init__", lambda self, *a, **kw: None):
             manager = DatabaseManager.__new__(DatabaseManager)
             manager._current_session_id = None
@@ -267,9 +257,11 @@ class TestLogTradePersistence:
         mock_trade.pnl = 25.0
         mock_trade.pnl_percent = 10.0
 
-        with patch("src.database.manager.Trade") as MockTrade, \
-             patch.object(DatabaseManager, "get_session_with_timeout") as mock_ctx, \
-             patch.object(DatabaseManager, "_update_performance_metrics"):
+        with (
+            patch("src.database.manager.Trade") as MockTrade,
+            patch.object(DatabaseManager, "get_session_with_timeout") as mock_ctx,
+            patch.object(DatabaseManager, "_update_performance_metrics"),
+        ):
             MockTrade.return_value = mock_trade
             mock_ctx.return_value.__enter__ = Mock(return_value=mock_session)
             mock_ctx.return_value.__exit__ = Mock(return_value=False)
@@ -307,9 +299,11 @@ class TestLogTradePersistence:
         mock_trade.pnl = 25.0
         mock_trade.pnl_percent = 10.0
 
-        with patch("src.database.manager.Trade") as MockTrade, \
-             patch.object(DatabaseManager, "get_session_with_timeout") as mock_ctx, \
-             patch.object(DatabaseManager, "_update_performance_metrics"):
+        with (
+            patch("src.database.manager.Trade") as MockTrade,
+            patch.object(DatabaseManager, "get_session_with_timeout") as mock_ctx,
+            patch.object(DatabaseManager, "_update_performance_metrics"),
+        ):
             MockTrade.return_value = mock_trade
             mock_ctx.return_value.__enter__ = Mock(return_value=mock_session)
             mock_ctx.return_value.__exit__ = Mock(return_value=False)

@@ -424,9 +424,7 @@ class LiveExecutionEngine:
             # duplicate entries. The order may or may not have filled on the exchange,
             # so mark the result as ambiguous for the caller to handle safely.
             is_ambiguous = (
-                client_order_id is not None
-                and order_id is not None
-                and order_id == client_order_id
+                client_order_id is not None and order_id is not None and order_id == client_order_id
             )
 
             return EntryExecutionResult(
@@ -675,7 +673,9 @@ class LiveExecutionEngine:
                         logger.error(
                             "Cannot open short for %s — failed to check %s balance: %s. "
                             "Rejecting to prevent false short.",
-                            symbol, base_asset, e,
+                            symbol,
+                            base_asset,
+                            e,
                         )
                         return None, None
                     if balance is None:
@@ -683,7 +683,8 @@ class LiveExecutionEngine:
                         logger.error(
                             "Cannot open short for %s — get_balance(%s) returned None. "
                             "Rejecting to prevent false short.",
-                            symbol, base_asset,
+                            symbol,
+                            base_asset,
                         )
                         return None, None
                     if balance.free > 0:
@@ -695,7 +696,10 @@ class LiveExecutionEngine:
                                 "%.8f %s (~$%.2f free). MARGIN_BUY would sell "
                                 "existing inventory instead of borrowing. "
                                 "Transfer %s out of Cross Margin first.",
-                                symbol, balance.free, base_asset, free_value,
+                                symbol,
+                                balance.free,
+                                base_asset,
+                                free_value,
                                 base_asset,
                             )
                             return None, None
@@ -946,7 +950,7 @@ class LiveExecutionEngine:
 
         # Validate and apply step_size
         step_size = symbol_info.get("step_size")
-        if step_size is None or not isinstance(step_size, (int, float)):
+        if step_size is None or not isinstance(step_size, int | float):
             logger.warning("Invalid step_size for %s - using raw quantity", symbol)
             # Continue without step_size normalization
         elif step_size <= 0 or not math.isfinite(step_size):
@@ -969,13 +973,11 @@ class LiveExecutionEngine:
                     # to the step's decimal count so the sent value has no excess decimals.
                     quantity = quantize_to_step(normalized, step_size)
             except (ArithmeticError, ValueError) as e:
-                logger.error(
-                    "Step_size normalization failed for %s: %s", symbol, e, exc_info=True
-                )
+                logger.error("Step_size normalization failed for %s: %s", symbol, e, exc_info=True)
 
         # Validate min_qty constraint
         min_qty = symbol_info.get("min_qty")
-        if min_qty and isinstance(min_qty, (int, float)) and min_qty > 0:
+        if min_qty and isinstance(min_qty, int | float) and min_qty > 0:
             if quantity < min_qty:
                 logger.error(
                     "Calculated quantity %.8f below minimum %.8f for %s",
@@ -987,7 +989,7 @@ class LiveExecutionEngine:
 
         # Validate min_notional constraint
         min_notional = symbol_info.get("min_notional")
-        if min_notional and isinstance(min_notional, (int, float)) and min_notional > 0:
+        if min_notional and isinstance(min_notional, int | float) and min_notional > 0:
             if value < min_notional:
                 logger.error(
                     "Order value %.2f below minimum notional %.2f for %s",

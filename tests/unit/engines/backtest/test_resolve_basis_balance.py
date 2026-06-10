@@ -6,8 +6,6 @@ Verifies the priority chain: entry_balance > caller balance > fallback constant.
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-import pytest
-
 from src.config.constants import DEFAULT_BASIS_BALANCE_FALLBACK
 from src.engines.backtest.execution.exit_handler import _resolve_basis_balance
 from src.engines.backtest.models import ActiveTrade
@@ -129,6 +127,7 @@ class TestResolveBasisBalance:
 
     def test_trade_without_entry_balance_attribute(self) -> None:
         """Gracefully handles trade objects missing entry_balance attribute."""
+
         # Arrange - use a plain object without entry_balance
         @dataclass
         class MinimalTrade:

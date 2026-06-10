@@ -51,9 +51,7 @@ class TestHandleStartupBan:
         ban_until_ms = now_ms + 60_000
         exc = _make_ban_exception(-1003, ban_until_ms)
 
-        with patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=60.0
-        ):
+        with patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=60.0):
             result = BinanceProvider._handle_startup_ban(
                 exc, attempt=0, max_retries=3, max_wait=600
             )
@@ -63,18 +61,14 @@ class TestHandleStartupBan:
     def test_returns_none_for_non_ban_error(self):
         """Non-ban errors (no .code or wrong code) are not retryable."""
         exc = _make_generic_exception()
-        result = BinanceProvider._handle_startup_ban(
-            exc, attempt=0, max_retries=3, max_wait=600
-        )
+        result = BinanceProvider._handle_startup_ban(exc, attempt=0, max_retries=3, max_wait=600)
         assert result is None
 
     def test_returns_none_when_retries_exhausted(self):
         """Returns None when attempt >= max_retries."""
         exc = _make_ban_exception(-1003, 1_775_000_060_000)
 
-        with patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=60.0
-        ):
+        with patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=60.0):
             result = BinanceProvider._handle_startup_ban(
                 exc, attempt=3, max_retries=3, max_wait=600
             )
@@ -86,9 +80,7 @@ class TestHandleStartupBan:
         exc = _make_ban_exception(-1003, 1_775_001_000_000)
 
         # 596s + 5s buffer = 601s > 600s max_wait
-        with patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=596.0
-        ):
+        with patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=596.0):
             result = BinanceProvider._handle_startup_ban(
                 exc, attempt=0, max_retries=3, max_wait=600
             )
@@ -99,9 +91,7 @@ class TestHandleStartupBan:
         """Falls back to 30s + 5s buffer when ban timestamp can't be parsed."""
         exc = _make_ban_exception(-1003, 0)
 
-        with patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=None
-        ):
+        with patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=None):
             result = BinanceProvider._handle_startup_ban(
                 exc, attempt=0, max_retries=3, max_wait=600
             )
@@ -112,9 +102,7 @@ class TestHandleStartupBan:
         """-1015 (too many orders) is also retryable."""
         exc = _make_ban_exception(-1015, 1_775_000_060_000)
 
-        with patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=60.0
-        ):
+        with patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=60.0):
             result = BinanceProvider._handle_startup_ban(
                 exc, attempt=0, max_retries=3, max_wait=600
             )
@@ -125,9 +113,7 @@ class TestHandleStartupBan:
         """When ban already expired (0s remaining), retry with minimal buffer."""
         exc = _make_ban_exception(-1003, 1_775_000_000_000)
 
-        with patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=0.0
-        ):
+        with patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=0.0):
             result = BinanceProvider._handle_startup_ban(
                 exc, attempt=0, max_retries=3, max_wait=600
             )
@@ -153,7 +139,9 @@ class TestInitializeClientBanRetry:
             "BINANCE_ACCOUNT_TYPE": "margin",
             "TRADING_MODE": "live",
         }.get(key, default)
-        mock_config_obj.get_required.side_effect = lambda key: FAKE_KEY if "KEY" in key else FAKE_SECRET
+        mock_config_obj.get_required.side_effect = lambda key: (
+            FAKE_KEY if "KEY" in key else FAKE_SECRET
+        )
         mock_config.return_value = mock_config_obj
 
         ban_exc = _make_ban_exception(-1003, 1_775_000_010_000)
@@ -169,8 +157,9 @@ class TestInitializeClientBanRetry:
         # First call raises ban, second succeeds
         mock_client_class.side_effect = [ban_exc, mock_client]
 
-        with patch("time.sleep") as mock_sleep, patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=5.0
+        with (
+            patch("time.sleep") as mock_sleep,
+            patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=5.0),
         ):
             provider = BinanceProvider(FAKE_KEY, FAKE_SECRET)
 
@@ -190,15 +179,19 @@ class TestInitializeClientBanRetry:
             "BINANCE_ACCOUNT_TYPE": "margin",
             "TRADING_MODE": "live",
         }.get(key, default)
-        mock_config_obj.get_required.side_effect = lambda key: FAKE_KEY if "KEY" in key else FAKE_SECRET
+        mock_config_obj.get_required.side_effect = lambda key: (
+            FAKE_KEY if "KEY" in key else FAKE_SECRET
+        )
         mock_config.return_value = mock_config_obj
 
         ban_exc = _make_ban_exception(-1003, 1_775_000_010_000)
         mock_client_class.side_effect = ban_exc  # Always fails
 
-        with patch("time.sleep"), patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=5.0
-        ), pytest.raises(RuntimeError, match="FATAL"):
+        with (
+            patch("time.sleep"),
+            patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=5.0),
+            pytest.raises(RuntimeError, match="FATAL"),
+        ):
             BinanceProvider(FAKE_KEY, FAKE_SECRET)
 
     @patch("src.data_providers.binance_provider.get_binance_api_endpoint", return_value="binance")
@@ -214,7 +207,9 @@ class TestInitializeClientBanRetry:
             "BINANCE_ACCOUNT_TYPE": "spot",
             "TRADING_MODE": "paper",
         }.get(key, default)
-        mock_config_obj.get_required.side_effect = lambda key: FAKE_KEY if "KEY" in key else FAKE_SECRET
+        mock_config_obj.get_required.side_effect = lambda key: (
+            FAKE_KEY if "KEY" in key else FAKE_SECRET
+        )
         mock_config.return_value = mock_config_obj
 
         mock_client_class.side_effect = ConnectionError("Network unreachable")
@@ -239,7 +234,9 @@ class TestInitializeClientBanRetry:
             "BINANCE_ACCOUNT_TYPE": "margin",
             "TRADING_MODE": "live",
         }.get(key, default)
-        mock_config_obj.get_required.side_effect = lambda key: FAKE_KEY if "KEY" in key else FAKE_SECRET
+        mock_config_obj.get_required.side_effect = lambda key: (
+            FAKE_KEY if "KEY" in key else FAKE_SECRET
+        )
         mock_config.return_value = mock_config_obj
 
         ban_exc = _make_ban_exception(-1003, 1_775_000_010_000)
@@ -260,8 +257,9 @@ class TestInitializeClientBanRetry:
 
         mock_client_class.side_effect = [mock_client_banned, mock_client_ok]
 
-        with patch("time.sleep") as mock_sleep, patch(
-            "src.data_providers.binance_provider._parse_ban_expiry", return_value=5.0
+        with (
+            patch("time.sleep") as mock_sleep,
+            patch("src.data_providers.binance_provider._parse_ban_expiry", return_value=5.0),
         ):
             provider = BinanceProvider(FAKE_KEY, FAKE_SECRET)
 
@@ -282,7 +280,9 @@ class TestInitializeClientBanRetry:
             "BINANCE_ACCOUNT_TYPE": "margin",
             "TRADING_MODE": "live",
         }.get(key, default)
-        mock_config_obj.get_required.side_effect = lambda key: FAKE_KEY if "KEY" in key else FAKE_SECRET
+        mock_config_obj.get_required.side_effect = lambda key: (
+            FAKE_KEY if "KEY" in key else FAKE_SECRET
+        )
         mock_config.return_value = mock_config_obj
 
         ban_exc = _make_ban_exception(-1003, 1_775_000_010_000)

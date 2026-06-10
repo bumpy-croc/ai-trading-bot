@@ -1,9 +1,10 @@
 """Unit tests for CoinGecko data provider."""
 
-import pytest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
+
 import pandas as pd
+import pytest
 import requests
 
 from src.data_providers.coingecko_provider import CoinGeckoProvider

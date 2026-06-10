@@ -48,8 +48,8 @@ def test_predict_smoke_skip_if_no_models():
     assert isinstance(result, PredictionResult)
     # Either successful prediction or an informative error without crashing
     if result.error is None:
-        assert isinstance(result.price, (int, float))
-        assert isinstance(result.confidence, (int, float))
+        assert isinstance(result.price, int | float)
+        assert isinstance(result.confidence, int | float)
         assert result.direction in [-1, 0, 1]
     else:
         assert isinstance(result.error, str)

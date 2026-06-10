@@ -115,7 +115,9 @@ def main() -> int:
     arr = np.array(preds)
     conf_arr = np.array(confidences)
     print("\n=== Predicted-return distribution ===")
-    print(f"  n={len(arr)}  mean={arr.mean():+.6f}  median={np.median(arr):+.6f}  std={arr.std():.6f}")
+    print(
+        f"  n={len(arr)}  mean={arr.mean():+.6f}  median={np.median(arr):+.6f}  std={arr.std():.6f}"
+    )
     print(f"  min={arr.min():+.6f}  max={arr.max():+.6f}")
     for q in (1, 5, 25, 50, 75, 95, 99):
         print(f"  p{q:02d} = {np.percentile(arr, q):+.6f}")
@@ -123,8 +125,12 @@ def main() -> int:
     pos_beyond_long_thr = 100 * (arr > gen.long_entry_threshold).mean()
     neg_beyond_short_thr = 100 * (arr < gen.short_entry_threshold).mean()
     print(f"  fraction positive: {pos_pct:.2f}%")
-    print(f"  fraction > long_entry_threshold ({gen.long_entry_threshold}): {pos_beyond_long_thr:.2f}%")
-    print(f"  fraction < short_entry_threshold ({gen.short_entry_threshold}): {neg_beyond_short_thr:.2f}%")
+    print(
+        f"  fraction > long_entry_threshold ({gen.long_entry_threshold}): {pos_beyond_long_thr:.2f}%"
+    )
+    print(
+        f"  fraction < short_entry_threshold ({gen.short_entry_threshold}): {neg_beyond_short_thr:.2f}%"
+    )
 
     print("\n=== Decision mix ===")
     total_dec = sum(decisions.values())
@@ -132,7 +138,9 @@ def main() -> int:
         print(f"  {d.value:>5}: {c} ({100*c/total_dec:.2f}%)")
 
     print("\n=== Confidence distribution ===")
-    print(f"  mean={conf_arr.mean():.4f}  median={np.median(conf_arr):.4f}  std={conf_arr.std():.4f}")
+    print(
+        f"  mean={conf_arr.mean():.4f}  median={np.median(conf_arr):.4f}  std={conf_arr.std():.4f}"
+    )
     for q in (1, 25, 50, 75, 95, 99):
         print(f"  p{q:02d} = {np.percentile(conf_arr, q):.4f}")
     # Hyper_growth's FlatRiskManager gate

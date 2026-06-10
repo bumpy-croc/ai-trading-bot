@@ -71,7 +71,7 @@ def _trade_net_pnl(trade: Any) -> float:
     Gracefully returns gross PnL when margin_interest_cost is missing or invalid.
     """
     raw = getattr(trade, "margin_interest_cost", None)
-    interest = float(raw) if isinstance(raw, (int, float, Decimal)) else 0.0
+    interest = float(raw) if isinstance(raw, int | float | Decimal) else 0.0
     return float(trade.pnl) - interest
 
 
@@ -1613,9 +1613,9 @@ class DatabaseManager:
         def _sanitize_scalar(val):
             import numpy as np
 
-            if isinstance(val, (np.integer,)):
+            if isinstance(val, np.integer):
                 return int(val)
-            elif isinstance(val, (np.floating,)):
+            elif isinstance(val, np.floating):
                 return float(val)
             elif hasattr(val, "item") and callable(val.item):
                 return val.item()
@@ -2029,7 +2029,7 @@ class DatabaseManager:
 
             # Some unit tests mock the session and return a MagicMock instead of
             # a list.  Gracefully degrade when the result is not list-like.
-            if not isinstance(account_history, (list, tuple)):
+            if not isinstance(account_history, list | tuple):
                 account_history = []
 
             max_drawdown = 0.0
@@ -2813,9 +2813,9 @@ class DatabaseManager:
             if math.isnan(obj) or math.isinf(obj):
                 return None
             return obj
-        elif isinstance(obj, (np.integer,)):
+        elif isinstance(obj, np.integer):
             return int(obj)
-        elif isinstance(obj, (np.floating,)):
+        elif isinstance(obj, np.floating):
             val = float(obj)
             # Check for NaN/Inf after converting numpy float to Python float
             if math.isnan(val) or math.isinf(val):

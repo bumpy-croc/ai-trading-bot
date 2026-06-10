@@ -7,8 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.risk.risk_manager import PortfolioRiskManager
-from src.risk.risk_manager import RiskParameters
+from src.risk.risk_manager import PortfolioRiskManager, RiskParameters
 
 from .policies import (
     DynamicRiskDescriptor,

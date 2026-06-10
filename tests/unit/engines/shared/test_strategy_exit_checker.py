@@ -3,8 +3,6 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-import pytest
-
 from src.engines.shared.strategy_exit_checker import (
     StrategyExitChecker,
     StrategyExitResult,

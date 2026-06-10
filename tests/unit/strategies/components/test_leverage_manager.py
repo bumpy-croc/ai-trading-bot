@@ -5,12 +5,9 @@ from __future__ import annotations
 import pytest
 
 from src.strategies.components.leverage_manager import (
-    DEFAULT_LEVERAGE_MAP,
     LeverageManager,
-    LeverageState,
 )
 from src.strategies.components.regime_context import RegimeContext, TrendLabel, VolLabel
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -212,7 +209,7 @@ class TestSmoothTransitions:
         # Start from neutral
         prev = mgr.current_leverage
         regime = _make_regime(TrendLabel.TREND_UP, VolLabel.LOW, duration=20)
-        for i in range(10):
+        for _i in range(10):
             curr = mgr.get_leverage_multiplier(regime)
             # Each step should move toward target (increasing for bull)
             assert curr >= prev - 0.01  # Allow tiny float rounding

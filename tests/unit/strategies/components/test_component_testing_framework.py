@@ -210,7 +210,7 @@ class TestRegimeTester:
 
         assert len(regime_datasets) > 0
 
-        for regime_type, dataset in regime_datasets.items():
+        for _regime_type, dataset in regime_datasets.items():
             assert len(dataset) > 0
             assert "regime_confidence" in dataset.columns
             assert "regime_duration" in dataset.columns
@@ -224,7 +224,7 @@ class TestRegimeTester:
 
         assert len(stats) > 0
 
-        for regime_type, regime_stats in stats.items():
+        for _regime_type, regime_stats in stats.items():
             assert "periods" in regime_stats
             assert "coverage" in regime_stats
             assert "avg_confidence" in regime_stats
@@ -385,7 +385,7 @@ class TestTestDatasetGenerator:
         assert len(edge_case_datasets) > 0
 
         # All datasets should be valid
-        for name, dataset in test_suite.items():
+        for _name, dataset in test_suite.items():
             assert len(dataset) > 0
             assert "close" in dataset.columns
 
@@ -458,7 +458,6 @@ def test_integration_all_components(sample_test_data):
     dataset_generator = TestDatasetGenerator()
     regime_data = dataset_generator.generate_synthetic_dataset("strong_bull_low_vol", seed=42)
     regime_tester = RegimeTester(regime_data)
-    attribution_analyzer = PerformanceAttributionAnalyzer(sample_test_data)
 
     # Create components to test
     signal_generator = RandomSignalGenerator(seed=42)

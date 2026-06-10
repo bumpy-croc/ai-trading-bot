@@ -161,7 +161,7 @@ class PositionReconciler:
         results.extend(self.resolve_pending_orders())
 
         # Step B: Verify each recovered position
-        for order_id, position in positions.items():
+        for _order_id, position in positions.items():
             result = self.reconcile_position(position)
             results.append(result)
 

@@ -5,15 +5,14 @@ called without the required 'candle' parameter, causing TypeError when trailing
 stops were triggered.
 """
 
-from unittest.mock import MagicMock, Mock, patch
-from datetime import datetime, UTC
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
-import pytest
 import pandas as pd
+import pytest
 
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -55,13 +54,15 @@ def make_mock_position(symbol: str = "BTCUSDT", entry_price: float = 70000.0):
 
 def make_minimal_df_with_candle() -> pd.DataFrame:
     """Create a minimal DataFrame with candle data for testing."""
-    return pd.DataFrame({
-        "open": [70000.0],
-        "high": [71000.0],
-        "low": [69000.0],
-        "close": [70500.0],
-        "volume": [1000.0],
-    })
+    return pd.DataFrame(
+        {
+            "open": [70000.0],
+            "high": [71000.0],
+            "low": [69000.0],
+            "close": [70500.0],
+            "volume": [1000.0],
+        }
+    )
 
 
 def make_mock_exit_check(should_exit: bool = True, exit_reason: str = "stop_loss"):
@@ -191,10 +192,7 @@ def test_check_exit_conditions_with_trailing_stop_scenario():
 
     # Current price below entry (short is profitable)
     df = make_minimal_df_with_candle()
-    candle = {
-        "timestamp": datetime.now(UTC),
-        "test": "trailing_stop_activation"
-    }
+    candle = {"timestamp": datetime.now(UTC), "test": "trailing_stop_activation"}
 
     # Trailing stop is triggered
     exit_check = make_mock_exit_check(should_exit=True, exit_reason="trailing_stop")
@@ -264,7 +262,9 @@ def test_check_exit_conditions_with_multiple_positions():
             return make_mock_exit_check(should_exit=True, exit_reason="take_profit")
         return make_mock_exit_check(should_exit=False)
 
-    with patch.object(engine.live_exit_handler, "check_exit_conditions", side_effect=mock_check_exit_conditions):
+    with patch.object(
+        engine.live_exit_handler, "check_exit_conditions", side_effect=mock_check_exit_conditions
+    ):
         engine._check_exit_conditions(
             df=df,
             current_index=0,

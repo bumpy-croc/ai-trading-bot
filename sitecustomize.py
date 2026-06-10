@@ -6,7 +6,7 @@ from shutil import which
 # Ensure we always execute under Python 3.11+ even if the system `python3` points
 # to an older interpreter (e.g., the macOS default 3.9). This repo depends on
 # 3.11 features like PEP 604 unions, so re-exec into a 3.11 binary when required.
-if sys.version_info < (3, 11):
+if sys.version_info < (3, 11):  # noqa: UP036 — bootstrap shim must run on older interpreters
     candidates: list[str] = []
 
     explicit_env = os.environ.get("PYTHON311")

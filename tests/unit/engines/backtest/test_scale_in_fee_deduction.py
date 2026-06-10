@@ -5,7 +5,6 @@ balance, and that non-finite values are safely skipped.
 """
 
 import math
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -16,9 +15,7 @@ class TestScaleInFeeDeduction:
     """Test that the backtest engine deducts scale_in_fees from balance."""
 
     @staticmethod
-    def _simulate_fee_deduction(
-        balance: float, scale_in_fees: float
-    ) -> float:
+    def _simulate_fee_deduction(balance: float, scale_in_fees: float) -> float:
         """Reproduce the engine's fee deduction logic (lines 1150-1158 of engine.py).
 
         This mirrors the exact branching logic in the backtest engine so we

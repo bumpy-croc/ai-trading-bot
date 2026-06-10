@@ -387,8 +387,8 @@ class LiveEntryHandler:
         actual_qty = getattr(exec_result, "quantity", 0.0) or 0.0
         requested_qty = getattr(exec_result, "requested_quantity", 0.0) or 0.0
         if (
-            isinstance(actual_qty, (int, float))
-            and isinstance(requested_qty, (int, float))
+            isinstance(actual_qty, int | float)
+            and isinstance(requested_qty, int | float)
             and actual_qty > 0
             and requested_qty > 0
         ):

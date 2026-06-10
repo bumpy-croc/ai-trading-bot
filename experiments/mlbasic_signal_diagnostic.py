@@ -15,7 +15,13 @@ from pathlib import Path
 
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
-for noisy in ("atb", "atb.src.engines", "atb.src.strategies", "atb.src.prediction", "atb.matplotlib.font_manager"):
+for noisy in (
+    "atb",
+    "atb.src.engines",
+    "atb.src.strategies",
+    "atb.src.prediction",
+    "atb.matplotlib.font_manager",
+):
     logging.getLogger(noisy).setLevel(logging.ERROR)
 
 import numpy as np  # noqa: E402
@@ -27,11 +33,15 @@ from src.strategies.components.signal_generator import SignalDirection  # noqa: 
 
 def main() -> int:
     provider = FixtureProvider(Path("tests/data/BTCUSDT_1h_2023-01-01_2024-12-31.feather"))
-    df = provider.get_historical_data("BTCUSDT", "1h", datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC))
+    df = provider.get_historical_data(
+        "BTCUSDT", "1h", datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC)
+    )
     print(f"Loaded {len(df)} bars")
 
     gen = MLBasicSignalGenerator(name="diag_basic", model_type="basic")
-    print(f"long_thr={gen.long_entry_threshold}, short_thr={gen.short_entry_threshold}, conf_mult={gen.confidence_multiplier}")
+    print(
+        f"long_thr={gen.long_entry_threshold}, short_thr={gen.short_entry_threshold}, conf_mult={gen.confidence_multiplier}"
+    )
 
     start_idx = max(gen.sequence_length, 120) + 1
     horizons = (1, 4, 12, 24)
@@ -42,7 +52,7 @@ def main() -> int:
 
     # Stride to keep runtime bounded — 1/4 of all bars
     step = 4
-    for n, idx in enumerate(range(start_idx, len(df) - max(horizons) - 1, step)):
+    for _n, idx in enumerate(range(start_idx, len(df) - max(horizons) - 1, step)):
         signal = gen.generate_signal(df, idx)
         meta = getattr(signal, "metadata", {}) or {}
         pred = meta.get("predicted_return")
@@ -70,7 +80,9 @@ def main() -> int:
     arr = np.array(preds)
     conf_arr = np.array(confidences)
     print("\n=== Predicted-return distribution (basic model) ===")
-    print(f"  n={len(arr)}  mean={arr.mean():+.6f}  median={np.median(arr):+.6f}  std={arr.std():.6f}")
+    print(
+        f"  n={len(arr)}  mean={arr.mean():+.6f}  median={np.median(arr):+.6f}  std={arr.std():.6f}"
+    )
     print(f"  min={arr.min():+.6f}  max={arr.max():+.6f}")
     for q in (1, 5, 25, 50, 75, 95, 99):
         print(f"  p{q:02d}={np.percentile(arr, q):+.6f}")
@@ -82,7 +94,9 @@ def main() -> int:
         print(f"  {d.value:>5}: {c} ({100*c/total_dec:.2f}%)")
 
     print("\n=== Confidence distribution ===")
-    print(f"  mean={conf_arr.mean():.4f}  std={conf_arr.std():.4f}  p50={np.percentile(conf_arr, 50):.4f}")
+    print(
+        f"  mean={conf_arr.mean():.4f}  std={conf_arr.std():.4f}  p50={np.percentile(conf_arr, 50):.4f}"
+    )
 
     print("\n=== Directional hit rate vs. forward return ===")
     for h in horizons:

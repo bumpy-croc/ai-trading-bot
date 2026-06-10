@@ -6,10 +6,8 @@ discrepancy handling, close-only mode, and audit events.
 
 from __future__ import annotations
 
-import threading
-import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -2335,7 +2333,7 @@ class TestPartialSLFillQuantityCalculation:
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
         mock_exchange.place_stop_loss_order.return_value = "new_sl_partial"
 
-        result = reconciler.reconcile_position(pos)
+        reconciler.reconcile_position(pos)
 
         # quantity stays at 1.0; current_size reduced to reflect remaining held
         assert pos.quantity == pytest.approx(1.0)

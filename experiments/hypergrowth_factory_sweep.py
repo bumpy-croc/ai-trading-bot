@@ -49,7 +49,9 @@ from src.risk.risk_manager import RiskParameters  # noqa: E402
 from src.strategies.hyper_growth import create_hyper_growth_strategy  # noqa: E402
 
 
-def run_variant(name: str, kwargs: dict[str, Any], start: datetime, end: datetime) -> tuple[float, float, float, float, int, float, float]:
+def run_variant(
+    name: str, kwargs: dict[str, Any], start: datetime, end: datetime
+) -> tuple[float, float, float, float, int, float, float]:
     strategy = create_hyper_growth_strategy(**kwargs)
     provider = FixtureProvider(Path("tests/data/BTCUSDT_1h_2023-01-01_2024-12-31.feather"))
     bt = Backtester(
@@ -90,7 +92,15 @@ VARIANTS: list[tuple[str, dict[str, Any]]] = [
     ("conf_gate_0.20", {"min_confidence": 0.20}),
     # Combo: tighter SL + larger sizing (risk-adjusted aggression)
     ("combo_sl10_frac30", {"stop_loss_pct": 0.10, "base_fraction": 0.30, "risk_fraction": 0.30}),
-    ("combo_sl15_frac30_tp40", {"stop_loss_pct": 0.15, "base_fraction": 0.30, "risk_fraction": 0.30, "take_profit_pct": 0.40}),
+    (
+        "combo_sl15_frac30_tp40",
+        {
+            "stop_loss_pct": 0.15,
+            "base_fraction": 0.30,
+            "risk_fraction": 0.30,
+            "take_profit_pct": 0.40,
+        },
+    ),
 ]
 
 
@@ -131,7 +141,9 @@ def main() -> int:
             continue
         dt = time.time() - t0
         delta = "" if baseline_ret is None else f"  (Δ{ret - baseline_ret:+.2f})"
-        print(f"{name:<36} {trades:>6} {wr:>6.1f} {ret:>8.2f} {ann:>8.2f} {dd:>7.2f} {sharpe:>7.3f} {final:>9.0f}{delta}  [{dt:.0f}s]")
+        print(
+            f"{name:<36} {trades:>6} {wr:>6.1f} {ret:>8.2f} {ann:>8.2f} {dd:>7.2f} {sharpe:>7.3f} {final:>9.0f}{delta}  [{dt:.0f}s]"
+        )
         rows.append((name, trades, wr, ret, ann, dd, sharpe, final))
         if baseline_ret is None:
             baseline_ret = ret

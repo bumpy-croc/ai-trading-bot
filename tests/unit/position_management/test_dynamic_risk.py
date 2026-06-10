@@ -886,10 +886,13 @@ class TestCorrelationAdjustment:
 
     def test_in_memory_positions_fallback(self):
         """Test correlation adjustment uses in-memory positions when DB is unavailable"""
-        positions_provider = lambda: {
-            "BTCUSDT": {"size": 0.12},
-            "ETHUSDT": {"size": 0.12},
-        }
+
+        def positions_provider():
+            return {
+                "BTCUSDT": {"size": 0.12},
+                "ETHUSDT": {"size": 0.12},
+            }
+
         manager = DynamicRiskManager(
             self.config,
             db_manager=None,

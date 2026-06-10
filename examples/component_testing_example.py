@@ -131,7 +131,7 @@ def main():
     attribution_analyzer = PerformanceAttributionAnalyzer(bull_market_data)
 
     # Test component replacement impact
-    replacement_impact = attribution_analyzer.analyze_component_replacement_impact(
+    attribution_analyzer.analyze_component_replacement_impact(
         None, "signal", RandomSignalGenerator(seed=42)  # Would need actual strategy object
     )
     print("   Component replacement analysis completed")

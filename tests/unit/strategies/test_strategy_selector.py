@@ -1,7 +1,7 @@
 """Tests for strategies.components.strategy_selector module."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

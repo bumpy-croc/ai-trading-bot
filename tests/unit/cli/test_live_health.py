@@ -14,7 +14,7 @@ class TestHealthCheckHandler:
     def test_health_endpoint_returns_200(self):
         """Test that /health endpoint returns 200 status."""
         # Arrange
-        with patch.object(_HealthCheckHandler, "handle") as mock_handle:
+        with patch.object(_HealthCheckHandler, "handle"):
             mock_request = Mock()
             handler = _HealthCheckHandler(mock_request, ("127.0.0.1", 8000), Mock())
             handler.path = "/health"
@@ -37,7 +37,7 @@ class TestHealthCheckHandler:
     def test_health_endpoint_returns_json(self):
         """Test that /health endpoint returns JSON response."""
         # Arrange
-        with patch.object(_HealthCheckHandler, "handle") as mock_handle:
+        with patch.object(_HealthCheckHandler, "handle"):
             mock_request = Mock()
             handler = _HealthCheckHandler(mock_request, ("127.0.0.1", 8000), Mock())
             handler.path = "/health"
@@ -60,7 +60,7 @@ class TestHealthCheckHandler:
     def test_health_endpoint_returns_expected_fields(self):
         """Test that /health endpoint returns expected fields."""
         # Arrange
-        with patch.object(_HealthCheckHandler, "handle") as mock_handle:
+        with patch.object(_HealthCheckHandler, "handle"):
             mock_request = Mock()
             handler = _HealthCheckHandler(mock_request, ("127.0.0.1", 8000), Mock())
             handler.path = "/health"
@@ -93,7 +93,7 @@ class TestHealthCheckHandler:
     def test_status_endpoint_returns_200(self):
         """Test that /status endpoint returns 200 status."""
         # Arrange
-        with patch.object(_HealthCheckHandler, "handle") as mock_handle:
+        with patch.object(_HealthCheckHandler, "handle"):
             mock_request = Mock()
             handler = _HealthCheckHandler(mock_request, ("127.0.0.1", 8000), Mock())
             handler.path = "/status"
@@ -144,7 +144,7 @@ class TestHealthCheckHandler:
     def test_unknown_endpoint_returns_404(self):
         """Test that unknown endpoint returns 404."""
         # Arrange
-        with patch.object(_HealthCheckHandler, "handle") as mock_handle:
+        with patch.object(_HealthCheckHandler, "handle"):
             mock_request = Mock()
             handler = _HealthCheckHandler(mock_request, ("127.0.0.1", 8000), Mock())
             handler.path = "/unknown"
