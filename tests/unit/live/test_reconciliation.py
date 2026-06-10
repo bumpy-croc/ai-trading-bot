@@ -3115,3 +3115,221 @@ class TestFailClosedSLLookup:
 
         mock_exchange.place_stop_loss_order.assert_called_once()
         assert position.stop_loss_order_id == "new_sl_replaced"
+
+
+class TestPeriodicSpotBalanceReconcile:
+    """Tests for the extracted, self-contained spot balance reconcile that the periodic
+    cycle uses (replacing the inline Step 4) and that the spot external-close path calls
+    directly. It values a FRESH tracker snapshot, so a position closed earlier this cycle
+    is excluded — fixing the stale-snapshot over-correction."""
+
+    def test_corrects_on_discrepancy_using_fresh_snapshot(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        # Tracker is flat (the externally-closed position was already removed this cycle).
+        mock_position_tracker.positions = {}
+        mock_exchange.get_balance.return_value = MockBalance(total=900.0)  # USDT proceeds
+        mock_db.get_current_balance.return_value = 1000.0  # still counts the closed slice
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+        )
+        corrected = reconciler._reconcile_spot_balance()
+
+        assert corrected is True
+        mock_db.update_balance.assert_called_once()
+        # Corrected to exchange USDT + 0 notional (fresh tracker is empty) — NOT
+        # 900 + the closed position's notional (the stale-snapshot over-correction).
+        assert mock_db.update_balance.call_args.args[0] == pytest.approx(900.0)
+
+    def test_no_correction_within_threshold(self, mock_exchange, mock_position_tracker, mock_db):
+        mock_position_tracker.positions = {}
+        mock_exchange.get_balance.return_value = MockBalance(total=1000.0)
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+        )
+        corrected = reconciler._reconcile_spot_balance()
+
+        assert corrected is False
+        mock_db.update_balance.assert_not_called()
+
+    def test_noop_in_margin_mode(self, mock_exchange, mock_position_tracker, mock_db):
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            use_margin=True,
+        )
+        corrected = reconciler._reconcile_spot_balance()
+
+        assert corrected is False
+        mock_db.update_balance.assert_not_called()
+        mock_exchange.get_balance.assert_not_called()
+
+
+class TestPeriodicExternalCloseTradeRow:
+    """End-to-end cycle tests: the periodic external-close branches (spot + margin) now
+    emit a balance-neutral ``reconcile_ext_`` audit trade row, and the spot path self-heals
+    the session balance the same cycle using a FRESH snapshot (no over-correction)."""
+
+    @staticmethod
+    def _seed(db, side="long"):
+        from src.engines.live.execution.position_tracker import LivePositionTracker
+
+        db.update_balance(10000.0, "seed", "test", 1)
+        db_id = db.log_position(
+            symbol="BTCUSDT",
+            side=side,
+            entry_price=50000.0,
+            size=0.1,
+            strategy_name="x",
+            quantity=0.1,
+            session_id=1,
+        )
+        tracker = LivePositionTracker()
+        pos = MockPosition(
+            symbol="BTCUSDT",
+            side=side,
+            entry_price=50000.0,
+            order_id="k1",
+            exchange_order_id="ex1",
+            db_position_id=db_id,
+            stop_loss_order_id="sl1",
+            quantity=0.1,
+            size=0.1,
+            current_size=0.1,
+            original_size=0.1,
+        )
+        tracker._positions[pos.order_id] = pos
+        return db_id, tracker, pos
+
+    @staticmethod
+    def _order_side_effect():
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        # Entry order FILLED; the SL order is resting (PENDING) so the SL step is a no-op.
+        def _get_order(oid, sym):
+            if oid == "sl1":
+                return MockExchangeOrder(order_id="sl1", status=ExOS.PENDING)
+            return MockExchangeOrder(order_id=oid, status=ExOS.FILLED)
+
+        return _get_order
+
+    def test_spot_external_close_writes_trade_row_and_heals_balance(self, mock_exchange):
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        db_id, tracker, pos = self._seed(db, side="long")
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        # BTC gone (external close); USDT now holds the sale proceeds.
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5200.0)
+            if asset == "USDT"
+            else MockBalance(asset="BTC", total=0.0, free=0.0, locked=0.0)
+        )
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 52000.0
+        on_critical = MagicMock()
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            on_critical=on_critical,
+            data_provider=data_provider,
+        )
+        reconciler._reconcile_cycle()
+
+        # (a) one balance-neutral audit row, GROSS pnl @ proxy price, synthetic dedup key.
+        trades = list(db._trades.values())
+        assert len(trades) == 1
+        t = trades[0]
+        assert t["order_id"] == f"reconcile_ext_{db_id}"
+        assert t["pnl"] == pytest.approx(200.0)  # (52000-50000)*0.1 GROSS long
+        assert t["quantity"] == pytest.approx(0.1)
+        # (b) balance healed to exchange USDT — the fresh snapshot excludes the closed
+        # position, so it is NOT 5200 + 5000 notional (the stale-snapshot over-correction).
+        assert db.get_current_balance(1) == pytest.approx(5200.0)
+        # (c) position removed from the tracker.
+        assert pos.order_id not in tracker.positions
+        # (d) the balance correction is CRITICAL → close-only mode is triggered.
+        on_critical.assert_called_once()
+
+    def test_spot_external_close_no_trade_row_when_db_close_fails(self, mock_exchange):
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        db_id, tracker, pos = self._seed(db, side="long")
+        # close_position returns False (real DatabaseManager swallows DB errors to False).
+        db.close_position = MagicMock(return_value=False)
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5200.0)
+            if asset == "USDT"
+            else MockBalance(asset="BTC", total=0.0, free=0.0, locked=0.0)
+        )
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 52000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            data_provider=data_provider,
+        )
+        reconciler._reconcile_cycle()
+
+        # DB close did not actually succeed → no audit trade row (would assert a closure
+        # that did not happen and duplicate once the close finally lands).
+        assert len(db._trades) == 0
+
+    def test_margin_external_close_writes_trade_row_balance_untouched(self, mock_exchange):
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        db_id, tracker, pos = self._seed(db, side="short")
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)  # short closed
+        mock_exchange.get_balance.side_effect = lambda asset: MockBalance(asset=asset, total=0.0)
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 48000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            use_margin=True,
+            data_provider=data_provider,
+        )
+        reconciler._reconcile_cycle()
+
+        trades = list(db._trades.values())
+        assert len(trades) == 1
+        t = trades[0]
+        assert t["order_id"] == f"reconcile_ext_{db_id}"
+        assert t["pnl"] == pytest.approx(200.0)  # short GROSS (50000-48000)*0.1
+        # Margin: the audit row must not move the session balance — AccountSynchronizer.
+        # _sync_margin_equity owns margin capital, and balance reconcile is margin-skipped.
+        assert db.get_current_balance(1) == pytest.approx(10000.0)
+        assert pos.order_id not in tracker.positions

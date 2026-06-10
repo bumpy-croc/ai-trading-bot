@@ -502,6 +502,139 @@ def test_reconciler_scale_in_close_nulls_quantity_and_does_not_inflate_commissio
     assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
 
 
+# ---------------------------------------------------------------------------
+# Periodic reconciler external-close audit trade rows (PeriodicReconciler).
+#
+# The PeriodicReconciler._reconcile_cycle inline external-close branches (margin
+# and spot) close the DB position + drop it from the tracker but historically
+# wrote NO ``trades`` row. These tests pin the balance-NEUTRAL audit row they now
+# emit: GROSS pnl from a proxy (current-market) exit price, a synthetic non-NULL
+# dedup key ``reconcile_ext_<db_position_id>`` over uq_trade_order_session, gated
+# on the DB close actually succeeding. Balance is owned elsewhere (spot: the
+# cycle's own balance reconcile; margin: AccountSynchronizer._sync_margin_equity),
+# so the row itself never moves the session balance.
+# ---------------------------------------------------------------------------
+
+
+def _make_periodic_reconciler(
+    db,
+    *,
+    exchange=None,
+    position_tracker=None,
+    data_provider=None,
+    fee_rate=0.001,
+    use_margin=False,
+):
+    from src.engines.live.reconciliation import PeriodicReconciler
+
+    if data_provider is None:
+        data_provider = Mock()
+        data_provider.get_current_price.return_value = 90.0
+    return PeriodicReconciler(
+        exchange_interface=exchange or Mock(),
+        position_tracker=position_tracker or Mock(),
+        db_manager=db,
+        session_id=1,
+        interval=60,
+        use_margin=use_margin,
+        data_provider=data_provider,
+        fee_rate=fee_rate,
+    )
+
+
+def test_periodic_external_close_logs_balance_neutral_trade():
+    """A periodic external close persists a balance-neutral audit Trade row.
+
+    pnl is GROSS, computed from the proxy (current-market) exit price; the dedup
+    key is the synthetic non-NULL ``reconcile_ext_<db_position_id>``; and the
+    session balance is left untouched by the row (it is owned elsewhere).
+    """
+    db = MockDatabaseManager()
+    db.update_balance(1000.0, "seed", "test", 1)
+    data_provider = Mock()
+    data_provider.get_current_price.return_value = 90.0
+    reconciler = _make_periodic_reconciler(db, data_provider=data_provider)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.db_position_id = 77
+    position.order_id = "pos-77"
+
+    reconciler._log_external_close_trade(position, db_closed=True)
+
+    trades = db._trades
+    assert len(trades) == 1
+    t = list(trades.values())[0]
+    assert t["pnl"] == pytest.approx(-25.0)  # GROSS long pnl (90-100)*2.5
+    assert t["quantity"] == pytest.approx(2.5)
+    assert t["commission"] is not None and t["commission"] > 0.0
+    assert t["order_id"] == "reconcile_ext_77"  # synthetic non-NULL dedup key
+    # Balance-neutral: writing the audit row must not move the session balance.
+    assert db.get_current_balance(1) == pytest.approx(1000.0)
+
+
+def test_periodic_external_close_skips_trade_when_db_not_closed():
+    """No audit row when the DB close did not succeed — the position is left OPEN for
+    re-reconciliation, so logging now would assert a closure that did not happen and
+    would duplicate once the close finally lands."""
+    db = MockDatabaseManager()
+    reconciler = _make_periodic_reconciler(db)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.db_position_id = 88
+
+    reconciler._log_external_close_trade(position, db_closed=False)
+
+    assert len(db._trades) == 0
+
+
+def test_periodic_external_close_dedups_on_rerun():
+    """A second external-close audit for the same DB position collides on
+    reconcile_ext_<id> (uq_trade_order_session) and is swallowed — exactly one row."""
+    db = MockDatabaseManager()
+    data_provider = Mock()
+    data_provider.get_current_price.return_value = 90.0
+    reconciler = _make_periodic_reconciler(db, data_provider=data_provider)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.db_position_id = 99
+
+    for _ in range(2):
+        reconciler._log_external_close_trade(position, db_closed=True)
+
+    assert len(db._trades) == 1
+
+
+def test_periodic_external_close_short_pnl_is_gross():
+    """Short external close records GROSS short pnl (entry-exit)*qty at the proxy price."""
+    db = MockDatabaseManager()
+    data_provider = Mock()
+    data_provider.get_current_price.return_value = 90.0
+    reconciler = _make_periodic_reconciler(db, data_provider=data_provider)
+    position = _make_position(
+        quantity=2.5, entry_fee=None, side=PositionSide.SHORT, entry_price=100.0
+    )
+    position.db_position_id = 55
+
+    reconciler._log_external_close_trade(position, db_closed=True)
+
+    t = list(db._trades.values())[0]
+    assert t["pnl"] == pytest.approx(25.0)  # GROSS short pnl (100-90)*2.5
+    assert t["order_id"] == "reconcile_ext_55"
+
+
+def test_periodic_external_close_skips_when_no_proxy_price():
+    """With neither a data_provider price nor a position current_price, the closure has
+    no usable exit price — skip the audit row rather than fabricate a pnl."""
+    db = MockDatabaseManager()
+    data_provider = Mock()
+    data_provider.get_current_price.return_value = None
+    reconciler = _make_periodic_reconciler(db, data_provider=data_provider)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.db_position_id = 44
+    # A recovered Position carries no current_price, so the proxy falls through to None.
+
+    reconciler._log_external_close_trade(position, db_closed=True)
+
+    assert len(db._trades) == 0
+
+
 def test_get_performance_metrics_nets_commission(monkeypatch):
     """get_performance_metrics nets commission: a gross-winner whose commission exceeds its
     gross pnl is bucketed as a loss and reduces total_pnl (the _trade_net_pnl integration)."""

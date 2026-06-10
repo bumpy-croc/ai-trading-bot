@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Periodic reconciler now persists a balance-neutral audit `trades` row when it
+  detects an externally-closed position (margin and spot branches of
+  `PeriodicReconciler._reconcile_cycle`), closing the same gap PR #731 fixed for
+  the startup paths. The closure has no real fill price, so pnl/commission are
+  valued at a proxy (current-market) exit price from the `data_provider`;
+  `Trade.pnl` stays GROSS and the row dedups on the synthetic non-NULL key
+  `reconcile_ext_<db_position_id>` over `uq_trade_order_session`. The row is
+  written only once the DB close actually succeeds — gated on the
+  `close_position` **return value** (it swallows DB errors to `False` rather than
+  raising), and the position is dropped from the tracker only on that success (no
+  memory/DB divergence). The trade-row writer is now the shared module-level
+  `reconciliation.log_reconciliation_trade` (used by both reconcilers).
+  Balance ownership: the periodic spot path now **self-heals** the session
+  balance the same cycle via the extracted `_reconcile_spot_balance`, which
+  values a **fresh** position snapshot — fixing a stale-snapshot over-correction
+  where Step 4 counted a just-closed position's notional and over-corrected the
+  balance by it for ~one cycle (~2 min) before self-healing. Margin balance stays
+  owned by `AccountSynchronizer._sync_margin_equity`. `PeriodicReconciler` gains
+  `data_provider` and `fee_rate` constructor params (wired from the engine).
 - OrderTracker no longer converts an API outage into a position deletion.
   After `MAX_API_ERROR_RETRIES` (10) consecutive failed/`None` polls
   (~50 s at the live 5 s interval) the tracker fired `on_cancel`, and
