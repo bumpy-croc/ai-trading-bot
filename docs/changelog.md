@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Backtest trailing-stop updates no longer crash the run when trailing
+  activates without a stop improvement (#761): `TrailingStopManager.update`
+  legitimately returns `updated=True, new_stop_price=None` (e.g. ATR
+  unavailable on the activation candle), and the backtest tracker compared
+  that `None` against the current stop (`TypeError`, unwrapped). The tracker
+  now mirrors the live tracker: flag updates apply, price comparison skipped.
 - `atb data populate-dummy` works again (#763): `log_trade` was called with the
   nonexistent `order_id` kwarg (the parameter is `exit_order_id`), so the first
   generated trade raised `TypeError` and the command always failed. Same bug
