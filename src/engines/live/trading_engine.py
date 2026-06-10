@@ -65,6 +65,12 @@ from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
+from src.engines.live.monitoring import (
+    LiveAccountMonitor,
+    extract_indicators,
+    extract_ml_predictions,
+    extract_sentiment_data,
+)
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
@@ -913,6 +919,9 @@ class LiveTradingEngine:
             engine_state=self,
             send_alert=self._send_alert,
         )
+
+        # Account monitor — snapshots, status lines, performance summaries.
+        self.account_monitor = LiveAccountMonitor(engine_state=self)
 
     def _apply_dynamic_risk_adjustment(
         self,
@@ -4846,161 +4855,27 @@ class LiveTradingEngine:
 
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
-        # Update performance tracker on every metric update cycle
-        # Note: Less frequent than backtest (every candle vs every update cycle)
-        # This trade-off reduces overhead while maintaining statistical validity for risk metrics
-        self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now(UTC))
+        self.account_monitor.update_performance_metrics()
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
-        if index >= len(df):
-            return {}
-
-        indicators = {}
-        current_row = df.iloc[index]
-
-        # Common indicators to extract
-        indicator_columns = [
-            "rsi",
-            "macd",
-            "macd_signal",
-            "macd_hist",
-            "atr",
-            "volatility",
-            "trend_ma",
-            "short_ma",
-            "long_ma",
-            "volume_ma",
-            "trend_strength",
-            "regime",
-            "body_size",
-            "upper_wick",
-            "lower_wick",
-        ]
-
-        for col in indicator_columns:
-            if col in df.columns and not pd.isna(current_row[col]):
-                indicators[col] = float(current_row[col])
-
-        # Add basic OHLCV data
-        for col in ["open", "high", "low", "close", "volume"]:
-            if col in df.columns:
-                indicators[col] = float(current_row[col])
-
-        return indicators
+        return extract_indicators(df, index)
 
     def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> dict:
         """Extract sentiment data from dataframe for logging"""
-        if index >= len(df):
-            return {}
-
-        sentiment_data = {}
-        current_row = df.iloc[index]
-
-        # Sentiment columns to extract
-        sentiment_columns = [
-            "sentiment_primary",
-            "sentiment_momentum",
-            "sentiment_volatility",
-            "sentiment_extreme_positive",
-            "sentiment_extreme_negative",
-            "sentiment_ma_3",
-            "sentiment_ma_7",
-            "sentiment_ma_14",
-            "sentiment_confidence",
-            "sentiment_freshness",
-        ]
-
-        for col in sentiment_columns:
-            if col in df.columns and not pd.isna(current_row[col]):
-                sentiment_data[col] = float(current_row[col])
-
-        return sentiment_data
+        return extract_sentiment_data(df, index)
 
     def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> dict:
         """Extract ML prediction data from dataframe for logging"""
-        if index >= len(df):
-            return {}
-
-        ml_data = {}
-        current_row = df.iloc[index]
-
-        # ML prediction columns to extract
-        ml_columns = ["ml_prediction", "prediction_confidence", "onnx_pred"]
-
-        for col in ml_columns:
-            if col in df.columns and not pd.isna(current_row[col]):
-                ml_data[col] = float(current_row[col])
-
-        return ml_data
+        return extract_ml_predictions(df, index)
 
     def _log_account_snapshot(self):
         """Log current account state to database"""
-        try:
-            # Calculate total exposure using the active fraction per position
-            positions_snapshot = self.live_position_tracker.positions
-            total_exposure = sum(
-                float(pos.current_size if pos.current_size is not None else pos.size)
-                * (
-                    float(pos.entry_balance)
-                    if pos.entry_balance is not None and pos.entry_balance > 0
-                    else float(self.current_balance)
-                )
-                for pos in positions_snapshot.values()
-            )
-
-            # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in positions_snapshot.values())
-            equity = float(self.current_balance) + unrealized_pnl
-
-            # Calculate current drawdown percentage
-            current_drawdown: float = 0
-            perf_metrics = self.performance_tracker.get_metrics()
-            if perf_metrics.peak_balance > 0:
-                current_drawdown = (
-                    (perf_metrics.peak_balance - self.current_balance)
-                    / perf_metrics.peak_balance
-                    * 100
-                )
-
-            # TODO: Calculate daily P&L (requires tracking of day start balance)
-            daily_pnl = 0  # Placeholder
-
-            # Log snapshot to database
-            if self.trading_session_id is not None:
-                self.db_manager.log_account_snapshot(
-                    balance=self.current_balance,
-                    equity=equity,
-                    total_pnl=perf_metrics.total_pnl,
-                    open_positions=self.live_position_tracker.position_count,
-                    total_exposure=total_exposure,
-                    drawdown=current_drawdown,
-                    daily_pnl=daily_pnl,
-                    session_id=self.trading_session_id,
-                )
-            else:
-                logger.warning(
-                    "⚠️ Cannot log account snapshot to database - no trading session ID available"
-                )
-
-        except Exception as e:
-            logger.error("Failed to log account snapshot: %s", e)
+        self.account_monitor.log_account_snapshot()
 
     def _log_status(self, symbol: str, current_price: float):
         """Log current trading status"""
-        total_unrealized = sum(
-            float(pos.unrealized_pnl) for pos in self.live_position_tracker.positions.values()
-        )
-        perf_metrics = self.performance_tracker.get_metrics()
-        win_rate = perf_metrics.win_rate * 100
-
-        logger.info(
-            f"📊 Status: {symbol} @ ${current_price:.2f} | "
-            f"Balance: ${self.current_balance:.2f} | "
-            f"Positions: {self.live_position_tracker.position_count} | "
-            f"Unrealized: ${total_unrealized:.2f} | "
-            f"Trades: {perf_metrics.total_trades} ({win_rate:.1f}% win)"
-        )
+        self.account_monitor.log_status(symbol, current_price)
 
     def _log_trade(self, trade: Trade):
         """Log trade to file"""
@@ -5194,84 +5069,11 @@ class LiveTradingEngine:
 
     def _print_final_stats(self):
         """Print final trading statistics"""
-        # Validate initial_balance before division to prevent crashes
-        if self.initial_balance <= 0:
-            logger.error(
-                "Cannot calculate total return - invalid initial_balance: %.8f. "
-                "Skipping final statistics.",
-                self.initial_balance,
-            )
-            return
-
-        total_return = ((self.current_balance - self.initial_balance) / self.initial_balance) * 100
-        perf_metrics = self.performance_tracker.get_metrics()
-        win_rate = perf_metrics.win_rate * 100
-
-        print("\n" + "=" * 60)
-        print("🏁 FINAL TRADING STATISTICS")
-        print("=" * 60)
-        print(f"Initial Balance: ${self.initial_balance:,.2f}")
-        print(f"Final Balance: ${self.current_balance:,.2f}")
-        print(f"Total Return: {total_return:+.2f}%")
-        print(f"Total PnL: ${perf_metrics.total_pnl:+,.2f}")
-        print(f"Max Drawdown: {perf_metrics.max_drawdown * 100:.2f}%")
-        print(f"Total Trades: {perf_metrics.total_trades}")
-        print(f"Winning Trades: {perf_metrics.winning_trades}")
-        print(f"Win Rate: {win_rate:.1f}%")
-        print(f"Active Positions: {self.live_position_tracker.position_count}")
-
-        if self.completed_trades:
-            avg_trade = sum(trade.pnl for trade in self.completed_trades) / len(
-                self.completed_trades
-            )
-            print(f"Average Trade: ${avg_trade:.2f}")
-
-        print("=" * 60)
+        self.account_monitor.print_final_stats()
 
     def get_performance_summary(self) -> dict[str, Any]:
         """Get current performance summary"""
-        # Get comprehensive metrics from performance tracker
-        perf_metrics = self.performance_tracker.get_metrics()
-
-        # Convert to percentages for backward compatibility
-        win_rate = perf_metrics.win_rate * 100
-        current_drawdown = perf_metrics.current_drawdown * 100
-        max_drawdown_pct = perf_metrics.max_drawdown * 100
-
-        return {
-            # Core metrics from tracker
-            "initial_balance": self.initial_balance,
-            "current_balance": self.current_balance,
-            "total_return": perf_metrics.total_return_pct,
-            "total_return_pct": perf_metrics.total_return_pct,
-            "total_pnl": perf_metrics.total_pnl,
-            "current_drawdown": current_drawdown,
-            "max_drawdown_pct": max_drawdown_pct,
-            "total_trades": perf_metrics.total_trades,
-            "winning_trades": perf_metrics.winning_trades,
-            "win_rate": win_rate,
-            "win_rate_pct": win_rate,
-            # New metrics from tracker
-            "sharpe_ratio": perf_metrics.sharpe_ratio,
-            "sortino_ratio": perf_metrics.sortino_ratio,
-            "calmar_ratio": perf_metrics.calmar_ratio,
-            "var_95": perf_metrics.var_95,
-            "expectancy": perf_metrics.expectancy,
-            "profit_factor": perf_metrics.profit_factor,
-            "avg_win": perf_metrics.avg_win,
-            "avg_loss": perf_metrics.avg_loss,
-            "largest_win": perf_metrics.largest_win,
-            "largest_loss": perf_metrics.largest_loss,
-            "avg_trade_duration_hours": perf_metrics.avg_trade_duration_hours,
-            "consecutive_wins": perf_metrics.consecutive_wins,
-            "consecutive_losses": perf_metrics.consecutive_losses,
-            "total_fees_paid": perf_metrics.total_fees_paid,
-            "total_slippage_cost": perf_metrics.total_slippage_cost,
-            # Live-specific metrics
-            "active_positions": self.live_position_tracker.position_count,
-            "last_update": self.last_data_update.isoformat() if self.last_data_update else None,
-            "is_running": self.is_running,
-        }
+        return self.account_monitor.performance_summary()
 
     def _recover_existing_session(self) -> float | None:
         """Try to recover balance from an existing session.
