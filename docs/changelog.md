@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Backtest risk tracking now covers next-bar (pending) entries (#757):
+  the post-fill `RiskManager.update_position` call passed the `PositionSide`
+  enum, whose string validation (`side in VALID_SIDES`) raised `ValueError`
+  on every call — swallowed with a warning — so `daily_risk_used` and
+  position tracking for correlation control silently omitted every pending
+  entry. Backtests could take position sequences a correctly-accounted run
+  would have rejected. The side now converts via `to_side_string`, like the
+  immediate-entry path.
 - `TradeProtocol` members are now read-only properties (#767), so concrete
   trade classes with narrower types (non-Optional datetimes, `PositionSide`
   enum side) conform structurally — the three `cast("TradeProtocol", ...)`

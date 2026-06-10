@@ -530,18 +530,12 @@ class EntryHandler:
             # Open position in tracker
             self.position_tracker.open_position(result.trade)
 
-            # Update risk manager
+            # Update risk manager (update_position validates string sides;
+            # convert the PositionSide enum like the immediate-entry path, #757)
             try:
-                # KNOWN BUG (typing surfaced, behavior preserved): result.trade.side
-                # is a PositionSide enum after __post_init__ normalization, but
-                # update_position validates `side in VALID_SIDES` (strings), so this
-                # call always raises ValueError and is swallowed by the except below,
-                # skipping risk tracking for pending (next-bar) entries. Converting
-                # via to_side_string here would change runtime behavior; tracked for
-                # a separate behavioral fix.
                 self.risk_manager.update_position(
                     symbol=symbol,
-                    side=result.trade.side,  # type: ignore[arg-type]
+                    side=to_side_string(result.trade.side),
                     size=result.trade.size,
                     entry_price=result.trade.entry_price,
                 )
