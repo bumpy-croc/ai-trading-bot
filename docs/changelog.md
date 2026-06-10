@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stored with the short formula (sign-flipped). `log_trade` now normalizes
   any Enum side/source by value before classification (hardens all callers)
   and the backtest call site converts via `to_side_string`.
+- Correlation control no longer silently drops peer symbols (#759): the
+  no-window fallback omitted the required `start` argument, so every call
+  raised `TypeError` (swallowed) and the peer vanished from correlated-
+  exposure accounting in BOTH engines. A failed window computation now falls
+  back to the default correlation window; when no time window is derivable
+  at all (non-datetime index), peers are skipped with an explicit WARNING
+  instead of fabricating a wall-clock window (backtest lookahead).
 - Backtest strategies can finally see their open position (#756):
   `_build_runtime_context` passed the `PositionSide` enum into
   `ComponentPosition`, whose validation expects "long"/"short" strings, so
