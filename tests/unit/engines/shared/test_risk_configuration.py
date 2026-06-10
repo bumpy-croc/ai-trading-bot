@@ -73,6 +73,7 @@ class TestBuildTimeExitPolicy:
 
     @pytest.mark.fast
     def test_defaults_applied_for_missing_keys(self):
+        """Keys omitted from the config fall back to their DEFAULT_* constants."""
         strategy = _StrategyWithOverrides({"time_exits": {"weekend_flat": True}})
 
         policy = build_time_exit_policy(strategy)
@@ -105,6 +106,7 @@ class TestBuildTimeExitPolicy:
 
     @pytest.mark.fast
     def test_returns_none_without_config(self):
+        """No time_exits config (None override or missing attribute) returns None."""
         strategy = _StrategyWithOverrides(None)
 
         assert build_time_exit_policy(strategy) is None
@@ -112,6 +114,14 @@ class TestBuildTimeExitPolicy:
 
     @pytest.mark.fast
     def test_non_dict_config_returns_none(self):
+        """A non-dict time_exits value emits a warning and returns None."""
         strategy = _StrategyWithOverrides({"time_exits": "24h"})
+
+        assert build_time_exit_policy(strategy) is None
+
+    @pytest.mark.fast
+    def test_invalid_time_restrictions_type_returns_none(self):
+        """A non-dict time_restrictions value triggers the except handler and returns None."""
+        strategy = _StrategyWithOverrides({"time_exits": {"time_restrictions": "invalid"}})
 
         assert build_time_exit_policy(strategy) is None
