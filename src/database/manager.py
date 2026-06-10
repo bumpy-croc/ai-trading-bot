@@ -1791,6 +1791,9 @@ class DatabaseManager:
                         # * Include exchange order IDs for live trading recovery
                         "entry_order_id": getattr(p, "entry_order_id", None),
                         "stop_loss_order_id": getattr(p, "stop_loss_order_id", None),
+                        # Idempotency key; recovery paths (engine and tracker)
+                        # hydrate LivePosition.client_order_id from this.
+                        "client_order_id": getattr(p, "client_order_id", None),
                     }
                 )
 
