@@ -1513,6 +1513,12 @@ class LiveTradingEngine:
             self.live_execution_engine.session_id = self.trading_session_id
             self.live_execution_engine.strategy_name = self._strategy_name()
 
+            # Wire the event logger so snapshot/daily-P&L logging is session
+            # scoped; on a clean restart also point day-start recovery at the
+            # prior session, where today's earlier snapshots live (#766).
+            self.event_logger.set_session_id(self.trading_session_id)
+            self.event_logger.set_recovery_session_id(self._recovered_inactive_session_id)
+
         # Carry OPEN positions forward on a clean restart (#668). The inactive
         # session recovered above (balance only) still owns any OPEN position via
         # Position.session_id, so _recover_active_positions() at line ~1281 saw a
@@ -5163,56 +5169,26 @@ class LiveTradingEngine:
         return ml_data
 
     def _log_account_snapshot(self):
-        """Log current account state to database"""
+        """Log current account state to database via the event logger.
+
+        Routing through ``LiveEventLogger.log_account_snapshot`` keeps daily
+        P&L tracking — and its day-start recovery across restarts (#766) — on
+        the live path. The engine previously duplicated the exposure/equity/
+        drawdown math here and wrote snapshots directly with a
+        ``daily_pnl = 0`` placeholder, so live snapshots never carried daily
+        P&L and the recovery wiring was dead code.
+        """
         try:
-            # Calculate total exposure using the active fraction per position
-            positions_snapshot = self.live_position_tracker.positions
-            total_exposure = sum(
-                float(pos.current_size if pos.current_size is not None else pos.size)
-                * (
-                    float(pos.entry_balance)
-                    if pos.entry_balance is not None and pos.entry_balance > 0
-                    else float(self.current_balance)
-                )
-                for pos in positions_snapshot.values()
-            )
-
-            # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in positions_snapshot.values())
-            equity = float(self.current_balance) + unrealized_pnl
-
-            # Calculate current drawdown percentage
-            current_drawdown: float = 0
             perf_metrics = self.performance_tracker.get_metrics()
-            if perf_metrics.peak_balance > 0:
-                current_drawdown = (
-                    (perf_metrics.peak_balance - self.current_balance)
-                    / perf_metrics.peak_balance
-                    * 100
-                )
-
-            # TODO: Calculate daily P&L (requires tracking of day start balance)
-            daily_pnl = 0  # Placeholder
-
-            # Log snapshot to database
-            if self.trading_session_id is not None:
-                self.db_manager.log_account_snapshot(
-                    balance=self.current_balance,
-                    equity=equity,
-                    total_pnl=perf_metrics.total_pnl,
-                    open_positions=self.live_position_tracker.position_count,
-                    total_exposure=total_exposure,
-                    drawdown=current_drawdown,
-                    daily_pnl=daily_pnl,
-                    session_id=self.trading_session_id,
-                )
-            else:
-                logger.warning(
-                    "⚠️ Cannot log account snapshot to database - no trading session ID available"
-                )
-
+            self.event_logger.log_account_snapshot(
+                balance=float(self.current_balance),
+                positions=self.live_position_tracker.positions,
+                total_pnl=perf_metrics.total_pnl,
+                peak_balance=perf_metrics.peak_balance,
+            )
         except Exception as e:
-            logger.error("Failed to log account snapshot: %s", e)
+            # Snapshot logging must never crash the trading loop.
+            logger.error("Failed to log account snapshot: %s", e, exc_info=True)
 
     def _log_status(self, symbol: str, current_price: float):
         """Log current trading status"""
@@ -5575,6 +5551,9 @@ class LiveTradingEngine:
                     # Wire session context to execution engine so journaling works
                     self.live_execution_engine.session_id = session_id
                     self.live_execution_engine.strategy_name = self._strategy_name()
+                    # Crash recovery reuses the session, so day-start snapshots
+                    # already live under it — no recovery fallback needed (#766).
+                    self.event_logger.set_session_id(session_id)
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,

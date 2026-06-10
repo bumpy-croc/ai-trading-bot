@@ -2269,7 +2269,10 @@ class DatabaseManager:
             return False
 
     def get_first_snapshot_of_day(
-        self, session_id: int | None = None, target_date: date | None = None
+        self,
+        session_id: int | None = None,
+        target_date: date | None = None,
+        fallback_session_id: int | None = None,
     ) -> AccountHistory | None:
         """Get the earliest account snapshot of a UTC calendar day for a session.
 
@@ -2284,10 +2287,14 @@ class DatabaseManager:
         Args:
             session_id: Trading session ID (defaults to the current session).
             target_date: UTC calendar date (defaults to today in UTC).
+            fallback_session_id: Prior session whose snapshots also count. A
+                clean restart creates a NEW session while the day's earlier
+                snapshots live under the recovered inactive session — without
+                this the primary use case (restart continuity) finds nothing.
 
         Returns:
-            The day's earliest ``AccountHistory`` row, or None when the session
-            has no snapshot that day.
+            The day's earliest ``AccountHistory`` row across the session(s),
+            or None when no snapshot exists that day.
         """
         session_id = session_id or self._current_session_id
         if not session_id:
@@ -2299,12 +2306,16 @@ class DatabaseManager:
         day_start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=UTC)
         day_end = day_start + timedelta(days=1)
 
+        session_ids = [session_id]
+        if fallback_session_id is not None and fallback_session_id != session_id:
+            session_ids.append(fallback_session_id)
+
         # Use ANALYTICS timeout - day-start recovery is a non-critical read
         with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
             snapshot = (
                 session.query(AccountHistory)
                 .filter(
-                    AccountHistory.session_id == session_id,
+                    AccountHistory.session_id.in_(session_ids),
                     AccountHistory.timestamp >= day_start,
                     AccountHistory.timestamp < day_end,
                 )

@@ -84,11 +84,16 @@ class TestGetFirstSnapshotOfDay:
         assert db.get_first_snapshot_of_day(session_id=None, target_date=date(2024, 1, 2)) is None
 
     def test_defaults_to_current_utc_day(self, db):
-        """target_date defaults to today's UTC date."""
+        """target_date defaults to today's UTC date (clock frozen: a midnight
+        tick between insert and query would otherwise split the day)."""
+        from unittest.mock import patch
+
         now = datetime.now(UTC)
         _insert_snapshot(db, 1, now, 1234.0)
 
-        snapshot = db.get_first_snapshot_of_day(session_id=1)
+        with patch("src.database.manager.datetime", wraps=datetime) as mock_dt:
+            mock_dt.now.return_value = now
+            snapshot = db.get_first_snapshot_of_day(session_id=1)
 
         assert snapshot is not None
         assert float(snapshot.balance) == 1234.0
@@ -102,3 +107,27 @@ class TestGetFirstSnapshotOfDay:
         assert snapshot is not None
         assert snapshot.session_id == 1
         assert float(snapshot.equity) == 1000.0
+
+    def test_fallback_session_covers_clean_restart(self, db):
+        """A clean restart creates a NEW session; the day's earlier snapshots
+        live under the prior session and must still be found via
+        fallback_session_id (#766 review)."""
+        _insert_snapshot(db, 1, datetime(2024, 1, 2, 0, 5, tzinfo=UTC), 1000.0)
+        _insert_snapshot(db, 2, datetime(2024, 1, 2, 12, 0, tzinfo=UTC), 1100.0)
+
+        snapshot = db.get_first_snapshot_of_day(
+            session_id=2, target_date=date(2024, 1, 2), fallback_session_id=1
+        )
+
+        assert snapshot is not None
+        assert float(snapshot.balance) == 1000.0
+
+    def test_fallback_session_ignored_when_none(self, db):
+        """Without a fallback the query stays strictly session scoped."""
+        _insert_snapshot(db, 1, datetime(2024, 1, 2, 0, 5, tzinfo=UTC), 1000.0)
+
+        snapshot = db.get_first_snapshot_of_day(
+            session_id=2, target_date=date(2024, 1, 2), fallback_session_id=None
+        )
+
+        assert snapshot is None

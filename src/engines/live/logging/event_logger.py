@@ -60,6 +60,9 @@ class LiveEventLogger:
         # Daily P&L tracking state
         self._current_trading_date: date | None = None
         self._day_start_balance: float | None = None
+        # Prior session a clean restart recovered from (see
+        # set_recovery_session_id): day-start snapshots may live there.
+        self.recovery_session_id: int | None = None
 
     @property
     def enabled(self) -> bool:
@@ -131,11 +134,25 @@ class LiveEventLogger:
             self._current_trading_date = today
             self._day_start_balance = current_balance
 
+    def set_recovery_session_id(self, session_id: int | None) -> None:
+        """Record the prior session a clean restart recovered from.
+
+        A clean restart creates a NEW trading session while the day's earlier
+        snapshots live under the recovered inactive session — day-start
+        recovery must look across both (#766).
+
+        Args:
+            session_id: The recovered inactive session's ID, or None.
+        """
+        self.recovery_session_id = session_id
+
     def _get_day_start_balance_from_db(self) -> float | None:
         """Recover day start balance from database on session restart.
 
         Enables continuous daily P&L tracking across restarts by retrieving
-        the starting balance from the first snapshot of the current UTC day.
+        the starting balance from the first snapshot of the current UTC day —
+        for the current session or, on clean restarts, the prior session set
+        via ``set_recovery_session_id``.
 
         Returns:
             The day start balance if found, None otherwise.
@@ -147,13 +164,16 @@ class LiveEventLogger:
             snapshot = self.db_manager.get_first_snapshot_of_day(
                 session_id=self.session_id,
                 target_date=self._utc_today(),
+                fallback_session_id=self.recovery_session_id,
             )
             if snapshot is not None:
                 return float(snapshot.balance)
-        except Exception as e:
-            # Degraded but non-fatal: daily P&L baseline falls back to the
-            # restart-time balance.
-            logger.warning("Failed to recover day start balance: %s", e)
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            # Data-shape failures: degraded but non-fatal — the daily P&L
+            # baseline falls back to the restart-time balance. Unexpected
+            # DB-level errors propagate to the engine's snapshot wrapper,
+            # which logs and skips the snapshot rather than crashing the loop.
+            logger.warning("Failed to recover day start balance: %s", e, exc_info=True)
 
         return None
 
