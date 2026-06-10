@@ -398,8 +398,10 @@ class LiveStopLossManager:
         tracked stop-loss id missing from the exchange, confirms via a direct
         order lookup whether it FILLED. Returns ``(position, fill_price)``
         pairs for confirmed fills; bookkeeping (balance/trade/DB updates) stays
-        with the caller. A failed ``get_open_orders`` propagates to the caller,
-        matching the original error handling.
+        with the caller. Unlike the other methods on this manager (which
+        catch-and-degrade), a failed ``get_open_orders`` PROPAGATES — the
+        caller must keep its surrounding try/except so a transient listing
+        failure degrades to a logged reconciliation error, not a startup crash.
         """
         state = self._state
         exchange_orders = state.exchange_interface.get_open_orders()

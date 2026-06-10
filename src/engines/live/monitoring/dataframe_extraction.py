@@ -43,7 +43,7 @@ SENTIMENT_COLUMNS = [
 ML_PREDICTION_COLUMNS = ["ml_prediction", "prediction_confidence", "onnx_pred"]
 
 
-def extract_indicators(df: pd.DataFrame, index: int) -> dict:
+def extract_indicators(df: pd.DataFrame, index: int) -> dict[str, float]:
     """Extract indicator values from dataframe for logging"""
     if index >= len(df):
         return {}
@@ -63,7 +63,7 @@ def extract_indicators(df: pd.DataFrame, index: int) -> dict:
     return indicators
 
 
-def extract_sentiment_data(df: pd.DataFrame, index: int) -> dict:
+def extract_sentiment_data(df: pd.DataFrame, index: int) -> dict[str, float]:
     """Extract sentiment data from dataframe for logging"""
     if index >= len(df):
         return {}
@@ -78,7 +78,7 @@ def extract_sentiment_data(df: pd.DataFrame, index: int) -> dict:
     return sentiment_data
 
 
-def extract_ml_predictions(df: pd.DataFrame, index: int) -> dict:
+def extract_ml_predictions(df: pd.DataFrame, index: int) -> dict[str, float]:
     """Extract ML prediction data from dataframe for logging"""
     if index >= len(df):
         return {}
