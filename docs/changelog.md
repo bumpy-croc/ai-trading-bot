@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wired into the first snapshot after engine start. Trading-day semantics are
   explicitly UTC throughout the event logger (was local `date.today()`,
   skewing day boundaries on non-UTC hosts).
+- `LivePositionTracker.recover_positions` actually recovers positions now
+  (#764): it called `DatabaseManager.get_open_positions`, a method that does
+  not exist, so the swallowed `AttributeError` made it always return `[]` —
+  a silent fail-open trap for any future recovery caller. It now maps the
+  dict rows from the real `get_active_positions` API with the same
+  normalization and hydration as the engine's `_recover_active_positions`
+  (uppercase DB side, tracker key fallback to row id, partial-op state,
+  reconciliation ids), skips invalid-entry-price rows with a CRITICAL log,
+  and isolates per-row failures.
 - `TradeProtocol` members are now read-only properties (#767), so concrete
   trade classes with narrower types (non-Optional datetimes, `PositionSide`
   enum side) conform structurally — the three `cast("TradeProtocol", ...)`
