@@ -45,14 +45,17 @@ def _make_market_data(periods: int = 200) -> pd.DataFrame:
 
 @pytest.fixture
 def paper_engine():
-    """Real engine in paper mode with a real in-memory DB and mocked provider."""
+    """Real engine in paper mode with a real DB and mocked provider."""
     df = _make_market_data()
     provider = MagicMock()
     provider.get_live_data.return_value = df
     provider.get_historical_data.return_value = df
     provider.get_current_price.return_value = float(df["close"].iloc[-1])
 
-    db = DatabaseManager("sqlite:///:memory:")
+    # DATABASE_URL is provisioned by conftest: CI Postgres service for
+    # integration runs, in-memory SQLite locally. A hardcoded SQLite URL is
+    # rejected by DatabaseManager in CI.
+    db = DatabaseManager()
     with (
         patch("src.engines.live.trading_engine.DatabaseManager"),
         patch("src.engines.live.trading_engine.get_config", return_value={}),
@@ -70,7 +73,16 @@ def paper_engine():
     engine.live_position_tracker.db_manager = db
     engine.live_execution_engine.db_manager = db
     engine.event_logger.db_manager = db
-    yield engine, df
+    # The CI Postgres DB is shared across the sequential integration run;
+    # other tests may leave active sessions/positions behind. Disable session
+    # recovery so this smoke always starts a fresh session (recovery has its
+    # own dedicated coverage in tests/unit/engines/live/test_session_recovery.py
+    # and test_clean_restart_readoption.py).
+    with (
+        patch.object(db, "get_active_session_id", return_value=None),
+        patch.object(db, "get_last_session_id", return_value=None),
+    ):
+        yield engine, df
     if engine.is_running:
         engine.stop()
 
