@@ -159,9 +159,11 @@ class BinanceWSKeepaliveFilter(logging.Filter):
         if record.exc_info:
             try:
                 text = text + "\n" + "".join(traceback.format_exception(*record.exc_info))
-            except Exception:
-                # If formatting fails for any reason, fall back to the
-                # message text alone — never raise from a logging filter.
+            except Exception:  # nosec B110
+                # A logging filter must never raise: if formatting fails for
+                # any reason, fall back to the message text alone. The failure
+                # must stay silent — a logger call here could recurse into the
+                # very records this filter inspects.
                 pass
         elif record.exc_text:
             text = text + "\n" + record.exc_text

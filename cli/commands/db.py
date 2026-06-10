@@ -9,7 +9,7 @@ import sys
 import traceback
 from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 # Ensure project root and src are in sys.path for absolute imports
@@ -22,17 +22,17 @@ SRC_PATH = PROJECT_ROOT / "src"
 if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
-from alembic.config import Config  # type: ignore
-from alembic.script import ScriptDirectory  # type: ignore
-from sqlalchemy import create_engine, text  # type: ignore
-from sqlalchemy import inspect as sa_inspect  # type: ignore
-from sqlalchemy.exc import SQLAlchemyError  # type: ignore
-from sqlalchemy.pool import QueuePool  # type: ignore
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, text
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import QueuePool
 
 try:
     import psycopg2
 except ImportError:  # pragma: no cover - optional dependency for local dev
-    psycopg2 = None  # type: ignore[assignment]
+    psycopg2 = None
 
 from src.database.models import Base
 
@@ -89,11 +89,12 @@ def _alembic_config(db_url: str) -> Config:
 
 
 def _get_alembic_status(cfg: Config) -> dict[str, Any]:
-    from alembic.runtime.migration import MigrationContext  # type: ignore
+    from alembic.runtime.migration import MigrationContext
 
     script = ScriptDirectory.from_config(cfg)
     heads = list(script.get_heads())
-    db_url = cfg.get_main_option("sqlalchemy.url")
+    # cast: _alembic_config always sets sqlalchemy.url, so it is never None here
+    db_url = cast(str, cfg.get_main_option("sqlalchemy.url"))
     # * Use secure engine configuration for consistency
     engine_config = _get_secure_engine_config()
     engine_config["connect_args"]["application_name"] = "ai-trading-bot:alembic-status"
@@ -124,17 +125,18 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
 
 def _apply_migrations(cfg: Config) -> bool:
     try:
-        from alembic import command  # type: ignore
+        from alembic import command
 
         print("🔄 Applying migrations to head...")
         command.upgrade(cfg, "head")
         print("✅ Alembic migrations applied successfully to head.")
 
         # Verify migration status after applying
-        from alembic.runtime.migration import MigrationContext  # type: ignore
+        from alembic.runtime.migration import MigrationContext
 
         script = ScriptDirectory.from_config(cfg)
-        db_url = cfg.get_main_option("sqlalchemy.url")
+        # cast: _alembic_config always sets sqlalchemy.url, so it is never None here
+        db_url = cast(str, cfg.get_main_option("sqlalchemy.url"))
         # * Use secure engine configuration for consistency
         engine_config = _get_secure_engine_config()
         engine_config["connect_args"]["application_name"] = "ai-trading-bot:post-migration-verify"
@@ -326,7 +328,7 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
             actual_types_map: dict[str, str] = {}
             for c in col_info:
                 try:
-                    compiled = c["type"].compile(dialect=engine.dialect)  # type: ignore[attr-defined]
+                    compiled = c["type"].compile(dialect=engine.dialect)
                     actual_types_map[c["name"]] = str(compiled).lower().replace(" ", "")
                 except Exception:
                     actual_types_map[c["name"]] = str(c["type"]).lower().replace(" ", "")
@@ -335,7 +337,7 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
                 if col_name not in actual_types_map:
                     continue
                 try:
-                    compiled_exp = exp_type.compile(dialect=engine.dialect)  # type: ignore[attr-defined]
+                    compiled_exp = exp_type.compile(dialect=engine.dialect)
                     exp_str = str(compiled_exp).lower().replace(" ", "")
                 except Exception:
                     exp_str = str(exp_type).lower().replace(" ", "")
@@ -395,7 +397,7 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
                     # Only attempt when actual exists and expected is JSON/JSONB
                     actual_t = actual_types_map.get(col_name, "")
                     try:
-                        compiled_exp = exp_type.compile(dialect=engine.dialect)  # type: ignore[attr-defined]
+                        compiled_exp = exp_type.compile(dialect=engine.dialect)
                         exp_str = str(compiled_exp).lower()
                     except Exception:
                         exp_str = str(exp_type).lower()
@@ -422,7 +424,7 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
                     # Build a minimal type expression for safe add
                     exp_type = expected["types"][table][col_name]
                     try:
-                        type_expr = exp_type.compile(dialect=engine.dialect)  # type: ignore[attr-defined]
+                        type_expr = exp_type.compile(dialect=engine.dialect)
                         type_sql = str(type_expr)
                     except Exception:
                         type_sql = str(exp_type)

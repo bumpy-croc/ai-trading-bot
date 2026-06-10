@@ -5,7 +5,7 @@ import logging
 import logging.config
 import re
 import time
-from typing import Any
+from typing import Any, cast
 
 from src.config import get_config
 from src.infrastructure.logging.context import get_context
@@ -107,7 +107,7 @@ class SensitiveDataFilter(logging.Filter):
                 redacted[k] = v
         return redacted
 
-    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+    def filter(self, record: logging.LogRecord) -> bool:
         try:
             if isinstance(record.msg, str):
                 record.msg = self._redact_text(record.msg)
@@ -115,8 +115,8 @@ class SensitiveDataFilter(logging.Filter):
             if isinstance(record.args, dict):
                 record.args = self._redact_mapping(record.args)
             elif isinstance(record.args, list | tuple):
-                sanitized = []
-                for a in record.args:  # type: ignore[assignment]
+                sanitized: list[object] = []
+                for a in record.args:
                     if isinstance(a, str):
                         sanitized.append(self._redact_text(a))
                     else:
@@ -133,7 +133,7 @@ class NamespacePrefixFilter(logging.Filter):
 
     _PREFIX = "atb."
 
-    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+    def filter(self, record: logging.LogRecord) -> bool:
         try:
             if record.name and not record.name.startswith(self._PREFIX):
                 record.name = f"{self._PREFIX}{record.name}"
@@ -145,7 +145,7 @@ class NamespacePrefixFilter(logging.Filter):
 class ContextInjectorFilter(logging.Filter):
     """Injects structured context fields from contextvars into LogRecord."""
 
-    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+    def filter(self, record: logging.LogRecord) -> bool:
         try:
             ctx = get_context()
             for key, value in ctx.items():
@@ -168,8 +168,9 @@ class SamplingFilter(logging.Filter):
         super().__init__()
         try:
             cfg = get_config()
-            rate_debug = float(cfg.get("LOG_SAMPLING_RATE_DEBUG", "1.0"))
-            rate_info = float(cfg.get("LOG_SAMPLING_RATE_INFO", "1.0"))
+            # cast: Config.get returns the non-None default when the key is unset
+            rate_debug = float(cast(str, cfg.get("LOG_SAMPLING_RATE_DEBUG", "1.0")))
+            rate_info = float(cast(str, cfg.get("LOG_SAMPLING_RATE_INFO", "1.0")))
             # Clamp to valid range [0.0, 1.0] to prevent undefined behavior
             self.rate_debug = max(0.0, min(1.0, rate_debug))
             self.rate_info = max(0.0, min(1.0, rate_info))
@@ -177,7 +178,7 @@ class SamplingFilter(logging.Filter):
             self.rate_debug = 1.0
             self.rate_info = 1.0
 
-    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+    def filter(self, record: logging.LogRecord) -> bool:
         try:
             if record.levelno <= logging.DEBUG:
                 return (hash((record.name, record.lineno, int(time.time() / 10))) % 1000) < int(
@@ -205,13 +206,14 @@ class MaxMessageLengthFilter(logging.Filter):
         super().__init__()
         try:
             cfg = get_config()
-            max_len = int(cfg.get("LOG_MAX_MESSAGE_LEN", "5000"))
+            # cast: Config.get returns the non-None default when the key is unset
+            max_len = int(cast(str, cfg.get("LOG_MAX_MESSAGE_LEN", "5000")))
             # Ensure max_len is at least _MIN_MESSAGE_LEN to prevent over-truncation
             self.max_len = max(self._MIN_MESSAGE_LEN, max_len)
         except Exception:
             self.max_len = 5000
 
-    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+    def filter(self, record: logging.LogRecord) -> bool:
         try:
             if isinstance(record.msg, str) and len(record.msg) > self.max_len:
                 record.msg = record.msg[: self.max_len] + "... [truncated]"
@@ -267,7 +269,8 @@ def build_logging_config(level_name: str | None = None, use_json: bool = False) 
         dict: Logging configuration dictionary suitable for logging.config.dictConfig().
     """
     cfg = get_config()
-    level = (level_name or cfg.get("LOG_LEVEL", "INFO")).upper()
+    # cast: Config.get returns the non-None default when the key is unset
+    level = (level_name or cast(str, cfg.get("LOG_LEVEL", "INFO"))).upper()
 
     # Use custom JSON formatter for structured logging
     if use_json:
@@ -332,7 +335,8 @@ def configure_logging(level_name: str | None = None, use_json: bool | None = Non
         # Explicit config override takes precedence if set
         if cfg.get("LOG_JSON") is not None:
             try:
-                use_json = bool(int(cfg.get("LOG_JSON", "0")))
+                # cast: Config.get returns the non-None default when the key is unset
+                use_json = bool(int(cast(str, cfg.get("LOG_JSON", "0"))))
             except Exception:
                 use_json = False
         else:

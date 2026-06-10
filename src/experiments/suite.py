@@ -205,7 +205,8 @@ class ExperimentSuiteRunner:
     def run(self, suite: SuiteConfig, *, now: datetime | None = None) -> SuiteResult:
         configs = self.build_configs(suite, now=now)
         variants = suite.all_variants()
-        assert len(configs) == len(variants), "config/variant mismatch"
+        if len(configs) != len(variants):
+            raise RuntimeError("config/variant mismatch")
 
         started_at = datetime.now(UTC)
         results: list[ExperimentResult] = []

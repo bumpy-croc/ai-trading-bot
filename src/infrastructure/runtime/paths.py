@@ -1,8 +1,13 @@
 """Project path utilities for finding project root and managing paths."""
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
+
+# Stdlib logging is safe before logging is configured (records are simply dropped
+# or routed to the last-resort handler), so a module logger is fine this early.
+logger = logging.getLogger(__name__)
 
 
 def find_project_root() -> Path:
@@ -33,8 +38,9 @@ def find_project_root() -> Path:
             try:
                 if any((parent / m).exists() for m in markers):
                     return parent
-            except Exception:
+            except Exception as exc:
                 # ! Filesystem edge cases (permissions, etc.)
+                logger.debug("Skipping %s during project-root search: %s", parent, exc)
                 continue
         return None
 
