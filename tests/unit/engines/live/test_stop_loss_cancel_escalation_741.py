@@ -10,11 +10,14 @@ system event + alert.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 
+from src.database.manager import DatabaseManager
 from src.database.models import EventType
+from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
 
@@ -28,17 +31,33 @@ def make_engine() -> LiveTradingEngine:
             data_provider=MagicMock(),
             initial_balance=1000.0,
         )
-    engine.db_manager = MagicMock()
+    # autospec catches signature mismatches on every db_manager call
+    engine.db_manager = create_autospec(DatabaseManager, instance=True)
     return engine
 
 
-def _with_tracked_position(engine: LiveTradingEngine, sl_id: str = "sl_42") -> MagicMock:
-    position = MagicMock()
-    position.symbol = "BTCUSDT"
-    position.order_id = "entry_42"
-    position.stop_loss_order_id = sl_id
-    engine.live_position_tracker = MagicMock()
-    engine.live_position_tracker.positions = {"entry_42": position}
+def _make_position(sl_id: str | None, order_id: str = "entry_42") -> LivePosition:
+    """A real LivePosition (no mock) so attribute access is the real contract."""
+    return LivePosition(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=50000.0,
+        entry_time=datetime.now(UTC),
+        size=0.05,
+        quantity=0.001,
+        order_id=order_id,
+        stop_loss=48000.0,
+        stop_loss_order_id=sl_id,
+    )
+
+
+def _with_tracked_position(engine: LiveTradingEngine, sl_id: str = "sl_42") -> LivePosition:
+    position = _make_position(sl_id)
+    # autospec'd tracker: positions/set_stop_loss_order_id/pop_position calls
+    # are signature-checked
+    tracker = create_autospec(LivePositionTracker, instance=True)
+    tracker.positions = {"entry_42": position}
+    engine.live_position_tracker = tracker
     return position
 
 
@@ -78,14 +97,12 @@ class TestStopLossCancelEscalation:
 
     def test_entry_cancel_path_unchanged(self):
         engine = make_engine()
-        position = MagicMock()
-        position.symbol = "BTCUSDT"
-        position.metadata = {}
-        position.stop_loss_order_id = None
-        engine.live_position_tracker = MagicMock()
-        engine.live_position_tracker.positions = {"entry_9": position}
-        engine.live_position_tracker.pop_position.return_value = position
+        position = _make_position(sl_id=None, order_id="entry_9")
+        tracker = create_autospec(LivePositionTracker, instance=True)
+        tracker.positions = {"entry_9": position}
+        tracker.pop_position.return_value = position
+        engine.live_position_tracker = tracker
 
         engine._handle_order_cancel("entry_9", "BTCUSDT")
 
-        engine.live_position_tracker.pop_position.assert_called_once_with("entry_9")
+        tracker.pop_position.assert_called_once_with("entry_9")
