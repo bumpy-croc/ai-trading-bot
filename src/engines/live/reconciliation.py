@@ -1910,11 +1910,11 @@ class PositionReconciler:
                 price = provider.get_current_price(symbol)
                 if price is not None and float(price) > 0:
                     return float(price)
-            except Exception as e:
+            except Exception:
                 logger.warning(
-                    "Could not fetch current price for external-close Trade row of %s: %s",
+                    "Could not fetch current price for external-close Trade row of %s",
                     symbol,
-                    e,
+                    exc_info=True,
                 )
         return float(getattr(position, "entry_price", 0.0) or 0.0)
 
@@ -2105,11 +2105,18 @@ class PositionReconciler:
                         "this run)",
                         symbol,
                     )
-                else:
-                    logger.info(
-                        "External close for %s — Trade row skipped (DB close not confirmed); "
-                        "will re-reconcile on a later pass",
+                elif db_pos_id:
+                    # Popped from the in-memory tracker but the DB row did NOT close (close_position
+                    # returned False / raised). Tracker and the DB positions table now disagree
+                    # (tracker says gone, DB says OPEN). Escalate (CODE.md: no silent divergence) —
+                    # the OPEN row is re-recovered on the next restart; manual reconciliation may be
+                    # needed meanwhile.
+                    logger.critical(
+                        "External close for %s: removed from tracker but DB position %s close "
+                        "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may be "
+                        "needed.",
                         symbol,
+                        db_pos_id,
                     )
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
@@ -2243,6 +2250,16 @@ class PositionReconciler:
         # avoids a duplicate when an earlier pass already handled it.
         if db_closed and removed is not None:
             self._log_external_close_trade(position)
+        elif db_pos_id and removed is not None and not db_closed:
+            # Popped from the in-memory tracker but the DB row did NOT close — memory/DB divergence
+            # (CODE.md: no silent divergence). The phantom is gone on the exchange, so do not
+            # re-track; the OPEN DB row is re-recovered on the next restart.
+            logger.critical(
+                "Margin phantom %s removed from tracker but DB position %s close FAILED (still "
+                "OPEN) — memory/DB divergence; manual reconciliation may be needed.",
+                getattr(position, "symbol", "?"),
+                db_pos_id,
+            )
         result.status = "corrected"
         result.severity = Severity.HIGH
 
@@ -2779,6 +2796,7 @@ class PeriodicReconciler:
         symbols: list[str] | None = None,
         sweep_cooldown: dict[str, float] | None = None,
         lock_registry: Any = None,
+        data_provider: Any | None = None,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -2829,6 +2847,7 @@ class PeriodicReconciler:
             db_manager=db_manager,
             session_id=session_id,
             use_margin=use_margin,
+            data_provider=data_provider,
         )
 
     def start(self) -> None:

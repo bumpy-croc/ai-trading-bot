@@ -758,6 +758,52 @@ def test_reconciler_filled_exit_scale_in_nulls_quantity(monkeypatch):
     assert t["order_id"] == "EXCH-SI"
 
 
+def test_periodic_reconciler_forwards_data_provider_to_embedded_reconciler():
+    """PeriodicReconciler forwards its data_provider to the embedded PositionReconciler so an
+    external close it delegates is priced mark-to-market, not entry-priced (CODE.md: every caller
+    of a new constructor param passes it)."""
+    from types import SimpleNamespace
+
+    from src.engines.live.reconciliation import PeriodicReconciler
+
+    provider = SimpleNamespace(get_current_price=lambda _s: 123.0)
+    periodic = PeriodicReconciler(
+        exchange_interface=Mock(),
+        position_tracker=Mock(),
+        db_manager=MockDatabaseManager(),
+        session_id=1,
+        data_provider=provider,
+    )
+
+    assert periodic._position_reconciler._data_provider is provider
+
+
+def test_reconciler_external_close_logs_critical_on_db_close_divergence(monkeypatch, caplog):
+    """Popped from the tracker but close_position fails (returns False) → the memory/DB divergence
+    is escalated to CRITICAL (CODE.md: no silent divergence) and no trade row is written."""
+    import logging
+    from types import SimpleNamespace
+
+    db = MockDatabaseManager()
+    monkeypatch.setattr(db, "close_position", Mock(return_value=False))
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.db_position_id = 81
+    position.order_id = "pos-81"
+    position.stop_loss_order_id = None
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=_tracker_with(position))
+    monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
+    reconciler._data_provider = SimpleNamespace(get_current_price=lambda _s: 110.0)
+
+    with caplog.at_level(logging.CRITICAL, logger="src.engines.live.reconciliation"):
+        reconciler._remove_phantom_position(position, _recon_result())
+
+    assert len(db._trades) == 0
+    assert any(
+        r.levelno == logging.CRITICAL and "divergence" in r.getMessage().lower()
+        for r in caplog.records
+    )
+
+
 def test_reconciler_dedups_duplicate_trade_on_rerun():
     """A re-run with the same exit_order_id + session inserts only ONE trade row.
 
