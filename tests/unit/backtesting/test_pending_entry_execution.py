@@ -1,14 +1,17 @@
 """Tests for pending entry execution behavior."""
 
 from datetime import datetime
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, create_autospec
 
 import pandas as pd
 import pytest
 
 from src.engines.backtest.execution.entry_handler import EntryHandler
 from src.engines.backtest.execution.execution_engine import ExecutionEngine
+from src.engines.backtest.execution.position_tracker import PositionTracker
 from src.engines.shared.execution.execution_decision import ExecutionDecision
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.risk.risk_manager import RiskManager
 
 
 def test_pending_entry_no_fill_does_not_execute_trade() -> None:
@@ -62,14 +65,11 @@ def test_pending_entry_no_fill_does_not_execute_trade() -> None:
     risk_manager.update_position.assert_not_called()
 
 
+@pytest.mark.fast
 def test_pending_entry_updates_risk_tracking() -> None:
-    """Regression for #757: a filled pending (next-bar) entry must register in
-    the REAL risk manager. The handler previously passed the PositionSide enum
-    to update_position, whose `side in VALID_SIDES` (strings) check raised
-    ValueError on every call — swallowed by the except — so daily risk and
-    position tracking silently skipped all next-bar entries."""
-    from src.risk.risk_manager import RiskManager
-
+    """A filled pending (next-bar) entry registers in the real risk manager:
+    the position is tracked under a string side and its size accrues to the
+    daily risk budget — identically to an immediate entry."""
     execution_engine = ExecutionEngine()
     execution_engine.queue_entry(
         side="long",
@@ -80,9 +80,9 @@ def test_pending_entry_updates_risk_tracking() -> None:
         signal_time=datetime(2024, 1, 1),
     )
 
-    position_tracker = Mock()
+    position_tracker = create_autospec(PositionTracker, instance=True)
     risk_manager = RiskManager()
-    execution_model = Mock()
+    execution_model = create_autospec(ExecutionModel, instance=True)
     execution_model.decide_fill.return_value = ExecutionDecision(
         should_fill=True,
         fill_price=100.0,
@@ -111,6 +111,7 @@ def test_pending_entry_updates_risk_tracking() -> None:
     )
 
     assert result.executed is True
-    assert "BTCUSDT" in risk_manager.positions
-    assert risk_manager.positions["BTCUSDT"]["side"] == "long"
+    positions = risk_manager.get_positions_snapshot()
+    assert "BTCUSDT" in positions
+    assert positions["BTCUSDT"]["side"] == "long"
     assert risk_manager.daily_risk_used == pytest.approx(0.1)

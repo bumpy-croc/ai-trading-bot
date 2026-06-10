@@ -530,8 +530,8 @@ class EntryHandler:
             # Open position in tracker
             self.position_tracker.open_position(result.trade)
 
-            # Update risk manager (update_position validates string sides;
-            # convert the PositionSide enum like the immediate-entry path, #757)
+            # Update risk manager (update_position validates string sides,
+            # so the PositionSide enum must be converted)
             try:
                 self.risk_manager.update_position(
                     symbol=symbol,
