@@ -285,10 +285,17 @@ See [Risk Management Architecture](risk_management_architecture.md) for complete
 Real-time execution with safety controls.
 
 **Key Files:**
-- `trading_engine.py` - Main execution loop
+- `trading_engine.py` - Orchestration: main loop, component wiring, lifecycle
 - `strategy_manager.py` - Hot-swap orchestration
 - `execution/entry_handler.py` - Entry signal processing
 - `execution/exit_handler.py` - Exit signal processing
+- `execution/stop_loss_manager.py` - All exchange-facing stop-loss lifecycle calls (place/cancel/query/re-protect)
+- `recovery.py` - Startup recovery: session balance, persisted-position reload, exchange reconciliation (`LiveSessionRecoverer`)
+- `trade_close_accounting.py` - Close-accounting helpers (closed quantity, entry-fee USD, position portion) shared by exit and recovery paths
+- `monitoring/` - Account snapshots, status lines, performance summaries (`LiveAccountMonitor`)
+
+The engine delegates to these handlers through thin private wrappers; see the
+handler decomposition and lock-ownership table in `docs/live_trading.md` (#486).
 
 **Safety Features:**
 - Paper trading mode (no real orders)
@@ -323,6 +330,7 @@ Unified logic extracted from both backtest and live engines to ensure consistenc
 | `models.py` | Unified `Position`, `Trade`, `PositionSide` types |
 | `cost_calculator.py` | Fee and slippage calculation |
 | `dynamic_risk_handler.py` | Dynamic risk adjustments during drawdowns |
+| `execution/entry_handler_mixin.py` | Entry-plan extraction + dynamic-risk sizing shared verbatim by both engines' entry handlers |
 | `partial_operations_manager.py` | Partial exit and scale-in logic |
 | `policy_hydration.py` | Extract policies from runtime decisions |
 | `risk_configuration.py` | Merge strategy risk overrides with base config |
