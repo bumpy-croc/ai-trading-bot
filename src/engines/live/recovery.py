@@ -401,8 +401,9 @@ class LiveSessionRecoverer:
                 if position.stop_loss_order_id and state.order_tracker:
                     state.order_tracker.track_order(position.stop_loss_order_id, position.symbol)
                     logger.info(
-                        f"📡 Recovered and tracking stop-loss order {position.stop_loss_order_id} "
-                        f"for position {position.symbol}"
+                        "📡 Recovered and tracking stop-loss order %s for position %s",
+                        position.stop_loss_order_id,
+                        position.symbol,
                     )
 
                 # Update risk manager tracking for recovered positions
@@ -598,8 +599,9 @@ class LiveSessionRecoverer:
                         continue
                     if exit_price <= 0 or not math.isfinite(exit_price):
                         logger.error(
-                            f"Invalid exit_price {exit_price} for position "
-                            f"{position.symbol} - skipping reconciliation"
+                            "Invalid exit_price %s for position %s - skipping reconciliation",
+                            exit_price,
+                            position.symbol,
                         )
                         continue
 
@@ -670,8 +672,10 @@ class LiveSessionRecoverer:
                             ) as balance_result:
                                 state.current_balance = balance_result["new_balance"]
                                 logger.info(
-                                    f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
-                                    f"(fee: ${exit_fee:.2f}) -> ${state.current_balance:,.2f}"
+                                    "💰 Adjusted balance for offline stop-loss: $%+.2f (fee: $%.2f) -> $%.2f",
+                                    realized_pnl,
+                                    exit_fee,
+                                    state.current_balance,
                                 )
                         except Exception as balance_err:
                             logger.error(
@@ -684,8 +688,10 @@ class LiveSessionRecoverer:
                         # No trading session - update balance directly
                         state.current_balance += realized_pnl
                         logger.info(
-                            f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
-                            f"(fee: ${exit_fee:.2f}) -> ${state.current_balance:,.2f}"
+                            "💰 Adjusted balance for offline stop-loss: $%+.2f (fee: $%.2f) -> $%.2f",
+                            realized_pnl,
+                            exit_fee,
+                            state.current_balance,
                         )
                     # Store GROSS P&L in Trade.pnl for parity with backtest engine
                     # Fees are tracked separately via performance_tracker.record_trade()
@@ -765,8 +771,8 @@ class LiveSessionRecoverer:
 
             if positions_to_close:
                 logger.info(
-                    f"🔄 Reconciliation complete: {len(positions_to_close)} positions "
-                    "closed (stopped out while offline)"
+                    "🔄 Reconciliation complete: %d positions closed (stopped out while offline)",
+                    len(positions_to_close),
                 )
             else:
                 logger.info("✅ All positions verified - no offline closures detected")
