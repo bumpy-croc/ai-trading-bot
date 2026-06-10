@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- CoinbaseProvider no longer submits every order as MARKET (#762):
+  `_convert_to_cb_type` was keyed by lowercase strings while `OrderType`
+  enum values are uppercase, so the lookup always fell back to "market" —
+  limit orders lost price protection and stop orders fired immediately.
+  Mapping is now enum-keyed, unknown types raise instead of defaulting to
+  the most dangerous order type, and GTD time_in_force is rejected before
+  the API call (it requires an end_time this client cannot send).
 - `LivePositionTracker.recover_positions` actually recovers positions now
   (#764): it called `DatabaseManager.get_open_positions`, a method that does
   not exist, so the swallowed `AttributeError` made it always return `[]` —
