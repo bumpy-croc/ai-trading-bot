@@ -1007,7 +1007,7 @@ class TestAssetHoldingsVerification:
         assert result.status == "corrected"
         assert result.severity == Severity.HIGH
         assert any("closed externally" in c.reason for c in result.corrections)
-        mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
+        mock_position_tracker.pop_position.assert_called_once_with(pos.order_id)
         mock_db.close_position.assert_called_once_with(10)
 
     def test_position_with_sufficient_balance_not_flagged(
@@ -1113,7 +1113,7 @@ class TestAssetHoldingsVerification:
 
         result = reconciler.reconcile_position(pos)
         assert result.status == "corrected"
-        mock_position_tracker.remove_position.assert_called_once()
+        mock_position_tracker.pop_position.assert_called_once()
         mock_db.close_position.assert_not_called()
 
 
@@ -3004,7 +3004,16 @@ class TestReconciliationFeeAccounting:
         with patch.object(reconciler, "_realize_pnl_on_close") as mock_pnl:
             reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.60)
 
-        mock_pnl.assert_called_once_with(position, 51000.0, "exit_order_recovery", exit_fee=0.60)
+        # Now opts into Trade-row logging with a stable dedup key. No real exit order id was
+        # threaded, so the synthetic reconcile_exit_<position_id> key is used.
+        mock_pnl.assert_called_once_with(
+            position,
+            51000.0,
+            "exit_order_recovery",
+            exit_fee=0.60,
+            log_trade=True,
+            exit_order_id="reconcile_exit_42",
+        )
 
     def test_stop_loss_recovery_passes_commission_to_pnl(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker

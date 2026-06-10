@@ -5444,6 +5444,7 @@ class LiveTradingEngine:
                     max_position_size=self.max_position_size,
                     use_margin=use_margin,
                     fee_rate=self.live_execution_engine.fee_rate,
+                    data_provider=self.data_provider,
                 )
 
                 if not positions_snapshot:
