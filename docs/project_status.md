@@ -1,11 +1,22 @@
 # Project Status
 
-> **Last Updated**: 2026-04-27
+> **Last Updated**: 2026-06-10
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## In Flight
+
+- **Live-capital bug-audit remediation (2026-06-10)** — a multi-agent code
+  audit produced 17 tracked findings (#734–#750) across order execution,
+  reconciliation, balance integrity, risk enforcement, and sync. Fix PRs in
+  flight: fail-closed stop-loss lookup (#733 → fixes #713), partial-ops
+  hard-disable (#734 interim), order-tracker tracking-lost handling, and
+  periodic-reconciler SL-fill PnL booking. Highest open items after the
+  PR train: close-quantity derivation (#737), balance-ledger serialization
+  (#735/#736), dead rate-limit retries (#738), stale-snapshot stop re-arm
+  (#739), live max-drawdown enforcement (#749), backtest partial-PnL
+  inflation (#748).
 
 - **Monitoring dashboard V2 redesign** — chart-led layout (left rail + KPI
   strip + hero equity chart + position inspector) replacing the legacy

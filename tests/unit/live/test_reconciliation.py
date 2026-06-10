@@ -2134,6 +2134,7 @@ class TestPeriodicReconcilerSLVerification:
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         pos = MockPosition(
+            order_id="entry_1",
             stop_loss_order_id="sl_periodic_1",
             exchange_order_id="entry_1",
             db_position_id=50,
@@ -2147,6 +2148,11 @@ class TestPeriodicReconcilerSLVerification:
         )
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
         mock_exchange.get_open_orders.return_value = []
+        # Wrapper pre-check sees the position; after the delegated close the
+        # tracker no longer has it (the handler removed it on success).
+        mock_position_tracker.get_position.side_effect = [pos, None]
+        mock_db.get_current_balance.return_value = 1000.0
+        mock_db.close_position.return_value = True
 
         reconciler = PeriodicReconciler(
             exchange_interface=mock_exchange,
@@ -2156,9 +2162,9 @@ class TestPeriodicReconcilerSLVerification:
         )
         reconciler._reconcile_cycle()
 
-        # Position removed from tracker and closed in DB
-        mock_position_tracker.remove_position.assert_called_once_with("entry_1")
+        # DB closed first, then removed from the tracker (delegated handler)
         mock_db.close_position.assert_called_once_with(50, exit_price=48000.0)
+        mock_position_tracker.remove_position.assert_called_once_with("entry_1")
         mock_db.log_audit_event.assert_any_call(
             session_id=1,
             entity_type="position",
@@ -2169,6 +2175,18 @@ class TestPeriodicReconcilerSLVerification:
             reason="Stop-loss filled @ 48000.0 (periodic check)",
             severity="HIGH",
         )
+        # Realized P&L booked to the session balance (parity with the startup
+        # path): long 0.1 qty, entry 50000 -> SL fill 48000 = -200 gross,
+        # minus the SL order's 0.05 commission. (Scoped to the reconciliation
+        # P&L write; the cycle's later balance-verification step may also call
+        # update_balance.)
+        pnl_calls = [
+            c
+            for c in mock_db.update_balance.call_args_list
+            if str(c.args[1]).startswith("reconciliation_close")
+        ]
+        assert len(pnl_calls) == 1
+        assert pnl_calls[0].args[0] == pytest.approx(1000.0 - 200.0 - 0.05)
 
     def test_cycle_replaces_cancelled_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places a cancelled SL order."""
@@ -3115,3 +3133,138 @@ class TestFailClosedSLLookup:
 
         mock_exchange.place_stop_loss_order.assert_called_once()
         assert position.stop_loss_order_id == "new_sl_replaced"
+
+
+class TestPeriodicSLFillBooksPnl:
+    """The periodic reconciler must book a detected SL fill's P&L (it
+    previously closed the DB row with NO balance update, silently
+    overstating capital by every SL loss it detected before the engine's
+    deferred-exit drain)."""
+
+    def _make_filled_sl_cycle(self, mock_exchange, mock_position_tracker, mock_db, pos):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id=pos.stop_loss_order_id,
+            status=ExOS.FILLED,
+            average_price=48000.0,
+            commission=0.05,
+        )
+        mock_exchange.get_order.side_effect = lambda oid, sym: (
+            sl_order if oid == pos.stop_loss_order_id else entry_order
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_db.get_current_balance.return_value = 1000.0
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+
+    def test_skips_booking_when_already_processed(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """pop_position=None means the engine drain already booked this fill —
+        the reconciler must not double-book."""
+        pos = MockPosition(
+            order_id="entry_done",
+            stop_loss_order_id="sl_done",
+            exchange_order_id="entry_done",
+            db_position_id=70,
+        )
+        mock_position_tracker.positions = {"entry_done": pos}
+        mock_position_tracker.get_position.return_value = None
+        reconciler = self._make_filled_sl_cycle(mock_exchange, mock_position_tracker, mock_db, pos)
+
+        reconciler._reconcile_cycle()
+
+        pnl_calls = [
+            c
+            for c in mock_db.update_balance.call_args_list
+            if str(c.args[1]).startswith("reconciliation_close")
+        ]
+        assert pnl_calls == []
+        mock_db.close_position.assert_not_called()
+
+    def test_margin_short_sl_fill_books_pnl_not_external_close(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A short whose SL filled (AUTO_REPAY zeroes the borrow) must be
+        booked as an SL close with its fill price — not closed as 'externally
+        closed' with no exit price and no P&L."""
+        pos = MockPosition(
+            order_id="entry_short",
+            side="short",
+            stop_loss_order_id="sl_short",
+            exchange_order_id="entry_short",
+            db_position_id=71,
+        )
+        mock_position_tracker.positions = {"entry_short": pos}
+        # Realistic tracker semantics: step 1b's handler sees the position and
+        # removes it on success; step 2 (iterating the same cycle's stale
+        # snapshot) then finds it gone and skips.
+        mock_position_tracker.get_position.side_effect = [pos, None, None]
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)
+        reconciler = self._make_filled_sl_cycle(mock_exchange, mock_position_tracker, mock_db, pos)
+        reconciler._use_margin = True
+        reconciler._position_reconciler._use_margin = False  # skip interest lookup
+        mock_db.close_position.return_value = True
+
+        reconciler._reconcile_cycle()
+
+        # Booked as SL close with the fill price...
+        mock_db.close_position.assert_called_once_with(71, exit_price=48000.0)
+        # ...with realized P&L: short entry 50000 -> cover 48000 on 0.1 qty
+        # = +200 gross, minus 0.05 SL commission. Booked exactly once even
+        # though step 2 re-sees the position in its stale snapshot (the
+        # pop-claim makes the second attempt a no-op).
+        pnl_calls = [
+            c
+            for c in mock_db.update_balance.call_args_list
+            if str(c.args[1]).startswith("reconciliation_close")
+        ]
+        assert len(pnl_calls) == 1
+        assert pnl_calls[0].args[0] == pytest.approx(1000.0 + 200.0 - 0.05)
+
+    def test_margin_short_unconfirmed_sl_defers_classification(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """If the SL lookup fails while the position looks externally closed,
+        the reconciler must retain the position this cycle (fail-closed)."""
+        pos = MockPosition(
+            side="short",
+            stop_loss_order_id="sl_unknown",
+            exchange_order_id="entry_unknown",
+            db_position_id=72,
+        )
+        mock_position_tracker.positions = {"entry_unknown": pos}
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+
+        def checked(oid, sym):
+            if oid == "sl_unknown":
+                raise OrderLookupError("timeout")
+            return entry_order
+
+        mock_exchange.get_order.return_value = entry_order
+        mock_exchange.get_order_checked.side_effect = checked
+        mock_exchange.get_open_orders.return_value = []
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._use_margin = True
+
+        reconciler._reconcile_cycle()
+
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
