@@ -188,6 +188,7 @@ class PositionReconciler:
         max_position_size: float = 0.1,
         use_margin: bool = False,
         fee_rate: float = DEFAULT_FEE_RATE,
+        data_provider: Any | None = None,
     ) -> None:
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
@@ -195,6 +196,10 @@ class PositionReconciler:
         self.session_id = session_id
         self.max_position_size = max_position_size
         self._use_margin = use_margin
+        # Optional market-data source (has get_current_price). Used only to mark-to-market the
+        # audit Trade row for an EXTERNAL close (the bot has no fill); never feeds a balance
+        # correction, so its absence degrades the row to entry-priced (P&L 0), nothing more.
+        self._data_provider = data_provider
         # Used to reconstruct fees when logging a Trade row for a reconciler-closed
         # position (recovered positions carry no entry-fee metadata). Route fee modelling
         # through the shared CostCalculator (CODE.md: never duplicate financial logic) so a
@@ -499,7 +504,12 @@ class PositionReconciler:
             exit_fee = order_commission_usd(exchange_order, symbol, fill_price)
             if exit_fee is None:
                 exit_fee = self._cost_calc.calculate_fee(fill_price * float(fill_qty or 0.0))
-            self._reconcile_filled_exit(order_data, fill_price, exit_fee=exit_fee)
+            self._reconcile_filled_exit(
+                order_data,
+                fill_price,
+                exit_fee=exit_fee,
+                exit_order_id=getattr(exchange_order, "order_id", None),
+            )
         elif order_type == "PARTIAL_EXIT":
             self._reconcile_filled_partial_exit(order_data, fill_price)
 
@@ -788,9 +798,22 @@ class PositionReconciler:
             raise
 
     def _reconcile_filled_exit(
-        self, order_data: dict, fill_price: float, exit_fee: float = 0.0
+        self,
+        order_data: dict,
+        fill_price: float,
+        exit_fee: float = 0.0,
+        exit_order_id: str | None = None,
     ) -> None:
-        """Close position if an exit order filled but position is still tracked."""
+        """Close a position whose exit order filled offline but is still tracked, and persist a
+        Trade row for the closure.
+
+        Mirrors the offline-SL reference (``_close_position_from_filled_sl``): P&L realization —
+        which also writes the Trade row — is gated on the DB position actually closing, so a
+        failed close does not double-correct the balance on the next reconcile pass (the row stays
+        OPEN and is re-recovered). The Trade uses a stable, non-NULL dedup key (the real exit order
+        id, else a synthetic id from ``position_id``) so a re-run collides on
+        ``uq_trade_order_session`` (NULL != NULL in Postgres) instead of inserting a duplicate.
+        """
         position_id = order_data.get("position_id")
         client_order_id = order_data.get("client_order_id", "")
 
@@ -815,16 +838,29 @@ class PositionReconciler:
                         order_id_to_remove,
                     )
 
-                # Close in DB
+                # Close in DB. close_position returns False (without raising) when the row is not
+                # found or the commit rolls back, so gate on the actual return — "did not raise" is
+                # not "closed", and logging a trade for a non-persisted close would diverge.
+                db_closed = False
                 try:
-                    self.db_manager.close_position(
-                        position_id, exit_price=fill_price if fill_price > 0 else None
+                    db_closed = bool(
+                        self.db_manager.close_position(
+                            position_id, exit_price=fill_price if fill_price > 0 else None
+                        )
                     )
-                    logger.info(
-                        "Reconciled filled exit %s: closed DB position %s",
-                        client_order_id,
-                        position_id,
-                    )
+                    if db_closed:
+                        logger.info(
+                            "Reconciled filled exit %s: closed DB position %s",
+                            client_order_id,
+                            position_id,
+                        )
+                    else:
+                        logger.warning(
+                            "close_position returned False for %s (exit order %s) — not persisted; "
+                            "skipping P&L/trade, will re-reconcile",
+                            position_id,
+                            client_order_id,
+                        )
                 except Exception as e:
                     logger.warning(
                         "Failed to close DB position %s for exit order %s: %s",
@@ -833,10 +869,20 @@ class PositionReconciler:
                         e,
                     )
 
-                # Realize P&L so session balance stays correct
-                if matched_position is not None and fill_price > 0:
+                # Realize P&L (and log the Trade row) ONLY once the DB position is closed.
+                # _realize_pnl_on_close corrects the balance unconditionally, so realizing it when
+                # the close failed (row still OPEN) would double-subtract on the next reconcile
+                # pass — and the row would be re-recovered anyway.
+                if matched_position is not None and fill_price > 0 and db_closed:
+                    # db_closed implies a non-NULL position_id, so the synthetic key is non-NULL.
+                    stable_exit_id = exit_order_id or f"reconcile_exit_{position_id}"
                     self._realize_pnl_on_close(
-                        matched_position, fill_price, "exit_order_recovery", exit_fee=exit_fee
+                        matched_position,
+                        fill_price,
+                        "exit_order_recovery",
+                        exit_fee=exit_fee,
+                        log_trade=True,
+                        exit_order_id=stable_exit_id,
                     )
         except Exception as e:
             logger.warning(
@@ -1777,8 +1823,9 @@ class PositionReconciler:
         db_closed = False
         if db_pos_id:
             try:
-                self.db_manager.close_position(db_pos_id, exit_price=exit_price)
-                db_closed = True
+                # Gate on close_position's actual return (False without raising = row not
+                # found / commit rolled back), not merely "did not raise".
+                db_closed = bool(self.db_manager.close_position(db_pos_id, exit_price=exit_price))
             except Exception as e:
                 logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
@@ -1846,6 +1893,73 @@ class PositionReconciler:
         except (TypeError, ValueError):
             pass
         return qty
+
+    def _external_close_exit_price(self, position: Any) -> float:
+        """Best-effort exit price for an externally-closed position.
+
+        The bot did not execute the close (manual sell on the exchange UI, or a liquidation), so
+        no fill price is known. Use the current market price as a mark-to-market estimate; fall
+        back to ``entry_price`` (GROSS P&L 0) when no price source is available. This only feeds
+        the audit Trade row — the session balance is owned by Step C (spot) / margin-equity sync
+        (margin), so the estimate never affects capital correctness.
+        """
+        symbol = getattr(position, "symbol", "") or ""
+        provider = getattr(self, "_data_provider", None)
+        if provider is not None and symbol:
+            try:
+                price = provider.get_current_price(symbol)
+                if price is not None and float(price) > 0:
+                    return float(price)
+            except Exception:
+                logger.warning(
+                    "Could not fetch current price for external-close Trade row of %s",
+                    symbol,
+                    exc_info=True,
+                )
+        return float(getattr(position, "entry_price", 0.0) or 0.0)
+
+    def _log_external_close_trade(self, position: Any) -> None:
+        """Persist a balance-neutral Trade row for an externally-closed position (audit only).
+
+        External closes are detected by a holdings/borrow check, so the bot has no fill — but the
+        closure still must leave a ``trades`` row (commission + quantity + GROSS pnl) for fee/P&L
+        accounting, the same gap #731 closed for the offline-SL path. Unlike the SL/exit paths this
+        does NOT realize P&L: an external close's capital is reconciled by Step C (spot) /
+        margin-equity sync (margin), so writing the balance here too would double-book the ledger.
+        Deduped by a stable, non-NULL ``reconcile_ext_{db_position_id}`` key — the external close's
+        exchange order id is not persisted, so a synthetic key keeps re-runs idempotent over
+        ``uq_trade_order_session`` (NULL != NULL in Postgres). Callers gate this on the DB position
+        actually closing so a failed close is re-reconciled, not logged twice.
+        """
+        db_pos_id = getattr(position, "db_position_id", None)
+        if db_pos_id is None:
+            return
+        exit_price = self._external_close_exit_price(position)
+        entry_price = float(getattr(position, "entry_price", 0) or 0.0)
+        if exit_price <= 0 or entry_price <= 0:
+            return
+        qty = self._closed_slice_quantity(position)
+        if qty <= 0:
+            return
+        side = getattr(position, "side", "long")
+        side_is_short = side == PositionSide.SHORT or str(side).lower() == "short"
+        gross_pnl = (
+            (entry_price - exit_price) * qty if side_is_short else (exit_price - entry_price) * qty
+        )
+        # exit_fee/interest are unknown for an external close (not executed by the bot); leave them
+        # 0 — the entry-fee leg is still reconstructed inside _log_reconciliation_trade.
+        self._log_reconciliation_trade(
+            position=position,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            qty=qty,
+            gross_pnl=gross_pnl,
+            exit_fee=0.0,
+            interest_cost=0.0,
+            reason="external_close_recovery",
+            exit_order_id=f"reconcile_ext_{db_pos_id}",
+            balance_realized=False,
+        )
 
     @staticmethod
     def _extract_base_asset(symbol: str) -> str:
@@ -1961,23 +2075,49 @@ class PositionReconciler:
                     held_qty,
                     position_qty,
                 )
-                # Remove from in-memory tracker
-                self.position_tracker.remove_position(position.order_id)
-                # Close the DB position
+                # Pop from the in-memory tracker. pop_position returns the position only if it was
+                # STILL tracked: if an earlier Step-A pending-exit reconcile already closed+removed
+                # it this run, this returns None and we must NOT log a second external-close trade
+                # (the reconcile_exit_/reconcile_ext_ keys do not collide, so dedup would miss it).
+                removed = self.position_tracker.pop_position(position.order_id)
+                # Close the DB position. Gate on close_position's actual return (False without
+                # raising = row not found / commit rolled back), not merely "did not raise".
                 db_pos_id = getattr(position, "db_position_id", None)
+                db_closed = False
                 if db_pos_id:
                     try:
-                        self.db_manager.close_position(db_pos_id)
+                        db_closed = bool(self.db_manager.close_position(db_pos_id))
                     except Exception as e:
                         logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
-                # Realize P&L — no exit price available for external closes,
-                # so skip balance update (P&L is unknown)
-                # External closes have no fill price; we cannot compute P&L
-                logger.info(
-                    "External close for %s — P&L not realized (no exit price)",
-                    symbol,
-                )
+                # Do NOT realize P&L here: a spot external close's capital is reconciled by Step C
+                # (_reconcile_balance), which always runs right after position verification —
+                # realizing here too would double-book the balance ledger. Persist a balance-neutral
+                # Trade row (commission/quantity/GROSS pnl, priced mark-to-market) only when WE
+                # closed a still-tracked position (removed is not None) and the DB row actually
+                # closed — so a failed close is re-reconciled and an already-handled position is not
+                # logged twice.
+                if db_closed and removed is not None:
+                    self._log_external_close_trade(position)
+                elif removed is None:
+                    logger.info(
+                        "External close for %s — Trade row skipped (position already reconciled "
+                        "this run)",
+                        symbol,
+                    )
+                elif db_pos_id:
+                    # Popped from the in-memory tracker but the DB row did NOT close (close_position
+                    # returned False / raised). Tracker and the DB positions table now disagree
+                    # (tracker says gone, DB says OPEN). Escalate (CODE.md: no silent divergence) —
+                    # the OPEN row is re-recovered on the next restart; manual reconciliation may be
+                    # needed meanwhile.
+                    logger.critical(
+                        "External close for %s: removed from tracker but DB position %s close "
+                        "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may be "
+                        "needed.",
+                        symbol,
+                        db_pos_id,
+                    )
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
 
@@ -2095,13 +2235,31 @@ class PositionReconciler:
                     e,
                 )
 
-        self.position_tracker.remove_position(position.order_id)
+        removed = self.position_tracker.pop_position(position.order_id)
         db_pos_id = getattr(position, "db_position_id", None)
+        db_closed = False
         if db_pos_id:
             try:
-                self.db_manager.close_position(db_pos_id)
+                db_closed = bool(self.db_manager.close_position(db_pos_id))
             except Exception as e:
                 logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+        # A margin phantom is an external close / liquidation. Capital is reconciled by
+        # account_sync margin-equity sync (true net equity), so do NOT realize P&L here; persist a
+        # balance-neutral audit Trade row (deduped by reconcile_ext_{db_position_id}) only when WE
+        # closed a still-tracked position (pop returned it) and the DB row actually closed —
+        # avoids a duplicate when an earlier pass already handled it.
+        if db_closed and removed is not None:
+            self._log_external_close_trade(position)
+        elif db_pos_id and removed is not None and not db_closed:
+            # Popped from the in-memory tracker but the DB row did NOT close — memory/DB divergence
+            # (CODE.md: no silent divergence). The phantom is gone on the exchange, so do not
+            # re-track; the OPEN DB row is re-recovered on the next restart.
+            logger.critical(
+                "Margin phantom %s removed from tracker but DB position %s close FAILED (still "
+                "OPEN) — memory/DB divergence; manual reconciliation may be needed.",
+                getattr(position, "symbol", "?"),
+                db_pos_id,
+            )
         result.status = "corrected"
         result.severity = Severity.HIGH
 
@@ -2418,6 +2576,7 @@ class PositionReconciler:
         interest_cost: float,
         reason: str,
         exit_order_id: str | None,
+        balance_realized: bool = True,
     ) -> None:
         """Insert a ``trades`` row for a reconciler-closed position, commission and
         quantity populated.
@@ -2500,18 +2659,30 @@ class PositionReconciler:
                 getattr(position, "symbol", "?"),
             )
         except Exception as e:
-            # The balance was already corrected and the DB position closed by the caller,
-            # so a failure here leaves account_balances and trades diverged with no row to
-            # explain the delta. Escalate (CRITICAL + stack trace) rather than swallow at
-            # WARNING — "silent divergence is a bug" (CODE.md). Still do not re-raise:
-            # reconciliation must continue for the remaining positions.
-            logger.critical(
-                "Balance corrected for %s but FAILED to persist its trades row: %s — "
-                "account_balances and trades have DIVERGED; manual reconciliation required.",
-                getattr(position, "symbol", "?"),
-                e,
-                exc_info=True,
-            )
+            # Escalate (CRITICAL + stack trace) rather than swallow at WARNING — "silent
+            # divergence is a bug" (CODE.md). Still do not re-raise: reconciliation must continue
+            # for the remaining positions. The alert differs by whether the caller moved the
+            # balance: a balance-realizing path (SL/exit) leaves account_balances and trades
+            # genuinely diverged; a balance-neutral path (external close) only loses an audit row
+            # (capital is reconciled by Step C / margin-equity sync), so it must NOT page as a
+            # ledger divergence.
+            if balance_realized:
+                logger.critical(
+                    "Balance corrected for %s but FAILED to persist its trades row: %s — "
+                    "account_balances and trades have DIVERGED; manual reconciliation required.",
+                    getattr(position, "symbol", "?"),
+                    e,
+                    exc_info=True,
+                )
+            else:
+                logger.critical(
+                    "FAILED to persist the external-close audit trades row for %s: %s — the close "
+                    "is missing from the trades table (balance is reconciled separately, so no "
+                    "account_balances divergence). Investigate the trades write path.",
+                    getattr(position, "symbol", "?"),
+                    e,
+                    exc_info=True,
+                )
 
     def _persist_position_correction(
         self,
@@ -2625,6 +2796,7 @@ class PeriodicReconciler:
         symbols: list[str] | None = None,
         sweep_cooldown: dict[str, float] | None = None,
         lock_registry: Any = None,
+        data_provider: Any | None = None,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -2675,6 +2847,7 @@ class PeriodicReconciler:
             db_manager=db_manager,
             session_id=session_id,
             use_margin=use_margin,
+            data_provider=data_provider,
         )
 
     def start(self) -> None:

@@ -36,6 +36,7 @@ from src.engines.shared.models import PositionSide
 from src.performance.metrics import Side, pnl_percent
 
 if TYPE_CHECKING:
+    from src.data_providers.data_provider import DataProvider
     from src.database.manager import DatabaseManager
     from src.engines.live.execution.execution_engine import LiveExecutionEngine
     from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
@@ -66,6 +67,7 @@ class RecoveryEngineState(Protocol):
     risk_manager: RiskManager
     order_tracker: OrderTracker | None
     exchange_interface: Any
+    data_provider: DataProvider
     enable_live_trading: bool
     log_trades: bool
     max_position_size: float
@@ -468,6 +470,7 @@ class LiveSessionRecoverer:
                     max_position_size=state.max_position_size,
                     use_margin=use_margin,
                     fee_rate=state.live_execution_engine.fee_rate,
+                    data_provider=state.data_provider,
                 )
 
                 if not positions_snapshot:

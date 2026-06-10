@@ -1595,6 +1595,7 @@ class LiveTradingEngine:
                     symbols=[self._active_symbol] if self._active_symbol else [],
                     sweep_cooldown=self._orphan_sweep_cooldown,
                     lock_registry=self._base_asset_locks,
+                    data_provider=self.data_provider,
                 )
                 self._periodic_reconciler.start()
                 logger.info("🔄 Periodic reconciler started")
