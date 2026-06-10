@@ -34,7 +34,7 @@ from src.config.constants import (
     ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS,
 )
 from src.config.feature_flags import get_flag
-from src.data_providers.exchange_interface import SideEffectType
+from src.data_providers.exchange_interface import OrderLookupError, SideEffectType
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.shared.models import PositionSide
 
@@ -44,6 +44,36 @@ if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePositionTracker
 
 logger = logging.getLogger(__name__)
+
+
+def lookup_order_fail_closed(exchange: Any, order_id: str, symbol: str) -> tuple[Any, bool]:
+    """Look up an order distinguishing "confirmed absent" from "lookup failed".
+
+    Returns ``(order, confirmed)``. ``confirmed=False`` means the lookup could
+    not be confirmed (transient API failure) — the caller must NOT treat the
+    order as missing. In particular it must not re-place a stop-loss: the
+    original may still rest on the exchange, and a duplicate stop reserves
+    balance (later -2010 rejections) and can flip the position if both fill
+    (#713).
+
+    Uses the provider's fail-closed ``get_order_checked`` when available;
+    falls back to legacy ``get_order`` (whose ``None`` is ambiguous but kept
+    as "confirmed" to preserve behavior for providers without the accessor).
+    """
+    checked = getattr(exchange, "get_order_checked", None)
+    if callable(checked):
+        try:
+            return checked(order_id, symbol), True
+        except OrderLookupError as e:
+            logger.warning(
+                "Order %s lookup for %s could not be confirmed — treating as "
+                "unknown (fail-closed): %s",
+                order_id,
+                symbol,
+                e,
+            )
+            return None, False
+    return exchange.get_order(order_id, symbol), True
 
 
 @runtime_checkable
@@ -1408,7 +1438,21 @@ class PositionReconciler:
         from src.data_providers.exchange_interface import OrderStatus as ExOrderStatus
 
         try:
-            sl_order = self.exchange.get_order(sl_order_id, position.symbol)
+            sl_order, confirmed = lookup_order_fail_closed(
+                self.exchange, sl_order_id, position.symbol
+            )
+            if not confirmed:
+                # Transient lookup failure — the stop may still be resting on
+                # the exchange. Do NOT clear the tracked ID or re-place (a
+                # duplicate stop reserves balance and can flip the position if
+                # both fill). The periodic reconciler re-checks shortly (#713).
+                logger.warning(
+                    "Skipping stop-loss verification for %s (order %s) — lookup "
+                    "unconfirmed this cycle; will re-check on the next pass.",
+                    position.symbol,
+                    sl_order_id,
+                )
+                return
             if not sl_order:
                 # SL order not found — may need re-placement
                 audit = AuditEvent(
@@ -2723,7 +2767,21 @@ class PeriodicReconciler:
                     OrderStatus as ExOrderStatus,
                 )
 
-                sl_order = self.exchange.get_order(sl_order_id, position.symbol)
+                sl_order, confirmed = lookup_order_fail_closed(
+                    self.exchange, sl_order_id, position.symbol
+                )
+                if not confirmed:
+                    # Transient lookup failure — the stop may still be resting
+                    # on the exchange. Treating it as "missing" would clear the
+                    # tracked ID and place a DUPLICATE stop (#713). Skip this
+                    # cycle; the next run (~2 min) re-checks.
+                    logger.warning(
+                        "Stop-loss %s for %s could not be verified this cycle "
+                        "(lookup failed) — skipping fail-closed, no re-placement.",
+                        sl_order_id,
+                        position.symbol,
+                    )
+                    continue
 
                 if sl_order and sl_order.status == ExOrderStatus.FILLED:
                     # SL triggered — remove position from tracker + close in DB

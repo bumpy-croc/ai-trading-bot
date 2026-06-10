@@ -44,6 +44,7 @@ from .exchange_interface import (
     AccountBalance,
     ExchangeInterface,
     Order,
+    OrderLookupError,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -1464,6 +1465,47 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         except Exception as e:
             logger.error("Failed to get order %s: %s", order_id, e)
             return None
+
+    def get_order_checked(self, order_id: str, symbol: str) -> Order | None:
+        """Fail-closed order lookup (see ExchangeInterface.get_order_checked).
+
+        Unlike :meth:`get_order` (which swallows every error into ``None``),
+        this returns ``None`` only when Binance confirms the order does not
+        exist (error code -2013) and raises :class:`OrderLookupError` on any
+        unconfirmed lookup, so safety logic (e.g. the reconciler's stop-loss
+        re-placement) never mistakes a transient API failure for a missing
+        order and places a duplicate.
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            raise OrderLookupError(
+                f"Binance client unavailable — cannot confirm order {order_id} for {symbol}"
+            )
+
+        # Binance's orderId parameter only accepts numeric strings; route
+        # alphanumeric IDs (our atb_... idempotency keys) via origClientOrderId.
+        params: dict[str, Any] = {"symbol": symbol}
+        if order_id.isdigit():
+            params["orderId"] = order_id
+        else:
+            params["origClientOrderId"] = order_id
+
+        try:
+            order_data = self._call_get_order(**params)
+        except (BinanceAPIException, BinanceOrderException) as e:
+            if getattr(e, "code", None) == -2013 or "-2013" in str(e):
+                return None  # confirmed: order does not exist on the exchange
+            raise OrderLookupError(f"Order {order_id} lookup failed for {symbol}: {e}") from e
+        except Exception as e:
+            raise OrderLookupError(f"Order {order_id} lookup failed for {symbol}: {e}") from e
+
+        parsed = self._parse_order_data(order_data)
+        if parsed is None:
+            # Got a response but could not parse it — the order may well exist,
+            # so this is "unknown", not "confirmed absent".
+            raise OrderLookupError(
+                f"Order {order_id} response for {symbol} could not be parsed: {order_data!r}"
+            )
+        return parsed
 
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:
         """Get recent trades for a symbol"""

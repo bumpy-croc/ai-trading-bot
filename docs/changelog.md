@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Reconciler no longer places a DUPLICATE stop-loss when an order lookup
+  fails transiently (#713). `BinanceProvider.get_order` swallows every
+  exception into `None`, and both stop-loss verifiers (startup
+  `PositionReconciler._verify_stop_loss` and the periodic reconciler's
+  stop-verification loop) treated `None` as "stop missing" — clearing the
+  tracked `stop_loss_order_id` and re-placing a new stop while the original
+  could still be resting on the exchange (reserving base/margin, able to
+  cause -2010 on a later close, and able to flip the position if both
+  stops fill). Added a fail-closed `ExchangeInterface.get_order_checked`
+  (Binance override returns `None` only on a confirmed -2013
+  "order does not exist" and raises `OrderLookupError` on any unconfirmed
+  lookup), and both verifiers now skip the cycle on an unconfirmed lookup
+  instead of re-placing. Confirmed-missing stops are still re-placed.
 - Live trade recovery on the `emergency_sync` path no longer silently fails.
   `AccountSynchronizer.recover_missing_trades` called
   `DatabaseManager.log_trade(order_id=...)`, but `log_trade` has no `order_id`

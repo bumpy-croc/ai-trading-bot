@@ -81,6 +81,9 @@ class TestReconciliationIntegration:
         """MagicMock exchange with sensible defaults."""
         exchange = MagicMock()
         exchange.get_order.return_value = None
+        # Fail-closed lookup (#713) delegates to get_order so tests keep
+        # driving order responses through get_order for both accessors.
+        exchange.get_order_checked.side_effect = lambda oid, sym: exchange.get_order(oid, sym)
         exchange.get_order_by_client_id.return_value = None
         exchange.get_all_orders.return_value = []
         exchange.get_open_orders.return_value = []
