@@ -883,7 +883,7 @@ class LivePositionTracker:
         try:
             db_positions = self.db_manager.get_active_positions(session_id)
         except Exception as e:
-            logger.error("Failed to load positions for recovery: %s", e)
+            logger.error("Failed to load positions for recovery: %s", e, exc_info=True)
             return []
 
         recovered: list[LivePosition] = []
@@ -959,7 +959,10 @@ class LivePositionTracker:
                 # Per-row isolation: one corrupt row must not abort recovery
                 # of the remaining positions.
                 logger.error(
-                    "Failed to recover position %s: %s", pos_data.get("symbol", "<unknown>"), e
+                    "Failed to recover position %s: %s",
+                    pos_data.get("symbol", "<unknown>"),
+                    e,
+                    exc_info=True,
                 )
 
         return recovered
