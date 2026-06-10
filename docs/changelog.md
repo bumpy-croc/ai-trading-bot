@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Live engine hard-disables partial exits / scale-ins behind the default-OFF
+  `live_partial_operations` feature flag (#734). The live engine executed
+  partial operations as bookkeeping only — `_execute_partial_exit` /
+  `_execute_scale_in` mutate the tracker/DB but **never place an exchange
+  order** — and with mismatched units (policy fractions of the original
+  position applied to fraction-of-balance state), so on a real account a
+  winner reaching the default +2%/+3% triggers desynced tracked size from
+  actual holdings (stranded inventory, un-repaid margin borrows, -2010 close
+  failures), booked phantom realized PnL, and freed daily-risk budget that
+  was still deployed. All three activation paths are gated (constructor,
+  strategy hot-swap overrides, runtime policy hydration via the existing
+  opt-in state). Re-enable only for development of the #734 fix.
 - Reconciler no longer places a DUPLICATE stop-loss when an order lookup
   fails transiently (#713). `BinanceProvider.get_order` swallows every
   exception into `None`, and both stop-loss verifiers (startup

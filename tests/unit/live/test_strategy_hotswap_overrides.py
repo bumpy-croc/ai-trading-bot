@@ -181,6 +181,11 @@ def test_hot_swap_rebuilds_partial_manager(monkeypatch):
     ``partial_operations`` overrides after a swap, including the wrapped
     PartialOperationsManager inside the live exit handler.
     """
+    # Partial ops are disabled by default (#734); this test exercises the
+    # opted-in swap-rebuild path, so enable the dev flag.
+    monkeypatch.setattr(
+        "src.engines.live.trading_engine.is_enabled", lambda key, default=False: True
+    )
     initial = create_ml_basic_strategy(fast_mode=True)
     initial.set_risk_overrides(
         {
