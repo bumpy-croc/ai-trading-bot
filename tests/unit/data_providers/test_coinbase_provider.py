@@ -177,3 +177,92 @@ def test_exchange_interface_default_get_order_checked_fails_closed():
     exchange = _MinimalExchange("key", "secret")
     with pytest.raises(OrderLookupError):
         exchange.get_order_checked("123", "BTCUSDT")
+
+
+class TestCoinbaseOrderTypeMapping:
+    """Regression tests for #762: every order type was submitted as MARKET.
+
+    ``OrderType.LIMIT.value`` is ``"LIMIT"`` (uppercase) while the old mapping
+    was keyed lowercase, so ``mapping.get(...)`` always fell back to
+    ``"market"`` — silently stripping price protection from limit orders and
+    firing stop orders immediately.
+    """
+
+    @staticmethod
+    def _provider() -> CoinbaseProvider:
+        with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
+            return CoinbaseProvider()
+
+    @pytest.mark.fast
+    def test_enum_order_types_map_correctly(self):
+        """Each supported OrderType maps to the matching Coinbase string."""
+        from src.data_providers.exchange_interface import OrderType
+
+        provider = self._provider()
+
+        assert provider._convert_to_cb_type(OrderType.MARKET) == "market"
+        assert provider._convert_to_cb_type(OrderType.LIMIT) == "limit"
+        assert provider._convert_to_cb_type(OrderType.STOP_LOSS) == "stop"
+
+    @pytest.mark.fast
+    def test_string_order_types_map_case_insensitively(self):
+        """Legacy string inputs (either case) resolve to the right type."""
+        provider = self._provider()
+
+        assert provider._convert_to_cb_type("limit") == "limit"
+        assert provider._convert_to_cb_type("LIMIT") == "limit"
+        assert provider._convert_to_cb_type("stop_loss") == "stop"
+        assert provider._convert_to_cb_type("market") == "market"
+
+    @pytest.mark.fast
+    def test_unsupported_order_type_raises(self):
+        """Unknown types raise instead of silently degrading to market."""
+        from src.data_providers.exchange_interface import OrderType
+
+        provider = self._provider()
+
+        with pytest.raises(ValueError, match="Unsupported Coinbase order type"):
+            provider._convert_to_cb_type(OrderType.TAKE_PROFIT)
+        with pytest.raises(ValueError, match="Unsupported Coinbase order type"):
+            provider._convert_to_cb_type("trailing_stop")
+
+    @pytest.mark.fast
+    def test_place_order_limit_builds_limit_body(self):
+        """A limit order reaches the API as type=limit with its price."""
+        from src.data_providers.exchange_interface import OrderSide, OrderType
+
+        provider = self._provider()
+        with patch.object(provider, "_request", return_value={"id": "ord-1"}) as mock_request:
+            order = provider.place_order(
+                symbol="BTC-USD",
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                quantity=0.5,
+                price=50000.0,
+            )
+
+        assert order is not None
+        body = mock_request.call_args.kwargs.get("body") or mock_request.call_args.args[2]
+        assert body["type"] == "limit"
+        assert body["price"] == "50000.0"
+
+    @pytest.mark.fast
+    def test_place_order_gtd_rejected(self):
+        """GTD requires an end_time this client cannot send — fail before the API."""
+        from src.data_providers.exchange_interface import OrderSide, OrderType
+
+        provider = self._provider()
+        with patch.object(provider, "_request") as mock_request:
+            order = provider.place_order(
+                symbol="BTC-USD",
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                quantity=0.5,
+                price=50000.0,
+                time_in_force="GTD",
+            )
+
+        assert order is None
+        mock_request.assert_not_called()
