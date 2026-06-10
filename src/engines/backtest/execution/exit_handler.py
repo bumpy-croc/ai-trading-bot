@@ -279,14 +279,10 @@ class ExitHandler:
         new_activated = result.trailing_activated or trade.trailing_stop_activated
         new_breakeven = result.breakeven_triggered or trade.breakeven_triggered
 
-        # Apply update via position tracker.
-        # KNOWN LATENT BUG (typing surfaced, behavior preserved): new_stop_price can
-        # be None when result.updated is True but trailing only just activated
-        # without a stop improvement; PositionTracker.update_trailing_stop would
-        # then compare None against the current stop (TypeError if a stop exists).
-        # Guarding here would change runtime behavior; tracked for a separate fix.
+        # Apply update via position tracker (a None stop price means trailing
+        # just activated without a stop improvement; flag updates still apply).
         changed = self.position_tracker.update_trailing_stop(
-            new_stop_loss=result.new_stop_price,  # type: ignore[arg-type]
+            new_stop_loss=result.new_stop_price,
             activated=new_activated,
             breakeven_triggered=new_breakeven,
         )
