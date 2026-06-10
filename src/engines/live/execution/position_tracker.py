@@ -272,8 +272,15 @@ class LivePositionTracker:
             self._positions[order_id] = position
             self._position_db_ids[order_id] = db_id
 
-    def set_stop_loss_order_id(self, order_id: str, stop_loss_order_id: str) -> None:
-        """Update the stop-loss order ID for a tracked position."""
+    def set_stop_loss_order_id(self, order_id: str, stop_loss_order_id: str | None) -> None:
+        """Update the stop-loss order ID for a tracked position.
+
+        ``None`` clears the in-memory reference (e.g. after the exchange
+        reports the stop terminally cancelled/rejected, #741) so the
+        reconciler's missing-stop path re-protects; the DB write is skipped
+        for ``None`` (``update_position`` ignores ``None`` kwargs) and the
+        stale persisted id is overwritten when the replacement stop is placed.
+        """
         with self._positions_lock:
             position = self._positions.get(order_id)
             if position is None:
