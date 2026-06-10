@@ -27,7 +27,6 @@ from src.config.constants import (
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_ERROR_COOLDOWN,
-    DEFAULT_EXECUTION_FILL_POLICY,
     DEFAULT_FEE_RATE,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
@@ -51,6 +50,7 @@ from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffe
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import EventType, TradeSource
+from src.engines.live.config import LiveEngineSettings
 
 # Modular handlers (optional injection for testability)
 from src.engines.live.data.market_data_handler import MarketDataHandler
@@ -84,7 +84,6 @@ from src.engines.live.trade_close_accounting import (
 from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
-from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
 from src.engines.shared.models import (
     BaseTrade,
     PositionSide,
@@ -219,6 +218,7 @@ class LiveTradingEngine:
         market_data_handler: MarketDataHandler | None = None,
         event_logger: LiveEventLogger | None = None,
         health_monitor: HealthMonitor | None = None,
+        settings: LiveEngineSettings | None = None,
     ):
         """
         Initialize the live trading engine.
@@ -234,6 +234,10 @@ class LiveTradingEngine:
         account_snapshot_interval : int, optional
             How often to log account snapshots to database in seconds.
             Defaults to 1800 (30 minutes). Set to 0 to disable snapshots.
+        settings : LiveEngineSettings, optional
+            Pre-resolved construction-time settings (feature flags / env /
+            app config). The runner builds these explicitly; when omitted the
+            engine resolves them itself (#486).
         """
 
         # Validate inputs
@@ -245,6 +249,15 @@ class LiveTradingEngine:
             raise ValueError("Check interval must be positive")
         if account_snapshot_interval < 0:
             raise ValueError("Account snapshot interval must be non-negative")
+
+        # Construction-time settings. Pass this module's lookups so test
+        # patches on trading_engine.is_enabled / trading_engine.get_config
+        # keep intercepting resolution.
+        self.settings = settings or LiveEngineSettings.resolve(
+            flag_lookup=is_enabled,
+            env_lookup=os.getenv,
+            config_lookup=get_config,
+        )
 
         self._runtime_dataset = None
         self._runtime_warmup = 0
@@ -338,9 +351,9 @@ class LiveTradingEngine:
         # failures), books phantom realized PnL, and frees risk budget that is
         # still deployed. The flag exists only for development of the proper
         # fix; do NOT enable it for live capital until #734 is resolved.
-        if (enable_partial_operations or partial_manager is not None) and not is_enabled(
-            "live_partial_operations", False
-        ):
+        if (
+            enable_partial_operations or partial_manager is not None
+        ) and not self.settings.partial_operations_allowed:
             logger.warning(
                 "Partial exits/scale-ins are DISABLED (#734): the live engine "
                 "executes them as bookkeeping only (no exchange order, mismatched "
@@ -642,7 +655,7 @@ class LiveTradingEngine:
         # Optional regime detector (feature-gated)
         self.regime_detector = None
         try:
-            if os.getenv("FEATURE_ENABLE_REGIME_DETECTION", "").lower() == "true":
+            if self.settings.regime_detection_enabled:
                 self.regime_detector = RegimeDetector()
         except Exception:
             self.regime_detector = None
@@ -655,7 +668,7 @@ class LiveTradingEngine:
             logger.debug("Skipping signal handler registration outside main thread")
 
         # Execution modeling
-        self.execution_fill_policy = self._resolve_execution_fill_policy()
+        self.execution_fill_policy = self.settings.execution_fill_policy
         self.execution_model = ExecutionModel(self.execution_fill_policy)
 
         # Initialize modular handlers (use injected or create defaults)
@@ -3637,17 +3650,6 @@ class LiveTradingEngine:
             return float(value)
         except (TypeError, ValueError):
             return DEFAULT_TAKE_PROFIT_PCT
-
-    def _resolve_execution_fill_policy(self) -> FillPolicy:
-        """Resolve execution fill policy from configuration."""
-        policy_name: str | None = DEFAULT_EXECUTION_FILL_POLICY
-        try:
-            cfg = get_config()
-            policy_name = cfg.get("EXECUTION_FILL_POLICY", DEFAULT_EXECUTION_FILL_POLICY)
-        except Exception as exc:
-            logger.warning("Failed to read execution fill policy config: %s", exc)
-
-        return resolve_fill_policy(policy_name)
 
     def _execute_entry(
         self,

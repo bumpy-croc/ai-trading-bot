@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `LiveTradingEngine` construction-time settings resolution (feature flags /
+  env / app config) moved to `src/engines/live/config.py`
+  (`LiveEngineSettings`, #486 step d): the #734 `live_partial_operations`
+  gate, the `FEATURE_ENABLE_REGIME_DETECTION` env flag, and the
+  `EXECUTION_FILL_POLICY` fill-policy read. `runner.py` resolves and injects
+  settings explicitly; the engine self-resolves when not injected (using its
+  module-level lookups so existing test patch points keep working).
+  Runtime-dynamic flag reads (`ws_user_hard_reconnect`, hot-swap partial-ops
+  re-check, heartbeat steps) intentionally stay runtime.
 - Live trading engine refactor, steps 1–3 of #486 (pure refactor, no behavior
   change; verified by the full unit suite, the parity suite, and a
   deterministic backtest fingerprint that is byte-identical before/after):
