@@ -442,3 +442,119 @@ def test_reconciler_filled_sl_skips_trade_when_db_close_fails(monkeypatch):
     reconciler._close_position_from_filled_sl(position, sl_order)
 
     assert len(db._trades) == 0  # DB close failed -> trade not logged (no duplicate risk)
+
+
+def test_reconciler_dedups_duplicate_trade_on_rerun():
+    """A re-run with the same exit_order_id + session inserts only ONE trade row.
+
+    The mock enforces uq_trade_order_session, so the second log_trade raises IntegrityError
+    which _log_reconciliation_trade swallows — exercising the dedup branch (the #657/#668
+    phantom-trade guard) end to end, not just the key string.
+    """
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+
+    for _ in range(2):
+        reconciler._log_reconciliation_trade(
+            position=position,
+            entry_price=100.0,
+            exit_price=90.0,
+            qty=2.5,
+            gross_pnl=-25.0,
+            exit_fee=0.225,
+            interest_cost=0.0,
+            reason="stop_loss_filled_offline",
+            exit_order_id="sl-dedup-1",
+        )
+
+    assert len(db._trades) == 1  # second insert deduped, not duplicated
+
+
+def test_reconciler_scale_in_close_nulls_quantity_and_does_not_inflate_commission():
+    """A scaled-in position (current_size > original_size) closed by the reconciler stores
+    NULL quantity and the un-inflated entry fee — matching the engine close path's policy."""
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    # Scaled in: held grew to 0.40 of balance from an original 0.25; quantity=2.5 is the
+    # ORIGINAL fill (not updated on scale-in). _realize_pnl_on_close would scale qty to
+    # 2.5 * 0.40/0.25 = 4.0; the engine path NULLs this case rather than over-reporting.
+    position = _make_position(
+        quantity=2.5, entry_fee=None, entry_price=100.0, size=0.40, current_size=0.40
+    )
+    position.original_size = 0.25
+
+    reconciler._log_reconciliation_trade(
+        position=position,
+        entry_price=100.0,
+        exit_price=110.0,
+        qty=4.0,  # the scaled (inflated) qty the caller would pass
+        gross_pnl=40.0,
+        exit_fee=0.11,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-scalein-1",
+    )
+
+    trade = list(db._trades.values())[0]
+    assert trade["quantity"] is None  # not the over-reported 4.0
+    # entry fee is on the ORIGINAL fill (2.5 * 100 * 0.001 = 0.25), not the inflated 4.0.
+    assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
+
+
+def test_get_performance_metrics_nets_commission(monkeypatch):
+    """get_performance_metrics nets commission: a gross-winner whose commission exceeds its
+    gross pnl is bucketed as a loss and reduces total_pnl (the _trade_net_pnl integration)."""
+    import contextlib
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from unittest.mock import Mock as M
+
+    from src.database.manager import DatabaseManager
+    from src.database.models import Trade
+
+    t0 = datetime(2025, 1, 1, tzinfo=UTC)
+    trades = [
+        # clear winner: net +9.5
+        SimpleNamespace(
+            pnl=10.0,
+            commission=0.5,
+            margin_interest_cost=0.0,
+            entry_time=t0,
+            exit_time=t0 + timedelta(hours=1),
+        ),
+        # marginal gross-winner that nets to a LOSS after commission: net -0.10
+        SimpleNamespace(
+            pnl=0.30,
+            commission=0.40,
+            margin_interest_cost=0.0,
+            entry_time=t0,
+            exit_time=t0 + timedelta(hours=1),
+        ),
+    ]
+
+    def query_side_effect(model):
+        q = M()
+        q.filter.return_value = q
+        q.order_by.return_value = q
+        q.all.return_value = trades if model is Trade else []
+        return q
+
+    mock_session = M()
+    mock_session.query.side_effect = query_side_effect
+
+    @contextlib.contextmanager
+    def fake_session(*a, **k):
+        yield mock_session
+
+    manager = DatabaseManager.__new__(DatabaseManager)
+    manager._current_session_id = 1
+    monkeypatch.setattr(DatabaseManager, "get_session_with_timeout", fake_session)
+
+    metrics = manager.get_performance_metrics(session_id=1)
+
+    # total_pnl = net(9.5) + net(-0.10) = 9.4 ; the marginal trade is a LOSER net of fees.
+    assert metrics["total_pnl"] == pytest.approx(9.4)
+    assert metrics["winning_trades"] == 1
+    assert metrics["losing_trades"] == 1
+    assert metrics["win_rate"] == pytest.approx(50.0)

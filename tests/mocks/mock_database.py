@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import Mock
 
+from sqlalchemy.exc import IntegrityError
+
 from src.database.models import EventType
 
 
@@ -21,6 +23,10 @@ class MockDatabaseManager:
         self.database_url = database_url or "mock://memory"
         self._sessions = {}
         self._trades = {}
+        # Emulates the real uq_trade_order_session unique constraint over
+        # (order_id, session_id) so dedup behaviour is testable. NULL order_ids are not
+        # tracked (NULL != NULL in Postgres — duplicates with no order_id are allowed).
+        self._seen_trade_keys: set = set()
         self._positions = {}
         self._events = {}
         self._account_snapshots = []
@@ -173,6 +179,21 @@ class MockDatabaseManager:
         **kwargs: Any,
     ) -> int:
         """Log a completed trade"""
+        # Emulate uq_trade_order_session: Trade.order_id is set from exit_order_id (else the
+        # explicit order_id arg). A non-NULL (order_id, session_id) seen before raises
+        # IntegrityError like real Postgres, so the reconciler dedup path is exercised.
+        effective_order_id = kwargs.get("exit_order_id", order_id)
+        effective_session = session_id or self._current_session_id
+        if effective_order_id is not None:
+            key = (effective_order_id, effective_session)
+            if key in self._seen_trade_keys:
+                raise IntegrityError(
+                    "duplicate key value violates unique constraint " '"uq_trade_order_session"',
+                    params=None,
+                    orig=Exception("mock unique violation"),
+                )
+            self._seen_trade_keys.add(key)
+
         trade_id = self._get_next_id()
 
         self._trades[trade_id] = {

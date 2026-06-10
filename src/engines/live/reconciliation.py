@@ -39,7 +39,8 @@ from src.config.constants import (
 from src.config.feature_flags import get_flag
 from src.data_providers.exchange_interface import SideEffectType
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
-from src.engines.shared.commission import order_commission_usd
+from src.engines.shared.commission import order_commission_usd, split_base_quote
+from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
@@ -150,9 +151,12 @@ class PositionReconciler:
         self.session_id = session_id
         self.max_position_size = max_position_size
         self._use_margin = use_margin
-        # Used to reconstruct the entry-fee leg when logging a Trade row for a
-        # reconciler-closed position (recovered positions carry no entry-fee metadata).
+        # Used to reconstruct fees when logging a Trade row for a reconciler-closed
+        # position (recovered positions carry no entry-fee metadata). Route fee modelling
+        # through the shared CostCalculator (CODE.md: never duplicate financial logic) so a
+        # future min-fee/maker-taker change applies to reconciler-logged trades too.
         self._fee_rate = fee_rate
+        self._cost_calc = CostCalculator(fee_rate=fee_rate)
 
     def reconcile_startup(self, positions: dict[str, Any]) -> list[ReconciliationResult]:
         """Run full startup reconciliation.
@@ -445,7 +449,12 @@ class PositionReconciler:
                 order_data, exchange_order, symbol, side, fill_price, fill_qty
             )
         elif order_type == "FULL_EXIT":
-            exit_fee = float(getattr(exchange_order, "commission", 0.0) or 0.0)
+            # Normalize the exchange commission to USD (a SELL is normally quote/USDT, but a
+            # short's exit BUY is base-asset); fall back to the modelled fee on an
+            # unconvertible asset (e.g. BNB). Same convention as the offline-SL/engine paths.
+            exit_fee = order_commission_usd(exchange_order, symbol, fill_price)
+            if exit_fee is None:
+                exit_fee = self._cost_calc.calculate_fee(fill_price * float(fill_qty or 0.0))
             self._reconcile_filled_exit(order_data, fill_price, exit_fee=exit_fee)
         elif order_type == "PARTIAL_EXIT":
             self._reconcile_filled_partial_exit(order_data, fill_price)
@@ -541,8 +550,12 @@ class PositionReconciler:
             # Track in memory
             self.position_tracker.track_recovered_position(position, db_id)
 
-            # Deduct entry commission from balance so fee is not silently lost
-            entry_fee = float(exchange_order.commission or 0.0)
+            # Deduct entry commission from balance so fee is not silently lost. Normalize to
+            # USD via commission_asset (a BUY's commission is base-asset, e.g. ETH); fall
+            # back to the modelled fee on an unconvertible asset (e.g. BNB).
+            entry_fee = order_commission_usd(exchange_order, symbol, fill_price)
+            if entry_fee is None:
+                entry_fee = self._cost_calc.calculate_fee(fill_price * float(fill_qty or 0.0))
             if entry_fee > 0:
                 try:
                     with self.db_manager.atomic_balance_update(
@@ -1704,23 +1717,59 @@ class PositionReconciler:
             except Exception as e:
                 logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
+        # Realize P&L (and log the trade) ONLY once the DB position is actually closed.
+        # _realize_pnl_on_close corrects the balance unconditionally, so doing it when the
+        # close failed (row still OPEN) would double-subtract the P&L on the next reconcile.
+        if not db_closed:
+            logger.warning(
+                "Skipping P&L realization for %s — DB position %s was not closed; it will "
+                "be re-reconciled on a later pass.",
+                getattr(position, "symbol", "?"),
+                db_pos_id,
+            )
+            return
+
         sl_fill_price = exit_price or 0.0
+        if sl_fill_price <= 0:
+            logger.warning(
+                "Offline SL fill for %s has no usable price; exit fee modelled as $0.",
+                getattr(position, "symbol", "?"),
+            )
+        # Normalize the SL commission to USD; on an unconvertible asset (e.g. BNB) fall back
+        # to the modelled fee on the CLOSED slice (scaled by current/original so a partially
+        # exited position is not over-charged) via the shared cost calculator.
         sl_exit_fee = order_commission_usd(sl_order, position.symbol, sl_fill_price)
         if sl_exit_fee is None:
-            sl_qty = abs(float(getattr(position, "quantity", 0.0) or 0.0))
-            sl_exit_fee = self._fee_rate * sl_fill_price * sl_qty
+            sl_exit_fee = self._cost_calc.calculate_fee(
+                sl_fill_price * self._closed_slice_quantity(position)
+            )
 
-        sl_oid = getattr(sl_order, "order_id", None) or (
-            f"reconcile_sl_{db_pos_id}" if db_pos_id else None
-        )
+        # db_closed implies a truthy db_pos_id, so the synthetic key is always non-NULL.
+        sl_oid = getattr(sl_order, "order_id", None) or f"reconcile_sl_{db_pos_id}"
         self._realize_pnl_on_close(
             position,
             exit_price,
             "stop_loss_filled_offline",
             exit_fee=sl_exit_fee,
-            log_trade=db_closed,
+            log_trade=True,
             exit_order_id=sl_oid,
         )
+
+    @staticmethod
+    def _closed_slice_quantity(position: Any) -> float:
+        """Base quantity represented by a reconciler close: the original fill scaled by
+        ``current_size / original_size``. For a partial exit this is the remaining slice;
+        for a scale-in it is the larger held amount (what the exit actually sells). Returns
+        the unscaled fill when sizing metadata is missing."""
+        qty = abs(float(getattr(position, "quantity", 0.0) or 0.0))
+        original = getattr(position, "original_size", None)
+        current = getattr(position, "current_size", None)
+        try:
+            if original not in (None, 0) and current is not None and float(original) > 0:
+                return qty * (float(current) / float(original))
+        except (TypeError, ValueError):
+            pass
+        return qty
 
     @staticmethod
     def _extract_base_asset(symbol: str) -> str:
@@ -1728,15 +1777,12 @@ class PositionReconciler:
 
         Strips common quote currencies (USDT, BUSD, USDC, USD) from the end of
         the symbol to get the base asset (e.g., "BTC" from "BTCUSDT", "ETH" from
-        "ETHUSDC"). Longest-first so 4-char quotes match before "USD". Single
-        source of truth for base-asset resolution (incl. the orphaned-borrow sweep,
-        which groups symbols by base asset — a missed quote would split a base into
-        two groups and weaken Gate 2).
+        "ETHUSDC"). Single source of truth for base-asset resolution (incl. the
+        orphaned-borrow sweep, which groups symbols by base asset — a missed quote would
+        split a base into two groups and weaken Gate 2). Delegates to the shared
+        ``split_base_quote`` so the quote list lives in exactly one place.
         """
-        for quote in ("USDT", "BUSD", "USDC", "USD"):
-            if symbol.endswith(quote) and len(symbol) > len(quote):
-                return symbol[: -len(quote)]
-        return symbol
+        return split_base_quote(symbol)[0]
 
     def _verify_asset_holdings(self, position: Any, result: ReconciliationResult) -> None:
         """Verify the bot holds the expected asset on exchange.
@@ -2207,12 +2253,26 @@ class PositionReconciler:
 
             # Balance uses net PnL (gross minus interest and exit fee)
             new_balance = current_balance + pnl - interest_cost - exit_fee
-            self.db_manager.update_balance(
+            balance_updated = self.db_manager.update_balance(
                 new_balance,
                 f"reconciliation_close: {reason}",
                 "system",
                 self.session_id,
             )
+            if not balance_updated:
+                # update_balance swallows its own errors and returns False. If the balance
+                # write failed, do NOT persist the audit or a trade row — a trades row that
+                # asserts a closure whose balance never moved is a silent
+                # account_balances/trades divergence. Escalate (CRITICAL); reconciliation
+                # continues for the remaining positions.
+                logger.critical(
+                    "Reconciliation balance update FAILED for %s (%s) — balance unchanged; "
+                    "skipping audit + trade row to avoid trades/account_balances divergence. "
+                    "Manual reconciliation required.",
+                    getattr(position, "symbol", "?"),
+                    reason,
+                )
+                return
 
             if exit_fee > 0:
                 logger.info(
@@ -2297,7 +2357,30 @@ class PositionReconciler:
             # PositionSide enum -> its .value ("LONG"/"SHORT"); a str side passes through.
             side_str = getattr(side, "value", None) or str(side or "long")
             qty_abs = abs(float(qty))
-            entry_fee = qty_abs * float(entry_price) * float(self._fee_rate)
+            # Match the engine close path on scale-ins (current_size > original_size):
+            # position.quantity is the ORIGINAL fill and is not updated on scale-in, so the
+            # held quantity is not reliably derivable. The engine stores NULL quantity and
+            # does not inflate the entry fee (_closed_base_quantity -> None,
+            # _close_position_portion -> 1.0); mirror that here rather than over-reporting.
+            original = getattr(position, "original_size", None)
+            current = getattr(position, "current_size", None)
+            try:
+                scaled_in = (
+                    original not in (None, 0)
+                    and current is not None
+                    and float(current) > float(original)
+                )
+            except (TypeError, ValueError):
+                scaled_in = False
+            if scaled_in:
+                logged_quantity = None
+                fee_base_qty = abs(float(getattr(position, "quantity", 0.0) or 0.0))
+            else:
+                logged_quantity = qty_abs
+                fee_base_qty = qty_abs
+            # Reconstruct the entry-fee leg via the shared cost calculator (CODE.md: no
+            # duplicated fee logic); recovered positions carry no entry-fee metadata.
+            entry_fee = self._cost_calc.calculate_fee(fee_base_qty * float(entry_price))
             commission = entry_fee + max(0.0, float(exit_fee))
             # Size as a fraction of balance: the remaining (closed) slice. Use explicit
             # None checks — a current_size of 0.0 is a valid (flat) value, not "missing".
@@ -2318,17 +2401,17 @@ class PositionReconciler:
                 exit_reason=reason,
                 strategy_name=getattr(position, "strategy_name", None) or "reconciler",
                 session_id=self.session_id,
-                quantity=qty_abs,
+                quantity=logged_quantity,
                 commission=commission,
                 margin_interest_cost=max(0.0, float(interest_cost)),
                 exit_order_id=exit_order_id,
             )
             logger.info(
-                "Logged reconciliation trade for %s: pnl=%.2f commission=%.4f qty=%.8f",
+                "Logged reconciliation trade for %s: pnl=%.2f commission=%.4f qty=%s",
                 getattr(position, "symbol", "?"),
                 float(gross_pnl),
                 commission,
-                qty_abs,
+                "NULL" if logged_quantity is None else f"{logged_quantity:.8f}",
             )
         except IntegrityError:
             logger.info(

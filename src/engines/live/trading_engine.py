@@ -148,7 +148,9 @@ def _closed_base_quantity(position: Position) -> float | None:
         return None
     if not (math.isfinite(original_f) and original_f > 0):
         return None
-    if not (math.isfinite(current_f) and current_f >= 0):
+    if not (math.isfinite(current_f) and current_f > 0):
+        # current_size <= 0 is a degenerate/flat slice — store NULL rather than a fabricated
+        # 0.0 quantity (which _close_position_portion would still pair with the full fee).
         return None
     if current_f > original_f:
         # Scale-ins grow current_size beyond original_size but do NOT update

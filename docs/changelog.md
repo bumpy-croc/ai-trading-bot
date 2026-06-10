@@ -50,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class; a failure to persist the row after the balance was corrected now escalates to
   CRITICAL rather than a silent warning. See the "Trade fee accounting" note in
   `docs/live_trading.md`.
+- Reconciler accounting hardening (review follow-ups): the offline stop-loss close now
+  realizes P&L **only after** the DB position is actually closed (a failed close no longer
+  double-subtracts P&L on the next reconcile), and a failed balance write skips the audit +
+  trade row (no `trades`/`account_balances` divergence). Fees route through the shared
+  `CostCalculator` (no duplicated fee modelling); the SL exit-fee fallback and the recovered
+  entry/exit reconciler bookings now normalize commission to USD via `commission_asset` like
+  the rest of the change. A scaled-in position closed by the reconciler stores NULL quantity
+  and an un-inflated entry fee, matching the engine close path. `_extract_base_asset` now
+  delegates to the shared `split_base_quote`. The mock DB enforces `uq_trade_order_session`
+  so the dedup path is unit-tested.
 - Live position/trade recovery no longer crashes on `Decimal`-vs-`float`
   arithmetic. `DatabaseManager.get_active_positions` and `get_recent_trades`
   now coerce SQLAlchemy `Numeric(18,8)` columns (which read back from
