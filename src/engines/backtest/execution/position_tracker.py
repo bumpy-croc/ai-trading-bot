@@ -228,14 +228,17 @@ class PositionTracker:
 
     def update_trailing_stop(
         self,
-        new_stop_loss: float,
+        new_stop_loss: float | None,
         activated: bool,
         breakeven_triggered: bool,
     ) -> bool:
         """Update trailing stop state for active position.
 
         Args:
-            new_stop_loss: New stop loss price.
+            new_stop_loss: New stop loss price, or None when trailing just
+                activated without producing a stop improvement (e.g. ATR
+                unavailable on the activation candle); flag updates still
+                apply. Mirrors the live tracker's None handling.
             activated: Whether trailing stop is now activated.
             breakeven_triggered: Whether breakeven has been triggered.
 
@@ -247,18 +250,19 @@ class PositionTracker:
 
         changed = False
 
-        # Only update if new stop is better
-        current_sl = self.current_trade.stop_loss
-        side_str = to_side_string(self.current_trade.side)
-        if side_str == "long":
-            should_update = current_sl is None or new_stop_loss > float(current_sl)
-        else:
-            should_update = current_sl is None or new_stop_loss < float(current_sl)
+        if new_stop_loss is not None:
+            # Only update if new stop is better
+            current_sl = self.current_trade.stop_loss
+            side_str = to_side_string(self.current_trade.side)
+            if side_str == "long":
+                should_update = current_sl is None or new_stop_loss > float(current_sl)
+            else:
+                should_update = current_sl is None or new_stop_loss < float(current_sl)
 
-        if should_update:
-            self.current_trade.stop_loss = new_stop_loss
-            self.current_trade.trailing_stop_price = new_stop_loss
-            changed = True
+            if should_update:
+                self.current_trade.stop_loss = new_stop_loss
+                self.current_trade.trailing_stop_price = new_stop_loss
+                changed = True
 
         if activated != self.current_trade.trailing_stop_activated:
             self.current_trade.trailing_stop_activated = activated

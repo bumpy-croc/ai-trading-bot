@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (uppercase DB side, tracker key fallback to row id, partial-op state,
   reconciliation ids), skips invalid-entry-price rows with a CRITICAL log,
   and isolates per-row failures.
+- Backtest trailing-stop updates no longer crash the run when trailing
+  activates without a stop improvement (#761): `TrailingStopManager.update`
+  legitimately returns `updated=True, new_stop_price=None` (e.g. ATR
+  unavailable on the activation candle), and the backtest tracker compared
+  that `None` against the current stop (`TypeError`, unwrapped). The tracker
+  now mirrors the live tracker: flag updates apply, price comparison skipped.
 - `build_time_exit_policy` (engines/shared) can now actually build a policy
   (#760): it passed `exit_time`/`exit_days` kwargs that `TimeExitPolicy` does
   not accept, so it always raised `TypeError` internally and returned `None`.
