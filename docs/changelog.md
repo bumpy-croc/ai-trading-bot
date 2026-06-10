@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Backtest trades persist the correct `pnl_percent` for longs (#758):
+  the backtest event logger passed the engines' `PositionSide` enum into
+  `log_trade`, which compares against the **database** `PositionSide` —
+  cross-enum equality is always False, so every long backtest trade was
+  stored with the short formula (sign-flipped). `log_trade` now normalizes
+  any Enum side/source by value before classification (hardens all callers)
+  and the backtest call site converts via `to_side_string`.
 - `TradeProtocol` members are now read-only properties (#767), so concrete
   trade classes with narrower types (non-Optional datetimes, `PositionSide`
   enum side) conform structurally — the three `cast("TradeProtocol", ...)`

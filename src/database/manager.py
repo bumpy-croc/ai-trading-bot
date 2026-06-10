@@ -11,6 +11,7 @@ from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy as sa
@@ -799,9 +800,17 @@ class DatabaseManager:
 
         # Use WRITE timeout - trade logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
-            # Convert string enums if necessary
+            # Normalize sides/sources to the DATABASE enums. Engines pass their
+            # own PositionSide (engines/shared), and cross-enum equality is
+            # always False — that misclassified every long backtest trade onto
+            # the short pnl_percent formula (#758). Compare by value, not enum
+            # identity, so any side representation classifies correctly.
+            if isinstance(side, Enum) and not isinstance(side, PositionSide):
+                side = str(side.value)
             if isinstance(side, str):
                 side = PositionSide[side.upper()]
+            if isinstance(source, Enum) and not isinstance(source, TradeSource):
+                source = str(source.value)
             if isinstance(source, str):
                 source = TradeSource[source.upper()]
 
