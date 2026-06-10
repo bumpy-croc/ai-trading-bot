@@ -110,7 +110,6 @@ if TYPE_CHECKING:
     from src.engines.live.kline_buffer import KlineBuffer
     from src.engines.live.reconciliation import PeriodicReconciler
     from src.engines.live.user_data_processor import UserDataProcessor
-    from src.performance.tracker import TradeProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -4718,10 +4717,8 @@ class LiveTradingEngine:
 
             # Include margin interest in performance tracker fees so
             # reported PnL, win rate, and net metrics account for financing.
-            # BaseTrade satisfies TradeProtocol at runtime; mutable-attribute
-            # invariance rejects its narrower non-Optional datetime fields.
             self.performance_tracker.record_trade(
-                trade=cast("TradeProtocol", trade),
+                trade=trade,
                 fee=total_fee + interest_cost,
                 slippage=total_slippage,
             )
@@ -6112,10 +6109,8 @@ class LiveTradingEngine:
                         pnl_percent=pnl_pct_sized,
                         exit_reason="stop_loss_offline",
                     )
-                    # BaseTrade satisfies TradeProtocol at runtime; mutable-attribute
-                    # invariance rejects its narrower non-Optional datetime fields.
                     self.performance_tracker.record_trade(
-                        trade=cast("TradeProtocol", trade),
+                        trade=trade,
                         fee=exit_fee + offline_interest_cost,
                         slippage=exit_slippage_cost,
                     )

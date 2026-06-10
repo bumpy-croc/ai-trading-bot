@@ -11,6 +11,7 @@ import math
 import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
@@ -23,13 +24,26 @@ class TradeProtocol(Protocol):
     """Protocol for trade objects that can be recorded.
 
     This protocol defines the minimum interface required for trade tracking.
+    Members are read-only properties, so conformance is covariant: a concrete
+    trade class may expose narrower types (e.g. a non-Optional ``datetime``
+    entry_time, or a ``PositionSide`` enum side) and still structurally
+    conform. ``record_trade`` only reads these values.
     """
 
-    pnl: float | None
-    entry_time: datetime | None
-    exit_time: datetime | None
-    symbol: str | None
-    side: str | None
+    @property
+    def pnl(self) -> float | None: ...
+
+    @property
+    def entry_time(self) -> datetime | None: ...
+
+    @property
+    def exit_time(self) -> datetime | None: ...
+
+    @property
+    def symbol(self) -> str | None: ...
+
+    @property
+    def side(self) -> str | Enum | None: ...
 
 
 logger = logging.getLogger(__name__)
