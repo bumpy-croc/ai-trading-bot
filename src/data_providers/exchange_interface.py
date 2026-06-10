@@ -207,13 +207,20 @@ class ExchangeInterface(ABC):
         :class:`OrderLookupError` when the lookup could not be confirmed
         (network error, rate limit, API failure).
 
-        The default delegates to :meth:`get_order`, which for most providers
-        swallows errors into ``None`` — i.e. the default CANNOT distinguish
-        "confirmed absent" from "unknown". Providers used for live trading
-        MUST override this with an implementation that raises
-        ``OrderLookupError`` on unconfirmed lookups (see ``BinanceProvider``).
+        The default fails CLOSED by raising: most ``get_order``
+        implementations swallow errors into ``None``, so delegating to them
+        would silently report "confirmed absent" on a transient failure —
+        exactly the bug this accessor exists to prevent (#713). Every
+        provider used for live trading must override this with an
+        implementation that distinguishes the exchange's "order does not
+        exist" response from other failures (see ``BinanceProvider`` /
+        ``CoinbaseProvider``).
         """
-        return self.get_order(order_id, symbol)
+        raise OrderLookupError(
+            f"get_order_checked is not implemented for {type(self).__name__} — "
+            f"cannot confirm absence of order {order_id} on {symbol}; treating "
+            "the lookup as unconfirmed. Override this method for live trading."
+        )
 
     @abstractmethod
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:

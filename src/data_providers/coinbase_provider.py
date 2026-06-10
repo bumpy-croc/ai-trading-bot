@@ -21,6 +21,7 @@ from .exchange_interface import (
     AccountBalance,
     ExchangeInterface,
     Order,
+    OrderLookupError,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -381,6 +382,31 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         except Exception as e:
             logger.error(f"Failed to get order {order_id}: {e}")
             return None
+
+    def get_order_checked(self, order_id: str, symbol: str) -> Order | None:
+        """Fail-closed order lookup (see ExchangeInterface.get_order_checked).
+
+        Returns ``None`` only when Coinbase confirms the order does not exist
+        (HTTP 404); any other failure — network error, rate limit, 5xx,
+        unparseable response — raises :class:`OrderLookupError` so safety
+        logic never mistakes a transient failure for a missing order (#713).
+        """
+        try:
+            od = self._request("GET", f"/orders/{order_id}", auth=True)
+            parsed = self._parse_order_data(od)
+        except requests.exceptions.HTTPError as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 404:
+                return None  # confirmed: order does not exist on the exchange
+            raise OrderLookupError(f"Order {order_id} lookup failed for {symbol}: {e}") from e
+        except Exception as e:
+            raise OrderLookupError(f"Order {order_id} lookup failed for {symbol}: {e}") from e
+
+        if parsed is None:
+            raise OrderLookupError(
+                f"Order {order_id} response for {symbol} could not be parsed: {od!r}"
+            )
+        return parsed
 
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:
         try:

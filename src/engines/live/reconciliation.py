@@ -46,7 +46,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@runtime_checkable
 class _OrderLookup(Protocol):
     """Structural type for exchanges that can look up an order by id.
 
