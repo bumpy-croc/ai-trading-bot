@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, create_autospec, patch
 import pytest
 
 from src.data_providers.data_provider import DataProvider
-from src.engines.live.config import ConfigSource, LiveEngineSettings
+from src.engines.live.config import LiveEngineSettings
+from src.engines.live.config_source import ConfigSource
 from src.engines.shared.execution.fill_policy import resolve_fill_policy
 from src.strategies.ml_basic import create_ml_basic_strategy
 
@@ -72,7 +73,7 @@ class TestEngineInjection:
     def _make_engine(self, **kwargs):
         from src.engines.live.trading_engine import LiveTradingEngine
 
-        with patch("src.engines.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager", autospec=True):
             return LiveTradingEngine(
                 strategy=create_ml_basic_strategy(),
                 data_provider=create_autospec(DataProvider, instance=True),

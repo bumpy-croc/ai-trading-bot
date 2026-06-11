@@ -18,20 +18,14 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
 
 from src.config import get_config
 from src.config.constants import DEFAULT_EXECUTION_FILL_POLICY
 from src.config.feature_flags import is_enabled
+from src.engines.live.config_source import ConfigSource
 from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
 
 logger = logging.getLogger(__name__)
-
-
-class ConfigSource(Protocol):
-    """Key-value app-config reader (structural match for ``ConfigManager``)."""
-
-    def get(self, key: str, default: str | None = None) -> str | None: ...
 
 
 @dataclass(frozen=True)
