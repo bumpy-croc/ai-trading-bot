@@ -5,12 +5,14 @@ app-config resolution; the engine accepts it injected (runner path) or
 resolves it with its own module-level lookups (test patch points).
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 
-from src.engines.live.config import LiveEngineSettings
+from src.data_providers.data_provider import DataProvider
+from src.engines.live.config import ConfigSource, LiveEngineSettings
 from src.engines.shared.execution.fill_policy import resolve_fill_policy
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 pytestmark = pytest.mark.fast
 
@@ -53,7 +55,7 @@ class TestResolve:
         assert settings.execution_fill_policy == resolve_fill_policy(None)
 
     def test_fill_policy_read_from_config(self):
-        cfg = MagicMock()
+        cfg = MagicMock(spec=ConfigSource)
         cfg.get.return_value = "next_open"
 
         settings = LiveEngineSettings.resolve(
@@ -72,8 +74,8 @@ class TestEngineInjection:
 
         with patch("src.engines.live.trading_engine.DatabaseManager"):
             return LiveTradingEngine(
-                strategy=MagicMock(),
-                data_provider=MagicMock(),
+                strategy=create_ml_basic_strategy(),
+                data_provider=create_autospec(DataProvider, instance=True),
                 initial_balance=1000.0,
                 **kwargs,
             )
