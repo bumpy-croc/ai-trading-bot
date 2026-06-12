@@ -20,6 +20,7 @@ from src.config.constants import (
 )
 from src.data_providers.data_provider import DataProvider
 from src.data_providers.mock_data_provider import MockDataProvider
+from src.engines.live.config import LiveEngineSettings
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.infrastructure.logging.config import configure_logging
 from src.risk.risk_manager import RiskParameters
@@ -259,7 +260,9 @@ def main():
             max_drawdown=args.max_drawdown,
         )
 
-        # Create trading engine
+        # Create trading engine. Settings are resolved here (feature flags /
+        # env / app config) and injected so the engine constructor stays free
+        # of config resolution (#486).
         logger.info("Creating live trading engine...")
         engine = LiveTradingEngine(
             strategy=strategy,
@@ -275,6 +278,7 @@ def main():
             account_snapshot_interval=args.snapshot_interval,
             provider=args.provider,
             testnet=args.testnet,
+            settings=LiveEngineSettings.resolve(),
         )
 
         # Final safety check for live trading

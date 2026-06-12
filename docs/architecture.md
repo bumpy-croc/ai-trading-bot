@@ -1,6 +1,6 @@
 # System Architecture
 
-> **Last Updated**: 2026-02-18
+> **Last Updated**: 2026-06-10
 > **Maintainer Note**: This is a living document. Update after major architectural changes or new component additions. Use the `/update-docs` command to keep this in sync.
 
 ---
@@ -293,6 +293,7 @@ Real-time execution with safety controls.
 - `recovery.py` - Startup recovery: session balance, persisted-position reload, exchange reconciliation (`LiveSessionRecoverer`)
 - `trade_close_accounting.py` - Close-accounting helpers (closed quantity, entry-fee USD, position portion) shared by exit and recovery paths
 - `monitoring/` - Account snapshots, status lines, performance summaries (`LiveAccountMonitor`)
+- `config.py` - Construction-time settings resolution (`LiveEngineSettings`): the #734 partial-ops feature gate, regime-detection env flag, and execution fill policy. `runner.py` resolves and injects `settings=LiveEngineSettings.resolve()`; the engine self-resolves when not injected. Runtime-dynamic flags stay runtime reads.
 
 The engine delegates to these handlers through thin private wrappers; see the
 handler decomposition and lock-ownership table in `docs/live_trading.md` (#486).
