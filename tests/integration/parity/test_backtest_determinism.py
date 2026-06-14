@@ -156,6 +156,47 @@ def test_backtest_is_byte_identical_in_process():
     assert _fingerprint(first) == _fingerprint(second)
 
 
+def test_run_pins_blas_threads_to_one():
+    """Mechanism guard: ``Backtester.run`` must pin BLAS threads to 1 *during*
+    the run, even under a high ambient thread limit.
+
+    The byte-identical tests above check the *symptom* (reproducibility), which
+    an intermittent multi-thread flip can evade. This test checks the *fix*
+    directly and deterministically: it sets a high ambient BLAS limit, captures
+    ``threadpool_info`` from inside the run (via the data provider, which the
+    engine calls within its pinned block), and asserts every BLAS pool is pinned
+    to 1. Removing the ``threadpool_limits`` block from the engine fails this
+    test reliably (the ambient limit, not 1, would be observed).
+    """
+    from threadpoolctl import threadpool_info, threadpool_limits
+
+    df = _make_fixed_market_data()
+    captured: dict[str, Any] = {}
+    provider = MagicMock()
+
+    def _grab(*_a: Any, **_k: Any) -> pd.DataFrame:
+        captured["info"] = threadpool_info()
+        return df
+
+    provider.get_historical_data.side_effect = _grab
+
+    backtester = Backtester(
+        strategy=create_ml_basic_strategy(),
+        data_provider=provider,
+        initial_balance=10000,
+    )
+    # Ambient limit deliberately > 1 so a missing engine pin is observable
+    # regardless of the host's core count.
+    with threadpool_limits(limits=4):
+        backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
+
+    blas_pools = [p for p in captured.get("info", []) if p.get("user_api") == "blas"]
+    assert blas_pools, "expected at least one BLAS thread pool (numpy backend)"
+    assert all(p["num_threads"] == 1 for p in blas_pools), (
+        f"Backtester.run did not pin BLAS threads to 1: {blas_pools}"
+    )
+
+
 if __name__ == "__main__":
     # Subprocess entrypoint: print the canonical backtest fingerprint hash so the
     # cross-process determinism test can compare independent processes.
