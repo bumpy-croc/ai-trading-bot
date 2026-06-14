@@ -84,7 +84,12 @@ class TestHotSwapCannotReenablePartialOps:
         assert engine.live_exit_handler.partial_manager is None
 
     def test_swap_rebuilds_policy_when_flag_enabled(self):
-        with patch("src.engines.live.trading_engine.is_enabled", return_value=True):
+        # Construction reads the flag via engine settings (trading_engine.is_enabled);
+        # the swap-rebuild reads it in the hot-swap module. Patch both.
+        with (
+            patch("src.engines.live.trading_engine.is_enabled", return_value=True),
+            patch("src.engines.live.strategy_hot_swap.is_enabled", return_value=True),
+        ):
             engine = make_engine(enable_partial_operations=True)
             engine._refresh_partial_manager_after_swap(
                 {
