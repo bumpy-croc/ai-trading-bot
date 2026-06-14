@@ -11,11 +11,12 @@ orchestrates while this coordinator owns strategy↔runtime translation.
 Thread-safety / lock ownership: the coordinator holds no locks and owns no
 mutable state of its own. It reads and writes the engine's strategy-runtime
 attributes (``strategy``, ``_component_strategy``, ``_runtime``,
-``_runtime_dataset``, ``_runtime_warmup``, the component risk-context cache,
-and ``_component_dynamic_risk_config``) at call time through a narrow
-``Protocol``. All of these are touched only on the single trading-loop thread
-(per-candle processing and the loop-applied hot-swap), exactly as the original
-inline code did.
+``_runtime_dataset``, ``_runtime_warmup``, and the component risk-context
+cache) at call time through a narrow ``Protocol``. All of these are touched
+only on the single trading-loop thread (per-candle processing and the
+loop-applied hot-swap), exactly as the original inline code did.
+``_component_dynamic_risk_config`` is also *written* here on that thread but is
+*read* elsewhere for engine-level state reporting.
 """
 
 from __future__ import annotations
@@ -66,7 +67,8 @@ class StrategyRuntimeEngineState(Protocol):
     correlation_engine: CorrelationEngine | None
     live_position_tracker: LivePositionTracker
     db_manager: DatabaseManager
-    # live_entry_handler is created mid-__init__; access is hasattr-guarded.
+    # Created mid-__init__ (after configure_strategy's first call), so it may be
+    # ABSENT during early construction; configure_strategy access is hasattr-guarded.
     live_entry_handler: LiveEntryHandler
 
     def _build_correlation_context(
