@@ -106,7 +106,7 @@ class StrategyHotSwapCoordinator:
         self._state = engine_state
 
     def handle_strategy_change(self, swap_data: dict[str, Any]) -> None:
-        """Handle strategy change callback"""
+        """Handles the strategy-change callback, closing positions if requested."""
         state = self._state
         logger.info("🔄 Strategy change requested: %s", swap_data)
 
@@ -147,7 +147,7 @@ class StrategyHotSwapCoordinator:
             logger.info("📊 Keeping existing positions during strategy swap")
 
     def handle_model_update(self, update_data: dict[str, Any]) -> None:
-        """Handle model update callback"""
+        """Handles the model-update callback (application deferred to the loop)."""
         logger.info("🤖 Model update requested: %s", update_data)
         # Model update logic is handled in strategy_manager.apply_pending_update()
 
@@ -390,6 +390,10 @@ class StrategyHotSwapCoordinator:
         """
         state = self._state
         new_policy: PartialExitPolicy | None = None
+        # Re-read the live flag here (not the construction-time
+        # ``state.settings.partial_operations_allowed``) on purpose:
+        # ``live_partial_operations`` is a deliberately runtime-dynamic flag
+        # (see config.py / #800) so a hot-swap re-checks the *current* value.
         if not is_enabled("live_partial_operations", False):
             # Same guard as __init__ (#734): partial ops are bookkeeping-only in
             # the live engine, so a hot-swapped strategy's partial_operations
