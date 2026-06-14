@@ -29,12 +29,13 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import create_autospec
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from src.data_providers.data_provider import DataProvider
 from src.engines.backtest.engine import Backtester
 from src.strategies.ml_basic import create_ml_basic_strategy
 
@@ -74,7 +75,7 @@ def run_deterministic_backtest() -> dict[str, Any]:
     parity is verified by comparing this result before and after the change.
     """
     df = _make_fixed_market_data()
-    provider = MagicMock()
+    provider = create_autospec(DataProvider, instance=True)
     provider.get_historical_data.return_value = df
 
     backtester = Backtester(
@@ -172,7 +173,7 @@ def test_run_pins_blas_threads_to_one():
 
     df = _make_fixed_market_data()
     captured: dict[str, Any] = {}
-    provider = MagicMock()
+    provider = create_autospec(DataProvider, instance=True)
 
     def _grab(*_a: Any, **_k: Any) -> pd.DataFrame:
         captured["info"] = threadpool_info()
