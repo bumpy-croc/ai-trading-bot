@@ -1456,7 +1456,7 @@ class LiveTradingEngine:
         return self.ws_health_monitor.should_hard_reconnect_user()
 
     def _restore_user_ws_primary(self) -> None:
-        """Return the user stream to WS-primary: disable REST polling once a real"""
+        """Return the user stream to WS-primary once a real event confirms delivery."""
         return self.ws_health_monitor.restore_user_ws_primary()
 
     def _handle_kline_disconnect(self) -> None:
