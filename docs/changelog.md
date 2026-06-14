@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Strategy-runtime coordination extracted from `LiveTradingEngine` into
+  `src/engines/live/strategy_runtime.py` (`StrategyRuntimeCoordinator`, #486):
+  strategy normalization (`_configure_strategy`), the component risk-context
+  provider (correlation hydration), runtime dataframe prep, `RuntimeContext`
+  construction from live positions, per-candle runtime decision processing, and
+  the construction-time risk-parameter merge/clone helpers. The engine keeps
+  thin delegating wrappers so all call sites and test mock points are unchanged;
+  the coordinator reads/writes the engine's strategy-runtime state at call time
+  via a narrow `Protocol`, all on the single trading-loop thread. Pure refactor
+  (no behavior change): full unit suite, parity suite, and the deterministic
+  backtest fingerprint are byte-identical before/after. Engine: 5,383 → 5,105
+  lines.
 - `LiveTradingEngine` construction-time settings resolution (feature flags /
   env / app config) moved to `src/engines/live/config.py`
   (`LiveEngineSettings`, #486 step d): the #734 `live_partial_operations`
