@@ -28,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guards the guarantee. (#486 parity work)
 
 ### Changed
+- WebSocket stream-health subsystem extracted from `LiveTradingEngine` into
+  `src/engines/live/ws_health.py` (`WebSocketHealthMonitor`, #486): WS stream
+  startup, the background health-monitor thread and its loop, kline/user-stream
+  staleness detection, reconnect/probe decisions, degraded-user hard-reconnect +
+  primary restore, and draining the order-fill exit queue on the trading-loop
+  thread. The lock-free single-writer threading model is preserved byte-for-byte
+  — the daemon-thread handle, the reconnect-failure counters, the
+  `_ws_kline_active` flag, and the thread-safe `_pending_fill_exits` queue all
+  stay on the engine and are accessed by the monitor via a narrow `Protocol`
+  backref, so the single writer (the health thread) and the single reader (the
+  trading loop) are unchanged. The engine keeps thin delegating wrappers so the
+  loop call sites and all test mock points are unchanged; the three test-mocked
+  sibling calls route back through the engine wrappers. The deterministic
+  backtest↔live parity fingerprint is byte-identical before and after the
+  extraction.
 - Strategy hot-swap / model-update lifecycle extracted from `LiveTradingEngine`
   into `src/engines/live/strategy_hot_swap.py` (`StrategyHotSwapCoordinator`,
   #486): the public `hot_swap_strategy` / `update_model` entry points, the
