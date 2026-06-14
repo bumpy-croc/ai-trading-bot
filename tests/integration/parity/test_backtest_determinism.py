@@ -4,28 +4,30 @@ A refactor's parity is verified by running the SAME backtest before and after
 and asserting byte-identical results (the "parity fingerprint"). That oracle is
 only trustworthy if the backtest is reproducible.
 
-Root cause investigated (#486 parity work): the ml_basic backtest is
-deterministic *within* a process but was observed to vary *across* processes
-under load — 49 vs 50 vs 51 trades. Systematically ruled out: ONNX inference
-(byte-identical within and across processes, multi- and single-threaded),
-``PYTHONHASHSEED`` (10 fixed seeds identical), and the prediction cache (varies
-with caching disabled). The cause is multi-threaded BLAS/OpenMP floating-point
-non-associativity: parallel reduction order varies run-to-run, perturbing a
-feature value enough to flip a near-threshold ML signal and thus a trade. ONNX
-itself is deterministic, so only the BLAS/OpenMP pools need pinning — pinning
-them to a single thread makes the backtest reproducible (and is also the
-recommended setup for parameter sweeps, since it avoids thread oversubscription
-across concurrent backtest processes).
+Root cause investigated (#486 parity work): the ml_basic backtest was
+deterministic *within* a process but varied *across* processes under load —
+49 vs 50 vs 51 trades on identical inputs. Systematically ruled out: ONNX
+inference (byte-identical within and across processes, multi- and
+single-threaded), ``PYTHONHASHSEED`` (10 fixed seeds identical), and the
+prediction cache (varied with caching disabled). The cause is multi-threaded
+BLAS/OpenMP floating-point non-associativity: parallel reduction order varies
+run-to-run, perturbing a feature value enough to flip a near-threshold ML
+signal and thus a trade. ``Backtester.run`` now pins the BLAS/OpenMP pools to 1
+for the run, so the result is reproducible regardless of the ambient thread
+count; ONNX keeps its own (deterministic) pool, so inference stays fast.
 
-``run_deterministic_backtest`` is the canonical parity-fingerprint runner: it
-wraps the backtest in ``threadpool_limits(1)`` so parity audits and this guard
-share one reproducible path.
+``run_deterministic_backtest`` is the canonical parity-fingerprint runner.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -96,19 +98,66 @@ def _fingerprint(results: dict[str, Any]) -> str:
     return json.dumps(results, sort_keys=True, default=default)
 
 
-@pytest.mark.slow
-def test_backtest_is_byte_identical_across_runs():
-    """Two pinned backtests on identical inputs must produce identical results.
+def _fingerprint_hash(results: dict[str, Any]) -> str:
+    return hashlib.sha256(_fingerprint(results).encode()).hexdigest()
 
-    This is the parity oracle's reproducibility guarantee. A regression that
-    introduces nondeterminism (an unseeded RNG, hash-order-dependent iteration,
-    or reliance on unpinned thread pools on the result path) breaks this.
+
+def _run_in_subprocess() -> str:
+    """Run the canonical backtest in a fresh process and return its fingerprint hash.
+
+    A HIGH ambient BLAS/OpenMP thread count is forced so the run would be prone
+    to multi-threaded reduction-order variance if the engine did not pin threads
+    — i.e. this exercises the actual cross-process failure mode and proves the
+    engine's runtime pin overrides the ambient thread environment.
     """
+    project_root = Path(__file__).resolve().parents[3]
+    env = {
+        **os.environ,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "8",
+        "PYTHONPATH": f"{project_root}:{project_root / 'src'}",
+    }
+    proc = subprocess.run(
+        [sys.executable, __file__, "--emit-fingerprint"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=180,
+        check=True,
+    )
+    # The fingerprint hash is the last non-empty stdout line.
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    return lines[-1]
+
+
+def test_backtest_is_byte_identical_across_processes():
+    """Two separate processes (under a high ambient thread count) must produce
+    an identical backtest result.
+
+    This is the parity oracle's reproducibility guarantee, exercised against the
+    real failure mode: cross-process variance from multi-threaded BLAS. With the
+    engine's thread pin it is deterministic; a regression that removed the pin —
+    or introduced unseeded RNG / hash-order-dependent iteration on the result
+    path — would break it.
+    """
+    first = _run_in_subprocess()
+    second = _run_in_subprocess()
+    assert first == second
+
+
+def test_backtest_is_byte_identical_in_process():
+    """Fast in-process guard against result-path nondeterminism (unseeded RNG,
+    hash-order-dependent iteration)."""
     first = run_deterministic_backtest()
     second = run_deterministic_backtest()
-
-    # Core trading outcomes must match exactly.
     assert first["total_trades"] == second["total_trades"]
     assert first["final_balance"] == second["final_balance"]
-    # And the full results fingerprint must be byte-identical.
     assert _fingerprint(first) == _fingerprint(second)
+
+
+if __name__ == "__main__":
+    # Subprocess entrypoint: print the canonical backtest fingerprint hash so the
+    # cross-process determinism test can compare independent processes.
+    if "--emit-fingerprint" in sys.argv:
+        print(_fingerprint_hash(run_deterministic_backtest()))
