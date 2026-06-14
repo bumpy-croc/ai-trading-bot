@@ -1,11 +1,30 @@
 # Project Status
 
-> **Last Updated**: 2026-06-10
+> **Last Updated**: 2026-06-14
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## In Flight
+
+- **Live trading engine refactor (#486)** — decomposing `LiveTradingEngine`
+  from a ~6,560-line god-class into a thin orchestrator that delegates to
+  focused modules. Merged: stop-loss lifecycle, monitoring glue, shared
+  entry-handler mixin (#796); startup recovery (#798); construction-time
+  settings (#800); strategy-runtime coordination (#809). Engine now ~4,790
+  lines. In flight: hot-swap lifecycle → `StrategyHotSwapCoordinator` (PR
+  #810, review-clean + CI-green, held pending the parity fix below). Remaining:
+  WebSocket-health extraction, locked entry/exit orchestration, toward a
+  <1,500-line orchestrator. Every step is a pure refactor proven against a
+  deterministic backtest parity fingerprint.
+- **Backtest determinism / parity fingerprint (#486 parity, PR #811)** — the
+  parity oracle the refactor series depends on. Found the ml_basic backtest
+  varied across processes under load (49/50/51 trades on identical inputs).
+  Root cause: multi-threaded BLAS/OpenMP float non-associativity (ONNX,
+  `PYTHONHASHSEED`, prediction cache all ruled out; NOT the refactors). Fix:
+  `Backtester.run` pins BLAS/OpenMP to 1 thread (`threadpoolctl`); ONNX stays
+  multi-threaded. Verified byte-identical across 5 processes + a mechanism
+  regression test. Perf neutral-to-faster. Lands before resuming refactors.
 
 - **Live-capital bug-audit remediation (2026-06-10)** — a multi-agent code
   audit produced 17 tracked findings (#734–#750) across order execution,

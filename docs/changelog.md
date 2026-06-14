@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Backtests are now bit-reproducible — `Backtester.run` pins BLAS/OpenMP thread
+  pools to 1 (`threadpoolctl`) for the duration of the run. Multi-threaded
+  parallel float reduction is non-associative, so its run-to-run ordering could
+  perturb a feature value enough to flip a near-threshold ML signal, changing
+  the trade count (49 vs 50 vs 51 observed on the same inputs) and breaking the
+  backtest↔live parity fingerprint that refactor work relies on. Investigation
+  ruled out ONNX inference (byte-identical within and across processes,
+  multi- and single-threaded), `PYTHONHASHSEED` (10 fixed seeds identical), and
+  the prediction cache (varied with caching disabled); the cause was BLAS thread
+  scheduling. ONNX keeps its own (deterministic) thread pool, so inference stays
+  multi-threaded — measured backtest wall-time is neutral-to-faster, since
+  pinning also avoids thread oversubscription across concurrent backtest
+  processes. A new `tests/integration/parity/test_backtest_determinism.py`
+  guards the guarantee. (#486 parity work)
+
 ### Changed
 - Strategy-runtime coordination extracted from `LiveTradingEngine` into
   `src/engines/live/strategy_runtime.py` (`StrategyRuntimeCoordinator`, #486):

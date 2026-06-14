@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pandas as pd
 from pandas import DataFrame
 from sqlalchemy.exc import SQLAlchemyError
+from threadpoolctl import threadpool_limits
 
 from src.config.config_manager import get_config
 from src.config.constants import (
@@ -879,44 +880,53 @@ class Backtester:
             Dictionary with backtest results including metrics and trades.
         """
         try:
-            # Reset all mutable state from any previous run so that reusing
-            # a Backtester instance produces correct, isolated results.
-            self._reset_run_state()
+            # Pin BLAS/OpenMP thread pools to 1 for the duration of the run so
+            # the backtest is bit-reproducible: multi-threaded parallel float
+            # reduction is non-associative, so its run-to-run ordering can perturb
+            # a feature value and flip a near-threshold ML signal — changing the
+            # trade count and breaking the backtest↔live parity fingerprint
+            # (#486). ONNX Runtime keeps its own (deterministic) thread pool, so
+            # inference stays multi-threaded and fast; measured wall-time is
+            # neutral-to-faster since this also avoids thread oversubscription.
+            with threadpool_limits(limits=1):
+                # Reset all mutable state from any previous run so that reusing
+                # a Backtester instance produces correct, isolated results.
+                self._reset_run_state()
 
-            # Set logging context
-            set_context(
-                component="backtester",
-                strategy=getattr(self.strategy, "__class__", type("_", (), {})).__name__,
-                symbol=symbol,
-                timeframe=timeframe,
-            )
-            log_engine_event(
-                "backtest_start",
-                initial_balance=self.initial_balance,
-                start=start.isoformat(),
-                end=end.isoformat() if end else None,
-            )
+                # Set logging context
+                set_context(
+                    component="backtester",
+                    strategy=getattr(self.strategy, "__class__", type("_", (), {})).__name__,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                )
+                log_engine_event(
+                    "backtest_start",
+                    initial_balance=self.initial_balance,
+                    start=start.isoformat(),
+                    end=end.isoformat() if end else None,
+                )
 
-            # Create trading session
-            self._create_trading_session(symbol, timeframe, start)
+                # Create trading session
+                self._create_trading_session(symbol, timeframe, start)
 
-            # Fetch and prepare data
-            df = self._fetch_and_prepare_data(symbol, timeframe, start, end)
-            if df.empty:
-                return self._build_empty_results()
+                # Fetch and prepare data
+                df = self._fetch_and_prepare_data(symbol, timeframe, start, end)
+                if df.empty:
+                    return self._build_empty_results()
 
-            # Calculate hold return for comparison
-            hold_return = self._calculate_hold_return(df)
+                # Calculate hold return for comparison
+                hold_return = self._calculate_hold_return(df)
 
-            logger.info("Starting backtest with %d candles", len(df))
+                logger.info("Starting backtest with %d candles", len(df))
 
-            # Run main backtest loop
-            balance_history, yearly_balance = self._run_main_loop(df, symbol, timeframe)
+                # Run main backtest loop
+                balance_history, yearly_balance = self._run_main_loop(df, symbol, timeframe)
 
-            # Compute final metrics
-            return self._build_final_results(
-                df, start, end, balance_history, yearly_balance, hold_return
-            )
+                # Compute final metrics
+                return self._build_final_results(
+                    df, start, end, balance_history, yearly_balance, hold_return
+                )
 
         except Exception as e:
             logger.error("Error running backtest: %s", e)
