@@ -291,6 +291,7 @@ Real-time execution with safety controls.
 - `execution/exit_handler.py` - Exit signal processing
 - `execution/stop_loss_manager.py` - All exchange-facing stop-loss lifecycle calls (place/cancel/query/re-protect)
 - `recovery.py` - Startup recovery: session balance, persisted-position reload, exchange reconciliation (`LiveSessionRecoverer`)
+- `strategy_runtime.py` - Strategy normalization + per-candle runtime decision pipeline (`StrategyRuntimeCoordinator`): config, component risk-context provider, `RuntimeContext` construction, decision processing, risk-param merge/clone
 - `trade_close_accounting.py` - Close-accounting helpers (closed quantity, entry-fee USD, position portion) shared by exit and recovery paths
 - `monitoring/` - Account snapshots, status lines, performance summaries (`LiveAccountMonitor`)
 - `config.py` - Construction-time settings resolution (`LiveEngineSettings`): the #734 partial-ops feature gate, regime-detection env flag, and execution fill policy. `runner.py` resolves and injects `settings=LiveEngineSettings.resolve()`; the engine self-resolves when not injected. Runtime-dynamic flags stay runtime reads.

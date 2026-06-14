@@ -10,7 +10,6 @@ import sys
 import threading
 import time
 import traceback
-from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -73,6 +72,7 @@ from src.engines.live.monitoring import (
 )
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.strategy_manager import StrategyManager
+from src.engines.live.strategy_runtime import StrategyRuntimeCoordinator
 
 # Re-exported close-accounting helpers: the exit path uses them directly and
 # tests import them from this module.
@@ -89,7 +89,6 @@ from src.engines.shared.models import (
     PositionSide,
 )
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
-from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
@@ -261,6 +260,17 @@ class LiveTradingEngine:
 
         self._runtime_dataset = None
         self._runtime_warmup = 0
+        # Strategy-runtime state, owned by StrategyRuntimeCoordinator and assigned
+        # via configure_strategy below. Declared here so the type-checker tracks
+        # the attributes now that the coordinator — not an engine method — writes
+        # them.
+        self.strategy: ComponentStrategy | StrategyRuntime
+        self._component_strategy: ComponentStrategy | None
+        self._runtime: StrategyRuntime | None
+        # Strategy-runtime coordinator owns strategy normalization and the
+        # per-candle runtime decision pipeline; built before _configure_strategy
+        # (its first caller) reads/writes engine strategy state at call time (#486).
+        self.strategy_coordinator = StrategyRuntimeCoordinator(engine_state=self)
         self._configure_strategy(strategy)
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
@@ -941,197 +951,32 @@ class LiveTradingEngine:
         self, component_risk_manager: object
     ) -> RiskParameters | None:
         """Clone risk parameters from a component adapter, if available."""
-
-        if component_risk_manager is None:
-            return None
-
-        core_manager = getattr(component_risk_manager, "_core_manager", None)
-        if core_manager is None:
-            return None
-
-        params = getattr(core_manager, "params", None)
-        if not isinstance(params, RiskParameters):
-            return None
-
-        return self._clone_risk_parameters(params)
+        return self.strategy_coordinator.extract_component_risk_parameters(component_risk_manager)
 
     def _merge_risk_parameters(
         self,
         engine_params: RiskParameters | None,
         component_params: RiskParameters | None,
     ) -> RiskParameters | None:
-        """Merges engine-provided and component-provided risk parameters.
-
-        Component parameters take precedence over engine parameters when both
-        are provided. Non-None component values override engine values.
-
-        Args:
-            engine_params: Risk parameters from the trading engine
-            component_params: Risk parameters from the strategy component
-
-        Returns:
-            Merged risk parameters, or None if both inputs are None
-        """
-
-        if engine_params is None and component_params is None:
-            return None
-
-        if component_params is None:
-            return self._clone_risk_parameters(engine_params)
-
-        if engine_params is None:
-            return component_params
-
-        component_dict = asdict(component_params)
-        engine_dict = asdict(engine_params)
-        default_dict = asdict(RiskParameters())
-
-        merged = dict(component_dict)
-        for key, value in engine_dict.items():
-            default_value = default_dict.get(key)
-
-            # Preserve component overrides when the engine sticks with defaults.
-            if value == default_value:
-                continue
-
-            merged[key] = value
-
-        return RiskParameters(**merged)
+        """Merge engine-provided and component-provided risk parameters."""
+        return self.strategy_coordinator.merge_risk_parameters(engine_params, component_params)
 
     @staticmethod
     def _clone_risk_parameters(params: RiskParameters | None) -> RiskParameters | None:
-        """Creates a deep-cloned copy of risk parameters for safe reuse.
-
-        Args:
-            params: Risk parameters to clone
-
-        Returns:
-            Deep copy of the risk parameters, or None if input is None
-        """
-
-        if params is None:
-            return None
-
-        return RiskParameters(**asdict(params))
+        """Create a deep-cloned copy of risk parameters for safe reuse."""
+        return StrategyRuntimeCoordinator.clone_risk_parameters(params)
 
     def _configure_strategy(self, strategy: ComponentStrategy | StrategyRuntime) -> None:
-        """Normalizes strategy inputs and configures runtime bookkeeping.
-
-        Handles both raw ComponentStrategy instances and wrapped StrategyRuntime
-        instances, extracting the underlying strategy and setting up engine state.
-
-        Args:
-            strategy: Strategy instance to configure (raw or wrapped)
-        """
-
-        runtime = strategy if isinstance(strategy, StrategyRuntime) else None
-        base_strategy = runtime.strategy if runtime is not None else strategy
-
-        previous_component = getattr(self, "_component_strategy", None)
-
-        self.strategy = base_strategy
-        self._component_strategy = (
-            base_strategy if isinstance(base_strategy, ComponentStrategy) else None
-        )
-
-        if (
-            previous_component is not None
-            and previous_component is not self._component_strategy
-            and hasattr(previous_component, "set_additional_risk_context_provider")
-        ):
-            try:
-                previous_component.set_additional_risk_context_provider(None)
-            except Exception as exc:  # pragma: no cover - defensive cleanup
-                logger.debug("Failed to clear risk context provider on previous strategy: %s", exc)
-
-        if runtime is not None:
-            self._runtime: StrategyRuntime | None = runtime
-        elif self._component_strategy is not None:
-            self._runtime = StrategyRuntime(self._component_strategy)
-        else:
-            self._runtime = None
-
-        self._register_component_context_provider()
-
-        if hasattr(self, "live_entry_handler"):
-            self.live_entry_handler.set_component_strategy(self._component_strategy)
+        """Normalize strategy inputs and configure runtime bookkeeping."""
+        self.strategy_coordinator.configure_strategy(strategy)
 
     def _register_component_context_provider(self) -> None:
-        """Attaches the engine-provided risk context hook to component strategies.
-
-        Registers a callback function that allows component strategies to request
-        additional risk context (correlation data, etc.) during decision-making.
-        """
-
-        strategy = getattr(self, "_component_strategy", None)
-        if strategy is None:
-            return
-
-        setter = getattr(strategy, "set_additional_risk_context_provider", None)
-        if not callable(setter):
-            return
-
-        def provider(df: pd.DataFrame, index: int, signal) -> dict[str, Any] | None:
-            return self._component_risk_context(df, index, signal)
-
-        try:
-            setter(provider)
-        except (TypeError, AttributeError) as exc:  # pragma: no cover - defensive logging
-            logger.debug("Failed to attach risk context provider to component strategy: %s", exc)
+        """Attach the engine-provided risk context hook to component strategies."""
+        self.strategy_coordinator.register_component_context_provider()
 
     def _component_risk_context(self, df: pd.DataFrame, index: int, signal) -> dict[str, Any]:
         """Build supplemental risk context (e.g., correlation data) for components."""
-
-        strategy = getattr(self, "_component_strategy", None)
-        if strategy is None:
-            return {}
-
-        if getattr(self, "correlation_engine", None) is None:
-            return {}
-
-        symbol = self._active_symbol or getattr(strategy, "trading_pair", None)
-        if not symbol:
-            self._component_risk_context_cache_key = None
-            self._component_risk_context_cache = None
-            return {}
-
-        cache_key = (str(symbol), int(index))
-        cached_key = getattr(self, "_component_risk_context_cache_key", None)
-        if cached_key != cache_key:
-            self._component_risk_context_cache_key = None
-            self._component_risk_context_cache = None
-
-        overrides = None
-        if hasattr(strategy, "get_risk_overrides"):
-            try:
-                overrides = strategy.get_risk_overrides()
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.debug(
-                    "Failed to fetch component risk overrides for correlation context: %s",
-                    exc,
-                )
-
-        # Only build correlation context when sizing a potential entry to avoid repeated
-        # historical price lookups on every candle. Reuse the cached value if the same bar
-        # has already triggered sizing.
-        try:
-            direction = getattr(signal, "direction", None)
-        except Exception:
-            direction = None
-
-        if direction == SignalDirection.HOLD:
-            return {}
-
-        correlation_ctx = self._get_correlation_context(
-            str(symbol),
-            df,
-            overrides,
-            index=index,
-        )
-        if not correlation_ctx:
-            return {}
-
-        return {"correlation_ctx": correlation_ctx}
+        return self.strategy_coordinator.component_risk_context(df, index, signal)
 
     def _get_correlation_context(
         self,
@@ -1142,115 +987,31 @@ class LiveTradingEngine:
         index: int | None = None,
     ) -> dict | None:
         """Return cached correlation context for the given bar or build it on demand."""
-
-        cache_key = (symbol, index) if index is not None else None
-        cached_key = getattr(self, "_component_risk_context_cache_key", None)
-        cached_ctx = getattr(self, "_component_risk_context_cache", None)
-        if cache_key is not None and cache_key == cached_key and cached_ctx is not None:
-            return cached_ctx
-
-        context = self._build_correlation_context(symbol, df, overrides)
-        if cache_key is not None:
-            if context:
-                self._component_risk_context_cache_key = cache_key
-                self._component_risk_context_cache = context
-            else:
-                if cache_key == getattr(self, "_component_risk_context_cache_key", None):
-                    self._component_risk_context_cache_key = None
-                    self._component_risk_context_cache = None
-        return context
+        return self.strategy_coordinator.get_correlation_context(symbol, df, overrides, index=index)
 
     def _apply_policies_from_decision(self, decision) -> None:
-        """Hydrate engine-level policies from component strategy output.
-
-        Uses shared policy hydration logic for consistency with backtest engine.
-        """
-        # Use shared policy hydration logic
-        apply_policies_to_engine(decision, self, self.db_manager)
-
-        # Cache dynamic risk config for live engine state tracking
-        if decision is not None:
-            bundle = getattr(decision, "policies", None)
-            if bundle:
-                try:
-                    dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
-                    if dynamic_descriptor is not None:
-                        self._component_dynamic_risk_config = dynamic_descriptor.to_config()
-                except Exception as exc:
-                    # Benign: shared hydration above already applied the policy;
-                    # only the live-engine state cache misses this descriptor.
-                    # Debug level: runs per decision in the trading loop.
-                    logger.debug("Dynamic risk config cache update skipped: %s", exc)
+        """Hydrate engine-level policies from component strategy output."""
+        self.strategy_coordinator.apply_policies_from_decision(decision)
 
     # Runtime integration helpers -------------------------------------------------
 
     def _is_runtime_strategy(self) -> bool:
-        return self._runtime is not None
+        return self.strategy_coordinator.is_runtime_strategy()
 
     def _strategy_name(self) -> str:
-        """Returns the configured strategy name for logging and reporting.
-
-        Returns:
-            Strategy name, or "UnknownStrategy" if no strategy is configured
-        """
-        strategy = getattr(self, "strategy", None)
-        if strategy is None:
-            return "UnknownStrategy"
-        return getattr(strategy, "name", strategy.__class__.__name__)
+        """Returns the configured strategy name for logging and reporting."""
+        return self.strategy_coordinator.strategy_name()
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Prepares dataframe for strategy processing.
-
-        Component-based strategies compute indicators on-demand in process_candle(),
-        so the dataframe is returned as-is. Legacy strategies would need upfront
-        indicator calculation (not currently used).
-
-        Args:
-            df: Raw market data dataframe
-
-        Returns:
-            Prepared dataframe ready for strategy processing
-        """
-        if not self._is_runtime_strategy():
-            # Component-based strategies don't need upfront indicator calculation
-            # They compute indicators on-demand in process_candle()
-            return df
-
-        # _is_runtime_strategy() guard above ensures _runtime is not None.
-        dataset = cast(StrategyRuntime, self._runtime).prepare_data(df)
-        self._runtime_dataset = dataset
-        self._runtime_warmup = max(0, int(dataset.warmup_period or 0))
-        return dataset.data
+        """Prepare dataframe for strategy processing."""
+        return self.strategy_coordinator.prepare_strategy_dataframe(df)
 
     def _build_component_positions(
         self,
         current_price: float,
     ) -> list[ComponentPosition]:
-        """Translate live positions into the strategy-side ComponentPosition list.
-
-        Used by both the StrategyRuntime context and the direct
-        ComponentStrategy.process_candle call so a strategy that consults
-        ``current_positions`` (e.g. for anti-pyramiding or correlation-aware
-        sizing) gets the same view in both code paths — and matching the
-        backtest path where positions always flow through.
-        """
-        positions: list[ComponentPosition] = []
-        for position in self.live_position_tracker.positions.values():
-            try:
-                quantity = self._compute_component_quantity(position)
-                component_position = ComponentPosition(
-                    symbol=position.symbol,
-                    # __post_init__ guarantees side is a PositionSide enum.
-                    side=cast(PositionSide, position.side).value,
-                    size=quantity,
-                    entry_price=float(position.entry_price),
-                    current_price=float(current_price),
-                    entry_time=position.entry_time,
-                )
-                positions.append(component_position)
-            except Exception as exc:
-                logger.debug("Failed to translate live position for runtime: %s", exc)
-        return positions
+        """Translate live positions into the strategy-side ComponentPosition list."""
+        return self.strategy_coordinator.build_component_positions(current_price)
 
     def _build_runtime_context(
         self,
@@ -1258,34 +1019,14 @@ class LiveTradingEngine:
         current_price: float,
         current_time: datetime,
     ) -> RuntimeContext:
-        """Build the StrategyRuntime context with current balance and live positions.
-
-        Delegates the position-translation step to ``_build_component_positions``
-        so the runtime path and the direct ``ComponentStrategy.process_candle``
-        path present an identical position view to the strategy — matching the
-        backtest engine's runtime context construction.
-        """
-        positions = self._build_component_positions(current_price)
-        return RuntimeContext(balance=float(balance), current_positions=positions or None)
+        """Build the StrategyRuntime context with current balance and live positions."""
+        return self.strategy_coordinator.build_runtime_context(balance, current_price, current_time)
 
     def _compute_component_quantity(
         self, position: Position, balance_basis: float | None = None
     ) -> float:
         """Translate a position's fractional size into asset quantity for component strategies."""
-        entry_price = float(position.entry_price)
-        if entry_price <= 0:
-            return 0.0
-
-        basis = (
-            balance_basis if balance_basis is not None else getattr(position, "entry_balance", None)
-        )
-        if basis is None or basis <= 0:
-            basis = self.current_balance
-
-        size_fraction = float(
-            position.current_size if position.current_size is not None else position.size
-        )
-        return (size_fraction * float(basis)) / entry_price
+        return self.strategy_coordinator.compute_component_quantity(position, balance_basis)
 
     def _runtime_process_decision(
         self,
@@ -1295,31 +1036,12 @@ class LiveTradingEngine:
         current_price: float,
         current_time: datetime,
     ):
-        if not self._is_runtime_strategy():
-            return None
-        if self._runtime_dataset is None:
-            return None
-        if index < self._runtime_warmup:
-            return None
-
-        context = self._build_runtime_context(balance, current_price, current_time)
-        try:
-            # _is_runtime_strategy() guard above ensures _runtime is not None.
-            decision = cast(StrategyRuntime, self._runtime).process(index, context)
-            self._apply_policies_from_decision(decision)
-            return decision
-        except (ValueError, KeyError, IndexError, AttributeError) as exc:
-            logger.warning("Runtime decision failed in live engine at index %s: %s", index, exc)
-            return None
+        return self.strategy_coordinator.runtime_process_decision(
+            df, index, balance, current_price, current_time
+        )
 
     def _finalize_runtime(self) -> None:
-        if self._is_runtime_strategy():
-            try:
-                # _is_runtime_strategy() guard ensures _runtime is not None.
-                cast(StrategyRuntime, self._runtime).finalize()
-            finally:
-                self._runtime_dataset = None
-                self._runtime_warmup = 0
+        self.strategy_coordinator.finalize_runtime()
 
     def start(
         self,
