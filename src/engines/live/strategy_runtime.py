@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from src.engines.live.execution.entry_handler import LiveEntryHandler
     from src.engines.live.execution.position_tracker import LivePositionTracker
     from src.position_management.correlation_engine import CorrelationEngine
+    from src.strategies.components.strategy import TradingDecision
 
 logger = logging.getLogger(__name__)
 
@@ -451,7 +452,7 @@ class StrategyRuntimeCoordinator:
         balance: float,
         current_price: float,
         current_time: datetime,
-    ):
+    ) -> TradingDecision | None:
         state = self._state
         if not self.is_runtime_strategy():
             return None

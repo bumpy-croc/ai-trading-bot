@@ -121,6 +121,7 @@ if TYPE_CHECKING:
     from src.engines.live.kline_buffer import KlineBuffer
     from src.engines.live.reconciliation import PeriodicReconciler
     from src.engines.live.user_data_processor import UserDataProcessor
+    from src.strategies.components.strategy import TradingDecision
 
 logger = logging.getLogger(__name__)
 
@@ -1035,7 +1036,7 @@ class LiveTradingEngine:
         balance: float,
         current_price: float,
         current_time: datetime,
-    ):
+    ) -> TradingDecision | None:
         return self.strategy_coordinator.runtime_process_decision(
             df, index, balance, current_price, current_time
         )

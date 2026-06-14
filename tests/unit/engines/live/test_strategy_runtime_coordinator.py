@@ -64,7 +64,7 @@ class TestRiskParameterHelpers:
     def test_clone_none_returns_none(self):
         assert StrategyRuntimeCoordinator.clone_risk_parameters(None) is None
 
-    def test_merge_prefers_component_then_non_default_engine(self):
+    def test_merge_non_default_engine_overrides_component(self):
         coord = make_engine().strategy_coordinator
         engine_params = RiskParameters(base_risk_per_trade=0.025)  # non-default, within max
         component_params = RiskParameters(base_risk_per_trade=0.01)
