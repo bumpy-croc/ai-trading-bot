@@ -71,6 +71,7 @@ from src.engines.live.monitoring import (
     extract_sentiment_data,
 )
 from src.engines.live.recovery import LiveSessionRecoverer
+from src.engines.live.strategy_hot_swap import StrategyHotSwapCoordinator
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.live.strategy_runtime import StrategyRuntimeCoordinator
 
@@ -273,6 +274,9 @@ class LiveTradingEngine:
         # per-candle runtime decision pipeline; built before _configure_strategy
         # (its first caller) reads/writes engine strategy state at call time (#486).
         self.strategy_coordinator = StrategyRuntimeCoordinator(engine_state=self)
+        # Hot-swap / model-update lifecycle. Reads/writes engine strategy state
+        # at call time; all mutation runs on the trading-loop thread (#486).
+        self.hot_swap_coordinator = StrategyHotSwapCoordinator(engine_state=self)
         self._configure_strategy(strategy)
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
@@ -4733,115 +4737,23 @@ class LiveTradingEngine:
 
     def _handle_strategy_change(self, swap_data: dict[str, Any]):
         """Handle strategy change callback"""
-        logger.info("🔄 Strategy change requested: %s", swap_data)
-
-        # If requested to close positions, close them now
-        if swap_data.get("close_positions", False):
-            logger.info("🚪 Closing all positions before strategy swap")
-            for position in list(self.live_position_tracker.positions.values()):
-                # Validate price before closing to prevent data corruption
-                try:
-                    current_price = self.data_provider.get_current_price(position.symbol)
-                except Exception as exc:
-                    logger.error(
-                        "Cannot close position %s during strategy change - price fetch failed: %s. "
-                        "Position will remain open.",
-                        position.symbol,
-                        exc,
-                    )
-                    continue
-                if current_price is None or current_price <= 0:
-                    logger.error(
-                        "Cannot close position %s during strategy change - invalid price %s. "
-                        "Position will remain open.",
-                        position.symbol,
-                        current_price,
-                    )
-                    continue
-
-                self._execute_exit(
-                    position,
-                    "Strategy change - close requested",
-                    None,
-                    float(current_price),
-                    None,
-                    None,
-                    None,
-                )
-        else:
-            logger.info("📊 Keeping existing positions during strategy swap")
+        self.hot_swap_coordinator.handle_strategy_change(swap_data)
 
     def _handle_model_update(self, update_data: dict[str, Any]):
         """Handle model update callback"""
-        logger.info("🤖 Model update requested: %s", update_data)
-        # Model update logic is handled in strategy_manager.apply_pending_update()
+        self.hot_swap_coordinator.handle_model_update(update_data)
 
     def hot_swap_strategy(
         self, new_strategy_name: str, close_positions: bool = False, new_config: dict | None = None
     ) -> bool:
-        """
-        Hot-swap to a new strategy during live trading
-
-        Args:
-            new_strategy_name: Name of new strategy
-            close_positions: Whether to close existing positions
-            new_config: Configuration for new strategy
-
-        Returns:
-            True if swap was initiated successfully
-        """
-
-        if not self.strategy_manager:
-            logger.error("Strategy manager not initialized - hot swapping disabled")
-            return False
-
-        logger.info("🔄 Initiating hot-swap to strategy: %s", new_strategy_name)
-
-        success = self.strategy_manager.hot_swap_strategy(
-            new_strategy_name=new_strategy_name,
-            new_config=new_config,
-            close_existing_positions=close_positions,
+        """Hot-swap to a new strategy during live trading."""
+        return self.hot_swap_coordinator.hot_swap_strategy(
+            new_strategy_name, close_positions=close_positions, new_config=new_config
         )
-
-        if success:
-            logger.info("✅ Hot-swap initiated successfully - will apply on next cycle")
-            strategy_name = self._strategy_name()
-            self._send_alert(f"Strategy hot-swap initiated: {strategy_name} → {new_strategy_name}")
-        else:
-            logger.error("❌ Hot-swap initiation failed")
-
-        return success
 
     def update_model(self, new_model_path: str) -> bool:
-        """
-        Update ML models during live trading
-
-        Args:
-            new_model_path: Path to new model file
-
-        Returns:
-            True if update was initiated successfully
-        """
-
-        if not self.strategy_manager:
-            logger.error("Strategy manager not initialized - model updates disabled")
-            return False
-
-        strategy_name = self._strategy_name().lower()
-
-        logger.info("🤖 Initiating model update for strategy: %s", strategy_name)
-
-        success = self.strategy_manager.update_model(
-            strategy_name=strategy_name, new_model_path=new_model_path, validate_model=True
-        )
-
-        if success:
-            logger.info("✅ Model update initiated successfully - will apply on next cycle")
-            self._send_alert(f"Model update initiated for {strategy_name}")
-        else:
-            logger.error("❌ Model update initiation failed")
-
-        return success
+        """Update ML models during live trading."""
+        return self.hot_swap_coordinator.update_model(new_model_path)
 
     def _build_trailing_policy(self) -> TrailingStopPolicy | None:
         """Construct trailing policy from risk parameters and strategy overrides.
@@ -4853,255 +4765,26 @@ class LiveTradingEngine:
     def _apply_pending_strategy_update(self) -> bool:
         """Apply a queued strategy/model update from the StrategyManager.
 
-        Drives the full hot-swap pipeline as observed by the run loop:
-        ``strategy_manager.apply_pending_update()`` then engine-side reconfigure
-        and refresh of all strategy-dependent state. Returns ``True`` on success.
-
-        Extracted as a method so unit tests can drive the same code path the
-        run loop uses.
+        See ``StrategyHotSwapCoordinator.apply_pending_strategy_update`` for the
+        full pipeline; kept as a method so the run loop and unit tests drive the
+        same code path.
         """
-        if not self.strategy_manager:
-            return False
-
-        success = self.strategy_manager.apply_pending_update()
-        if not success:
-            logger.error("❌ Failed to apply strategy/model update")
-            return False
-
-        self._finalize_runtime()
-        # apply_pending_update() success guarantees a current strategy is set.
-        updated_strategy = cast(ComponentStrategy, self.strategy_manager.current_strategy)
-        self._configure_strategy(updated_strategy)
-        self._runtime_dataset = None
-        self._runtime_warmup = 0
-        # Refresh strategy-dependent state so the new strategy's overrides take
-        # effect on the very next decision (matches backtest _switch_strategy).
-        self._refresh_strategy_dependencies()
-        logger.info("✅ Strategy/model update applied successfully")
-        return True
+        return self.hot_swap_coordinator.apply_pending_strategy_update()
 
     def _refresh_strategy_dependencies(self) -> None:
-        """Refresh engine state derived from the active strategy.
-
-        Called after a hot-swap (or model update) to re-bind the new component
-        risk adapter to the engine's portfolio risk manager and rebuild engine-
-        level policies (trailing stop, partial operations, time exits) from the
-        new strategy's risk overrides. Without this, the live engine continues
-        to use the previous strategy's risk plumbing until restart, silently
-        diverging from a backtest-validated strategy.
-
-        Mirrors the backtest equivalent in ``Backtester._switch_strategy``.
-        """
-        component_strategy = getattr(self, "_component_strategy", None)
-        component_risk = (
-            getattr(component_strategy, "risk_manager", None)
-            if component_strategy is not None
-            else None
-        )
-
-        # 1. Re-bind component risk adapter to the engine's portfolio risk
-        #    manager so position-tracking writes hit the canonical instance.
-        if component_risk is not None and hasattr(component_risk, "bind_core_manager"):
-            try:
-                component_risk.bind_core_manager(self.risk_manager)
-            except Exception as exc:
-                logger.warning(
-                    "Hot-swap: failed to re-bind core risk manager to component "
-                    "strategy: %s. Component risk limits may not be enforced.",
-                    exc,
-                    exc_info=True,
-                )
-
-        # 2. Push the new strategy's overrides onto the component risk adapter.
-        #    The factory typically already does this, but engines have
-        #    historically also called it (see __init__ around L250) so the
-        #    adapter is the single source of truth post-swap.
-        new_overrides: dict[str, Any] = {}
-        if component_strategy is not None and hasattr(component_strategy, "get_risk_overrides"):
-            try:
-                fetched = component_strategy.get_risk_overrides()
-            except Exception as exc:
-                logger.debug("Hot-swap: get_risk_overrides() failed: %s", exc)
-                fetched = None
-            if isinstance(fetched, dict):
-                new_overrides = dict(fetched)
-        if component_risk is not None and hasattr(component_risk, "set_strategy_overrides"):
-            adapter_overrides = getattr(component_risk, "_strategy_overrides", None)
-            merged = dict(adapter_overrides) if isinstance(adapter_overrides, dict) else {}
-            merged.update(new_overrides)
-            try:
-                component_risk.set_strategy_overrides(merged)
-            except Exception as exc:
-                logger.warning(
-                    "Hot-swap: failed to propagate strategy overrides to "
-                    "component risk manager: %s",
-                    exc,
-                    exc_info=True,
-                )
-
-        # 3. Rebuild engine-level trailing-stop policy from the new strategy /
-        #    risk-manager and propagate it into the live exit handler so that
-        #    the next trailing-stop tick uses the refreshed configuration.
-        try:
-            self.trailing_stop_policy = self._build_trailing_policy()
-            self._trailing_stop_opt_in = self.trailing_stop_policy is not None
-            exit_handler = getattr(self, "live_exit_handler", None)
-            if exit_handler is not None:
-                exit_handler.trailing_stop_policy = self.trailing_stop_policy
-                trailing_manager = getattr(exit_handler, "_trailing_stop_manager", None)
-                if trailing_manager is not None:
-                    trailing_manager.policy = self.trailing_stop_policy
-        except Exception as exc:
-            logger.warning(
-                "Hot-swap: failed to refresh trailing stop policy: %s",
-                exc,
-                exc_info=True,
-            )
-
-        # 4. Rebuild engine-level partial operations policy from new overrides.
-        try:
-            self._refresh_partial_manager_after_swap(new_overrides)
-        except Exception as exc:
-            logger.warning(
-                "Hot-swap: failed to refresh partial operations manager: %s",
-                exc,
-                exc_info=True,
-            )
-
-        # 5. Rebuild engine-level time exit policy from new overrides.
-        try:
-            self._refresh_time_exit_policy_after_swap(new_overrides)
-        except Exception as exc:
-            logger.warning(
-                "Hot-swap: failed to refresh time exit policy: %s",
-                exc,
-                exc_info=True,
-            )
-
-        # 6. If a correlation handler is wired on the entry handler, refresh
-        #    its strategy reference (mirrors backtest engine.py:817).
-        entry_handler = getattr(self, "live_entry_handler", None)
-        if entry_handler is not None:
-            correlation_handler = getattr(entry_handler, "correlation_handler", None)
-            if correlation_handler is not None and hasattr(correlation_handler, "set_strategy"):
-                try:
-                    correlation_handler.set_strategy(self.strategy)
-                except Exception as exc:
-                    logger.debug("Hot-swap: correlation_handler.set_strategy failed: %s", exc)
-
-        # 7. Defensive invariant guard: ConfidenceWeightedSizer enforces
-        #    min_confidence_floor <= min_confidence at construction time, but
-        #    log a critical signal here if it ever slips through (e.g. via a
-        #    mutated sizer instance) so operators can intervene quickly.
-        position_sizer = getattr(component_strategy, "position_sizer", None)
-        if position_sizer is not None:
-            min_conf = getattr(position_sizer, "min_confidence", None)
-            min_floor = getattr(position_sizer, "min_confidence_floor", None)
-            if min_conf is not None and min_floor is not None and min_floor > min_conf:
-                logger.critical(
-                    "Hot-swap invariant violation: min_confidence_floor (%s) > "
-                    "min_confidence (%s) on new strategy sizer; live engine may "
-                    "over-size low-confidence signals until next swap.",
-                    min_floor,
-                    min_conf,
-                )
+        """Refresh engine state derived from the active strategy (post hot-swap)."""
+        self.hot_swap_coordinator.refresh_strategy_dependencies()
 
     def _refresh_partial_manager_after_swap(
         self,
         new_overrides: dict[str, Any],
     ) -> None:
-        """Rebuild engine-level partial_manager from new strategy overrides.
-
-        Pushes the refreshed policy into the live exit handler's
-        :class:`PartialOperationsManager` so that partial-exit / scale-in
-        decisions on the next bar use the new configuration.
-        """
-        new_policy: PartialExitPolicy | None = None
-        if not is_enabled("live_partial_operations", False):
-            # Same guard as __init__ (#734): partial ops are bookkeeping-only in
-            # the live engine, so a hot-swapped strategy's partial_operations
-            # overrides must not re-enable them.
-            if isinstance(new_overrides, dict) and "partial_operations" in new_overrides:
-                logger.warning(
-                    "Ignoring partial_operations overrides from hot-swapped "
-                    "strategy: partial exits/scale-ins are disabled in the live "
-                    "engine (#734)."
-                )
-            self.partial_manager = None
-            self._partial_operations_opt_in = False
-            exit_handler = getattr(self, "live_exit_handler", None)
-            if exit_handler is not None:
-                exit_handler.partial_manager = None
-            return
-        partial_cfg = (
-            new_overrides.get("partial_operations") if isinstance(new_overrides, dict) else None
-        )
-        if isinstance(partial_cfg, dict):
-            new_policy = PartialExitPolicy(
-                exit_targets=partial_cfg.get("exit_targets", []),
-                exit_sizes=partial_cfg.get("exit_sizes", []),
-                scale_in_thresholds=partial_cfg.get("scale_in_thresholds", []),
-                scale_in_sizes=partial_cfg.get("scale_in_sizes", []),
-                max_scale_ins=partial_cfg.get("max_scale_ins", 0),
-            )
-        elif self.enable_partial_operations:
-            rp = self.risk_manager.params if self.risk_manager else RiskParameters()
-            new_policy = PartialExitPolicy(
-                exit_targets=rp.partial_exit_targets or [],
-                exit_sizes=rp.partial_exit_sizes or [],
-                scale_in_thresholds=rp.scale_in_thresholds or [],
-                scale_in_sizes=rp.scale_in_sizes or [],
-                max_scale_ins=rp.max_scale_ins,
-            )
-
-        self.partial_manager = new_policy
-        self._partial_operations_opt_in = bool(
-            self.enable_partial_operations or self.partial_manager is not None
-        )
-
-        exit_handler = getattr(self, "live_exit_handler", None)
-        if exit_handler is None:
-            return
-
-        ops_manager = getattr(exit_handler, "partial_manager", None)
-        if new_policy is None:
-            # Disable partial operations on the exit handler.
-            exit_handler.partial_manager = None
-            return
-
-        if ops_manager is None:
-            exit_handler.partial_manager = PartialOperationsManager(policy=new_policy)
-        elif hasattr(ops_manager, "set_policy"):
-            ops_manager.set_policy(new_policy)
-        else:
-            ops_manager.policy = new_policy
+        """Rebuild engine-level partial_manager from new strategy overrides."""
+        self.hot_swap_coordinator.refresh_partial_manager_after_swap(new_overrides)
 
     def _refresh_time_exit_policy_after_swap(
         self,
         new_overrides: dict[str, Any],
     ) -> None:
         """Rebuild engine-level time_exit_policy from new strategy overrides."""
-        time_cfg = new_overrides.get("time_exits") if isinstance(new_overrides, dict) else None
-        if not time_cfg and self.risk_manager and getattr(self.risk_manager, "params", None):
-            time_cfg = getattr(self.risk_manager.params, "time_exits", None)
-
-        new_policy: TimeExitPolicy | None = None
-        if time_cfg:
-            tr = time_cfg.get("time_restrictions") or DEFAULT_TIME_RESTRICTIONS
-            restrictions = TimeRestrictions(
-                no_overnight=bool(tr.get("no_overnight", False)),
-                no_weekend=bool(tr.get("no_weekend", False)),
-                trading_hours_only=bool(tr.get("trading_hours_only", False)),
-            )
-            new_policy = TimeExitPolicy(
-                max_holding_hours=time_cfg.get("max_holding_hours", DEFAULT_MAX_HOLDING_HOURS),
-                end_of_day_flat=time_cfg.get("end_of_day_flat", DEFAULT_END_OF_DAY_FLAT),
-                weekend_flat=time_cfg.get("weekend_flat", DEFAULT_WEEKEND_FLAT),
-                market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
-                time_restrictions=restrictions,
-            )
-
-        self.time_exit_policy = new_policy
-        exit_handler = getattr(self, "live_exit_handler", None)
-        if exit_handler is not None:
-            exit_handler.time_exit_policy = new_policy
+        self.hot_swap_coordinator.refresh_time_exit_policy_after_swap(new_overrides)

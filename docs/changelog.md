@@ -28,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guards the guarantee. (#486 parity work)
 
 ### Changed
+- Strategy hot-swap / model-update lifecycle extracted from `LiveTradingEngine`
+  into `src/engines/live/strategy_hot_swap.py` (`StrategyHotSwapCoordinator`,
+  #486): the public `hot_swap_strategy` / `update_model` entry points, the
+  `StrategyManager` callbacks, the loop-applied `_apply_pending_strategy_update`,
+  and the post-swap refresh of all strategy-derived engine state (trailing-stop
+  / partial-operations / time-exit policies, component risk re-binding,
+  correlation-handler strategy reference). The engine keeps thin delegating
+  wrappers so the public API, the `__init__` callback registrations, the
+  trading-loop call site, and test mock points are unchanged. The coordinator
+  reads/writes engine state at call time via a narrow `Protocol`; all mutation
+  runs on the single trading-loop thread (the entry points/callbacks only queue
+  a `StrategyManager`-locked pending update), so the lock-free design is
+  preserved. Pure refactor (live-engine only; no backtest/shared code touched);
+  full unit suite incl. the hot-swap behavior tests stays green. Engine: 5,107
+  → 4,790 lines.
 - Strategy-runtime coordination extracted from `LiveTradingEngine` into
   `src/engines/live/strategy_runtime.py` (`StrategyRuntimeCoordinator`, #486):
   strategy normalization (`_configure_strategy`), the component risk-context
