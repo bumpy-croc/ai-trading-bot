@@ -8,7 +8,7 @@ itself, the public API + callback wrappers delegate to it, and the pending-updat
 application drives the engine through the coordinator.
 """
 
-from unittest.mock import MagicMock, create_autospec, patch
+from unittest.mock import create_autospec, patch
 
 import pytest
 
@@ -38,7 +38,7 @@ class TestWiring:
 
     def test_public_api_delegates_to_coordinator(self):
         engine = make_engine()
-        engine.hot_swap_coordinator = MagicMock()
+        engine.hot_swap_coordinator = create_autospec(StrategyHotSwapCoordinator, instance=True)
         engine.hot_swap_coordinator.hot_swap_strategy.return_value = True
         engine.hot_swap_coordinator.update_model.return_value = True
 
@@ -52,11 +52,16 @@ class TestWiring:
 
     def test_callbacks_and_pending_update_delegate(self):
         engine = make_engine()
-        engine.hot_swap_coordinator = MagicMock()
+        engine.hot_swap_coordinator = create_autospec(StrategyHotSwapCoordinator, instance=True)
 
         engine._handle_strategy_change({"close_positions": False})
         engine.hot_swap_coordinator.handle_strategy_change.assert_called_once_with(
             {"close_positions": False}
+        )
+
+        engine._handle_model_update({"model_path": "/new/model"})
+        engine.hot_swap_coordinator.handle_model_update.assert_called_once_with(
+            {"model_path": "/new/model"}
         )
 
         engine._apply_pending_strategy_update()

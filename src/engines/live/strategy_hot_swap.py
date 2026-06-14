@@ -123,6 +123,7 @@ class StrategyHotSwapCoordinator:
                         "Position will remain open.",
                         position.symbol,
                         exc,
+                        exc_info=True,
                     )
                     continue
                 if current_price is None or current_price <= 0:
@@ -293,7 +294,7 @@ class StrategyHotSwapCoordinator:
             try:
                 fetched = component_strategy.get_risk_overrides()
             except Exception as exc:
-                logger.debug("Hot-swap: get_risk_overrides() failed: %s", exc)
+                logger.warning("Hot-swap: get_risk_overrides() failed: %s", exc, exc_info=True)
                 fetched = None
             if isinstance(fetched, dict):
                 new_overrides = dict(fetched)
@@ -359,7 +360,9 @@ class StrategyHotSwapCoordinator:
                 try:
                     correlation_handler.set_strategy(state.strategy)
                 except Exception as exc:
-                    logger.debug("Hot-swap: correlation_handler.set_strategy failed: %s", exc)
+                    logger.warning(
+                        "Hot-swap: correlation_handler.set_strategy failed: %s", exc, exc_info=True
+                    )
 
         # 7. Defensive invariant guard: ConfidenceWeightedSizer enforces
         #    min_confidence_floor <= min_confidence at construction time, but
