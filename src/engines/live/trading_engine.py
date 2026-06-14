@@ -121,6 +121,7 @@ if TYPE_CHECKING:
     from src.engines.live.kline_buffer import KlineBuffer
     from src.engines.live.reconciliation import PeriodicReconciler
     from src.engines.live.user_data_processor import UserDataProcessor
+    from src.strategies.components.runtime import SupportsRuntimeHooks
     from src.strategies.components.strategy import TradingDecision
 
 logger = logging.getLogger(__name__)
@@ -265,7 +266,7 @@ class LiveTradingEngine:
         # via configure_strategy below. Declared here so the type-checker tracks
         # the attributes now that the coordinator — not an engine method — writes
         # them.
-        self.strategy: ComponentStrategy | StrategyRuntime
+        self.strategy: SupportsRuntimeHooks | StrategyRuntime
         self._component_strategy: ComponentStrategy | None
         self._runtime: StrategyRuntime | None
         # Strategy-runtime coordinator owns strategy normalization and the

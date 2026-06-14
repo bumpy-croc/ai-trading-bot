@@ -7,10 +7,11 @@ coordinator bound to itself, the thin wrappers delegate to it, and strategy-stat
 mutations made through the coordinator land on the engine object.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import create_autospec, patch
 
 import pytest
 
+from src.data_providers.data_provider import DataProvider
 from src.engines.live.strategy_runtime import StrategyRuntimeCoordinator
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
@@ -23,7 +24,7 @@ def make_engine() -> LiveTradingEngine:
     with patch("src.engines.live.trading_engine.DatabaseManager"):
         return LiveTradingEngine(
             strategy=create_ml_basic_strategy(),
-            data_provider=MagicMock(),
+            data_provider=create_autospec(DataProvider, instance=True),
             initial_balance=1000.0,
         )
 

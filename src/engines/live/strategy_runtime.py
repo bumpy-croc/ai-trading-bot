@@ -41,9 +41,16 @@ if TYPE_CHECKING:
     from src.engines.live.execution.entry_handler import LiveEntryHandler
     from src.engines.live.execution.position_tracker import LivePositionTracker
     from src.position_management.correlation_engine import CorrelationEngine
+    from src.strategies.components.runtime import SupportsRuntimeHooks
     from src.strategies.components.strategy import TradingDecision
 
 logger = logging.getLogger(__name__)
+
+
+class SignalLike(Protocol):
+    """Duck type for a strategy signal: only its ``direction`` is read here."""
+
+    direction: SignalDirection
 
 
 class StrategyRuntimeEngineState(Protocol):
@@ -55,7 +62,7 @@ class StrategyRuntimeEngineState(Protocol):
     ``_component_strategy`` / ``_runtime``.
     """
 
-    strategy: Any
+    strategy: SupportsRuntimeHooks | StrategyRuntime
     _component_strategy: ComponentStrategy | None
     _runtime: StrategyRuntime | None
     _runtime_dataset: Any
@@ -224,7 +231,7 @@ class StrategyRuntimeCoordinator:
         if not callable(setter):
             return
 
-        def provider(df: pd.DataFrame, index: int, signal) -> dict[str, Any] | None:
+        def provider(df: pd.DataFrame, index: int, signal: SignalLike) -> dict[str, Any] | None:
             return self.component_risk_context(df, index, signal)
 
         try:
@@ -232,7 +239,9 @@ class StrategyRuntimeCoordinator:
         except (TypeError, AttributeError) as exc:  # pragma: no cover - defensive logging
             logger.debug("Failed to attach risk context provider to component strategy: %s", exc)
 
-    def component_risk_context(self, df: pd.DataFrame, index: int, signal) -> dict[str, Any]:
+    def component_risk_context(
+        self, df: pd.DataFrame, index: int, signal: SignalLike
+    ) -> dict[str, Any]:
         """Build supplemental risk context (e.g., correlation data) for components."""
         state = self._state
 
@@ -315,7 +324,7 @@ class StrategyRuntimeCoordinator:
                     state._component_risk_context_cache = None
         return context
 
-    def apply_policies_from_decision(self, decision) -> None:
+    def apply_policies_from_decision(self, decision: TradingDecision | None) -> None:
         """Hydrate engine-level policies from component strategy output.
 
         Uses shared policy hydration logic for consistency with backtest engine.
@@ -341,6 +350,7 @@ class StrategyRuntimeCoordinator:
     # Runtime integration helpers -------------------------------------------------
 
     def is_runtime_strategy(self) -> bool:
+        """Return True if the engine is configured with a runtime-wrapped strategy."""
         return self._state._runtime is not None
 
     def strategy_name(self) -> str:
@@ -453,6 +463,12 @@ class StrategyRuntimeCoordinator:
         current_price: float,
         current_time: datetime,
     ) -> TradingDecision | None:
+        """Run the runtime strategy for one candle and apply its policies.
+
+        Returns ``None`` (no decision) when the strategy is not runtime-wrapped,
+        the prepared dataset is missing, the index is within the warmup period,
+        or the runtime raises a known data/lookup error.
+        """
         state = self._state
         if not self.is_runtime_strategy():
             return None
@@ -472,6 +488,11 @@ class StrategyRuntimeCoordinator:
             return None
 
     def finalize_runtime(self) -> None:
+        """Finalize the runtime strategy and unconditionally reset runtime state.
+
+        The dataset and warmup counter are cleared in a ``finally`` so they reset
+        even if ``StrategyRuntime.finalize()`` raises.
+        """
         state = self._state
         if self.is_runtime_strategy():
             try:
