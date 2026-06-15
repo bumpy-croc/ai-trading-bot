@@ -13,7 +13,7 @@ hardening applied after the extraction (the cancel-refund uses an explicit
 from __future__ import annotations
 
 import queue
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
@@ -22,6 +22,7 @@ from src.engines.live.execution.order_fill_coordinator import (
     LiveOrderFillCoordinator,
     LiveOrderFillEngineState,
 )
+from src.engines.live.execution.position_tracker import LivePositionTracker
 
 pytestmark = pytest.mark.fast
 
@@ -36,11 +37,16 @@ def _make_position(*, stop_loss_order_id: str | None = None, entry_fee: float = 
 
 
 def _make_state(*, positions: dict | None = None, session_id=None, balance: float = 1000.0):
-    """Build a mocked engine-state backref with a real fill-exit queue."""
-    state = MagicMock(spec=LiveOrderFillEngineState)
+    """Build a mocked engine-state backref with a real fill-exit queue.
+
+    ``state`` and ``live_position_tracker`` are autospec'd so call-signature
+    drift on the coordinator's protocol / the tracker is caught; ``db_manager``
+    is protocol-typed ``Any``, so a plain mock matches the surface.
+    """
+    state = create_autospec(LiveOrderFillEngineState, instance=True)
     state.current_balance = balance
     state.trading_session_id = session_id
-    state.live_position_tracker = MagicMock()
+    state.live_position_tracker = create_autospec(LivePositionTracker, instance=True)
     state.db_manager = MagicMock()
     state._pending_fill_exits = queue.SimpleQueue()
     state.live_position_tracker.positions = positions or {}
@@ -126,7 +132,7 @@ def test_order_cancel_removes_phantom_and_refunds_full_fee_sessionless():
     # filled_qty=0.0 -> fully unfilled -> full fee refunded; sessionless -> direct balance add.
     LiveOrderFillCoordinator(state).handle_order_cancel("entry-order", "BTCUSDT", filled_qty=0.0)
 
-    assert state.current_balance == 1005.0
+    assert state.current_balance == pytest.approx(1005.0)
 
 
 def test_order_cancel_partial_fill_refunds_only_unfilled_fraction_sessionless():
@@ -150,7 +156,7 @@ def test_order_cancel_none_quantity_does_not_crash_and_refunds_full_fee():
     LiveOrderFillCoordinator(state).handle_order_cancel("entry-order", "BTCUSDT", filled_qty=0.5)
 
     # original_qty resolves to 0.0 (not >0), so the full fee is refunded.
-    assert state.current_balance == 1003.0
+    assert state.current_balance == pytest.approx(1003.0)
 
 
 def test_tracking_lost_keeps_position_and_escalates():
