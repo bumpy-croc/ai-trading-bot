@@ -120,6 +120,31 @@ def test_is_data_fresh_uses_ws_buffer_when_stream_healthy():
     assert LiveLoopTimingCoordinator(state).is_data_fresh(df) is False
 
 
+def test_is_data_fresh_object_index_naive_datetime():
+    # Object-dtype index of a *python* datetime (not pd.Timestamp) hits the
+    # `isinstance(datetime)` branch; a naive value is promoted to UTC.
+    state = _make_state()
+    coordinator = LiveLoopTimingCoordinator(state)
+
+    naive_recent = datetime.now(UTC).replace(tzinfo=None)
+    fresh = pd.DataFrame({"close": [1.0]}, index=pd.Index([naive_recent], dtype=object))
+    assert coordinator.is_data_fresh(fresh) is True
+
+    naive_old = (datetime.now(UTC) - pd.Timedelta(seconds=600)).replace(tzinfo=None)
+    stale = pd.DataFrame({"close": [1.0]}, index=pd.Index([naive_old], dtype=object))
+    assert coordinator.is_data_fresh(stale) is False
+
+
+def test_is_data_fresh_object_index_aware_datetime():
+    # Object-dtype index of an aware python datetime -> astimezone(UTC) branch.
+    state = _make_state()
+    coordinator = LiveLoopTimingCoordinator(state)
+
+    aware_recent = datetime.now(UTC)
+    fresh = pd.DataFrame({"close": [1.0]}, index=pd.Index([aware_recent], dtype=object))
+    assert coordinator.is_data_fresh(fresh) is True
+
+
 def test_is_data_fresh_recent_candle_is_fresh_stale_candle_is_not():
     state = _make_state()  # WS inactive -> candle-age path
     coordinator = LiveLoopTimingCoordinator(state)

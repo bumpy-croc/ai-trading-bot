@@ -26,6 +26,7 @@ from src.config.constants import DEFAULT_SLEEP_POLL_INTERVAL
 
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePositionTracker
+    from src.engines.live.kline_buffer import KlineBuffer
 
 
 class LiveLoopTimingEngineState(Protocol):
@@ -38,7 +39,7 @@ class LiveLoopTimingEngineState(Protocol):
     data_freshness_threshold: float
     live_position_tracker: LivePositionTracker
     _ws_kline_active: bool
-    _kline_buffer: Any
+    _kline_buffer: KlineBuffer | None
     _ws_kline_provider: Any
 
 
