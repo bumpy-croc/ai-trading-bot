@@ -739,9 +739,12 @@ class TestCloseOnlyMode:
         (the engine's ``_check_entry_conditions`` is a thin wrapper, #486); the
         close-only guard reads engine state through the coordinator's backref.
         """
-        from src.engines.live.execution.entry_coordinator import LiveEntryCoordinator
+        from src.engines.live.execution.entry_coordinator import (
+            LiveEntryCoordinator,
+            LiveEntryEngineState,
+        )
 
-        state = MagicMock()
+        state = MagicMock(spec=LiveEntryEngineState)
         state._close_only_mode = True
         coordinator = LiveEntryCoordinator(engine_state=state)
         coordinator.check_entry_conditions(
@@ -756,9 +759,12 @@ class TestCloseOnlyMode:
 
     def test_close_only_mode_allows_exits(self):
         """Close-only mode does not block when disabled (entry check proceeds)."""
-        from src.engines.live.execution.entry_coordinator import LiveEntryCoordinator
+        from src.engines.live.execution.entry_coordinator import (
+            LiveEntryCoordinator,
+            LiveEntryEngineState,
+        )
 
-        state = MagicMock()
+        state = MagicMock(spec=LiveEntryEngineState)
         state._close_only_mode = False
         # The method will proceed past the guard and call _is_runtime_strategy.
         # Let it raise to short-circuit the rest — we only care that the guard
