@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, call, create_autospec, patch
 
 import pytest
 
@@ -744,7 +744,7 @@ class TestCloseOnlyMode:
             LiveEntryEngineState,
         )
 
-        state = MagicMock(spec=LiveEntryEngineState)
+        state = create_autospec(LiveEntryEngineState, instance=True)
         state._close_only_mode = True
         coordinator = LiveEntryCoordinator(engine_state=state)
         coordinator.check_entry_conditions(
@@ -764,7 +764,7 @@ class TestCloseOnlyMode:
             LiveEntryEngineState,
         )
 
-        state = MagicMock(spec=LiveEntryEngineState)
+        state = create_autospec(LiveEntryEngineState, instance=True)
         state._close_only_mode = False
         # The method will proceed past the guard and call _is_runtime_strategy.
         # Let it raise to short-circuit the rest — we only care that the guard

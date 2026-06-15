@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Live entry/exit coordinator `Protocol` types tightened (#486 Step D): the
+  engine-state backref `Protocol`s (`LiveEntryEngineState`,
+  `LiveExitEngineState`) now declare `data_provider: DataProvider`,
+  `db_manager: DatabaseManager`, `_base_asset_locks: BaseAssetLockRegistry`, and
+  `_component_strategy: ComponentStrategy | None` (were bare `Any`), matching the
+  concrete-typing standard set by the later coordinators / `LiveSessionRecoverer`.
+  `exchange_interface` / `strategy` stay `Any` (genuinely duck-typed). Their unit
+  tests now build the mocked backref with `create_autospec(..., instance=True)`
+  instead of `MagicMock(spec=...)`, so call-signature drift on the spec'd engine
+  helpers is caught, not just attribute-name drift. Typing/test-only — no runtime
+  change; backtest determinism fingerprint byte-identical. (#486)
 - `LiveTradingEngine._trading_loop` readability: extracted the ~100-line legacy
   duck-typed short-entry path into `_process_legacy_short_entry()` and the
   periodic account snapshot + exchange-sync block into

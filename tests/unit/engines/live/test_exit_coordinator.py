@@ -14,7 +14,7 @@ which must not raise on an aware ``entry_time``).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
 import pandas as pd
 import pytest
@@ -70,7 +70,7 @@ def _make_state(position: MagicMock, exit_check: MagicMock, **overrides) -> Magi
     protocol attributes are annotation-only, so each one the path reads is
     assigned explicitly.
     """
-    state = MagicMock(spec=LiveExitEngineState)
+    state = create_autospec(LiveExitEngineState, instance=True)
     state.enable_live_trading = False
     state.current_balance = 1000.0
     state.trading_session_id = None
