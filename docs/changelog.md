@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Live entry stop-loss gate no longer silently skips a misconfigured `0.0`
+  stop. `LiveEntryCoordinator.execute_entry_locked` now keys the server-side
+  stop-loss placement on `stop_loss is not None` (was a truthy check), so a
+  `0.0` stop enters the placement path and fails there → emergency-close,
+  rather than leaving the position open and unprotected. Also hardened the
+  surrounding CODE.md issues carried over in the #486 entry extraction: the
+  stop-loss-calc and risk-override failure paths now log at WARNING (were
+  silent / `debug`), the emergency-close error log uses lazy `%s` formatting,
+  and the entry-reason `stop_loss`/`take_profit` checks use `is not None`.
+  Adds direct `LiveEntryCoordinator.execute_entry_locked` unit-test coverage
+  for the guard, tracking-failure, balance-failure, risk-failure, ambiguous,
+  and stop-loss-placement branches. (#486 follow-up)
 - Backtests are now bit-reproducible — `Backtester.run` pins BLAS/OpenMP thread
   pools to 1 (`threadpoolctl`) for the duration of the run. Multi-threaded
   parallel float reduction is non-associative, so its run-to-run ordering could
