@@ -860,3 +860,117 @@ class LiveEntryCoordinator:
                 )
             else:
                 logger.warning("⚠️ Cannot log error to database - no trading session ID available")
+
+    def process_legacy_short_entry(
+        self,
+        df: pd.DataFrame,
+        current_index: int,
+        symbol: str,
+        current_price: float,
+        current_time: datetime,
+    ) -> None:
+        """Evaluate and execute a legacy duck-typed short entry (non-runtime strategies)."""
+        state = self._state
+        if (not state._is_runtime_strategy()) and callable(
+            getattr(state.strategy, "check_short_entry_conditions", None)
+        ):
+            # Legacy duck-typed hook; presence is verified by the
+            # callable(getattr(...)) guard above.
+            short_entry_signal = cast(Any, state.strategy).check_short_entry_conditions(
+                df, current_index
+            )
+            if short_entry_signal:
+                try:
+                    overrides = (
+                        state.strategy.get_risk_overrides()
+                        if hasattr(state.strategy, "get_risk_overrides")
+                        else None
+                    )
+                except Exception:
+                    logger.warning(
+                        "get_risk_overrides() raised for %s; proceeding with overrides=None "
+                        "(strategy-configured SL/TP may not apply to this short entry)",
+                        getattr(state.strategy, "name", "<unknown>"),
+                        exc_info=True,
+                    )
+                    overrides = None
+                indicators = state._extract_indicators(df, current_index)
+                # Correlation context for short entries
+                short_correlation_ctx = state._get_correlation_context(
+                    symbol,
+                    df,
+                    overrides,
+                    index=current_index,
+                )
+                if overrides and overrides.get("position_sizer"):
+                    short_fraction = state.risk_manager.calculate_position_fraction(
+                        df=df,
+                        index=current_index,
+                        balance=state.current_balance,
+                        price=current_price,
+                        indicators=indicators,
+                        strategy_overrides=overrides,
+                        correlation_ctx=short_correlation_ctx,
+                    )
+                    short_fraction = min(short_fraction, state.max_position_size)
+                    short_position_size = short_fraction
+                else:
+                    # All strategies should be component-based
+                    logger.error(
+                        "Strategy %s does not support component-based position sizing",
+                        state.strategy.name,
+                    )
+                    short_position_size = 0.0
+
+                # Apply dynamic risk adjustments
+                short_position_size = state._apply_dynamic_risk_adjustment(
+                    short_position_size,
+                    current_time,
+                )
+                if short_position_size > 0:
+                    if overrides and (
+                        ("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)
+                    ):
+                        short_stop_loss, short_take_profit = state.risk_manager.compute_sl_tp(
+                            df=df,
+                            index=current_index,
+                            entry_price=current_price,
+                            side="short",
+                            strategy_overrides=overrides,
+                        )
+                        if short_take_profit is None:
+                            short_take_profit = current_price * (
+                                1
+                                - getattr(
+                                    state.strategy,
+                                    "take_profit_pct",
+                                    DEFAULT_TAKE_PROFIT_PCT,
+                                )
+                            )
+                    else:
+                        # All strategies should be component-based
+                        logger.error(
+                            "Strategy %s does not support component-based stop loss calculation",
+                            state.strategy.name,
+                        )
+                        short_stop_loss = current_price * (
+                            1 + DEFAULT_STOP_LOSS_PCT
+                        )  # Default 5% stop for short
+                        short_take_profit = current_price * (
+                            1
+                            - getattr(
+                                state.strategy,
+                                "take_profit_pct",
+                                DEFAULT_TAKE_PROFIT_PCT,
+                            )
+                        )
+                    self.execute_entry(
+                        symbol=symbol,
+                        side=PositionSide.SHORT,
+                        size=short_position_size,
+                        price=float(current_price),
+                        stop_loss=short_stop_loss,
+                        take_profit=short_take_profit,
+                        signal_strength=0.0,
+                        signal_confidence=0.0,
+                    )

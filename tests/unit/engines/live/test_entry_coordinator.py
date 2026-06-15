@@ -11,10 +11,12 @@ silently skipped), and the SL-calc / risk-override failure paths log.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
+from src.config.constants import DEFAULT_STOP_LOSS_PCT
 from src.engines.live.execution.entry_coordinator import (
     LiveEntryCoordinator,
     LiveEntryEngineState,
@@ -266,3 +268,126 @@ def test_none_stop_loss_skips_placement():
     _call(state, stop_loss=None)
 
     state.stop_loss_manager.place_protection.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# process_legacy_short_entry (legacy duck-typed short path, moved from engine)
+# ---------------------------------------------------------------------------
+
+
+def _make_short_state(*, is_runtime: bool, short_signal, overrides):
+    """Minimal backref for the legacy short-entry path."""
+    state = create_autospec(LiveEntryEngineState, instance=True)
+    state._is_runtime_strategy.return_value = is_runtime
+    state.current_balance = 1000.0
+    state.max_position_size = 1.0
+    strategy = MagicMock()
+    strategy.check_short_entry_conditions.return_value = short_signal
+    strategy.get_risk_overrides.return_value = overrides
+    strategy.name = "legacy_strat"
+    state.strategy = strategy
+    state._extract_indicators.return_value = {}
+    state._get_correlation_context.return_value = None
+    # Protocol attributes are annotation-only, so a spec'd/autospec'd mock won't
+    # auto-create them — assign the ones the short path reads.
+    state.risk_manager = MagicMock()
+    state.risk_manager.calculate_position_fraction.return_value = 0.5
+    state.risk_manager.compute_sl_tp.return_value = (52000.0, 48000.0)
+    # Identity: dynamic-risk adjustment leaves the size unchanged here.
+    state._apply_dynamic_risk_adjustment.side_effect = lambda original_size, current_time: (
+        original_size
+    )
+    return state
+
+
+def _run_short_entry(state):
+    coordinator = LiveEntryCoordinator(engine_state=state)
+    # Isolate the decision logic from the real (locked, exchange-touching) entry.
+    coordinator.execute_entry = MagicMock()  # type: ignore[method-assign]
+    coordinator.process_legacy_short_entry(
+        df=MagicMock(),
+        current_index=0,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    return coordinator
+
+
+def test_legacy_short_entry_skipped_for_runtime_strategy():
+    """Runtime/component strategies never take the legacy duck-typed short path."""
+    state = _make_short_state(is_runtime=True, short_signal=True, overrides={"position_sizer": "x"})
+    coordinator = _run_short_entry(state)
+    coordinator.execute_entry.assert_not_called()
+
+
+def test_legacy_short_entry_no_signal_is_noop():
+    """No short signal → no entry executed."""
+    state = _make_short_state(
+        is_runtime=False, short_signal=None, overrides={"position_sizer": "x"}
+    )
+    coordinator = _run_short_entry(state)
+    coordinator.execute_entry.assert_not_called()
+
+
+def test_legacy_short_entry_executes_short_with_sizer_overrides():
+    """Non-runtime strategy + signal + sizer/SL overrides → a SHORT entry is executed."""
+    overrides = {"position_sizer": "x", "stop_loss_pct": 0.05, "take_profit_pct": 0.04}
+    state = _make_short_state(is_runtime=False, short_signal=True, overrides=overrides)
+    coordinator = _run_short_entry(state)
+
+    coordinator.execute_entry.assert_called_once()
+    kwargs = coordinator.execute_entry.call_args.kwargs
+    assert kwargs["side"] == PositionSide.SHORT
+    assert kwargs["size"] == pytest.approx(0.5)
+    assert kwargs["price"] == pytest.approx(50000.0)
+    assert kwargs["stop_loss"] == pytest.approx(52000.0)
+
+
+def test_legacy_short_entry_zero_size_skips_execution():
+    """A dynamic-risk reduction to zero size suppresses the entry."""
+    state = _make_short_state(
+        is_runtime=False, short_signal=True, overrides={"position_sizer": "x"}
+    )
+    state._apply_dynamic_risk_adjustment.side_effect = None
+    state._apply_dynamic_risk_adjustment.return_value = 0.0
+    coordinator = _run_short_entry(state)
+    coordinator.execute_entry.assert_not_called()
+
+
+def test_legacy_short_entry_without_position_sizer_suppresses_entry():
+    """No `position_sizer` override → size forced to 0.0 (logged), no entry."""
+    state = _make_short_state(is_runtime=False, short_signal=True, overrides={})
+    coordinator = _run_short_entry(state)
+    coordinator.execute_entry.assert_not_called()
+
+
+def test_legacy_short_entry_logs_when_get_risk_overrides_raises(caplog):
+    """A raising `get_risk_overrides()` is logged at WARNING and falls through to None."""
+    import logging
+
+    state = _make_short_state(is_runtime=False, short_signal=True, overrides={})
+    state.strategy.get_risk_overrides.side_effect = ValueError("boom")
+    with caplog.at_level(logging.WARNING):
+        coordinator = _run_short_entry(state)
+    # overrides=None → no position_sizer → size 0.0 → no entry executed
+    coordinator.execute_entry.assert_not_called()
+    assert any("get_risk_overrides() raised" in r.message for r in caplog.records)
+
+
+def test_legacy_short_entry_sl_fallback_when_overrides_lack_sl_tp():
+    """Sizer override present but no SL/TP keys → default-stop fallback branch."""
+    state = _make_short_state(
+        is_runtime=False, short_signal=True, overrides={"position_sizer": "x"}
+    )
+    # Real float so the `1 - take_profit_pct` short-TP math resolves.
+    state.strategy.take_profit_pct = 0.04
+    coordinator = _run_short_entry(state)
+
+    coordinator.execute_entry.assert_called_once()
+    kwargs = coordinator.execute_entry.call_args.kwargs
+    assert kwargs["side"] == PositionSide.SHORT
+    # Fallback stop = price * (1 + DEFAULT_STOP_LOSS_PCT); compute_sl_tp NOT used.
+    assert kwargs["stop_loss"] == pytest.approx(50000.0 * (1 + DEFAULT_STOP_LOSS_PCT))
+    assert kwargs["take_profit"] == pytest.approx(50000.0 * (1 - 0.04))
+    state.risk_manager.compute_sl_tp.assert_not_called()
