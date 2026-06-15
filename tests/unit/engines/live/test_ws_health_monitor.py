@@ -39,7 +39,7 @@ class TestWiring:
 
     def test_wrappers_delegate_to_monitor(self):
         engine = make_engine()
-        engine.ws_health_monitor = MagicMock()
+        engine.ws_health_monitor = create_autospec(WebSocketHealthMonitor, instance=True)
 
         engine._check_kline_health()
         engine.ws_health_monitor.check_kline_health.assert_called_once_with()

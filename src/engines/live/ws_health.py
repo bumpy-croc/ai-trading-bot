@@ -44,6 +44,7 @@ from src.data_providers.binance_provider import WebSocketState
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
     from src.engines.live.kline_buffer import KlineBuffer
+    from src.engines.live.order_tracker import OrderTracker
     from src.engines.live.reconciliation import PeriodicReconciler
     from src.engines.live.user_data_processor import UserDataProcessor
 
@@ -62,7 +63,7 @@ class WebSocketHealthEngineState(Protocol):
     enable_live_trading: bool
     exchange_interface: Any
     data_provider: Any
-    order_tracker: Any
+    order_tracker: OrderTracker | None
     is_running: bool
     stop_event: threading.Event
     timeframe: str | None
