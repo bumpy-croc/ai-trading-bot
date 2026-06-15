@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `LiveTradingEngine.start()` bootstrap sequence extracted into a new
+  `LiveStartupSequencer` (`engines/live/startup.py`, #486 follow-up): the public
+  `start()` is now a thin delegator to `LiveStartupSequencer.run()`, and the
+  seven bootstrap phase helpers (session recover/create + wiring, #668
+  open-position carry-forward, #657 self-heal, account sync, runtime services,
+  main-loop launch) move verbatim behind an engine-backref `Protocol`
+  (mechanical `self.` → `state.`). The capital-critical startup ordering and the
+  public `start()` signature are preserved exactly. Adds a direct
+  `LiveStartupSequencer` unit test file. Pure refactor — backtest determinism
+  fingerprint byte-identical. (#486)
 - Legacy duck-typed short-entry path moved off `LiveTradingEngine` into
   `LiveEntryCoordinator.process_legacy_short_entry` (#486 follow-up): the
   ~100-line `_process_legacy_short_entry` body is now a verbatim coordinator

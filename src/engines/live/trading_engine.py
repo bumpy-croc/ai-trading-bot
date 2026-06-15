@@ -43,7 +43,7 @@ from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
-from src.database.models import EventType, TradeSource
+from src.database.models import EventType
 from src.engines.live.config import LiveEngineSettings
 
 # Modular handlers (optional injection for testability)
@@ -71,6 +71,7 @@ from src.engines.live.monitoring import (
     extract_sentiment_data,
 )
 from src.engines.live.recovery import LiveSessionRecoverer
+from src.engines.live.startup import LiveStartupSequencer
 from src.engines.live.strategy_hot_swap import StrategyHotSwapCoordinator
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.live.strategy_runtime import StrategyRuntimeCoordinator
@@ -96,7 +97,6 @@ from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
-from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import (
     log_data_event,
     log_engine_event,
@@ -414,6 +414,10 @@ class LiveTradingEngine:
         self.loop_timing_coordinator = LiveLoopTimingCoordinator(engine_state=self)
         self.market_data_coordinator = LiveMarketDataCoordinator(engine_state=self)
         self.order_fill_coordinator = LiveOrderFillCoordinator(engine_state=self)
+        # Startup bootstrap sequence (session recover/create, #668 carry-forward,
+        # #657 self-heal, account sync, runtime services, loop kickoff). Reads/writes
+        # engine state at call time; the public start() delegates here (#486).
+        self.startup_sequencer = LiveStartupSequencer(engine_state=self)
 
     def _init_risk_manager(self, risk_parameters: RiskParameters | None) -> None:
         """Build the canonical RiskManager and bind it to component strategies."""
@@ -715,6 +719,11 @@ class LiveTradingEngine:
         # Trading state
         self.is_running = False
         self._close_only_mode = False  # No new entries when True; exits still run
+        # Startup account-sync may stage a balance correction to persist after the
+        # session is wired; owned by LiveStartupSequencer, declared here so the
+        # engine carries the attribute for the startup backref Protocol (#486).
+        self._pending_balance_correction: bool = False
+        self._pending_corrected_balance: float | None = None
         # Set during start() for live trading
         self._periodic_reconciler: PeriodicReconciler | None = None
         # Shared per-base-asset cooldown for the orphaned-borrow sweep, so the
@@ -1092,345 +1101,16 @@ class LiveTradingEngine:
         so an orchestrator restarts it (#630). It defaults to False so start()
         stays a well-behaved library call for callers that read results after it
         returns (e.g. the migration baseline tool); the production runner opts in.
+
+        Delegated to LiveStartupSequencer; the capital-critical bootstrap ordering
+        lives there (#486).
         """
-        if self.is_running:
-            logger.warning("Trading engine is already running")
-            return
-
-        self._begin_session_runtime(symbol, timeframe)
-        self._bootstrap_trading_session(symbol, timeframe)
-        self._carry_forward_open_positions()
-        self._self_heal_terminal_positions()
-        self._synchronize_account_on_start()
-
-        # Set session ID on strategy for logging
-        if hasattr(self.strategy, "session_id"):
-            self.strategy.session_id = self.trading_session_id
-
-        self._start_runtime_services(symbol, timeframe)
-        self._run_main_loop_until_stopped(symbol, timeframe, max_steps)
-
-        # After a clean stop this is a no-op; after an abnormal loop death it
-        # exits the process non-zero (when opted in) so the orchestrator
-        # restarts it (#630).
-        self._exit_if_loop_crashed(exit_on_crash)
-
-    def _begin_session_runtime(self, symbol: str, timeframe: str) -> None:
-        """Set runtime flags + logging context and emit the startup banner."""
-        self.is_running = True
-        self._active_symbol = symbol
-        self.timeframe = timeframe  # Store the trading timeframe
-        # Set base logging context for this engine run
-        set_context(
-            component="live_engine",
-            strategy=getattr(self.strategy, "__class__", type("_", (), {})).__name__,
-            symbol=symbol,
+        self.startup_sequencer.run(
+            symbol,
             timeframe=timeframe,
+            max_steps=max_steps,
+            exit_on_crash=exit_on_crash,
         )
-        log_engine_event(
-            "engine_start",
-            initial_balance=self.current_balance,
-            max_position_size=self.max_position_size,
-            check_interval=self.check_interval,
-            mode="live" if self.enable_live_trading else "paper",
-        )
-        logger.info("🚀 Starting live trading for %s on %s timeframe", symbol, timeframe)
-        logger.info("Initial balance: $%.2f", self.current_balance)
-        logger.info("Max position size: %.1f%% of balance", self.max_position_size * 100)
-        logger.info("Check interval: %ss", self.check_interval)
-
-        if not self.enable_live_trading:
-            logger.warning("⚠️  PAPER TRADING MODE - No real orders will be executed")
-
-    def _bootstrap_trading_session(self, symbol: str, timeframe: str) -> None:
-        """Recover prior balance/positions and create + wire the trading session."""
-        # Try to recover from existing session first
-        if self.resume_from_last_balance:
-            recovered_balance = self._recover_existing_session()
-            if recovered_balance is not None:
-                # _recover_existing_session() already coerced this to a finite float
-                # and rejected corrupt (non-finite) state. The float() here is a
-                # cheap defensive invariant so current_balance never becomes a
-                # Decimal — which would break downstream float arithmetic such as
-                # _print_final_stats (CODE.md "Arithmetic & Financial Calculations").
-                self.current_balance = float(recovered_balance)
-                logger.info(
-                    "💾 Recovered balance from previous session: $%.2f",
-                    recovered_balance,
-                )
-                # Also recover active positions
-                self._recover_active_positions()
-            else:
-                logger.info("🆕 No existing session found, starting fresh")
-
-        # Create new trading session in database if none exists
-        if self.trading_session_id is None:
-            mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
-            # Prepare time-exit session config for persistence
-            tx_cfg = None
-            if self.time_exit_policy:
-                tx_cfg = {
-                    "max_holding_hours": self.time_exit_policy.max_holding_hours,
-                    "end_of_day_flat": self.time_exit_policy.end_of_day_flat,
-                    "weekend_flat": self.time_exit_policy.weekend_flat,
-                    "time_restrictions": {
-                        "no_overnight": self.time_exit_policy.time_restrictions.no_overnight,
-                        "no_weekend": self.time_exit_policy.time_restrictions.no_weekend,
-                        "trading_hours_only": self.time_exit_policy.time_restrictions.trading_hours_only,
-                    },
-                }
-
-            self.trading_session_id = self.db_manager.create_trading_session(
-                strategy_name=self._strategy_name(),
-                symbol=symbol,
-                timeframe=timeframe,
-                mode=mode,
-                initial_balance=self.current_balance,  # Use current balance (might be recovered)
-                strategy_config=getattr(self.strategy, "config", {}),
-                time_exit_config=tx_cfg,
-                market_timezone=(
-                    self.time_exit_policy.market_timezone if self.time_exit_policy else None
-                ),
-            )
-
-            # Update context with session id
-            update_context(session_id=self.trading_session_id)
-
-            # Initialize balance tracking
-            self.db_manager.update_balance(
-                self.current_balance, "session_start", "system", self.trading_session_id
-            )
-
-            # Set session ID on strategy for logging
-            if hasattr(self.strategy, "session_id"):
-                self.strategy.session_id = self.trading_session_id
-
-            # Wire session_id and strategy_name to execution engine for order journaling
-            self.live_execution_engine.session_id = self.trading_session_id
-            self.live_execution_engine.strategy_name = self._strategy_name()
-
-            # Wire the event logger so snapshot/daily-P&L logging is session
-            # scoped; on a clean restart also point day-start recovery at the
-            # prior session, where today's earlier snapshots live (#766).
-            self.event_logger.set_session_id(self.trading_session_id)
-            self.event_logger.set_recovery_session_id(self._recovered_inactive_session_id)
-
-    def _carry_forward_open_positions(self) -> None:
-        """Carry OPEN positions forward from a recovered inactive session (#668)."""
-        # Carry OPEN positions forward on a clean restart (#668). The inactive
-        # session recovered above (balance only) still owns any OPEN position via
-        # Position.session_id, so _recover_active_positions() at line ~1281 saw a
-        # None session id and loaded nothing — the position would be orphaned.
-        # Re-point those positions onto the new session, then reload them into the
-        # live tracker. Ordering: reassign → recover-into-tracker (which self-heals
-        # first) → the heal + exchange reconciliation below re-verify the position
-        # and its server-side stop-loss against the exchange.
-        if self._recovered_inactive_session_id is not None and self.trading_session_id is not None:
-            try:
-                moved_ids = self.db_manager.reassign_open_positions_to_session(
-                    old_session_id=self._recovered_inactive_session_id,
-                    new_session_id=self.trading_session_id,
-                    symbol=self._active_symbol,
-                    strategy_name=self._strategy_name(),
-                )
-                if moved_ids:
-                    logger.info(
-                        "🔁 Carried %d OPEN position(s) forward from inactive session "
-                        "#%s into new session #%s; reloading into tracker",
-                        len(moved_ids),
-                        self._recovered_inactive_session_id,
-                        self.trading_session_id,
-                    )
-                    # Reload now that the rows belong to the new session. Safe and
-                    # idempotent if it already ran (empty session ⇒ no-op).
-                    self._recover_active_positions()
-            except Exception as reassign_err:
-                # A failure here must not abort startup, but it is capital-critical
-                # (an OPEN position stays orphaned), so log loudly for alerting.
-                logger.critical(
-                    "Failed to carry OPEN positions forward from inactive session "
-                    "#%s into session #%s (positions may be orphaned — MANUAL "
-                    "RECONCILIATION REQUIRED): %s",
-                    self._recovered_inactive_session_id,
-                    self.trading_session_id,
-                    reassign_err,
-                    exc_info=True,
-                )
-            finally:
-                # Clear so a later start()/stop()/start() re-entry cannot re-trigger a
-                # stale-session reassign (#668, P3).
-                self._recovered_inactive_session_id = None
-
-    def _self_heal_terminal_positions(self) -> None:
-        """Close any OPEN position in this session that already has a terminal Trade (#657)."""
-        # Startup self-heal (#657): close any OPEN position in this session that
-        # already has a terminal Trade. Deliberately NOT gated behind
-        # enable_live_trading/exchange — the whole bug was that closing was
-        # paper-blind, so this must run in paper mode too. Pure DB reconciliation
-        # (no exchange calls), idempotent, and complements the atomic status flip
-        # now performed inside log_trade. Placed before account sync so the books
-        # are consistent before any exchange reconciliation reads them.
-        if self.trading_session_id is not None:
-            try:
-                healed = self.db_manager.heal_positions_with_terminal_trades(
-                    self.trading_session_id
-                )
-                if healed:
-                    logger.info(
-                        "🩹 Startup self-heal closed %d stale-OPEN position(s) with "
-                        "terminal trades (session #%s)",
-                        healed,
-                        self.trading_session_id,
-                    )
-            except Exception as heal_err:
-                logger.warning("Startup position self-heal failed (continuing): %s", heal_err)
-
-    def _synchronize_account_on_start(self) -> None:
-        """Sync balance/positions with the exchange and persist any balance correction."""
-        # Perform account synchronization if available
-        self._pending_balance_correction = False
-        self._pending_corrected_balance = None
-        if self.account_synchronizer and self.enable_live_trading:
-            try:
-                logger.info("🔄 Performing initial account synchronization...")
-                sync_result = self.account_synchronizer.sync_account_data(
-                    force=True, symbol=self._active_symbol
-                )
-                if sync_result.success:
-                    logger.info("✅ Account synchronization completed")
-                    # Update session ID for synchronizer
-                    if self.trading_session_id:
-                        self.account_synchronizer.session_id = self.trading_session_id
-                    # Check if balance was corrected
-                    balance_sync = sync_result.data.get("balance_sync", {})
-                    if balance_sync.get("corrected", False):
-                        previous_balance = balance_sync.get("old_balance", self.current_balance)
-                        corrected_balance = balance_sync.get("new_balance", self.current_balance)
-                        # Atomic balance update with lock to prevent race conditions
-                        with self._balance_lock:
-                            self.current_balance = corrected_balance
-                            self._pending_balance_correction = True
-                            self._pending_corrected_balance = corrected_balance
-                        logger.info(
-                            "💰 Balance corrected from exchange: $%.2f",
-                            corrected_balance,
-                        )
-                        # A silent balance overwrite masked a real capital-erosion
-                        # incident before — make every correction auditable.
-                        self._record_event(
-                            EventType.WARNING,
-                            (
-                                "Balance overwritten from exchange: "
-                                f"{previous_balance} -> {corrected_balance}"
-                            ),
-                            severity="warning",
-                            component="balance",
-                            error_code="BALANCE_OVERWRITE",
-                        )
-                else:
-                    logger.warning("⚠️ Account synchronization failed: %s", sync_result.message)
-
-                # Reconcile positions with exchange (detect offline stop-loss triggers)
-                self._reconcile_positions_with_exchange()
-
-                # Reconciliation paths (e.g. PositionReconciler._reconcile_filled_entry)
-                # may create LivePositions via track_recovered_position without
-                # registering them with risk_manager. The DB-recovery path in
-                # _recover_active_positions does register; the reconciler path
-                # currently does not. Sweep the tracker after reconciliation so
-                # every tracked position is known to the risk manager — this
-                # restores the parity invariant (also enforced on every
-                # backtest entry) that risk_manager has visibility into all
-                # active positions for per-symbol caps and correlation gating.
-                self._ensure_positions_registered_with_risk_manager()
-
-            except Exception as e:
-                logger.error("❌ Account synchronization error: %s", e, exc_info=True)
-
-        # If a balance correction was pending, log it now (outside session creation conditional)
-        # Use lock to ensure atomic check and update
-        with self._balance_lock:
-            if (
-                getattr(self, "_pending_balance_correction", False)
-                and self.trading_session_id is not None
-            ):
-                corrected_balance = self._pending_corrected_balance
-                self.db_manager.update_balance(
-                    corrected_balance, "account_sync", "system", self.trading_session_id
-                )
-                self._pending_balance_correction = False
-                self._pending_corrected_balance = None
-                logger.info("💰 Balance corrected in database: $%.2f", corrected_balance)
-            elif getattr(self, "_pending_balance_correction", False):
-                # Balance correction was pending but no session ID available
-                logger.warning(
-                    "⚠️ Balance correction pending but no trading session ID available - skipping database update"
-                )
-                self._pending_balance_correction = False
-                self._pending_corrected_balance = None
-
-    def _start_runtime_services(self, symbol: str, timeframe: str) -> None:
-        """Start the order tracker, periodic reconciler, and WebSocket streams."""
-        # Start order tracker for monitoring order fills (live trading only)
-        if self.order_tracker and self.enable_live_trading:
-            self.order_tracker.start()
-            logger.info("📡 Order tracker started")
-
-        # Start periodic reconciler (live trading only, not paper mode)
-        if self.enable_live_trading and self.exchange_interface and self.trading_session_id:
-            try:
-                from src.engines.live.reconciliation import PeriodicReconciler
-
-                use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
-                self._periodic_reconciler = PeriodicReconciler(
-                    exchange_interface=self.exchange_interface,
-                    position_tracker=self.live_position_tracker,
-                    db_manager=self.db_manager,
-                    session_id=self.trading_session_id,
-                    on_critical=self._enter_close_only_mode,
-                    use_margin=use_margin,
-                    symbols=[self._active_symbol] if self._active_symbol else [],
-                    sweep_cooldown=self._orphan_sweep_cooldown,
-                    lock_registry=self._base_asset_locks,
-                    data_provider=self.data_provider,
-                )
-                self._periodic_reconciler.start()
-                logger.info("🔄 Periodic reconciler started")
-            except Exception as e:
-                logger.warning("Failed to start periodic reconciler: %s", e)
-                # A silently-disabled reconciler is exactly the kind of failure
-                # that ran invisible for months — surface it in system_events.
-                self._record_event(
-                    EventType.ERROR,
-                    f"Periodic reconciler failed to start: {e}",
-                    severity="error",
-                    component="reconciler",
-                    error_code="RECONCILER_START_FAILED",
-                    exc=e,
-                )
-
-        # Try to start WebSocket streams for reduced API weight
-        self._start_websocket_streams(symbol, timeframe)
-
-    def _run_main_loop_until_stopped(
-        self, symbol: str, timeframe: str, max_steps: int | None
-    ) -> None:
-        """Launch the trading-loop thread and block until it stops, then tear down."""
-        # Start main trading loop in separate thread
-        self.main_thread = threading.Thread(
-            target=self._run_trading_loop, args=(symbol, timeframe, max_steps)
-        )
-        self.main_thread.daemon = True
-        self.main_thread.start()
-
-        try:
-            # Keep main thread alive
-            while self.is_running and self.main_thread.is_alive():
-                time.sleep(1)
-        except KeyboardInterrupt:
-            logger.info("Received interrupt signal")
-        finally:
-            self.stop()
 
     def _enter_close_only_mode(self) -> None:
         """Enter close-only mode: no new entries, exits/stops/trailing still active."""

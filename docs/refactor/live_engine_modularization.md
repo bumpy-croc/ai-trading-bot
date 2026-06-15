@@ -45,6 +45,7 @@ engine keeps thin delegating wrappers (so call sites and test mock points are un
 | `strategy_hot_swap.py` | `StrategyHotSwapCoordinator` | Hot-swap / model-update lifecycle |
 | `ws_health.py` | `WebSocketHealthMonitor` | WS stream health + reconnect (lock-free single-writer) |
 | `recovery.py` | `LiveSessionRecoverer` | Startup recovery (balance, position reload, reconciliation) |
+| `startup.py` | `LiveStartupSequencer` | Bootstrap sequence: session recover/create + wiring, #668 carry-forward, #657 self-heal, account sync, runtime-service startup, loop launch (`start()` delegates here) |
 | `monitoring/` | `LiveAccountMonitor` + extractors | Account snapshots, status lines, indicator/sentiment/ml extractors |
 | `config.py` | `LiveEngineSettings` | Construction-time settings resolution (feature flags / env / config) |
 
