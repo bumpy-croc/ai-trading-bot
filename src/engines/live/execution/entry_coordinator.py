@@ -347,7 +347,10 @@ class LiveEntryCoordinator:
                         runtime_decision.signal if runtime_decision else None,
                         runtime_decision.regime if runtime_decision else None,
                     )
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "Stop loss price calculation failed for %s, using default: %s", symbol, e
+                )
                 if stop_loss is None:
                     stop_loss = float(current_price) * (
                         (1 - DEFAULT_STOP_LOSS_PCT)
@@ -379,7 +382,7 @@ class LiveEntryCoordinator:
                     float(current_price), signal, None  # regime context
                 )
             except Exception as e:
-                logger.debug("Component stop loss calculation failed: %s", e)
+                logger.warning("Component stop loss calculation failed for %s: %s", symbol, e)
                 stop_loss = float(current_price) * (
                     (1 - DEFAULT_STOP_LOSS_PCT)
                     if entry_side == PositionSide.LONG
@@ -398,7 +401,8 @@ class LiveEntryCoordinator:
                     if hasattr(state.strategy, "get_risk_overrides")
                     else None
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to get risk overrides for %s: %s", symbol, e)
                 overrides = None
 
             if overrides and ("stop_loss_pct" in overrides or "take_profit_pct" in overrides):
@@ -518,9 +522,9 @@ class LiveEntryCoordinator:
                 f"strength_{signal_strength:.2f}",
                 f"confidence_{signal_confidence:.2f}",
             ]
-            if stop_loss:
+            if stop_loss is not None:
                 entry_reasons.append(f"sl_{stop_loss:.2f}")
-            if take_profit:
+            if take_profit is not None:
                 entry_reasons.append(f"tp_{take_profit:.2f}")
 
             entry_signal = LiveEntrySignal(
@@ -558,11 +562,12 @@ class LiveEntryCoordinator:
                         correlation_id=position.order_id,
                     ) as balance_result:
                         state.current_balance = balance_result["new_balance"]
-                except (ValueError, Exception) as balance_err:
+                except Exception as balance_err:
                     logger.error(
                         "Failed to update balance for entry fee %s: %s. Aborting entry.",
                         symbol,
                         balance_err,
+                        exc_info=True,
                     )
                     # Critical: Entry executed but balance update failed
                     # Attempt emergency close to maintain consistency
@@ -574,8 +579,11 @@ class LiveEntryCoordinator:
                             # Validate entry_price to prevent division by zero
                             if position.entry_price <= 0:
                                 logger.error(
-                                    f"Cannot calculate emergency close quantity - invalid entry_price "
-                                    f"{position.entry_price} for {symbol}"
+                                    "Cannot calculate emergency close quantity - invalid "
+                                    "entry_price %s for %s",
+                                    position.entry_price,
+                                    symbol,
+                                    exc_info=True,
                                 )
                             else:
                                 # Use quantity from position - LiveEntryResult.position.quantity
@@ -769,7 +777,7 @@ class LiveEntryCoordinator:
                 return
 
             # Place server-side stop-loss order for protection with retry logic
-            if state.enable_live_trading and stop_loss and state.exchange_interface:
+            if state.enable_live_trading and stop_loss is not None and state.exchange_interface:
                 # Use stored quantity directly to ensure stop-loss covers exact position size
                 if position.quantity is not None and position.quantity > 0:
                     quantity = position.quantity
@@ -783,7 +791,7 @@ class LiveEntryCoordinator:
                     position_value = size * entry_balance
                     quantity = (
                         position_value / float(position.entry_price)
-                        if position.entry_price
+                        if position.entry_price is not None and position.entry_price > 0
                         else 0.0
                     )
 
