@@ -1993,7 +1993,8 @@ class LiveTradingEngine:
                     else:
                         # All strategies should be component-based
                         logger.error(
-                            f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
+                            "Strategy %s does not support component-based stop loss calculation",
+                            self.strategy.name,
                         )
                         short_stop_loss = current_price * (
                             1 + DEFAULT_STOP_LOSS_PCT
