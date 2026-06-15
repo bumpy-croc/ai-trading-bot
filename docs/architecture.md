@@ -86,6 +86,7 @@ ai-trading-bot/
 │   │   │
 │   │   ├── live/                 # Live trading engine
 │   │   │   ├── trading_engine.py # Real-time execution
+│   │   │   ├── startup.py        # Bootstrap sequence (LiveStartupSequencer)
 │   │   │   ├── loop_timing.py    # Trading-loop timing helpers
 │   │   │   ├── strategy_manager.py # Hot-swap strategy management
 │   │   │   └── execution/        # Entry/exit handling
@@ -298,6 +299,7 @@ Real-time execution with safety controls.
 - `loop_timing.py` - Trading-loop cadence + data-freshness helpers (`LiveLoopTimingCoordinator`): interruptible sleep, adaptive poll interval, candle-age/WS-buffer freshness gate. Leaf helpers behind a `Protocol` backref
 - `dynamic_risk_coordinator.py` - Per-entry dynamic-risk position-size adjustment + audit logging (`LiveDynamicRiskCoordinator`): drawdown/peak-aware sizing via the shared `DynamicRiskHandler`. Behind a `Protocol` backref
 - `recovery.py` - Startup recovery: session balance, persisted-position reload, exchange reconciliation (`LiveSessionRecoverer`)
+- `startup.py` - Bootstrap sequence (`LiveStartupSequencer`): session recover/create + wiring, #668 carry-forward, #657 self-heal, account sync, runtime-service startup, loop launch. The engine's public `start()` delegates here. Behind a `Protocol` backref
 - `strategy_runtime.py` - Strategy normalization + per-candle runtime decision pipeline (`StrategyRuntimeCoordinator`): config, component risk-context provider, `RuntimeContext` construction, decision processing, risk-param merge/clone
 - `strategy_hot_swap.py` - Hot-swap / model-update lifecycle (`StrategyHotSwapCoordinator`): public entry points, StrategyManager callbacks, loop-applied pending-update application, post-swap policy/risk refresh
 - `ws_health.py` - WebSocket stream-health subsystem (`WebSocketHealthMonitor`): WS startup, background health-monitor thread + loop, kline/user-stream staleness + reconnect/probe decisions, degraded-user hard-reconnect/restore, order-fill exit-queue drain. Lock-free single-writer model (health thread is the only writer of reconnect counters / `_ws_kline_active`; trading loop reads); state stays on the engine via a `Protocol` backref
