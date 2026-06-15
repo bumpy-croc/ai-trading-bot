@@ -49,6 +49,7 @@ from src.engines.live.config import LiveEngineSettings
 
 # Modular handlers (optional injection for testability)
 from src.engines.live.data.market_data_handler import MarketDataHandler
+from src.engines.live.dynamic_risk_coordinator import LiveDynamicRiskCoordinator
 from src.engines.live.execution.entry_coordinator import LiveEntryCoordinator
 from src.engines.live.execution.entry_handler import LiveEntryHandler
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
@@ -100,7 +101,6 @@ from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import (
     log_data_event,
     log_engine_event,
-    log_risk_event,
 )
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
@@ -287,6 +287,7 @@ class LiveTradingEngine:
         # ordering of the real-money entry path (#486).
         self.entry_coordinator = LiveEntryCoordinator(engine_state=self)
         self.exit_coordinator = LiveExitCoordinator(engine_state=self)
+        self.dynamic_risk_coordinator = LiveDynamicRiskCoordinator(engine_state=self)
         self.loop_timing_coordinator = LiveLoopTimingCoordinator(engine_state=self)
         self.market_data_coordinator = LiveMarketDataCoordinator(engine_state=self)
         self.order_fill_coordinator = LiveOrderFillCoordinator(engine_state=self)
@@ -858,88 +859,14 @@ class LiveTradingEngine:
         original_size: float,
         current_time: datetime,
     ) -> float:
-        """Apply dynamic risk adjustments to position size.
-
-        Reduces position size during drawdown or adverse market conditions
-        to preserve capital and prevent excessive losses.
-        """
-        if self.dynamic_risk_manager is None:
-            return original_size
-
-        try:
-            perf_metrics = self.performance_tracker.get_metrics()
-
-            # Guard against zero/None balances to prevent division by zero in drawdown calc
-            balance = (
-                float(self.current_balance)
-                if self.current_balance and self.current_balance > 0
-                else float(self.initial_balance)
-            )
-            peak = (
-                float(perf_metrics.peak_balance)
-                if perf_metrics.peak_balance and perf_metrics.peak_balance > 0
-                else balance
-            )
-            # Peak should never be less than current balance
-            peak_balance = max(peak, balance)
-
-            adjusted_size = self._dynamic_risk_handler.apply_dynamic_risk(
-                original_size=original_size,
-                current_time=current_time,
-                balance=balance,
-                peak_balance=peak_balance,
-                trading_session_id=self.trading_session_id,
-            )
-            self._log_dynamic_risk_adjustments()
-            return adjusted_size
-
-        except Exception as e:
-            logger.warning("Failed to apply dynamic risk adjustment: %s", e)
-            return original_size
+        """Apply dynamic risk adjustments to position size (delegated to LiveDynamicRiskCoordinator)."""
+        return self.dynamic_risk_coordinator.apply_dynamic_risk_adjustment(
+            original_size, current_time
+        )
 
     def _log_dynamic_risk_adjustments(self) -> None:
-        """Log dynamic risk adjustments for observability and audit."""
-        adjustments = self._dynamic_risk_handler.get_adjustment_objects(clear=True)
-        for adjustment in adjustments:
-            logger.info(
-                "🎛️ Dynamic risk adjustment applied: size factor=%.2f, reason=%s",
-                adjustment.position_size_factor,
-                adjustment.primary_reason,
-            )
-            # Log both factor values (for analysis) and sizes (for debugging)
-            log_risk_event(
-                "dynamic_risk_adjustment",
-                position_size_factor=adjustment.position_size_factor,
-                reason=adjustment.primary_reason,
-                original_value=1.0,
-                adjusted_value=adjustment.position_size_factor,
-                original_size=adjustment.original_size,
-                adjusted_size=adjustment.adjusted_size,
-                current_drawdown=adjustment.current_drawdown,
-            )
-
-            if self.db_manager and self.trading_session_id:
-                try:
-                    # Extract adjustment type from primary_reason (e.g., "drawdown_reduction" -> "drawdown")
-                    # Use safe extraction to handle edge cases where reason doesn't contain "_"
-                    reason = adjustment.primary_reason or "unknown"
-                    adjustment_type = reason.split("_")[0] if "_" in reason else reason
-
-                    # Log factor values (not position sizes) for backward compatibility
-                    self.db_manager.log_risk_adjustment(
-                        session_id=self.trading_session_id,
-                        adjustment_type=adjustment_type,
-                        trigger_reason=adjustment.primary_reason,
-                        parameter_name="position_size_factor",
-                        original_value=1.0,
-                        adjusted_value=adjustment.position_size_factor,
-                        adjustment_factor=adjustment.position_size_factor,
-                        current_drawdown=adjustment.current_drawdown,
-                        performance_score=None,
-                        volatility_level=None,
-                    )
-                except Exception as log_e:
-                    logger.warning("Failed to log risk adjustment to database: %s", log_e)
+        """Log dynamic risk adjustments for observability/audit (delegated to LiveDynamicRiskCoordinator)."""
+        return self.dynamic_risk_coordinator.log_dynamic_risk_adjustments()
 
     def _get_dynamic_risk_adjusted_params(self) -> RiskParameters:
         """Get risk parameters with dynamic adjustments applied"""

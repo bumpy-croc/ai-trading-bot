@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `LiveTradingEngine` dynamic-risk adjustment extracted into
+  `LiveDynamicRiskCoordinator` (`engines/live/dynamic_risk_coordinator.py`):
+  `_apply_dynamic_risk_adjustment` and `_log_dynamic_risk_adjustments` move
+  verbatim (mechanical `self.` → `state.` against an engine backref
+  `Protocol`); the engine keeps thin delegating wrappers (still called by the
+  trading loop and by `LiveEntryCoordinator` via `state._apply_dynamic_risk_adjustment`).
+  Adds direct `LiveDynamicRiskCoordinator` unit tests. Pure refactor — backtest
+  determinism fingerprint byte-identical; engine `trading_engine.py` ~2,570 →
+  ~2,490 lines. (#486)
 - `LiveTradingEngine` trading-loop timing helpers extracted into
   `LiveLoopTimingCoordinator` (`engines/live/loop_timing.py`):
   `_sleep_with_interrupt`, `_calculate_adaptive_interval`, and `_is_data_fresh`
