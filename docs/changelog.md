@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `LiveTradingEngine._trading_loop` readability: extracted the ~100-line legacy
+  duck-typed short-entry path into `_process_legacy_short_entry()` and the
+  periodic account snapshot + exchange-sync block into
+  `_log_periodic_account_state()`. Both are behavior-preserving moves (the loop
+  body shrinks ~390 → ~250 lines); the loop, its per-iteration control flow, and
+  the capital-critical error-handling/backoff block stay inline on the engine.
+  Pure refactor — backtest determinism fingerprint byte-identical. (#486)
 - `LiveTradingEngine.start()` decomposed from a ~327-line bootstrap monolith into
   a thin ~18-line phase orchestrator that calls cohesive, single-purpose private
   helpers (`_begin_session_runtime`, `_bootstrap_trading_session`,

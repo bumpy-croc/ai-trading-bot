@@ -1830,146 +1830,12 @@ class LiveTradingEngine:
                         runtime_decision=runtime_decision,
                     )
                     # Check for short entry via legacy hook when available
-                    if (not self._is_runtime_strategy()) and callable(
-                        getattr(self.strategy, "check_short_entry_conditions", None)
-                    ):
-                        # Legacy duck-typed hook; presence is verified by the
-                        # callable(getattr(...)) guard above.
-                        short_entry_signal = cast(Any, self.strategy).check_short_entry_conditions(
-                            df, current_index
-                        )
-                        if short_entry_signal:
-                            try:
-                                overrides = (
-                                    self.strategy.get_risk_overrides()
-                                    if hasattr(self.strategy, "get_risk_overrides")
-                                    else None
-                                )
-                            except Exception:
-                                overrides = None
-                            indicators = self._extract_indicators(df, current_index)
-                            # Correlation context for short entries
-                            short_correlation_ctx = self._get_correlation_context(
-                                symbol,
-                                df,
-                                overrides,
-                                index=current_index,
-                            )
-                            if overrides and overrides.get("position_sizer"):
-                                short_fraction = self.risk_manager.calculate_position_fraction(
-                                    df=df,
-                                    index=current_index,
-                                    balance=self.current_balance,
-                                    price=current_price,
-                                    indicators=indicators,
-                                    strategy_overrides=overrides,
-                                    correlation_ctx=short_correlation_ctx,
-                                )
-                                short_fraction = min(short_fraction, self.max_position_size)
-                                short_position_size = short_fraction
-                            else:
-                                # All strategies should be component-based
-                                logger.error(
-                                    "Strategy %s does not support component-based position sizing",
-                                    self.strategy.name,
-                                )
-                                short_position_size = 0.0
-
-                            # Apply dynamic risk adjustments
-                            short_position_size = self._apply_dynamic_risk_adjustment(
-                                short_position_size,
-                                current_time,
-                            )
-                            if short_position_size > 0:
-                                if overrides and (
-                                    ("stop_loss_pct" in overrides)
-                                    or ("take_profit_pct" in overrides)
-                                ):
-                                    short_stop_loss, short_take_profit = (
-                                        self.risk_manager.compute_sl_tp(
-                                            df=df,
-                                            index=current_index,
-                                            entry_price=current_price,
-                                            side="short",
-                                            strategy_overrides=overrides,
-                                        )
-                                    )
-                                    if short_take_profit is None:
-                                        short_take_profit = current_price * (
-                                            1
-                                            - getattr(
-                                                self.strategy,
-                                                "take_profit_pct",
-                                                DEFAULT_TAKE_PROFIT_PCT,
-                                            )
-                                        )
-                                else:
-                                    # All strategies should be component-based
-                                    logger.error(
-                                        f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
-                                    )
-                                    short_stop_loss = current_price * (
-                                        1 + DEFAULT_STOP_LOSS_PCT
-                                    )  # Default 5% stop for short
-                                    short_take_profit = current_price * (
-                                        1
-                                        - getattr(
-                                            self.strategy,
-                                            "take_profit_pct",
-                                            DEFAULT_TAKE_PROFIT_PCT,
-                                        )
-                                    )
-                                self._execute_entry(
-                                    symbol=symbol,
-                                    side=PositionSide.SHORT,
-                                    size=short_position_size,
-                                    price=float(current_price),
-                                    stop_loss=short_stop_loss,
-                                    take_profit=short_take_profit,
-                                    signal_strength=0.0,
-                                    signal_confidence=0.0,
-                                )
+                    self._process_legacy_short_entry(
+                        df, current_index, symbol, current_price, current_time
+                    )
                 # Update performance metrics
                 self._update_performance_metrics()
-                # Log account snapshot to database periodically (configurable interval)
-                now = datetime.now(UTC)
-                if self.account_snapshot_interval > 0 and (
-                    self.last_account_snapshot is None
-                    or (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval
-                ):
-                    self._log_account_snapshot()
-                    self.last_account_snapshot = now
-
-                    # Perform periodic account synchronization
-                    if self.account_synchronizer and self.enable_live_trading:
-                        try:
-                            sync_result = self.account_synchronizer.sync_account_data(
-                                symbol=self._active_symbol
-                            )
-                            if sync_result.success:
-                                logger.debug("Periodic account sync completed")
-                                # Apply any balance correction to the in-memory balance
-                                # that drives sizing (the DB is already updated inside the
-                                # sync). Without this a mid-session margin-equity
-                                # correction would not reach live sizing until restart.
-                                balance_sync = sync_result.data.get("balance_sync", {})
-                                if balance_sync.get("corrected", False):
-                                    corrected = balance_sync.get("new_balance")
-                                    if corrected is not None:
-                                        with self._balance_lock:
-                                            self.current_balance = corrected
-                                        logger.info(
-                                            "💰 Balance corrected mid-session from "
-                                            "exchange: $%.2f",
-                                            corrected,
-                                        )
-                            else:
-                                logger.warning(
-                                    "Periodic account sync failed: %s",
-                                    sync_result.message,
-                                )
-                        except Exception as e:
-                            logger.error("Periodic account sync error: %s", e)
+                self._log_periodic_account_state()
                 # Log status periodically
                 if (
                     self.performance_tracker.get_metrics().total_trades % 10 == 0
@@ -2044,6 +1910,154 @@ class LiveTradingEngine:
 
         logger.info("Trading loop ended")
         self._finalize_runtime()
+
+    def _process_legacy_short_entry(
+        self,
+        df: pd.DataFrame,
+        current_index: int,
+        symbol: str,
+        current_price: float,
+        current_time: datetime,
+    ) -> None:
+        """Evaluate and execute a legacy duck-typed short entry (non-runtime strategies)."""
+        if (not self._is_runtime_strategy()) and callable(
+            getattr(self.strategy, "check_short_entry_conditions", None)
+        ):
+            # Legacy duck-typed hook; presence is verified by the
+            # callable(getattr(...)) guard above.
+            short_entry_signal = cast(Any, self.strategy).check_short_entry_conditions(
+                df, current_index
+            )
+            if short_entry_signal:
+                try:
+                    overrides = (
+                        self.strategy.get_risk_overrides()
+                        if hasattr(self.strategy, "get_risk_overrides")
+                        else None
+                    )
+                except Exception:
+                    overrides = None
+                indicators = self._extract_indicators(df, current_index)
+                # Correlation context for short entries
+                short_correlation_ctx = self._get_correlation_context(
+                    symbol,
+                    df,
+                    overrides,
+                    index=current_index,
+                )
+                if overrides and overrides.get("position_sizer"):
+                    short_fraction = self.risk_manager.calculate_position_fraction(
+                        df=df,
+                        index=current_index,
+                        balance=self.current_balance,
+                        price=current_price,
+                        indicators=indicators,
+                        strategy_overrides=overrides,
+                        correlation_ctx=short_correlation_ctx,
+                    )
+                    short_fraction = min(short_fraction, self.max_position_size)
+                    short_position_size = short_fraction
+                else:
+                    # All strategies should be component-based
+                    logger.error(
+                        "Strategy %s does not support component-based position sizing",
+                        self.strategy.name,
+                    )
+                    short_position_size = 0.0
+
+                # Apply dynamic risk adjustments
+                short_position_size = self._apply_dynamic_risk_adjustment(
+                    short_position_size,
+                    current_time,
+                )
+                if short_position_size > 0:
+                    if overrides and (
+                        ("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)
+                    ):
+                        short_stop_loss, short_take_profit = self.risk_manager.compute_sl_tp(
+                            df=df,
+                            index=current_index,
+                            entry_price=current_price,
+                            side="short",
+                            strategy_overrides=overrides,
+                        )
+                        if short_take_profit is None:
+                            short_take_profit = current_price * (
+                                1
+                                - getattr(
+                                    self.strategy,
+                                    "take_profit_pct",
+                                    DEFAULT_TAKE_PROFIT_PCT,
+                                )
+                            )
+                    else:
+                        # All strategies should be component-based
+                        logger.error(
+                            "Strategy %s does not support component-based stop loss calculation",
+                            self.strategy.name,
+                        )
+                        short_stop_loss = current_price * (
+                            1 + DEFAULT_STOP_LOSS_PCT
+                        )  # Default 5% stop for short
+                        short_take_profit = current_price * (
+                            1
+                            - getattr(
+                                self.strategy,
+                                "take_profit_pct",
+                                DEFAULT_TAKE_PROFIT_PCT,
+                            )
+                        )
+                    self._execute_entry(
+                        symbol=symbol,
+                        side=PositionSide.SHORT,
+                        size=short_position_size,
+                        price=float(current_price),
+                        stop_loss=short_stop_loss,
+                        take_profit=short_take_profit,
+                        signal_strength=0.0,
+                        signal_confidence=0.0,
+                    )
+
+    def _log_periodic_account_state(self) -> None:
+        """Log the periodic account snapshot and run periodic exchange account sync."""
+        # Log account snapshot to database periodically (configurable interval)
+        now = datetime.now(UTC)
+        if self.account_snapshot_interval > 0 and (
+            self.last_account_snapshot is None
+            or (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval
+        ):
+            self._log_account_snapshot()
+            self.last_account_snapshot = now
+
+            # Perform periodic account synchronization
+            if self.account_synchronizer and self.enable_live_trading:
+                try:
+                    sync_result = self.account_synchronizer.sync_account_data(
+                        symbol=self._active_symbol
+                    )
+                    if sync_result.success:
+                        logger.debug("Periodic account sync completed")
+                        # Apply any balance correction to the in-memory balance
+                        # that drives sizing (the DB is already updated inside the
+                        # sync). Without this a mid-session margin-equity
+                        # correction would not reach live sizing until restart.
+                        balance_sync = sync_result.data.get("balance_sync", {})
+                        if balance_sync.get("corrected", False):
+                            corrected = balance_sync.get("new_balance")
+                            if corrected is not None:
+                                with self._balance_lock:
+                                    self.current_balance = corrected
+                                logger.info(
+                                    "💰 Balance corrected mid-session from " "exchange: $%.2f",
+                                    corrected,
+                                )
+                    else:
+                        logger.warning(
+                            "Periodic account sync failed: %s",
+                            sync_result.message,
+                        )
+                except Exception as e:
+                    logger.error("Periodic account sync error: %s", e)
 
     @staticmethod
     def _is_transient_db_error(exc: BaseException) -> bool:

@@ -53,7 +53,7 @@ engine keeps thin delegating wrappers (so call sites and test mock points are un
 | Method | Lines (develop) | Nature |
 |---|---|---|
 | ~~`__init__`~~ | ~~~534~~ → ~110 | **DONE (Step A).** Decomposed into 15 cohesive private initializer helpers; now a thin phase orchestrator. |
-| `_trading_loop` | ~390 | **Orchestrator core — stays.** Readability-only improvements optional (Step C). |
+| `_trading_loop` | ~390 → ~250 | **Orchestrator core — stays.** Step C extracted the legacy short-entry + periodic-account-state blocks; remaining per-iteration flow + error handling kept inline by design. |
 | ~~`start`~~ | ~~~326~~ → ~18 | **DONE (Step B).** Decomposed into 7 cohesive phase helpers; now a thin orchestrator. |
 | `_init_modular_handlers` | ~112 | Default-vs-injected handler construction. Could fold into the Step A helper family or a builder later. |
 | `stop` | ~86 | Lifecycle teardown. |
@@ -178,9 +178,17 @@ streams) → loop kickoff. Parity byte-identical. (A future `LiveStartupSequence
 coordinator is the more-architectural end-state, mirroring the builder-vs-
 phase-helper trade-off noted in Step A.)
 
-### Step C (optional, behavior-preserving) — `_trading_loop` readability
-Extract per-iteration phases (data fetch → freshness/context gate → entry/exit eval →
-cadence/sleep → error handling) into named private helpers. The loop **stays** on the engine.
+### Step C (optional, behavior-preserving) — `_trading_loop` readability (DONE)
+Extracted the two largest **pure-sequential** blocks into named private helpers:
+the ~100-line legacy duck-typed short-entry path (`_process_legacy_short_entry`)
+and the periodic account snapshot + exchange-sync block
+(`_log_periodic_account_state`). The loop dropped ~390 → ~250 lines and now reads
+as named phases. **Deliberately left inline:** the early-`continue` data-fetch /
+freshness / context-readiness guards (already terse) and the capital-critical
+error-handling/backoff block — its `continue`/`break` control flow is clearer in
+place than behind a returns-a-signal helper, and the loop is **not** parity-
+guarded (live-only), so minimizing control-flow transforms there is the safer
+call. The loop **stays** on the engine.
 
 ### Step D — Protocol-tightening + test-consistency sweep (tracked)
 The **entry** and **exit** coordinators still use bare `Any` for some `Protocol` attrs
@@ -328,7 +336,8 @@ The bot reviews each PR and flags carried-over CODE.md nits: f-strings in loggin
 | #821 | dynamic-risk → `LiveDynamicRiskCoordinator` (+ tests folded in) |
 | #822 | this handover doc |
 | #823 | **Step A** — `__init__` decomposed into 15 cohesive private initializer helpers; engine `__init__` ~534 → ~110 lines. Also aligned `LiveLoopTimingEngineState.data_freshness_threshold` to `int`. |
-| (this branch) | **Step B** — `start()` decomposed into 7 cohesive private phase helpers; ~327 → ~18 lines. |
+| #824 | **Step B** — `start()` decomposed into 7 cohesive private phase helpers; ~327 → ~18 lines. |
+| (this branch) | **Step C** — `_trading_loop` short-entry + periodic-account blocks extracted; ~390 → ~250 lines. |
 
 Engine: **6,558 → 2,493 lines** through #821; Step A keeps the engine's total
 line count roughly flat (the slim `__init__` is offset by per-helper
