@@ -129,7 +129,7 @@ Use this for every extraction. It is the established pattern across all coordina
 
 Each item is its own PR with the full workflow in §6. Re-grep line numbers first.
 
-### Step A (highest value) — Construction slim-down ✅ DONE
+### Step A (highest value) — Construction slim-down (DONE)
 `__init__` (~534) has been decomposed into 15 cohesive private initializer helpers
 (see the changelog entry / ledger below); it is now a thin ~110-line phase
 orchestrator. Construction ordering, the 35-param signature, and every public
