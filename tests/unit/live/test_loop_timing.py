@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, create_autospec
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pandas as pd
 import pytest
@@ -25,6 +26,21 @@ from src.engines.live.loop_timing import (
 )
 
 pytestmark = pytest.mark.fast
+
+
+@contextmanager
+def _frozen_clock(hour: int):
+    """Pin loop_timing's ``datetime.now(UTC)`` to a fixed instant at ``hour``.
+
+    ``calculate_adaptive_interval`` reads the wall clock for its off-hours
+    multiplier, so tests must pin it to stay deterministic across CI run times.
+    ``.now`` returns a real datetime (so ``.replace`` / arithmetic still work);
+    only the instant is fixed.
+    """
+    fixed = datetime(2025, 1, 1, hour, 30, 0, tzinfo=UTC)
+    with patch("src.engines.live.loop_timing.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed
+        yield fixed
 
 
 def _make_state(**overrides) -> MagicMock:
@@ -59,21 +75,31 @@ def test_sleep_with_interrupt_breaks_when_stop_event_set():
 
 
 def test_calculate_adaptive_interval_no_positions_backs_off():
-    # No open positions -> interval doubles (capped at max).
+    # No open positions -> interval doubles (capped at max). Daytime so the
+    # off-hours multiplier doesn't fire.
     state = _make_state()
-    interval = LiveLoopTimingCoordinator(state).calculate_adaptive_interval()
+    with _frozen_clock(hour=12):
+        interval = LiveLoopTimingCoordinator(state).calculate_adaptive_interval()
     assert interval == 120  # 60 * 2
 
 
 def test_calculate_adaptive_interval_recent_activity_speeds_up():
-    pos = MagicMock()
-    pos.entry_time = datetime.now(UTC)  # entered within the last hour
     state = _make_state()
-    state.live_position_tracker.positions = {"p1": pos}
     state.live_position_tracker.position_count = 1
-
-    interval = LiveLoopTimingCoordinator(state).calculate_adaptive_interval()
+    with _frozen_clock(hour=12) as now:
+        pos = MagicMock()
+        pos.entry_time = now  # entered within the last hour
+        state.live_position_tracker.positions = {"p1": pos}
+        interval = LiveLoopTimingCoordinator(state).calculate_adaptive_interval()
     assert interval == 30  # max(min_check_interval=10, 60 // 2)
+
+
+def test_calculate_adaptive_interval_off_hours_scales_up():
+    # Off-hours (UTC hour > 22): no positions doubles to 120, then x1.5 -> 180.
+    state = _make_state()
+    with _frozen_clock(hour=23):
+        interval = LiveLoopTimingCoordinator(state).calculate_adaptive_interval()
+    assert interval == 180  # min(300, (60 * 2) * 1.5)
 
 
 def test_is_data_fresh_false_on_empty_frame():
