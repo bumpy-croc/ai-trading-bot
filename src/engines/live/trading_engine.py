@@ -2462,7 +2462,7 @@ class LiveTradingEngine:
             logger.error("Failed to send alert: %s", e, exc_info=True)
             return False
 
-    def _sleep_with_interrupt(self, seconds: float):
+    def _sleep_with_interrupt(self, seconds: float) -> None:
         """Sleep in small increments to allow for interrupt (delegated to LiveLoopTimingCoordinator)."""
         return self.loop_timing_coordinator.sleep_with_interrupt(seconds)
 

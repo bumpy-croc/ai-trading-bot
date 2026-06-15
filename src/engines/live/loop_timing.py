@@ -49,7 +49,7 @@ class LiveLoopTimingCoordinator:
         """Bind to the engine's live state (see protocol for the surface)."""
         self._state = engine_state
 
-    def sleep_with_interrupt(self, seconds: float):
+    def sleep_with_interrupt(self, seconds: float) -> None:
         """Sleep in small increments to allow for interrupt and float seconds"""
         state = self._state
         end_time = time.time() + seconds
@@ -67,7 +67,7 @@ class LiveLoopTimingCoordinator:
 
         # Factor in recent trading activity — use naive UTC for comparison
         # since positions from the database store naive UTC timestamps
-        now_naive = datetime.utcnow()
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         one_hour_ago = now_naive - timedelta(hours=1)
         recent_trades = len(
             [
