@@ -28,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guards the guarantee. (#486 parity work)
 
 ### Changed
+- Entry decision + execution pipeline extracted from `LiveTradingEngine` into
+  `src/engines/live/execution/entry_coordinator.py` (`LiveEntryCoordinator`,
+  #486): `check_entry_conditions` (signal/sizing/SL-TP derivation) and the
+  base-asset-locked `execute_entry` → `execute_entry_locked` order path
+  (duplicate/limit guards, balance + fee accounting, position tracking, risk
+  re-registration, server-side stop-loss placement, and the emergency-close
+  fallbacks). This is a real-money path, so the move is verbatim — the methods
+  are unchanged except for `self.`→`state.` against an engine backref; the
+  base-asset locking and ordering (#703) are preserved. The two engine methods
+  callers mock (`_execute_exit`, `_record_event`) are invoked through the
+  backref so test mocks still intercept. The engine keeps thin delegating
+  wrappers, dropping ~620 lines (to ~3,575). The deterministic backtest↔live
+  parity fingerprint is byte-identical before and after the extraction.
 - WebSocket stream-health subsystem extracted from `LiveTradingEngine` into
   `src/engines/live/ws_health.py` (`WebSocketHealthMonitor`, #486): WS stream
   startup, the background health-monitor thread and its loop, kline/user-stream

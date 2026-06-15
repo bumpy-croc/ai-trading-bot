@@ -733,14 +733,18 @@ class TestCloseOnlyMode:
     """Tests for close-only mode behavior in trading engine context."""
 
     def test_close_only_mode_skips_entries(self):
-        """Close-only mode causes _check_entry_conditions to return early."""
-        from src.engines.live.trading_engine import LiveTradingEngine
+        """Close-only mode causes the entry check to return early.
 
-        engine = MagicMock(spec=LiveTradingEngine)
-        engine._close_only_mode = True
-        # Call the real method on the mock instance
-        LiveTradingEngine._check_entry_conditions(
-            engine,
+        The entry-decision logic lives in ``LiveEntryCoordinator.check_entry_conditions``
+        (the engine's ``_check_entry_conditions`` is a thin wrapper, #486); the
+        close-only guard reads engine state through the coordinator's backref.
+        """
+        from src.engines.live.execution.entry_coordinator import LiveEntryCoordinator
+
+        state = MagicMock()
+        state._close_only_mode = True
+        coordinator = LiveEntryCoordinator(engine_state=state)
+        coordinator.check_entry_conditions(
             df=MagicMock(),
             current_index=0,
             symbol="BTCUSDT",
@@ -748,22 +752,22 @@ class TestCloseOnlyMode:
             current_time=datetime.now(UTC),
         )
         # _is_runtime_strategy should NOT be called — early return before it
-        engine._is_runtime_strategy.assert_not_called()
+        state._is_runtime_strategy.assert_not_called()
 
     def test_close_only_mode_allows_exits(self):
         """Close-only mode does not block when disabled (entry check proceeds)."""
-        from src.engines.live.trading_engine import LiveTradingEngine
+        from src.engines.live.execution.entry_coordinator import LiveEntryCoordinator
 
-        engine = MagicMock(spec=LiveTradingEngine)
-        engine._close_only_mode = False
+        state = MagicMock()
+        state._close_only_mode = False
         # The method will proceed past the guard and call _is_runtime_strategy.
         # Let it raise to short-circuit the rest — we only care that the guard
         # did NOT block execution.
-        engine._is_runtime_strategy.side_effect = StopIteration("short-circuit")
+        state._is_runtime_strategy.side_effect = StopIteration("short-circuit")
+        coordinator = LiveEntryCoordinator(engine_state=state)
 
         with pytest.raises(StopIteration):
-            LiveTradingEngine._check_entry_conditions(
-                engine,
+            coordinator.check_entry_conditions(
                 df=MagicMock(),
                 current_index=0,
                 symbol="BTCUSDT",
@@ -771,7 +775,7 @@ class TestCloseOnlyMode:
                 current_time=datetime.now(UTC),
             )
         # _is_runtime_strategy IS called — not blocked by close-only mode
-        engine._is_runtime_strategy.assert_called_once()
+        state._is_runtime_strategy.assert_called_once()
 
 
 # ---------- _find_matching_order Tests ----------

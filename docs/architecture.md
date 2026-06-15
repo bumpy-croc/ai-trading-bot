@@ -288,6 +288,7 @@ Real-time execution with safety controls.
 - `trading_engine.py` - Orchestration: main loop, component wiring, lifecycle
 - `strategy_manager.py` - Hot-swap orchestration
 - `execution/entry_handler.py` - Entry signal processing
+- `execution/entry_coordinator.py` - Entry decision + execution pipeline (`LiveEntryCoordinator`): signal/sizing/SL-TP derivation and the base-asset-locked order path (guards, balance+fee accounting, position tracking, risk re-registration, stop-loss placement, emergency-close fallbacks, #703). Reads/writes engine state via a `Protocol` backref
 - `execution/exit_handler.py` - Exit signal processing
 - `execution/stop_loss_manager.py` - All exchange-facing stop-loss lifecycle calls (place/cancel/query/re-protect)
 - `recovery.py` - Startup recovery: session balance, persisted-position reload, exchange reconciliation (`LiveSessionRecoverer`)

@@ -45,7 +45,6 @@ from src.config.feature_flags import is_enabled
 from src.data_providers.binance_provider import BinanceProvider, WebSocketState
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
-from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import EventType, TradeSource
@@ -53,7 +52,8 @@ from src.engines.live.config import LiveEngineSettings
 
 # Modular handlers (optional injection for testability)
 from src.engines.live.data.market_data_handler import MarketDataHandler
-from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
+from src.engines.live.execution.entry_coordinator import LiveEntryCoordinator
+from src.engines.live.execution.entry_handler import LiveEntryHandler
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
 from src.engines.live.execution.position_tracker import (
@@ -112,7 +112,7 @@ from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Position as ComponentPosition
-from src.strategies.components import RuntimeContext, Signal, SignalDirection, StrategyRuntime
+from src.strategies.components import RuntimeContext, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
 
 from .account_sync import AccountSynchronizer
@@ -283,6 +283,11 @@ class LiveTradingEngine:
         # engine attrs at call time, preserving the lock-free single-writer
         # threading model (#486).
         self.ws_health_monitor = WebSocketHealthMonitor(engine_state=self)
+        # Entry decision + execution pipeline. Holds no state of its own; reads/
+        # writes engine state (balance, trackers, risk manager, session) through
+        # the engine backref at call time, preserving the base-asset locking and
+        # ordering of the real-money entry path (#486).
+        self.entry_coordinator = LiveEntryCoordinator(engine_state=self)
         self._configure_strategy(strategy)
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
@@ -2488,286 +2493,14 @@ class LiveTradingEngine:
         current_time: datetime,
         runtime_decision=None,
     ):
-        """Check if new positions should be opened"""
-
-        # Close-only mode: skip all entry signals, exits/stops still active
-        if self._close_only_mode:
-            logger.debug("Close-only mode active — skipping entry check")
-            return
-
-        use_runtime = self._is_runtime_strategy()
-        entry_signal = False
-        position_size = 0.0
-        entry_side = PositionSide.LONG
-        runtime_strength = 0.0
-        runtime_confidence = 0.0
-        stop_loss = None
-        take_profit = None
-        overrides = None
-
-        indicators = self._extract_indicators(df, current_index)
-        sentiment_data = self._extract_sentiment_data(df, current_index)
-        ml_predictions = self._extract_ml_predictions(df, current_index)
-
-        if use_runtime:
-            perf_metrics = self.performance_tracker.get_metrics()
-            # Pass symbol/timeframe/df/index so LiveEntryHandler can run
-            # correlation control. These are required keyword args of the
-            # handler's correlation guard (see LiveEntryHandler.process_runtime_decision
-            # at src/engines/live/execution/entry_handler.py:208-222) — without
-            # them, correlation_handler.apply_correlation_control is silently
-            # skipped, so the live engine over-concentrates in correlated pairs
-            # that the backtest engine de-risks.
-            entry_signal_result = self.live_entry_handler.process_runtime_decision(
-                runtime_decision=runtime_decision,
-                balance=self.current_balance,
-                current_price=float(current_price),
-                current_time=datetime.now(UTC),
-                symbol=symbol,
-                timeframe=self.timeframe,
-                df=df,
-                index=current_index,
-                peak_balance=perf_metrics.peak_balance or self.current_balance,
-                trading_session_id=self.trading_session_id,
-            )
-            if entry_signal_result.should_enter and entry_signal_result.side is not None:
-                entry_signal = True
-                entry_side = entry_signal_result.side
-                position_size = entry_signal_result.size_fraction
-                stop_loss = entry_signal_result.stop_loss
-                take_profit = entry_signal_result.take_profit
-                runtime_strength = entry_signal_result.signal_strength
-                runtime_confidence = entry_signal_result.signal_confidence
-        elif isinstance(self.strategy, ComponentStrategy):
-            # Component-based strategy: use process_candle() for decision
-            # Note: runtime_decision should already be populated if this is a component strategy
-            # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper.
-            # Pass the live positions list so strategies that consult
-            # current_positions (anti-pyramiding, correlation-aware sizing,
-            # etc.) see the same view they would in the StrategyRuntime path
-            # and in backtest. Previously this hardcoded ``None`` and silently
-            # diverged from backtest.
-            try:
-                # Fall back to the most recent close (df[-1]) when
-                # current_index is past the end — never to 0.0, which would
-                # produce a -100% pnl_percent in ComponentPosition and could
-                # trigger forced-exit logic in strategies that consult
-                # current_positions.
-                if len(df) == 0:
-                    fallback_price = 0.0
-                elif current_index < len(df):
-                    fallback_price = float(df["close"].iloc[current_index])
-                else:
-                    fallback_price = float(df["close"].iloc[-1])
-                current_positions = self._build_component_positions(fallback_price)
-                decision = self.strategy.process_candle(
-                    df,
-                    current_index,
-                    self.current_balance,
-                    current_positions or None,
-                )
-                self._apply_policies_from_decision(decision)
-
-                notional_size = float(decision.position_size or 0.0)
-                balance = float(self.current_balance or 0.0)
-                size_fraction = 0.0 if balance <= 0 else max(0.0, notional_size / balance)
-                bounded_fraction = min(size_fraction, self.max_position_size)
-
-                if decision.signal.direction == SignalDirection.BUY and bounded_fraction > 0:
-                    entry_signal = True
-                    entry_side = PositionSide.LONG
-                    position_size = bounded_fraction
-                    runtime_strength = decision.signal.strength
-                    runtime_confidence = decision.signal.confidence
-                elif decision.signal.direction == SignalDirection.SELL and bounded_fraction > 0:
-                    entry_signal = True
-                    entry_side = PositionSide.SHORT
-                    position_size = bounded_fraction
-                    runtime_strength = decision.signal.strength
-                    runtime_confidence = decision.signal.confidence
-            except Exception as e:
-                logger.warning("Component strategy decision failed: %s", e)
-                entry_signal = False
-        else:
-            # All strategies should be component-based
-            logger.error("Strategy %s is not a component-based strategy", self.strategy.name)
-            entry_signal = False
-
-        if entry_signal and not use_runtime:
-            # Component strategies supply their own sizing. Retain correlation context computation
-            # for downstream consumers that expect it to be populated as part of the entry check.
-            self._get_correlation_context(symbol, df, None, index=current_index)
-
-        if position_size > 0 and not use_runtime:
-            position_size = self._apply_dynamic_risk_adjustment(position_size, current_time)
-
-        if self.db_manager:
-            # Prepare logging data - include TradingDecision data if available
-            log_reasons = [
-                (
-                    "runtime_entry"
-                    if use_runtime
-                    else "entry_conditions_met" if entry_signal else "entry_conditions_not_met"
-                ),
-                (f"position_size_{position_size:.4f}" if position_size > 0 else "no_position_size"),
-                f"max_positions_check_{self.live_position_tracker.position_count}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}",
-                (
-                    f"enter_short_{bool(getattr(runtime_decision, 'metadata', {}).get('enter_short'))}"
-                    if use_runtime and runtime_decision is not None
-                    else "enter_short_n/a"
-                ),
-            ]
-
-            # Add regime context if available from TradingDecision
-            if runtime_decision and hasattr(runtime_decision, "regime") and runtime_decision.regime:
-                regime = runtime_decision.regime
-                log_reasons.append(
-                    f"regime_trend_{regime.trend.value if hasattr(regime.trend, 'value') else regime.trend}"
-                )
-                log_reasons.append(
-                    f"regime_volatility_{regime.volatility.value if hasattr(regime.volatility, 'value') else regime.volatility}"
-                )
-                log_reasons.append(f"regime_confidence_{regime.confidence:.2f}")
-
-            # Add risk metrics if available from TradingDecision
-            if (
-                runtime_decision
-                and hasattr(runtime_decision, "risk_metrics")
-                and runtime_decision.risk_metrics
-            ):
-                for key, value in runtime_decision.risk_metrics.items():
-                    if isinstance(value, int | float):
-                        log_reasons.append(f"risk_{key}_{value:.4f}")
-
-            self.db_manager.log_strategy_execution(
-                strategy_name=self._strategy_name(),
-                symbol=symbol,
-                signal_type="entry",
-                action_taken=(
-                    "opened_long"
-                    if entry_signal and position_size > 0 and entry_side == PositionSide.LONG
-                    else (
-                        "opened_short"
-                        if entry_signal and position_size > 0 and entry_side == PositionSide.SHORT
-                        else "no_action"
-                    )
-                ),
-                price=current_price,
-                timeframe="1m",
-                signal_strength=runtime_strength if use_runtime else (1.0 if entry_signal else 0.0),
-                confidence_score=(
-                    runtime_confidence
-                    if use_runtime
-                    else indicators.get("prediction_confidence", 0.5)
-                ),
-                indicators=indicators,
-                sentiment_data=sentiment_data if sentiment_data else None,
-                ml_predictions=ml_predictions if ml_predictions else None,
-                position_size=position_size if position_size > 0 else None,
-                reasons=log_reasons,
-                volume=indicators.get("volume"),
-                volatility=indicators.get("volatility"),
-                session_id=self.trading_session_id,
-            )
-
-        if not entry_signal or position_size <= 0:
-            return
-
-        if use_runtime and self._component_strategy is not None:
-            try:
-                if stop_loss is None:
-                    stop_loss = self._component_strategy.get_stop_loss_price(
-                        float(current_price),
-                        runtime_decision.signal if runtime_decision else None,
-                        runtime_decision.regime if runtime_decision else None,
-                    )
-            except Exception:
-                if stop_loss is None:
-                    stop_loss = float(current_price) * (
-                        (1 - DEFAULT_STOP_LOSS_PCT)
-                        if entry_side == PositionSide.LONG
-                        else (1 + DEFAULT_STOP_LOSS_PCT)
-                    )
-            if take_profit is None:
-                tp_pct = self._resolve_take_profit_pct()
-                take_profit = (
-                    float(current_price) * (1 + tp_pct)
-                    if entry_side == PositionSide.LONG
-                    else float(current_price) * (1 - tp_pct)
-                )
-        elif isinstance(self.strategy, ComponentStrategy):
-            # Component-based strategy: use get_stop_loss_price()
-            try:
-                # Create a signal from the decision
-                signal = Signal(
-                    direction=(
-                        SignalDirection.BUY
-                        if entry_side == PositionSide.LONG
-                        else SignalDirection.SELL
-                    ),
-                    strength=runtime_strength,
-                    confidence=runtime_confidence,
-                    metadata={},
-                )
-                stop_loss = self.strategy.get_stop_loss_price(
-                    float(current_price), signal, None  # regime context
-                )
-            except Exception as e:
-                logger.debug("Component stop loss calculation failed: %s", e)
-                stop_loss = float(current_price) * (
-                    (1 - DEFAULT_STOP_LOSS_PCT)
-                    if entry_side == PositionSide.LONG
-                    else (1 + DEFAULT_STOP_LOSS_PCT)
-                )
-            tp_pct = self._resolve_take_profit_pct()
-            take_profit = (
-                float(current_price) * (1 + tp_pct)
-                if entry_side == PositionSide.LONG
-                else float(current_price) * (1 - tp_pct)
-            )
-        else:
-            try:
-                overrides = (
-                    self.strategy.get_risk_overrides()
-                    if hasattr(self.strategy, "get_risk_overrides")
-                    else None
-                )
-            except Exception:
-                overrides = None
-
-            if overrides and ("stop_loss_pct" in overrides or "take_profit_pct" in overrides):
-                stop_loss, take_profit = self.risk_manager.compute_sl_tp(
-                    df=df,
-                    index=current_index,
-                    entry_price=current_price,
-                    side="long",
-                    strategy_overrides=overrides,
-                )
-                if take_profit is None:
-                    take_profit = current_price * (
-                        1 + overrides.get("take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
-                    )
-            else:
-                # All strategies should be component-based
-                logger.error(
-                    "Strategy %s does not support component-based stop loss calculation",
-                    self.strategy.name,
-                )
-                stop_loss = current_price * (1 - DEFAULT_STOP_LOSS_PCT)  # Default 5% stop for long
-                take_profit = current_price * (
-                    1 + getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
-                )
-            entry_side = PositionSide.LONG
-
-        self._execute_entry(
-            symbol=symbol,
-            side=entry_side,
-            size=position_size,
-            price=float(current_price),
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            signal_strength=runtime_strength,
-            signal_confidence=runtime_confidence,
+        """Check if new positions should be opened (delegated to LiveEntryCoordinator)."""
+        return self.entry_coordinator.check_entry_conditions(
+            df,
+            current_index,
+            symbol,
+            current_price,
+            current_time,
+            runtime_decision,
         )
 
     def _resolve_take_profit_pct(self) -> float:
@@ -2801,24 +2534,21 @@ class LiveTradingEngine:
     ) -> None:
         """Serialise the entry on the symbol's base-asset lock, then execute it.
 
-        The lock is held across order submit -> position tracking (and any
-        emergency-close fallback, which re-acquires it re-entrantly) so the
-        orphaned-borrow sweep can't repay a borrow this entry just created (#703).
+        Delegated to LiveEntryCoordinator; the lock is held across order submit
+        -> position tracking (and any emergency-close fallback, which re-acquires
+        it re-entrantly) so the orphaned-borrow sweep can't repay a borrow this
+        entry just created (#703).
         """
-        from src.engines.live.reconciliation import PositionReconciler
-
-        base = PositionReconciler._extract_base_asset(symbol)
-        with self._base_asset_locks.lock_for(base):
-            self._execute_entry_locked(
-                symbol=symbol,
-                side=side,
-                size=size,
-                price=price,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-                signal_strength=signal_strength,
-                signal_confidence=signal_confidence,
-            )
+        return self.entry_coordinator.execute_entry(
+            symbol=symbol,
+            side=side,
+            size=size,
+            price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            signal_strength=signal_strength,
+            signal_confidence=signal_confidence,
+        )
 
     def _execute_entry_locked(
         self,
@@ -2831,372 +2561,17 @@ class LiveTradingEngine:
         signal_strength: float,
         signal_confidence: float,
     ) -> None:
-        """Execute a new trading position using shared execution modules."""
-        try:
-            # Prevent duplicate positions on the same symbol (guards against multi-slot
-            # risk managers with max_concurrent_positions > 1).
-            if self.live_position_tracker.has_position_for_symbol(symbol):
-                logger.info(
-                    "Position already open for %s — skipping duplicate entry.",
-                    symbol,
-                )
-                return
-
-            # Check max concurrent positions limit (defense-in-depth, also checked in loop)
-            max_concurrent = self.risk_manager.get_max_concurrent_positions()
-            if self.live_position_tracker.position_count >= max_concurrent:
-                logger.warning(
-                    "Max concurrent positions limit reached (%d/%d). Rejecting entry for %s.",
-                    self.live_position_tracker.position_count,
-                    max_concurrent,
-                    symbol,
-                )
-                return
-
-            if size > self.max_position_size:
-                logger.warning(
-                    "Position size %.2f%% exceeds maximum %.2f%%. Capping at maximum.",
-                    size * 100,
-                    self.max_position_size * 100,
-                )
-                size = self.max_position_size
-
-            # Build entry reasons for logging and analysis
-            entry_reasons = [
-                f"side_{side.value}",
-                f"size_{size:.4f}",
-                f"strength_{signal_strength:.2f}",
-                f"confidence_{signal_confidence:.2f}",
-            ]
-            if stop_loss:
-                entry_reasons.append(f"sl_{stop_loss:.2f}")
-            if take_profit:
-                entry_reasons.append(f"tp_{take_profit:.2f}")
-
-            entry_signal = LiveEntrySignal(
-                should_enter=True,
-                side=side,
-                size_fraction=size,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-                reasons=entry_reasons,
-                signal_strength=signal_strength,
-                signal_confidence=signal_confidence,
-            )
-            result = self.live_entry_handler.execute_entry(
-                signal=entry_signal,
-                symbol=symbol,
-                current_price=price,
-                balance=self.current_balance,
-            )
-
-            if not result.executed or result.position is None:
-                logger.error("Failed to execute entry for %s: %s", symbol, result.error)
-                return
-
-            position = result.position
-            entry_fee = result.entry_fee
-            entry_slippage_cost = result.slippage_cost
-
-            # Atomic balance update with full audit trail when trading session exists
-            if self.trading_session_id is not None:
-                try:
-                    with self.db_manager.atomic_balance_update(
-                        balance_change=-entry_fee,
-                        reason=f"entry_fee_{symbol}",
-                        updated_by="live_engine",
-                        correlation_id=position.order_id,
-                    ) as balance_result:
-                        self.current_balance = balance_result["new_balance"]
-                except (ValueError, Exception) as balance_err:
-                    logger.error(
-                        "Failed to update balance for entry fee %s: %s. Aborting entry.",
-                        symbol,
-                        balance_err,
-                    )
-                    # Critical: Entry executed but balance update failed
-                    # Attempt emergency close to maintain consistency
-                    if self.enable_live_trading and self.exchange_interface:
-                        try:
-                            close_side = (
-                                OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-                            )
-                            # Validate entry_price to prevent division by zero
-                            if position.entry_price <= 0:
-                                logger.error(
-                                    f"Cannot calculate emergency close quantity - invalid entry_price "
-                                    f"{position.entry_price} for {symbol}"
-                                )
-                            else:
-                                # Use quantity from position - LiveEntryResult.position.quantity
-                                self.exchange_interface.place_order(
-                                    symbol=symbol,
-                                    side=close_side,
-                                    order_type=OrderType.MARKET,
-                                    quantity=result.position.quantity,
-                                    side_effect_type=SideEffectType.AUTO_REPAY,
-                                )
-                            logger.warning(
-                                "Emergency close placed for %s due to balance update failure",
-                                symbol,
-                            )
-                        except Exception as close_err:
-                            logger.critical(
-                                "CRITICAL: Emergency close FAILED after balance update failure for %s. "
-                                "MANUAL INTERVENTION REQUIRED. Error: %s",
-                                symbol,
-                                close_err,
-                            )
-                    return
-            else:
-                # No trading session - update balance directly (testing/paper trading mode)
-                self.current_balance -= entry_fee
-                if self.current_balance < 0:
-                    logger.critical(
-                        "CRITICAL: Balance went negative (%.6f) after entry fee deduction "
-                        "of %.6f for %s. MANUAL RECONCILIATION REQUIRED.",
-                        self.current_balance,
-                        entry_fee,
-                        symbol,
-                    )
-
-            position.metadata["entry_fee"] = entry_fee
-            position.metadata["entry_slippage_cost"] = entry_slippage_cost
-
-            # CRITICAL: Register position with tracker IMMEDIATELY after execution
-            # to minimize race window with OrderTracker callbacks.
-            # If this fails after order execution, we have an orphaned position.
-            try:
-                self.live_position_tracker.open_position(
-                    position=position,
-                    session_id=self.trading_session_id,
-                    strategy_name=self._strategy_name(),
-                )
-            except Exception as tracker_err:
-                # Position executed on exchange but failed to track locally.
-                # This is critical - attempt emergency close to avoid orphaned position.
-                logger.critical(
-                    "CRITICAL: Position tracking failed after order execution for %s. "
-                    "Attempting emergency close. Error: %s",
-                    symbol,
-                    tracker_err,
-                )
-                if self.enable_live_trading and self.exchange_interface:
-                    try:
-                        close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-
-                        # Use quantity from position - LiveEntryResult.position.quantity
-                        # No need to recalculate from entry_price which could introduce errors.
-                        # Live executed entries always carry the filled quantity.
-                        if cast(float, result.position.quantity) <= 0:
-                            logger.critical(
-                                "CRITICAL: Cannot place emergency close for %s - "
-                                "invalid quantity %.8f. MANUAL INTERVENTION REQUIRED.",
-                                symbol,
-                                result.position.quantity,
-                            )
-                        else:
-                            self.exchange_interface.place_order(
-                                symbol=symbol,
-                                side=close_side,
-                                order_type=OrderType.MARKET,
-                                quantity=result.position.quantity,
-                                side_effect_type=SideEffectType.AUTO_REPAY,
-                            )
-                            logger.info(
-                                "Emergency close order placed for orphaned position %s", symbol
-                            )
-                    except Exception as close_err:
-                        logger.critical(
-                            "CRITICAL: Emergency close FAILED for %s. "
-                            "MANUAL INTERVENTION REQUIRED. Error: %s",
-                            symbol,
-                            close_err,
-                        )
-                # Restore balance since position tracking failed (atomic refund)
-                if self.trading_session_id is not None:
-                    try:
-                        with self.db_manager.atomic_balance_update(
-                            balance_change=entry_fee,
-                            reason=f"refund_entry_fee_{symbol}_tracking_failed",
-                            updated_by="live_engine",
-                            correlation_id=position.order_id,
-                        ) as balance_result:
-                            self.current_balance = balance_result["new_balance"]
-                    except Exception as refund_err:
-                        logger.critical(
-                            "CRITICAL: Failed to refund entry fee after position tracking failure for %s. "
-                            "Balance state inconsistent. Error: %s",
-                            symbol,
-                            refund_err,
-                        )
-                else:
-                    # No trading session - update balance directly
-                    self.current_balance += entry_fee
-                return
-
-            # Update risk manager tracking for new position.
-            # If this fails, close the position to maintain state consistency.
-            if self.risk_manager:
-                try:
-                    self.risk_manager.update_position(
-                        symbol=symbol,
-                        side=side.value,
-                        size=size,
-                        entry_price=position.entry_price,
-                    )
-                except (AttributeError, ValueError, KeyError, TypeError) as e:
-                    # Risk manager update failed - state is now inconsistent.
-                    # Close position to prevent exceeding risk limits.
-                    logger.error(
-                        "Risk manager update failed for %s position %s. "
-                        "Closing position to maintain risk consistency. Error: %s",
-                        side.value,
-                        symbol,
-                        e,
-                    )
-                    self._execute_exit(
-                        position,
-                        "Risk manager sync failure",
-                        None,
-                        price,
-                        None,
-                        None,
-                        None,
-                        skip_live_close=False,
-                    )
-                    return
-
-            logger.info(
-                "🚀 Opened %s position: %s @ $%.2f (Size: %.2f%%)",
-                side.value,
-                symbol,
-                position.entry_price,
-                size * 100,
-            )
-            log_order_event(
-                "open_position",
-                order_id=position.order_id,
-                symbol=symbol,
-                side=side.value,
-                entry_price=position.entry_price,
-                size=size,
-            )
-
-            # Register with order tracker AFTER position is fully tracked.
-            # This ensures callbacks can find the position in the tracker.
-            if position.order_id and self.order_tracker:
-                try:
-                    self.order_tracker.track_order(position.order_id, symbol)
-                except Exception as e:
-                    # Order tracking failure is non-critical - position exists and is tracked.
-                    # Stop-loss monitoring may be affected but position is safe.
-                    logger.warning(
-                        "Failed to track order %s for %s (position still valid): %s",
-                        position.order_id,
-                        symbol,
-                        e,
-                    )
-
-            # Send alert if configured
-            self._send_alert(
-                f"Position Opened: {symbol} {side.value} @ ${position.entry_price:.2f}"
-            )
-
-            # Ambiguous entry: order submission timed out so we don't know if/how
-            # much actually filled. Track the phantom position (so the reconciler can
-            # resolve it on restart) but do NOT place a stop-loss and immediately
-            # enter close-only mode to prevent further exposure.
-            if result.ambiguous:
-                logger.critical(
-                    "Ambiguous order submission for %s (order_id=%s) — "
-                    "entering close-only mode until restart reconciles the phantom position. "
-                    "No stop-loss placed.",
-                    symbol,
-                    position.order_id,
-                )
-                self._enter_close_only_mode()
-                return
-
-            # Place server-side stop-loss order for protection with retry logic
-            if self.enable_live_trading and stop_loss and self.exchange_interface:
-                # Use stored quantity directly to ensure stop-loss covers exact position size
-                if position.quantity is not None and position.quantity > 0:
-                    quantity = position.quantity
-                else:
-                    # Fallback for legacy positions without quantity field
-                    entry_balance = (
-                        float(position.entry_balance)
-                        if position.entry_balance is not None and position.entry_balance > 0
-                        else float(self.current_balance)
-                    )
-                    position_value = size * entry_balance
-                    quantity = (
-                        position_value / float(position.entry_price)
-                        if position.entry_price
-                        else 0.0
-                    )
-
-                sl_order_id = self.stop_loss_manager.place_protection(
-                    position=position,
-                    symbol=symbol,
-                    side=side,
-                    quantity=quantity,
-                    stop_price=stop_loss,
-                )
-
-                if not sl_order_id:
-                    logger.critical(
-                        "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
-                        "closing position on exchange to prevent unprotected exposure",
-                        3,  # placement retry budget lives in LiveStopLossManager
-                        symbol,
-                    )
-                    # Record the structured event and fire the alert in one call
-                    # (alert=True dispatches the webhook, so no separate
-                    # _send_alert is needed here).
-                    self._record_event(
-                        EventType.ALERT,
-                        f"EMERGENCY: Closing {symbol} position - stop-loss placement failed",
-                        severity="critical",
-                        component="execution",
-                        error_code="EMERGENCY_CLOSE",
-                        alert=True,
-                    )
-                    # Fetch current market price for accurate exit pricing.
-                    # The position is still open on the exchange without a stop loss,
-                    # so we MUST close it via live order (skip_live_close=False).
-                    # Using skip_live_close=True would only remove it from local
-                    # tracking while leaving the unprotected position open on the
-                    # exchange - a critical fund loss risk.
-                    try:
-                        emergency_price = self.data_provider.get_current_price(symbol)
-                    except Exception:
-                        emergency_price = price
-                    self._execute_exit(
-                        position,
-                        "Stop-loss placement failed - emergency close",
-                        None,
-                        emergency_price,
-                        None,
-                        None,
-                        None,
-                        skip_live_close=False,
-                    )
-
-        except Exception as e:
-            logger.error("Failed to open position: %s", e, exc_info=True)
-            if self.trading_session_id is not None:
-                self.db_manager.log_event(
-                    event_type="ERROR",
-                    message=f"Failed to open position: {str(e)}",
-                    severity="error",
-                    component="LiveTradingEngine",
-                    details={"stack_trace": str(e)},
-                    session_id=self.trading_session_id,
-                )
-            else:
-                logger.warning("⚠️ Cannot log error to database - no trading session ID available")
+        """Execute a new trading position (delegated to LiveEntryCoordinator)."""
+        return self.entry_coordinator.execute_entry_locked(
+            symbol=symbol,
+            side=side,
+            size=size,
+            price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            signal_strength=signal_strength,
+            signal_confidence=signal_confidence,
+        )
 
     def _handle_order_fill(
         self, order_id: str, symbol: str, filled_qty: float, avg_price: float
