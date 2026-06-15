@@ -191,10 +191,11 @@ attribute names.)
 
 1. Branch off `develop`: `claude/live-trading-engine-refactor-09koj9-<topic>`.
 2. Make the change (AST-sliced verbatim where extracting).
-3. **Quality gate:** `ruff check`, `black --check`, `python -m mypy -p src.engines.live.<module>`
-   (use the **`-p` package** form — the file-path form chokes on the `ai-trading-bot`
-   metadata name). There is a pre-existing unused `type: ignore` on `import requests` in the
-   engine that surfaces environment-dependently — **not yours to fix.**
+3. **Quality gate:** `atb dev quality` (runs black + ruff + mypy + bandit). When type-checking
+   a single module directly, use the **`-p` package** form
+   (`python -m mypy -p src.engines.live.<module>`) — the file-path form chokes on the
+   `ai-trading-bot` metadata name. There is a pre-existing unused `type: ignore` on
+   `import requests` in the engine that surfaces environment-dependently — **not yours to fix.**
 4. **Parity:** capture the fingerprint before/after, assert byte-identical (§4).
 5. **Run the full fast suite BEFORE pushing:** `pytest -m "not integration and not slow"`
    (~4,090 tests, ~2 min). Pushing first then fixing wastes the bot's ~8-min review cycle.
@@ -287,11 +288,13 @@ The bot reviews each PR and flags carried-over CODE.md nits: f-strings in loggin
 
 ## 9. Git / environment conventions
 
-- Commit author must be `noreply@anthropic.com` / `Claude`
-  (`git config user.email noreply@anthropic.com && git config user.name Claude`); a stop-hook
-  flags "Unverified" commits — fix the tip with `git commit --amend --no-edit --reset-author`.
+- Commit author must be `noreply@anthropic.com` / `Claude` (set via the environment/harness).
+  A stop-hook flags "Unverified" commits (wrong author) and **prints the exact remediation
+  to run** — follow the hook's printed instructions.
 - End commit messages with the session URL line. **Never** put model IDs in commits/PRs/code.
-- GitHub ops are via `mcp__github__*` MCP tools (no `gh` CLI). Repo scope: `bumpy-croc/ai-trading-bot`.
+- GitHub ops: **prefer the `mcp__github__*` MCP tools**; `gh` CLI is the documented fallback
+  (`CLAUDE.md`) when MCP is unavailable — though this remote execution environment has no `gh`
+  CLI, so MCP is the only option here. Repo scope: `bumpy-croc/ai-trading-bot`.
 - Read first: `CLAUDE.md`, `CODE.md`, `.claude/LESSONS.md`, `docs/live_trading.md`,
   `docs/architecture.md`.
 - Work autonomously; escalate only on **parity drift** or a genuine confidence drop.
