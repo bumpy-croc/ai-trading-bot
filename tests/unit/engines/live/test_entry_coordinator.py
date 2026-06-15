@@ -82,6 +82,7 @@ def _make_state(position: MagicMock, result: MagicMock, **overrides) -> MagicMoc
 
 
 def _call(state: MagicMock, *, side=PositionSide.LONG, stop_loss=49000.0, take_profit=51000.0):
+    """Drive execute_entry_locked on a fresh LiveEntryCoordinator with BTCUSDT defaults."""
     coordinator = LiveEntryCoordinator(engine_state=state)
     coordinator.execute_entry_locked(
         symbol="BTCUSDT",
