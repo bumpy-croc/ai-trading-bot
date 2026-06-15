@@ -127,6 +127,14 @@ Use this for every extraction. It is the established pattern across all coordina
 
 ## 5. Remaining work — prioritized plan
 
+> **Status: all planned steps (A–E) complete** as of 2026-06-15 (PRs #823–#825 +
+> the Step D/E PR). The big methods are decomposed (`__init__` 534→~110,
+> `start()` 327→~18, `_trading_loop` 390→~250), the entry/exit `Protocol`s are
+> concretely typed, and the deliberate non-extractions are documented below.
+> Remaining ideas are explicitly *optional* future polish (e.g. a
+> `LiveEngineBuilder` / `LiveStartupSequencer`, folding `_init_modular_handlers`
+> into the builder) — none required for the #486 goal.
+
 Each item is its own PR with the full workflow in §6. Re-grep line numbers first.
 
 ### Step A (highest value) — Construction slim-down (DONE)
@@ -190,20 +198,30 @@ place than behind a returns-a-signal helper, and the loop is **not** parity-
 guarded (live-only), so minimizing control-flow transforms there is the safer
 call. The loop **stays** on the engine.
 
-### Step D — Protocol-tightening + test-consistency sweep (tracked)
-The **entry** and **exit** coordinators still use bare `Any` for some `Protocol` attrs
-(e.g. `db_manager`) and their tests use `MagicMock(spec=...)`. Align them to the
-concrete-typing + `create_autospec` standard the later coordinators set. (`create_autospec`
-works fine on these `Protocol`s — verified — and enforces call-signature drift, not just
-attribute names.)
+### Step D — Protocol-tightening + test-consistency sweep (DONE)
+The **entry** and **exit** coordinator `Protocol`s (`LiveEntryEngineState`,
+`LiveExitEngineState`) now declare concrete types — `data_provider: DataProvider`,
+`db_manager: DatabaseManager`, `_base_asset_locks: BaseAssetLockRegistry`,
+`_component_strategy: ComponentStrategy | None` — matching the standard set by the
+later coordinators / `LiveSessionRecoverer`. `exchange_interface` and `strategy`
+stay `Any` (genuinely duck-typed — the engine itself types `exchange_interface: Any`).
+Their unit tests build the backref with `create_autospec(..., instance=True)`
+instead of `MagicMock(spec=...)` (verified to work on these `Protocol`s; enforces
+call-signature drift, not just attribute names).
 
-### Step E — Document deliberate non-extractions
+### Step E — Document deliberate non-extractions (DONE)
 - **Keep `_record_event` / `_send_alert` on the engine.** They are cross-cutting infra used
   by *every* coordinator via `state.`; extracting them adds indirection without cohesion
   benefit. (A tiny `LiveEventEmitter` is possible but low value.)
-- Record the **one-class-per-file** decision: the engine-state `Protocol`s are co-located
-  with their coordinator. This is consistent across the family and acceptable; document it
-  rather than churn.
+- **Keep the per-iteration data/freshness/context guards and the error-handling
+  /backoff block inline in `_trading_loop`** (see Step C): terse early-`continue`
+  guards and capital-critical `continue`/`break` control flow are clearer in place,
+  and the loop is live-only (not parity-guarded).
+- **One-class-per-file is not enforced for the coordinator family:** each engine-state
+  `Protocol` is co-located with its coordinator (e.g. `LiveEntryEngineState` lives in
+  `entry_coordinator.py`). This is consistent across the family and intentional — the
+  `Protocol` is the coordinator's own narrow view of the engine and has no independent
+  reuse — so it is documented here rather than churned into separate modules.
 
 ---
 
@@ -337,7 +355,8 @@ The bot reviews each PR and flags carried-over CODE.md nits: f-strings in loggin
 | #822 | this handover doc |
 | #823 | **Step A** — `__init__` decomposed into 15 cohesive private initializer helpers; engine `__init__` ~534 → ~110 lines. Also aligned `LiveLoopTimingEngineState.data_freshness_threshold` to `int`. |
 | #824 | **Step B** — `start()` decomposed into 7 cohesive private phase helpers; ~327 → ~18 lines. |
-| (this branch) | **Step C** — `_trading_loop` short-entry + periodic-account blocks extracted; ~390 → ~250 lines. |
+| #825 | **Step C** — `_trading_loop` short-entry + periodic-account blocks extracted; ~390 → ~250 lines. |
+| (this branch) | **Steps D + E** — entry/exit coordinator `Protocol`s tightened to concrete types + tests moved to `create_autospec`; deliberate non-extractions documented. |
 
 Engine: **6,558 → 2,493 lines** through #821; Step A keeps the engine's total
 line count roughly flat (the slim `__init__` is offset by per-helper

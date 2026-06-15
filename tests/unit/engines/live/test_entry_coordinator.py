@@ -11,7 +11,7 @@ silently skipped), and the SL-calc / risk-override failure paths log.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
@@ -56,7 +56,7 @@ def _make_state(position: MagicMock, result: MagicMock, **overrides) -> MagicMoc
     every attribute the execution path reads is set explicitly (protocol
     attributes are annotation-only, so they must be assigned to be readable).
     """
-    state = MagicMock(spec=LiveEntryEngineState)
+    state = create_autospec(LiveEntryEngineState, instance=True)
     state.enable_live_trading = False
     state.current_balance = 1000.0
     state.max_position_size = 1.0

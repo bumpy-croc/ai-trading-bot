@@ -38,10 +38,13 @@ from src.strategies.components import Signal, SignalDirection
 from src.strategies.components import Strategy as ComponentStrategy
 
 if TYPE_CHECKING:
+    from src.data_providers.data_provider import DataProvider
+    from src.database.manager import DatabaseManager
     from src.engines.live.execution.entry_handler import LiveEntryHandler
     from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
     from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
     from src.engines.live.order_tracker import OrderTracker
+    from src.engines.live.reconciliation import BaseAssetLockRegistry
     from src.risk.risk_manager import RiskManager
     from src.trading.performance import PerformanceTracker
 
@@ -68,12 +71,14 @@ class LiveEntryEngineState(Protocol):
     live_position_tracker: LivePositionTracker
     stop_loss_manager: LiveStopLossManager
     order_tracker: OrderTracker | None
+    # Genuinely loose: concrete providers expose duck-typed margin/WS extensions
+    # beyond the base interface (matches the engine's own ``exchange_interface: Any``).
     exchange_interface: Any
-    data_provider: Any
-    db_manager: Any
-    _component_strategy: Any
+    data_provider: DataProvider
+    db_manager: DatabaseManager
+    _component_strategy: ComponentStrategy | None
     _close_only_mode: bool
-    _base_asset_locks: Any
+    _base_asset_locks: BaseAssetLockRegistry
 
     # Engine helpers that stay on the engine; the coordinator calls them via
     # this backref (so subclass/test overrides on the engine still apply).
