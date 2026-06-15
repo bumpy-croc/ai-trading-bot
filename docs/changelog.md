@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `LiveTradingEngine.start()` decomposed from a ~327-line bootstrap monolith into
+  a thin ~18-line phase orchestrator that calls cohesive, single-purpose private
+  helpers (`_begin_session_runtime`, `_bootstrap_trading_session`,
+  `_carry_forward_open_positions`, `_self_heal_terminal_positions`,
+  `_synchronize_account_on_start`, `_start_runtime_services`,
+  `_run_main_loop_until_stopped`). Each block moved verbatim — the
+  capital-critical startup ordering (recover → create session → #668
+  carry-forward → #657 self-heal → account sync → runtime services → loop
+  kickoff) and the public `start()` signature are preserved exactly. Pure
+  refactor — backtest determinism fingerprint byte-identical. (#486)
 - `LiveTradingEngine.__init__` decomposed from a ~534-line monolith into a thin
   ~110-line orchestrator that calls cohesive, single-purpose private
   initializer helpers (`_validate_inputs`, `_resolve_settings`,
