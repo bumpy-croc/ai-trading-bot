@@ -55,6 +55,7 @@ from src.engines.live.execution.entry_handler import LiveEntryHandler
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_coordinator import LiveExitCoordinator
 from src.engines.live.execution.exit_handler import LiveExitHandler
+from src.engines.live.execution.order_fill_coordinator import LiveOrderFillCoordinator
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
@@ -98,7 +99,6 @@ from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import (
     log_data_event,
     log_engine_event,
-    log_order_event,
     log_risk_event,
 )
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
@@ -286,6 +286,7 @@ class LiveTradingEngine:
         # ordering of the real-money entry path (#486).
         self.entry_coordinator = LiveEntryCoordinator(engine_state=self)
         self.exit_coordinator = LiveExitCoordinator(engine_state=self)
+        self.order_fill_coordinator = LiveOrderFillCoordinator(engine_state=self)
         self._configure_strategy(strategy)
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
@@ -2437,266 +2438,30 @@ class LiveTradingEngine:
     def _handle_order_fill(
         self, order_id: str, symbol: str, filled_qty: float, avg_price: float
     ) -> None:
-        """
-        Handle a fully filled order notification from OrderTracker.
-
-        This handles both entry order fills and stop-loss order fills.
-        For stop-loss fills, it closes the associated position.
-
-        Args:
-            order_id: The filled order ID
-            symbol: Trading symbol
-            filled_qty: Total quantity filled
-            avg_price: Average fill price
-        """
-        logger.info(
-            f"Order fill confirmed: {order_id} {symbol} qty={filled_qty} @ ${avg_price:.2f}"
+        """Handle a fully filled order from OrderTracker (delegated to LiveOrderFillCoordinator)."""
+        return self.order_fill_coordinator.handle_order_fill(
+            order_id, symbol, filled_qty, avg_price
         )
-        log_order_event(
-            "order_filled",
-            order_id=order_id,
-            symbol=symbol,
-            filled_quantity=filled_qty,
-            average_price=avg_price,
-        )
-
-        # If this is a stop-loss order fill, the position must be closed — but the
-        # close (DB writes, P&L bookkeeping) is DEFERRED to the trading loop via a
-        # queue rather than run here on the OrderTracker poll thread. Running it
-        # inline blocked all order polling on a slow close and, on failure, drove
-        # the order toward force-removal (orphaning the position). The stop-loss
-        # has already executed on-exchange, so the loop drains and runs the exit
-        # with skip_live_close=True; a drain failure is backstopped by the
-        # periodic/startup reconcilers (#631). positions returns a thread-safe copy.
-        for pos_order_id, position in self.live_position_tracker.positions.items():
-            if position.stop_loss_order_id == order_id:
-                logger.warning(
-                    "Stop-loss order %s filled for position %s at $%.2f - "
-                    "queuing position close for the trading loop",
-                    order_id,
-                    pos_order_id,
-                    avg_price,
-                )
-                self._pending_fill_exits.put((pos_order_id, float(avg_price)))
-                break
 
     def _handle_partial_fill(
         self, order_id: str, symbol: str, new_filled_qty: float, avg_price: float
     ) -> None:
-        """
-        Handle a partial fill notification from OrderTracker.
-
-        For stop-loss partial fills, logs a critical warning since position
-        remains exposed. Full handling of partial SL fills would require
-        placing a new SL order for the remaining quantity.
-
-        Args:
-            order_id: The partially filled order ID
-            symbol: Trading symbol
-            new_filled_qty: Additional quantity filled since last check
-            avg_price: Average fill price
-        """
-        logger.info("Partial fill: %s %s +%s @ $%.2f", order_id, symbol, new_filled_qty, avg_price)
-        log_order_event(
-            "partial_fill",
-            order_id=order_id,
-            symbol=symbol,
-            new_filled_quantity=new_filled_qty,
-            average_price=avg_price,
+        """Handle a partial fill from OrderTracker (delegated to LiveOrderFillCoordinator)."""
+        return self.order_fill_coordinator.handle_partial_fill(
+            order_id, symbol, new_filled_qty, avg_price
         )
-
-        # Check if this is a stop-loss order partial fill - log critical warning
-        # Partial SL fills leave the position partially exposed without protection
-        for pos_order_id, position in self.live_position_tracker.positions.items():
-            if position.stop_loss_order_id == order_id:
-                logger.critical(
-                    "PARTIAL STOP-LOSS FILL: Position %s SL order %s partially filled "
-                    "(%.4f @ $%.2f). Remaining SL order is still active on exchange. "
-                    "MANUAL MONITORING REQUIRED.",
-                    pos_order_id,
-                    order_id,
-                    new_filled_qty,
-                    avg_price,
-                )
-                log_order_event(
-                    "partial_sl_fill_warning",
-                    order_id=order_id,
-                    position_order_id=pos_order_id,
-                    symbol=symbol,
-                    filled_quantity=new_filled_qty,
-                    average_price=avg_price,
-                )
-                # Do NOT auto-close the remaining position here. The partial SL
-                # fill already sold part of the position, and the remaining SL
-                # order is still active on the exchange protecting the unfilled
-                # portion. Calling _execute_exit(skip_live_close=False) would
-                # place a market order for the FULL position.quantity, over-selling
-                # by the already-filled amount and creating unintended exposure.
-                # If the remaining SL order expires/cancels, the cancel callback
-                # will fire and can be handled there.
-                self._send_alert(
-                    f"⚠️ PARTIAL SL FILL: {symbol} position {pos_order_id} "
-                    f"partially filled ({new_filled_qty} @ ${avg_price:.2f}). "
-                    f"Remaining SL order still active. MANUAL MONITORING REQUIRED."
-                )
-                return
 
     def _handle_stop_loss_cancelled(self, order_id: str, symbol: str) -> bool:
-        """Escalate when a tracked position's stop-loss order terminates unexpectedly.
-
-        Clears the stale in-memory ``stop_loss_order_id`` so the periodic
-        reconciler's missing-stop path re-places protection on its next cycle
-        (which also persists the NEW id over the stale DB value), and emits a
-        critical ``system_events`` row + webhook alert. Deliberate cancels from
-        the close path don't reach here — that path stops tracking the SL order
-        before the callback can fire.
-
-        Returns True when ``order_id`` matched a tracked position's stop-loss.
-        """
-        matched_key: str | None = None
-        for pos_key, position in self.live_position_tracker.positions.items():
-            if getattr(position, "stop_loss_order_id", None) == order_id:
-                matched_key = pos_key
-                break
-        if matched_key is None:
-            return False
-
-        self.live_position_tracker.set_stop_loss_order_id(matched_key, None)
-        message = (
-            f"Stop-loss order {order_id} for OPEN {symbol} position {matched_key} was "
-            f"cancelled/rejected/expired on the exchange — position is UNPROTECTED until "
-            f"the reconciler re-places it (next cycle)."
-        )
-        logger.critical("CRITICAL: %s", message)
-        self._record_event(
-            EventType.ERROR,
-            message,
-            severity="critical",
-            component="order_tracker",
-            error_code="STOP_LOSS_CANCELLED",
-            alert=True,
-        )
-        return True
+        """Escalate a terminated stop-loss order (delegated to LiveOrderFillCoordinator)."""
+        return self.order_fill_coordinator.handle_stop_loss_cancelled(order_id, symbol)
 
     def _handle_order_cancel(self, order_id: str, symbol: str, filled_qty: float = 0.0) -> None:
-        """Handle an order cancellation/rejection notification from OrderTracker.
-
-        Refunds only the entry fee for the unfilled portion of the order.
-        When an entry limit order partially fills before cancellation, part of
-        the fee was legitimately incurred on the exchange; only the unfilled
-        fraction is refunded to prevent over-crediting the balance.
-
-        Args:
-            order_id: The cancelled/rejected order ID.
-            symbol: Trading symbol.
-            filled_qty: Cumulative quantity filled before cancellation (0.0 if fully unfilled).
-        """
-        logger.warning("Order cancelled/rejected: %s %s", order_id, symbol)
-        log_order_event(
-            "order_cancelled",
-            order_id=order_id,
-            symbol=symbol,
-        )
-        # Not an entry order? Check whether a tracked position's STOP-LOSS was
-        # cancelled/rejected/expired out from under it (#741). Must run before
-        # pop_position: popping by an SL order id can never match (positions
-        # are keyed by entry order id), but the position it protects must not
-        # be left silently unprotected.
-        if self._handle_stop_loss_cancelled(order_id, symbol):
-            return
-
-        # Check if this was an entry order for a position we thought we had.
-        # Use atomic pop_position() for thread safety - combines get + remove
-        # in a single lock acquisition (called from OrderTracker background thread).
-        removed_position = self.live_position_tracker.pop_position(order_id)
-        if removed_position is not None:
-            logger.error("Entry order %s was cancelled - removing phantom position", order_id)
-            # Refund only the fee for the unfilled portion. If the order partially filled
-            # before cancellation, the exchange kept the fee for those fills; refunding the
-            # full entry_fee would over-credit the balance and corrupt P&L accounting.
-            entry_fee = float(removed_position.metadata.get("entry_fee", 0.0))
-            if entry_fee > 0:
-                original_qty = removed_position.quantity or 0.0
-                if original_qty > 0 and filled_qty > 0:
-                    # Compute the fraction of the order that was NOT filled.
-                    unfilled_fraction = max(0.0, (original_qty - filled_qty) / original_qty)
-                    refund_amount = entry_fee * unfilled_fraction
-                    if unfilled_fraction < 1.0:
-                        logger.info(
-                            "Order %s partially filled (%.6f / %.6f qty); "
-                            "refunding %.6f of %.6f entry fee (unfilled fraction: %.4f)",
-                            order_id,
-                            filled_qty,
-                            original_qty,
-                            refund_amount,
-                            entry_fee,
-                            unfilled_fraction,
-                        )
-                else:
-                    # Order was fully unfilled - refund the entire fee
-                    refund_amount = entry_fee
-
-                if refund_amount > 0:
-                    if self.trading_session_id is not None:
-                        try:
-                            with self.db_manager.atomic_balance_update(
-                                balance_change=refund_amount,
-                                reason=f"refund_entry_fee_{symbol}_order_cancelled",
-                                updated_by="live_engine",
-                                correlation_id=order_id,
-                            ) as balance_result:
-                                self.current_balance = balance_result["new_balance"]
-                            logger.info(
-                                "Refunded entry fee %.6f for cancelled order %s on %s",
-                                refund_amount,
-                                order_id,
-                                symbol,
-                            )
-                        except Exception as refund_err:
-                            logger.critical(
-                                "CRITICAL: Failed to refund entry fee %.6f for cancelled "
-                                "order %s on %s. MANUAL RECONCILIATION REQUIRED. Error: %s",
-                                refund_amount,
-                                order_id,
-                                symbol,
-                                refund_err,
-                            )
-                    else:
-                        self.current_balance += refund_amount
+        """Handle an order cancel/reject from OrderTracker (delegated to LiveOrderFillCoordinator)."""
+        return self.order_fill_coordinator.handle_order_cancel(order_id, symbol, filled_qty)
 
     def _handle_order_tracking_lost(self, order_id: str, symbol: str, failures: int) -> None:
-        """Handle the OrderTracker giving up on an order whose state is UNKNOWN.
-
-        Fail-closed counterpart to :meth:`_handle_order_cancel`: after
-        ``failures`` consecutive failed/None polls the order's exchange state
-        could not be confirmed, so the position (if any) is deliberately KEPT
-        tracked — removing it and refunding its entry fee here would vaporize a
-        possibly-live position from the books (untracked exposure, corrupted
-        balance, double-entry on the next signal). The periodic reconciler
-        resolves the true state from the exchange: it removes ghosts whose
-        entry order is confirmed cancelled and books offline stop-loss fills.
-        """
-        position = self.live_position_tracker.get_position(order_id)
-        message = (
-            f"Order {order_id} on {symbol} state UNKNOWN after {failures} consecutive "
-            f"failed polls — tracking abandoned (NOT treated as cancelled). "
-            f"{'Position kept tracked' if position is not None else 'No tracked position'}; "
-            f"reconciler will resolve from exchange truth."
-        )
-        logger.critical("CRITICAL: %s", message)
-        log_order_event(
-            "order_tracking_lost",
-            order_id=order_id,
-            symbol=symbol,
-        )
-        self._record_event(
-            EventType.ERROR,
-            message,
-            severity="critical",
-            component="order_tracker",
-            error_code="ORDER_TRACKING_LOST",
-            alert=True,
-        )
+        """Handle OrderTracker abandoning an UNKNOWN-state order (delegated to LiveOrderFillCoordinator)."""
+        return self.order_fill_coordinator.handle_order_tracking_lost(order_id, symbol, failures)
 
     def _execute_exit(
         self,

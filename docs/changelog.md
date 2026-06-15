@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `LiveTradingEngine` order-fill callbacks extracted into
+  `LiveOrderFillCoordinator` (`engines/live/execution/order_fill_coordinator.py`).
+  The `OrderTracker` callbacks — `_handle_order_fill`, `_handle_partial_fill`,
+  `_handle_order_cancel` (+ its `_handle_stop_loss_cancelled` escalation), and
+  `_handle_order_tracking_lost` — move verbatim (mechanical `self.` → `state.`
+  against an engine backref `Protocol`); the engine keeps thin delegating
+  wrappers and still registers those wrappers with `OrderTracker`. These run on
+  the OrderTracker poll thread; the coordinator holds no state of its own, so
+  the single-writer / thread-safe-handoff discipline (stop-loss fills enqueued
+  on `_pending_fill_exits`, #631; atomic tracker mutations) is unchanged. Pure
+  refactor — backtest determinism fingerprint byte-identical; engine
+  `trading_engine.py` ~3,117 → ~2,880 lines. (#486)
 - `LiveTradingEngine` exit pipeline extracted into `LiveExitCoordinator`
   (`engines/live/execution/exit_coordinator.py`), mirroring the entry
   extraction. `_check_exit_conditions`, `_execute_exit`, and

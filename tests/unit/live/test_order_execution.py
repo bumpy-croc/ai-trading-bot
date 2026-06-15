@@ -517,7 +517,7 @@ class TestHandleOrderFill:
 
     def test_handle_fill_logs_event(self, engine_with_exchange):
         """Fill callback logs the event."""
-        with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
+        with patch("src.engines.live.execution.order_fill_coordinator.log_order_event") as mock_log:
             engine_with_exchange._handle_order_fill("order123", "BTCUSDT", 1.5, 50000.0)
 
             mock_log.assert_called_once()
@@ -602,7 +602,7 @@ class TestHandlePartialFill:
 
     def test_handle_partial_fill_logs_event(self, engine_with_exchange):
         """Partial fill callback logs the event."""
-        with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
+        with patch("src.engines.live.execution.order_fill_coordinator.log_order_event") as mock_log:
             engine_with_exchange._handle_partial_fill("order123", "BTCUSDT", 0.5, 50000.0)
 
             mock_log.assert_called_once()
@@ -636,7 +636,7 @@ class TestHandlePartialFill:
             sample_position, db_id=None
         )
 
-        with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
+        with patch("src.engines.live.execution.order_fill_coordinator.log_order_event") as mock_log:
             engine_with_exchange._handle_partial_fill("sl_order_456", "BTCUSDT", 0.01, 48000.0)
 
             mock_log.assert_any_call(
@@ -663,7 +663,7 @@ class TestHandleOrderCancel:
 
     def test_handle_cancel_logs_event(self, engine_with_exchange):
         """Cancel callback logs the event."""
-        with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
+        with patch("src.engines.live.execution.order_fill_coordinator.log_order_event") as mock_log:
             engine_with_exchange._handle_order_cancel("order123", "BTCUSDT")
 
             mock_log.assert_called_once()
