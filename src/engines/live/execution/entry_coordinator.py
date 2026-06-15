@@ -567,6 +567,7 @@ class LiveEntryCoordinator:
                         "Failed to update balance for entry fee %s: %s. Aborting entry.",
                         symbol,
                         balance_err,
+                        exc_info=True,
                     )
                     # Critical: Entry executed but balance update failed
                     # Attempt emergency close to maintain consistency
@@ -582,6 +583,7 @@ class LiveEntryCoordinator:
                                     "entry_price %s for %s",
                                     position.entry_price,
                                     symbol,
+                                    exc_info=True,
                                 )
                             else:
                                 # Use quantity from position - LiveEntryResult.position.quantity
