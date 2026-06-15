@@ -1829,7 +1829,7 @@ class LiveTradingEngine:
                         runtime_decision=runtime_decision,
                     )
                     # Check for short entry via legacy hook when available
-                    self._process_legacy_short_entry(
+                    self.entry_coordinator.process_legacy_short_entry(
                         df, current_index, symbol, current_price, current_time
                     )
                 # Update performance metrics
@@ -1909,19 +1909,6 @@ class LiveTradingEngine:
 
         logger.info("Trading loop ended")
         self._finalize_runtime()
-
-    def _process_legacy_short_entry(
-        self,
-        df: pd.DataFrame,
-        current_index: int,
-        symbol: str,
-        current_price: float,
-        current_time: datetime,
-    ) -> None:
-        """Evaluate + execute a legacy duck-typed short entry (delegated to LiveEntryCoordinator)."""
-        self.entry_coordinator.process_legacy_short_entry(
-            df, current_index, symbol, current_price, current_time
-        )
 
     def _log_periodic_account_state(self) -> None:
         """Log the periodic account snapshot and run periodic exchange account sync."""
