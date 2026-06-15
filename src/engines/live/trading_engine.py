@@ -241,7 +241,127 @@ class LiveTradingEngine:
             engine resolves them itself (#486).
         """
 
-        # Validate inputs
+        self._validate_inputs(
+            initial_balance=initial_balance,
+            max_position_size=max_position_size,
+            check_interval=check_interval,
+            account_snapshot_interval=account_snapshot_interval,
+        )
+        self._resolve_settings(settings)
+        self._init_coordinators()
+        self._configure_strategy(strategy)
+        self.data_provider = data_provider
+        self.sentiment_provider = sentiment_provider
+        self._init_risk_manager(risk_parameters)
+        self._init_risk_policies(
+            trailing_stop_policy=trailing_stop_policy,
+            enable_dynamic_risk=enable_dynamic_risk,
+            dynamic_risk_config=dynamic_risk_config,
+        )
+
+        # Timing configuration
+        self.base_check_interval = check_interval
+        self.check_interval = check_interval
+        self.min_check_interval = DEFAULT_MIN_CHECK_INTERVAL
+        self.max_check_interval = DEFAULT_MAX_CHECK_INTERVAL
+        self.data_freshness_threshold = DEFAULT_DATA_FRESHNESS_THRESHOLD
+        self.last_data_timestamp = None
+        self.initial_balance = initial_balance
+        self.current_balance = initial_balance  # Will be updated during startup
+        self._balance_lock = threading.Lock()  # Protect concurrent balance modifications
+        self.max_position_size = max_position_size
+        self.enable_live_trading = enable_live_trading
+        # Execution realism (parity with backtest)
+        self.fee_rate = fee_rate
+        self.slippage_rate = slippage_rate
+        self.use_high_low_for_stops = use_high_low_for_stops
+        self.max_filled_price_deviation = max_filled_price_deviation
+        self.log_trades = log_trades
+        self.alert_webhook_url = alert_webhook_url
+        self.enable_hot_swapping = enable_hot_swapping
+        self.resume_from_last_balance = resume_from_last_balance
+        self.account_snapshot_interval = account_snapshot_interval
+        self.testnet = testnet
+        self._init_partial_operations(
+            enable_partial_operations=enable_partial_operations,
+            partial_manager=partial_manager,
+        )
+        self._init_correlation(data_provider)
+        self._init_database(database_url)
+        self._init_dynamic_risk_manager()
+
+        self._init_exchange_interface(
+            provider=provider,
+            testnet=testnet,
+            enable_live_trading=enable_live_trading,
+        )
+        self._resume_balance_from_snapshot()
+        self._init_strategy_manager(strategy, enable_hot_swapping=enable_hot_swapping)
+        self._seed_trading_state()
+
+        # Performance tracker (unified with backtest engine)
+        from src.performance.tracker import PerformanceTracker
+
+        self.performance_tracker = PerformanceTracker(initial_balance)
+
+        # Error handling
+        self.max_consecutive_errors = max_consecutive_errors
+        self.consecutive_errors = 0
+        # Monotonic timestamp marking when the database first became unreachable
+        # inside the trading loop (None while reachable). Lets the engine ride
+        # out transient DB outages instead of counting them toward
+        # max_consecutive_errors (incident 2026-05-19: a Railway internal-DNS
+        # outage made Postgres unresolvable and shut the live bot down).
+        self.db_unreachable_since: float | None = None
+        self.error_cooldown = DEFAULT_ERROR_COOLDOWN
+
+        self._init_time_exit_policy(time_exit_policy)
+
+        # Threading
+        self.main_thread: threading.Thread | None = None
+        # Set when the trading loop dies abnormally (unhandled crash or error
+        # exhaustion) so start() can exit non-zero for an orchestrator restart (#630).
+        self._loop_crashed = False
+        self.stop_event = threading.Event()
+
+        # Optional regime detector (feature-gated)
+        self.regime_detector = None
+        try:
+            if self.settings.regime_detection_enabled:
+                self.regime_detector = RegimeDetector()
+        except Exception:
+            self.regime_detector = None
+
+        self._install_signal_handlers()
+
+        # Execution modeling
+        self.execution_fill_policy = self.settings.execution_fill_policy
+        self.execution_model = ExecutionModel(self.execution_fill_policy)
+
+        # Initialize modular handlers (use injected or create defaults)
+        self._init_modular_handlers(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            entry_handler=entry_handler,
+            exit_handler=exit_handler,
+            market_data_handler=market_data_handler,
+            event_logger=event_logger,
+            health_monitor=health_monitor,
+        )
+
+        logger.info(
+            f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}"
+        )
+
+    def _validate_inputs(
+        self,
+        *,
+        initial_balance: float,
+        max_position_size: float,
+        check_interval: int,
+        account_snapshot_interval: int,
+    ) -> None:
+        """Validate constructor inputs, raising ``ValueError`` on bad values."""
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
         if max_position_size <= 0 or max_position_size > 1:
@@ -251,6 +371,8 @@ class LiveTradingEngine:
         if account_snapshot_interval < 0:
             raise ValueError("Account snapshot interval must be non-negative")
 
+    def _resolve_settings(self, settings: LiveEngineSettings | None) -> None:
+        """Resolve construction-time settings (feature flags / env / config)."""
         # Construction-time settings. Pass this module's lookups so test
         # patches on trading_engine.is_enabled / trading_engine.get_config
         # keep intercepting resolution.
@@ -260,6 +382,8 @@ class LiveTradingEngine:
             config_lookup=get_config,
         )
 
+    def _init_coordinators(self) -> None:
+        """Construct the coordinator family that owns extracted engine behaviors."""
         self._runtime_dataset = None
         self._runtime_warmup = 0
         # Strategy-runtime state, owned by StrategyRuntimeCoordinator and assigned
@@ -291,10 +415,9 @@ class LiveTradingEngine:
         self.loop_timing_coordinator = LiveLoopTimingCoordinator(engine_state=self)
         self.market_data_coordinator = LiveMarketDataCoordinator(engine_state=self)
         self.order_fill_coordinator = LiveOrderFillCoordinator(engine_state=self)
-        self._configure_strategy(strategy)
-        self.data_provider = data_provider
-        self.sentiment_provider = sentiment_provider
 
+    def _init_risk_manager(self, risk_parameters: RiskParameters | None) -> None:
+        """Build the canonical RiskManager and bind it to component strategies."""
         # Duck-typed component risk adapter; attribute access is hasattr-guarded.
         component_risk: Any = None
         component_risk_params = None
@@ -330,13 +453,21 @@ class LiveTradingEngine:
                             exc_info=True,
                         )
 
+    def _init_risk_policies(
+        self,
+        *,
+        trailing_stop_policy: TrailingStopPolicy | None,
+        enable_dynamic_risk: bool,
+        dynamic_risk_config: DynamicRiskConfig | None,
+    ) -> None:
+        """Resolve trailing-stop + dynamic-risk config and seed correlation cache."""
         # Trailing stop policy
         self.trailing_stop_policy = trailing_stop_policy or self._build_trailing_policy()
         self._trailing_stop_opt_in = self.trailing_stop_policy is not None
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
-        self.dynamic_risk_manager = None
+        self.dynamic_risk_manager: DynamicRiskManager | None = None
         self._component_dynamic_risk_config: DynamicRiskConfig | None = None
         if enable_dynamic_risk:
             config = dynamic_risk_config or DynamicRiskConfig()
@@ -347,29 +478,13 @@ class LiveTradingEngine:
         self._component_risk_context_cache_key: tuple[str, int] | None = None
         self._component_risk_context_cache: dict[str, Any] | None = None
 
-        # Timing configuration
-        self.base_check_interval = check_interval
-        self.check_interval = check_interval
-        self.min_check_interval = DEFAULT_MIN_CHECK_INTERVAL
-        self.max_check_interval = DEFAULT_MAX_CHECK_INTERVAL
-        self.data_freshness_threshold = DEFAULT_DATA_FRESHNESS_THRESHOLD
-        self.last_data_timestamp = None
-        self.initial_balance = initial_balance
-        self.current_balance = initial_balance  # Will be updated during startup
-        self._balance_lock = threading.Lock()  # Protect concurrent balance modifications
-        self.max_position_size = max_position_size
-        self.enable_live_trading = enable_live_trading
-        # Execution realism (parity with backtest)
-        self.fee_rate = fee_rate
-        self.slippage_rate = slippage_rate
-        self.use_high_low_for_stops = use_high_low_for_stops
-        self.max_filled_price_deviation = max_filled_price_deviation
-        self.log_trades = log_trades
-        self.alert_webhook_url = alert_webhook_url
-        self.enable_hot_swapping = enable_hot_swapping
-        self.resume_from_last_balance = resume_from_last_balance
-        self.account_snapshot_interval = account_snapshot_interval
-        self.testnet = testnet
+    def _init_partial_operations(
+        self,
+        *,
+        enable_partial_operations: bool,
+        partial_manager: PartialExitPolicy | None,
+    ) -> None:
+        """Resolve the partial exit/scale-in policy (gated by #734 feature flag)."""
         # Partial operations policy.
         #
         # DISABLED by default behind the `live_partial_operations` feature flag
@@ -427,6 +542,8 @@ class LiveTradingEngine:
             self.enable_partial_operations or self.partial_manager is not None
         )
 
+    def _init_correlation(self, data_provider: DataProvider) -> None:
+        """Initialize the correlation engine and entry-time correlation handler."""
         # Correlation engine setup
         try:
             corr_cfg = CorrelationConfig(
@@ -460,6 +577,8 @@ class LiveTradingEngine:
                     e,
                 )
 
+    def _init_database(self, database_url: str | None) -> None:
+        """Connect the (required) database manager and seed session state."""
         # Initialize database manager
         try:
             self.db_manager = DatabaseManager(database_url)
@@ -476,6 +595,8 @@ class LiveTradingEngine:
         # found no recent session.
         self._recovered_inactive_session_id: int | None = None
 
+    def _init_dynamic_risk_manager(self) -> None:
+        """Build the dynamic-risk manager now that the database is available."""
         # Initialize dynamic risk manager after database is available
         if self.enable_dynamic_risk:
             try:
@@ -493,6 +614,14 @@ class LiveTradingEngine:
                 self.dynamic_risk_manager = None
         self._dynamic_risk_handler = DynamicRiskHandler(self.dynamic_risk_manager)
 
+    def _init_exchange_interface(
+        self,
+        *,
+        provider: str,
+        testnet: bool,
+        enable_live_trading: bool,
+    ) -> None:
+        """Initialize exchange interface, account synchronizer, and order tracker."""
         # Initialize exchange interface, account synchronizer, and order tracker.
         # Typed Any: the provider factory is untyped and concrete providers expose
         # duck-typed margin/WS extensions beyond the base interface.
@@ -539,6 +668,8 @@ class LiveTradingEngine:
                     "Ensure valid API credentials are configured for the selected provider."
                 )
 
+    def _resume_balance_from_snapshot(self) -> None:
+        """Optionally resume balance from the last account snapshot (live only)."""
         # Optionally resume balance from last snapshot (only in live trading mode)
         if self.resume_from_last_balance and self.enable_live_trading:
             try:
@@ -555,6 +686,10 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.warning("Could not resume from last balance: %s", e)
 
+    def _init_strategy_manager(
+        self, strategy: ComponentStrategy | StrategyRuntime, *, enable_hot_swapping: bool
+    ) -> None:
+        """Wire the hot-swap StrategyManager and strategy DB logging."""
         # Initialize strategy manager for hot-swapping
         self.strategy_manager = None
         if enable_hot_swapping:
@@ -576,6 +711,8 @@ class LiveTradingEngine:
             if hasattr(self.strategy, "set_database_manager"):
                 self.strategy.set_database_manager(self.db_manager)
 
+    def _seed_trading_state(self) -> None:
+        """Seed trading-loop, reconciliation, and WebSocket runtime state."""
         # Trading state
         self.is_running = False
         self._close_only_mode = False  # No new entries when True; exits still run
@@ -616,22 +753,8 @@ class LiveTradingEngine:
         # can't block order polling or force-remove a filled order (#631).
         self._pending_fill_exits: queue.SimpleQueue = queue.SimpleQueue()
 
-        # Performance tracker (unified with backtest engine)
-        from src.performance.tracker import PerformanceTracker
-
-        self.performance_tracker = PerformanceTracker(initial_balance)
-
-        # Error handling
-        self.max_consecutive_errors = max_consecutive_errors
-        self.consecutive_errors = 0
-        # Monotonic timestamp marking when the database first became unreachable
-        # inside the trading loop (None while reachable). Lets the engine ride
-        # out transient DB outages instead of counting them toward
-        # max_consecutive_errors (incident 2026-05-19: a Railway internal-DNS
-        # outage made Postgres unresolvable and shut the live bot down).
-        self.db_unreachable_since: float | None = None
-        self.error_cooldown = DEFAULT_ERROR_COOLDOWN
-
+    def _init_time_exit_policy(self, time_exit_policy: TimeExitPolicy | None) -> None:
+        """Construct the time-exit policy from overrides when not injected."""
         # Time exit policy (construct from overrides if not provided)
         self.time_exit_policy = time_exit_policy
         if self.time_exit_policy is None:
@@ -675,46 +798,14 @@ class LiveTradingEngine:
                 )
                 self.time_exit_policy = None
 
-        # Threading
-        self.main_thread: threading.Thread | None = None
-        # Set when the trading loop dies abnormally (unhandled crash or error
-        # exhaustion) so start() can exit non-zero for an orchestrator restart (#630).
-        self._loop_crashed = False
-        self.stop_event = threading.Event()
-
-        # Optional regime detector (feature-gated)
-        self.regime_detector = None
-        try:
-            if self.settings.regime_detection_enabled:
-                self.regime_detector = RegimeDetector()
-        except Exception:
-            self.regime_detector = None
-
+    def _install_signal_handlers(self) -> None:
+        """Register SIGINT/SIGTERM handlers for graceful shutdown (main thread)."""
         # Setup graceful shutdown (main thread only)
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGINT, self._signal_handler)
             signal.signal(signal.SIGTERM, self._signal_handler)
         else:
             logger.debug("Skipping signal handler registration outside main thread")
-
-        # Execution modeling
-        self.execution_fill_policy = self.settings.execution_fill_policy
-        self.execution_model = ExecutionModel(self.execution_fill_policy)
-
-        # Initialize modular handlers (use injected or create defaults)
-        self._init_modular_handlers(
-            position_tracker=position_tracker,
-            execution_engine=execution_engine,
-            entry_handler=entry_handler,
-            exit_handler=exit_handler,
-            market_data_handler=market_data_handler,
-            event_logger=event_logger,
-            health_monitor=health_monitor,
-        )
-
-        logger.info(
-            f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}"
-        )
 
     @property
     def positions(self) -> dict[str, Position]:

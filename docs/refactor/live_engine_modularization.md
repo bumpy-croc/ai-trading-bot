@@ -52,10 +52,10 @@ engine keeps thin delegating wrappers (so call sites and test mock points are un
 
 | Method | Lines (develop) | Nature |
 |---|---|---|
-| `__init__` | ~534 (`183–717`) | Wiring hub — ~29 distinct phases (see §5). |
-| `_trading_loop` | ~390 (`1540–1930`) | **Orchestrator core — stays.** Readability-only improvements optional. |
-| `start` | ~326 (`992–1318`) | Bootstrap sequence (session recover/create, #668 carry-forward, #657 self-heal, account sync, WS streams, reconciler, loop kickoff). |
-| `_init_modular_handlers` | ~112 (`743–855`) | Default-vs-injected handler construction. |
+| ~~`__init__`~~ | ~~~534~~ → ~110 | **DONE (Step A).** Decomposed into 15 cohesive private initializer helpers; now a thin phase orchestrator. |
+| `_trading_loop` | ~390 | **Orchestrator core — stays.** Readability-only improvements optional (Step C). |
+| `start` | ~326 | Bootstrap sequence (session recover/create, #668 carry-forward, #657 self-heal, account sync, WS streams, reconciler, loop kickoff) — **next: Step B**. |
+| `_init_modular_handlers` | ~112 | Default-vs-injected handler construction. Could fold into the Step A helper family or a builder later. |
 | `stop` | ~86 | Lifecycle teardown. |
 | `_is_transient_db_error`, `_record_event`, `_send_alert`, `_create_exchange_provider` | small | Cross-cutting infra. |
 
@@ -129,9 +129,13 @@ Use this for every extraction. It is the established pattern across all coordina
 
 Each item is its own PR with the full workflow in §6. Re-grep line numbers first.
 
-### Step A (highest value) — Construction slim-down
-Decompose `__init__` (~534) + `_init_modular_handlers` (~112) into cohesive private
-initializer helpers and/or a `LiveEngineBuilder`. The `__init__` phases are roughly:
+### Step A (highest value) — Construction slim-down (DONE)
+`__init__` (~534) has been decomposed into 15 cohesive private initializer helpers
+(see the changelog entry / ledger below); it is now a thin ~110-line phase
+orchestrator. Construction ordering, the 35-param signature, and every public
+attribute are preserved; parity byte-identical. **Still open under Step A:**
+`_init_modular_handlers` (~112) could be folded into the helper family or a
+`LiveEngineBuilder`. The original `__init__` phases were roughly:
 input validation → settings resolution → coordinator construction → `_configure_strategy`
 → providers → risk-manager merge/bind → trailing-stop policy → dynamic-risk config →
 timing config → balance/financial/flags → partial-operations policy → correlation
@@ -314,5 +318,10 @@ The bot reviews each PR and flags carried-over CODE.md nits: f-strings in loggin
 | #819 | market-data read path → `LiveMarketDataCoordinator` |
 | #820 | loop-timing → `LiveLoopTimingCoordinator` (+ hardening folded in) |
 | #821 | dynamic-risk → `LiveDynamicRiskCoordinator` (+ tests folded in) |
+| #822 | this handover doc |
+| (this branch) | **Step A** — `__init__` decomposed into 15 cohesive private initializer helpers; engine `__init__` ~534 → ~110 lines. Also aligned `LiveLoopTimingEngineState.data_freshness_threshold` to `int`. |
 
-Engine: **6,558 → 2,493 lines**, parity byte-identical throughout.
+Engine: **6,558 → 2,493 lines** through #821; Step A keeps the engine's total
+line count roughly flat (the slim `__init__` is offset by per-helper
+signatures/docstrings) while collapsing the largest method from 534 → ~110
+lines. Parity byte-identical throughout.
