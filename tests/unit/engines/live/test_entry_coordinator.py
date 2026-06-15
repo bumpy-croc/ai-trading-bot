@@ -25,6 +25,7 @@ pytestmark = pytest.mark.fast
 
 
 def _make_position() -> MagicMock:
+    """Return a minimal position mock for use in coordinator tests."""
     position = MagicMock()
     position.order_id = "order-1"
     position.entry_price = 50000.0
@@ -35,6 +36,7 @@ def _make_position() -> MagicMock:
 
 
 def _make_result(position: MagicMock, **overrides) -> MagicMock:
+    """Return a successful entry-result mock wrapping the given position."""
     result = MagicMock()
     result.executed = True
     result.position = position
