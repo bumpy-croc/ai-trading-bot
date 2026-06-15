@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `LiveTradingEngine` trading-loop timing helpers extracted into
+  `LiveLoopTimingCoordinator` (`engines/live/loop_timing.py`):
+  `_sleep_with_interrupt`, `_calculate_adaptive_interval`, and `_is_data_fresh`
+  move verbatim (mechanical `self.` → `state.` against an engine backref
+  `Protocol`); the engine keeps thin delegating wrappers (still called by the
+  trading loop, and `_is_data_fresh` by `LiveMarketDataCoordinator`). Leaf
+  helpers — no order placement or balance mutation. Pure refactor — backtest
+  determinism fingerprint byte-identical; engine `trading_engine.py` ~2,630 →
+  ~2,570 lines. (#486)
 - `LiveTradingEngine` per-candle market-data + context read path extracted into
   `LiveMarketDataCoordinator` (`engines/live/execution/market_data_coordinator.py`):
   `_is_context_ready`, `_get_latest_data`, `_add_sentiment_data`, and
