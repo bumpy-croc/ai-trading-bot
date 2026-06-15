@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3,574 → ~3,130 lines. (#486)
 
 ### Fixed
+- Hardened `LiveOrderFillCoordinator` CODE.md compliance after the #486
+  order-fill extraction (issues carried over verbatim from the engine): the
+  order-fill `logger.info` uses lazy `%s` formatting (was an f-string); the
+  cancel-refund's original-quantity fallback uses an explicit
+  `quantity is not None` check instead of `or 0.0` (Position-Fields rule — a
+  legitimate `0.0` is valid state, not "unset"; behaviour-neutral here given
+  the downstream `> 0` guard); and the entry-fee-refund-failure
+  `logger.critical` now passes `exc_info=True` (balance-integrity failure
+  where the traceback matters most). Adds direct `LiveOrderFillCoordinator`
+  unit tests covering the deferred stop-loss-close queue handoff, the
+  stop-loss-cancel escalation seam, the cancel-refund full/partial/`None`-qty
+  branches, and the fail-closed tracking-lost contract. (#486 follow-up)
 - Hardened `LiveExitCoordinator` CODE.md compliance after the #486 exit
   extraction (issues carried over verbatim from the engine): the exit-logging
   `logger.error` calls use lazy `%s` formatting (were f-strings); the
