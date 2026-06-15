@@ -97,7 +97,11 @@ class LiveOrderFillCoordinator:
         """
         state = self._state
         logger.info(
-            f"Order fill confirmed: {order_id} {symbol} qty={filled_qty} @ ${avg_price:.2f}"
+            "Order fill confirmed: %s %s qty=%s @ $%.2f",
+            order_id,
+            symbol,
+            filled_qty,
+            avg_price,
         )
         log_order_event(
             "order_filled",
@@ -266,7 +270,9 @@ class LiveOrderFillCoordinator:
             # full entry_fee would over-credit the balance and corrupt P&L accounting.
             entry_fee = float(removed_position.metadata.get("entry_fee", 0.0))
             if entry_fee > 0:
-                original_qty = removed_position.quantity or 0.0
+                original_qty = (
+                    removed_position.quantity if removed_position.quantity is not None else 0.0
+                )
                 if original_qty > 0 and filled_qty > 0:
                     # Compute the fraction of the order that was NOT filled.
                     unfilled_fraction = max(0.0, (original_qty - filled_qty) / original_qty)
@@ -310,6 +316,7 @@ class LiveOrderFillCoordinator:
                                 order_id,
                                 symbol,
                                 refund_err,
+                                exc_info=True,
                             )
                     else:
                         state.current_balance += refund_amount
