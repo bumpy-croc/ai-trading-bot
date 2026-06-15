@@ -5,6 +5,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from src.engines.live.execution.market_data_coordinator import LiveMarketDataCoordinator
 from src.engines.live.execution.position_tracker import LivePositionTracker
 from src.engines.live.strategy_runtime import StrategyRuntimeCoordinator
 from src.engines.live.trading_engine import LiveTradingEngine
@@ -202,9 +203,11 @@ def test_live_engine_supplies_correlation_context(sample_dataframe: pd.DataFrame
     engine._active_symbol = "BTCUSDT"
     engine.strategy_manager = None
     engine._runtime = None
-    # __new__ bypasses __init__, so wire the strategy-runtime coordinator the
-    # engine normally builds in its constructor (#486).
+    # __new__ bypasses __init__, so wire the coordinators the engine normally
+    # builds in its constructor (#486). _build_correlation_context delegates to
+    # the market-data coordinator.
     engine.strategy_coordinator = StrategyRuntimeCoordinator(engine_state=engine)
+    engine.market_data_coordinator = LiveMarketDataCoordinator(engine_state=engine)
 
     engine._configure_strategy(strategy)
 
