@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import traceback
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
@@ -32,7 +32,6 @@ from src.config.constants import (
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
-    DEFAULT_SLEEP_POLL_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
@@ -64,6 +63,7 @@ from src.engines.live.execution.position_tracker import (
 from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.live.loop_timing import LiveLoopTimingCoordinator
 from src.engines.live.monitoring import (
     LiveAccountMonitor,
     extract_indicators,
@@ -287,6 +287,7 @@ class LiveTradingEngine:
         # ordering of the real-money entry path (#486).
         self.entry_coordinator = LiveEntryCoordinator(engine_state=self)
         self.exit_coordinator = LiveExitCoordinator(engine_state=self)
+        self.loop_timing_coordinator = LiveLoopTimingCoordinator(engine_state=self)
         self.market_data_coordinator = LiveMarketDataCoordinator(engine_state=self)
         self.order_fill_coordinator = LiveOrderFillCoordinator(engine_state=self)
         self._configure_strategy(strategy)
@@ -2461,84 +2462,17 @@ class LiveTradingEngine:
             logger.error("Failed to send alert: %s", e, exc_info=True)
             return False
 
-    def _sleep_with_interrupt(self, seconds: float):
-        """Sleep in small increments to allow for interrupt and float seconds"""
-        end_time = time.time() + seconds
-        poll_interval = DEFAULT_SLEEP_POLL_INTERVAL  # Use configurable interval instead of 0.1
-        while time.time() < end_time:
-            if self.stop_event.is_set():
-                break
-            time.sleep(min(poll_interval, end_time - time.time()))
+    def _sleep_with_interrupt(self, seconds: float) -> None:
+        """Sleep in small increments to allow for interrupt (delegated to LiveLoopTimingCoordinator)."""
+        return self.loop_timing_coordinator.sleep_with_interrupt(seconds)
 
     def _calculate_adaptive_interval(self, current_price: float | None = None) -> int:
-        """Calculate adaptive check interval based on recent trading activity and market conditions"""
-        # Base interval from configuration (float: off-hours scaling is fractional)
-        interval: float = self.base_check_interval
-
-        # Factor in recent trading activity — use naive UTC for comparison
-        # since positions from the database store naive UTC timestamps
-        now_naive = datetime.utcnow()
-        one_hour_ago = now_naive - timedelta(hours=1)
-        recent_trades = len(
-            [
-                p
-                for p in self.live_position_tracker.positions.values()
-                if p.entry_time is not None and p.entry_time.replace(tzinfo=None) > one_hour_ago
-            ]
-        )
-        if recent_trades > 0:
-            # More frequent checks if we have recent activity
-            interval = max(self.min_check_interval, interval // 2)
-        elif self.live_position_tracker.position_count == 0:
-            # Less frequent checks if no active positions
-            interval = min(self.max_check_interval, interval * 2)
-
-        # Consider time of day (basic market hours awareness)
-        current_hour = datetime.now(UTC).hour
-        if current_hour < 6 or current_hour > 22:  # Off-hours (UTC)
-            interval = min(self.max_check_interval, interval * 1.5)
-
-        return int(interval)
+        """Adaptive check interval from activity + market conditions (delegated to LiveLoopTimingCoordinator)."""
+        return self.loop_timing_coordinator.calculate_adaptive_interval(current_price)
 
     def _is_data_fresh(self, df: pd.DataFrame) -> bool:
-        """Check if the data is fresh enough to warrant processing.
-
-        When WS kline cache is active, uses buffer freshness instead of
-        candle timestamps (which stay static for higher timeframes like 1h).
-        """
-        if df is None or df.empty:
-            return False
-
-        # Bypass candle-timestamp check only when WS stream is confirmed healthy
-        if (
-            self._ws_kline_active
-            and self._kline_buffer
-            and self._ws_kline_provider
-            and getattr(self._ws_kline_provider, "ws_healthy", False)
-        ):
-            return self._kline_buffer.is_fresh
-
-        latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now(UTC)
-        if isinstance(latest_timestamp, str):
-            try:
-                latest_timestamp = pd.to_datetime(latest_timestamp)
-            except (ValueError, TypeError):
-                return True  # Assume fresh if we can't parse timestamp
-
-        # Normalizes to UTC to avoid naive/aware datetime comparisons.
-        if isinstance(latest_timestamp, pd.Timestamp):
-            if latest_timestamp.tz is None:
-                latest_timestamp = latest_timestamp.tz_localize(UTC)
-            else:
-                latest_timestamp = latest_timestamp.tz_convert(UTC)
-        elif isinstance(latest_timestamp, datetime):
-            if latest_timestamp.tzinfo is None:
-                latest_timestamp = latest_timestamp.replace(tzinfo=UTC)
-            else:
-                latest_timestamp = latest_timestamp.astimezone(UTC)
-
-        age_seconds = (datetime.now(UTC) - latest_timestamp).total_seconds()
-        return age_seconds <= self.data_freshness_threshold
+        """Check the data is fresh enough to process (delegated to LiveLoopTimingCoordinator)."""
+        return self.loop_timing_coordinator.is_data_fresh(df)
 
     def _print_final_stats(self):
         """Print final trading statistics"""
