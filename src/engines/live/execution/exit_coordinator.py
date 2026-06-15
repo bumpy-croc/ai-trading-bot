@@ -125,10 +125,10 @@ class LiveExitCoordinator:
         df: pd.DataFrame,
         current_index: int,
         current_price: float,
-        runtime_decision=None,
-        candle=None,
+        runtime_decision: Any = None,
+        candle: Any = None,
         safety_mode: bool = False,
-    ):
+    ) -> None:
         """Check if any positions should be closed."""
         state = self._state
         positions_snapshot = state.live_position_tracker.positions
@@ -189,14 +189,16 @@ class LiveExitCoordinator:
                 # Note: Using fraction=1.0 to get raw P&L percentage for logging (unsized)
                 if position.entry_price <= 0:
                     logger.error(
-                        f"Invalid entry_price {position.entry_price} for position {position.symbol} - "
-                        "skipping P&L calculation for logging"
+                        "Invalid entry_price %s for position %s - skipping P&L calculation for logging",
+                        position.entry_price,
+                        position.symbol,
                     )
                     current_pnl = 0.0  # Fallback value for logging
                 elif float(current_price) <= 0 or not math.isfinite(float(current_price)):
                     logger.error(
-                        f"Invalid current_price {current_price} for position {position.symbol} - "
-                        "skipping P&L calculation for logging"
+                        "Invalid current_price %s for position %s - skipping P&L calculation for logging",
+                        current_price,
+                        position.symbol,
                     )
                     current_pnl = 0.0  # Fallback value for logging
                 else:
@@ -209,7 +211,7 @@ class LiveExitCoordinator:
                 log_reasons = [
                     exit_reason if should_exit else "holding_position",
                     f"current_pnl_{current_pnl:.4f}",
-                    f"position_age_{(datetime.utcnow() - position.entry_time.replace(tzinfo=None)).total_seconds():.0f}s",
+                    f"position_age_{(datetime.now(UTC).replace(tzinfo=None) - position.entry_time.replace(tzinfo=None)).total_seconds():.0f}s",
                     f"entry_price_{position.entry_price:.2f}",
                 ]
 
@@ -285,7 +287,7 @@ class LiveExitCoordinator:
         current_price: float,
         candle_high: float | None,
         candle_low: float | None,
-        candle,
+        candle: Any,
         skip_live_close: bool = False,
     ) -> None:
         """Serialise the close on the position's base-asset lock, then execute it (#703).
@@ -317,7 +319,7 @@ class LiveExitCoordinator:
         current_price: float,
         candle_high: float | None,
         candle_low: float | None,
-        candle,
+        candle: Any,
         skip_live_close: bool = False,
     ) -> None:
         """Close a position using shared execution modules."""
@@ -500,6 +502,7 @@ class LiveExitCoordinator:
                         "Failed to update balance for realized P&L %s: %s. Trade will be logged but balance inconsistent.",
                         position.symbol,
                         balance_err,
+                        exc_info=True,
                     )
                     # Continue processing to log the trade even if balance update fails
                     # This allows for manual reconciliation

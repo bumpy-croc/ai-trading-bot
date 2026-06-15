@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3,574 → ~3,130 lines. (#486)
 
 ### Fixed
+- Hardened `LiveExitCoordinator` CODE.md compliance after the #486 exit
+  extraction (issues carried over verbatim from the engine): the exit-logging
+  `logger.error` calls use lazy `%s` formatting (were f-strings); the
+  position-age log reason uses `datetime.now(UTC)` instead of the deprecated
+  `datetime.utcnow()` (behaviour-preserving — both sides compared tz-naive);
+  the realized-P&L balance-failure `logger.error` now passes `exc_info=True`
+  (financial-state failure where the traceback matters most); and
+  `check_exit_conditions` / `execute_exit` / `execute_exit_locked` gained
+  `Any` annotations on `runtime_decision`/`candle` and a `-> None` return.
+  Adds direct `LiveExitCoordinator` unit tests covering the close-routing seam
+  (`state._execute_exit`), the base-asset-lock delegation, and the
+  `execute_exit_locked` early-return guards. (#486 follow-up)
 - Live entry stop-loss gate no longer silently skips a misconfigured `0.0`
   stop. `LiveEntryCoordinator.execute_entry_locked` now keys the server-side
   stop-loss placement on `stop_loss is not None` (was a truthy check), so a
