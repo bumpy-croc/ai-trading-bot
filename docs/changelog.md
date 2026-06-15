@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Legacy duck-typed short-entry path moved off `LiveTradingEngine` into
+  `LiveEntryCoordinator.process_legacy_short_entry` (#486 follow-up): the
+  ~100-line `_process_legacy_short_entry` body is now a verbatim coordinator
+  method (mechanical `self.` → `state.`, with the entry execution routed through
+  the coordinator's own `execute_entry`); the engine keeps a thin delegating
+  wrapper so the trading loop's call site is unchanged. Adds four direct
+  `LiveEntryCoordinator` unit tests for the moved path. Pure refactor — backtest
+  determinism fingerprint byte-identical. (#486)
 - Live entry/exit coordinator `Protocol` types tightened (#486 Step D): the
   engine-state backref `Protocol`s (`LiveEntryEngineState`,
   `LiveExitEngineState`) now declare `data_provider: DataProvider`,
