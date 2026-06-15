@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from src.infrastructure.logging.events import log_risk_event
 
 if TYPE_CHECKING:
+    from src.database.manager import DatabaseManager
     from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
     from src.position_management.dynamic_risk import DynamicRiskManager
     from src.trading.performance import PerformanceTracker
@@ -34,7 +35,7 @@ class LiveDynamicRiskEngineState(Protocol):
     trading_session_id: int | None
     dynamic_risk_manager: DynamicRiskManager | None
     performance_tracker: PerformanceTracker
-    db_manager: Any
+    db_manager: DatabaseManager
     _dynamic_risk_handler: DynamicRiskHandler
 
 
@@ -65,12 +66,12 @@ class LiveDynamicRiskCoordinator:
             # Guard against zero/None balances to prevent division by zero in drawdown calc
             balance = (
                 float(state.current_balance)
-                if state.current_balance and state.current_balance > 0
+                if state.current_balance is not None and state.current_balance > 0
                 else float(state.initial_balance)
             )
             peak = (
                 float(perf_metrics.peak_balance)
-                if perf_metrics.peak_balance and perf_metrics.peak_balance > 0
+                if perf_metrics.peak_balance is not None and perf_metrics.peak_balance > 0
                 else balance
             )
             # Peak should never be less than current balance
