@@ -1,22 +1,12 @@
 # Project Status
 
-> **Last Updated**: 2026-06-14
+> **Last Updated**: 2026-06-15
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## In Flight
 
-- **Live trading engine refactor (#486)** — decomposing `LiveTradingEngine`
-  from a ~6,560-line god-class into a thin orchestrator that delegates to
-  focused modules. Merged: stop-loss lifecycle, monitoring glue, shared
-  entry-handler mixin (#796); startup recovery (#798); construction-time
-  settings (#800); strategy-runtime coordination (#809). Engine now ~4,790
-  lines. In flight: hot-swap lifecycle → `StrategyHotSwapCoordinator` (PR
-  #810, review-clean + CI-green, held pending the parity fix below). Remaining:
-  WebSocket-health extraction, locked entry/exit orchestration, toward a
-  <1,500-line orchestrator. Every step is a pure refactor proven against a
-  deterministic backtest parity fingerprint.
 - **Backtest determinism / parity fingerprint (#486 parity, PR #811)** — the
   parity oracle the refactor series depends on. Found the ml_basic backtest
   varied across processes under load (49/50/51 trades on identical inputs).
@@ -84,6 +74,7 @@ warning, per-trade sequence tie-break.
 - [x] **Feature Schema Saving** - ML models save feature schemas for validation (#530)
 - [x] **Cloud Training Automation** - Auto data download/upload for cloud training (#532)
 - [x] **CI/CD Pipeline** - Claude Code GitHub Workflow with tests (#551)
+- [x] **Live Trading Engine Modularization (#486)** - Decomposed the `LiveTradingEngine` god-class (~6,560 lines at the start of the effort) into a thin orchestrator over a coordinator family. The handover-doc plan (Steps A–E) landed via #823–#826: `__init__` 534→~110 lines (15 phase helpers), `start()` 327→~18 lines (7 phase helpers), `_trading_loop` 390→~250 lines (short-entry + periodic-account extracted), and entry/exit coordinator `Protocol`s tightened to concrete types. Every step proven byte-identical against the deterministic backtest parity fingerprint. Engine now ~2,620 lines; optional further extraction (e.g. `LiveEngineBuilder`, `LiveStartupSequencer`) remains as future polish. Plan: `docs/refactor/live_engine_modularization.md`.
 
 ### In Progress
 
@@ -134,19 +125,23 @@ warning, per-trade sequence tie-break.
 
 ## Last Session Summary
 
-**Date**: 2026-02-18
+**Date**: 2026-06-15
 
 **Work Completed**:
-- Implemented PSB high-priority improvements: updated changelog, project status, architecture docs
-- Added `#` hashtag regression prevention pattern to CLAUDE.md
-- Verified `/update-docs` slash command is complete
+- Completed the #486 live-engine modularization plan (Steps A–E) across four
+  PRs (#823–#826): decomposed `__init__`, `start()`, and `_trading_loop` into
+  cohesive helpers; tightened the entry/exit coordinator `Protocol`s to concrete
+  types and moved their tests to `create_autospec`; documented the deliberate
+  non-extractions. Every PR proven byte-identical against the backtest parity
+  fingerprint and merged CI-green.
 
 **Ended At**:
-- PSB high-priority documentation improvements
+- #486 modularization plan complete; engine is a thin ~2,620-line orchestrator.
 
 **Next Steps**:
-- Implement PSB medium-priority items (feature reference docs, additional slash commands)
-- Continue performance optimization work
+- Optional further extraction if pursued: `_process_legacy_short_entry` →
+  `LiveEntryCoordinator`; a `LiveEngineBuilder` for construction; a
+  `LiveStartupSequencer` for the bootstrap sequence.
 
 ---
 
