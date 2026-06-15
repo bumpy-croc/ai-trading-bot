@@ -1098,6 +1098,26 @@ class LiveTradingEngine:
             logger.warning("Trading engine is already running")
             return
 
+        self._begin_session_runtime(symbol, timeframe)
+        self._bootstrap_trading_session(symbol, timeframe)
+        self._carry_forward_open_positions()
+        self._self_heal_terminal_positions()
+        self._synchronize_account_on_start()
+
+        # Set session ID on strategy for logging
+        if hasattr(self.strategy, "session_id"):
+            self.strategy.session_id = self.trading_session_id
+
+        self._start_runtime_services(symbol, timeframe)
+        self._run_main_loop_until_stopped(symbol, timeframe, max_steps)
+
+        # After a clean stop this is a no-op; after an abnormal loop death it
+        # exits the process non-zero (when opted in) so the orchestrator
+        # restarts it (#630).
+        self._exit_if_loop_crashed(exit_on_crash)
+
+    def _begin_session_runtime(self, symbol: str, timeframe: str) -> None:
+        """Set runtime flags + logging context and emit the startup banner."""
         self.is_running = True
         self._active_symbol = symbol
         self.timeframe = timeframe  # Store the trading timeframe
@@ -1123,6 +1143,8 @@ class LiveTradingEngine:
         if not self.enable_live_trading:
             logger.warning("⚠️  PAPER TRADING MODE - No real orders will be executed")
 
+    def _bootstrap_trading_session(self, symbol: str, timeframe: str) -> None:
+        """Recover prior balance/positions and create + wire the trading session."""
         # Try to recover from existing session first
         if self.resume_from_last_balance:
             recovered_balance = self._recover_existing_session()
@@ -1194,6 +1216,8 @@ class LiveTradingEngine:
             self.event_logger.set_session_id(self.trading_session_id)
             self.event_logger.set_recovery_session_id(self._recovered_inactive_session_id)
 
+    def _carry_forward_open_positions(self) -> None:
+        """Carry OPEN positions forward from a recovered inactive session (#668)."""
         # Carry OPEN positions forward on a clean restart (#668). The inactive
         # session recovered above (balance only) still owns any OPEN position via
         # Position.session_id, so _recover_active_positions() at line ~1281 saw a
@@ -1238,6 +1262,8 @@ class LiveTradingEngine:
                 # stale-session reassign (#668, P3).
                 self._recovered_inactive_session_id = None
 
+    def _self_heal_terminal_positions(self) -> None:
+        """Close any OPEN position in this session that already has a terminal Trade (#657)."""
         # Startup self-heal (#657): close any OPEN position in this session that
         # already has a terminal Trade. Deliberately NOT gated behind
         # enable_live_trading/exchange — the whole bug was that closing was
@@ -1260,6 +1286,8 @@ class LiveTradingEngine:
             except Exception as heal_err:
                 logger.warning("Startup position self-heal failed (continuing): %s", heal_err)
 
+    def _synchronize_account_on_start(self) -> None:
+        """Sync balance/positions with the exchange and persist any balance correction."""
         # Perform account synchronization if available
         self._pending_balance_correction = False
         self._pending_corrected_balance = None
@@ -1342,10 +1370,8 @@ class LiveTradingEngine:
                 self._pending_balance_correction = False
                 self._pending_corrected_balance = None
 
-        # Set session ID on strategy for logging
-        if hasattr(self.strategy, "session_id"):
-            self.strategy.session_id = self.trading_session_id
-
+    def _start_runtime_services(self, symbol: str, timeframe: str) -> None:
+        """Start the order tracker, periodic reconciler, and WebSocket streams."""
         # Start order tracker for monitoring order fills (live trading only)
         if self.order_tracker and self.enable_live_trading:
             self.order_tracker.start()
@@ -1387,6 +1413,10 @@ class LiveTradingEngine:
         # Try to start WebSocket streams for reduced API weight
         self._start_websocket_streams(symbol, timeframe)
 
+    def _run_main_loop_until_stopped(
+        self, symbol: str, timeframe: str, max_steps: int | None
+    ) -> None:
+        """Launch the trading-loop thread and block until it stops, then tear down."""
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(
             target=self._run_trading_loop, args=(symbol, timeframe, max_steps)
@@ -1402,11 +1432,6 @@ class LiveTradingEngine:
             logger.info("Received interrupt signal")
         finally:
             self.stop()
-
-        # After a clean stop this is a no-op; after an abnormal loop death it
-        # exits the process non-zero (when opted in) so the orchestrator
-        # restarts it (#630).
-        self._exit_if_loop_crashed(exit_on_crash)
 
     def _enter_close_only_mode(self) -> None:
         """Enter close-only mode: no new entries, exits/stops/trailing still active."""

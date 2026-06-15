@@ -54,7 +54,7 @@ engine keeps thin delegating wrappers (so call sites and test mock points are un
 |---|---|---|
 | ~~`__init__`~~ | ~~~534~~ → ~110 | **DONE (Step A).** Decomposed into 15 cohesive private initializer helpers; now a thin phase orchestrator. |
 | `_trading_loop` | ~390 | **Orchestrator core — stays.** Readability-only improvements optional (Step C). |
-| `start` | ~326 | Bootstrap sequence (session recover/create, #668 carry-forward, #657 self-heal, account sync, WS streams, reconciler, loop kickoff) — **next: Step B**. |
+| ~~`start`~~ | ~~~326~~ → ~18 | **DONE (Step B).** Decomposed into 7 cohesive phase helpers; now a thin orchestrator. |
 | `_init_modular_handlers` | ~112 | Default-vs-injected handler construction. Could fold into the Step A helper family or a builder later. |
 | `stop` | ~86 | Lifecycle teardown. |
 | `_is_transient_db_error`, `_record_event`, `_send_alert`, `_create_exchange_provider` | small | Cross-cutting infra. |
@@ -163,12 +163,20 @@ lower-risk first move and still hits the goal.
 - Consider moving OS **signal registration** out of `__init__` into `start()` (it's a side
   effect that complicates construction) — but only if behavior/tests allow; verify.
 
-### Step B — `start()` bootstrap slim-down
-Move the startup sequence into `LiveSessionRecoverer` and/or a new `LiveStartupSequencer`,
-leaving `start()` a thin phase orchestration. Watch the capital-critical ordering: session
-recover → create session → wire session/strategy/execution-engine/event-logger → #668
-open-position carry-forward → #657 self-heal → account sync / exchange reconciliation → WS
-streams → WS health monitor → periodic reconciler → loop kickoff.
+### Step B — `start()` bootstrap slim-down (DONE)
+Decomposed `start()` (~327 → ~18 lines) into 7 cohesive private phase helpers
+(`_begin_session_runtime`, `_bootstrap_trading_session`,
+`_carry_forward_open_positions`, `_self_heal_terminal_positions`,
+`_synchronize_account_on_start`, `_start_runtime_services`,
+`_run_main_loop_until_stopped`) — Step-A-style verbatim moves on the engine
+(the recovery primitives already live in `LiveSessionRecoverer`, so no
+duplication). The capital-critical ordering is preserved exactly: session
+recover → create session → wire session/strategy/execution-engine/event-logger →
+#668 open-position carry-forward → #657 self-heal → account sync / exchange
+reconciliation → runtime services (order tracker → periodic reconciler → WS
+streams) → loop kickoff. Parity byte-identical. (A future `LiveStartupSequencer`
+coordinator is the more-architectural end-state, mirroring the builder-vs-
+phase-helper trade-off noted in Step A.)
 
 ### Step C (optional, behavior-preserving) — `_trading_loop` readability
 Extract per-iteration phases (data fetch → freshness/context gate → entry/exit eval →
@@ -319,7 +327,8 @@ The bot reviews each PR and flags carried-over CODE.md nits: f-strings in loggin
 | #820 | loop-timing → `LiveLoopTimingCoordinator` (+ hardening folded in) |
 | #821 | dynamic-risk → `LiveDynamicRiskCoordinator` (+ tests folded in) |
 | #822 | this handover doc |
-| (this branch) | **Step A** — `__init__` decomposed into 15 cohesive private initializer helpers; engine `__init__` ~534 → ~110 lines. Also aligned `LiveLoopTimingEngineState.data_freshness_threshold` to `int`. |
+| #823 | **Step A** — `__init__` decomposed into 15 cohesive private initializer helpers; engine `__init__` ~534 → ~110 lines. Also aligned `LiveLoopTimingEngineState.data_freshness_threshold` to `int`. |
+| (this branch) | **Step B** — `start()` decomposed into 7 cohesive private phase helpers; ~327 → ~18 lines. |
 
 Engine: **6,558 → 2,493 lines** through #821; Step A keeps the engine's total
 line count roughly flat (the slim `__init__` is offset by per-helper
