@@ -18,8 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   method (mechanical `self.` → `state.`, with the entry execution routed through
   the coordinator's own `execute_entry`); the trading loop calls the coordinator
   directly (the engine wrapper was removed — no test-mock seam or other caller).
-  Adds six direct `LiveEntryCoordinator` unit tests for the moved path. Pure
-  refactor — backtest determinism fingerprint byte-identical. (#486)
+  Hardens a carried-over bare `except Exception` around `get_risk_overrides()` to
+  log at WARNING (was a silent swallow on a live short-entry path). Adds seven
+  direct `LiveEntryCoordinator` unit tests for the moved path. Pure refactor —
+  backtest determinism fingerprint byte-identical. (#486)
 - Live entry/exit coordinator `Protocol` types tightened (#486 Step D): the
   engine-state backref `Protocol`s (`LiveEntryEngineState`,
   `LiveExitEngineState`) now declare `data_provider: DataProvider`,

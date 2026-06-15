@@ -362,6 +362,19 @@ def test_legacy_short_entry_without_position_sizer_suppresses_entry():
     coordinator.execute_entry.assert_not_called()
 
 
+def test_legacy_short_entry_logs_when_get_risk_overrides_raises(caplog):
+    """A raising `get_risk_overrides()` is logged at WARNING and falls through to None."""
+    import logging
+
+    state = _make_short_state(is_runtime=False, short_signal=True, overrides={})
+    state.strategy.get_risk_overrides.side_effect = ValueError("boom")
+    with caplog.at_level(logging.WARNING):
+        coordinator = _run_short_entry(state)
+    # overrides=None → no position_sizer → size 0.0 → no entry executed
+    coordinator.execute_entry.assert_not_called()
+    assert any("get_risk_overrides() raised" in r.message for r in caplog.records)
+
+
 def test_legacy_short_entry_sl_fallback_when_overrides_lack_sl_tp():
     """Sizer override present but no SL/TP keys → default-stop fallback branch."""
     state = _make_short_state(

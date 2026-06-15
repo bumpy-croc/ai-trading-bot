@@ -887,6 +887,12 @@ class LiveEntryCoordinator:
                         else None
                     )
                 except Exception:
+                    logger.warning(
+                        "get_risk_overrides() raised for %s; proceeding with overrides=None "
+                        "(strategy-configured SL/TP may not apply to this short entry)",
+                        getattr(state.strategy, "name", "<unknown>"),
+                        exc_info=True,
+                    )
                     overrides = None
                 indicators = state._extract_indicators(df, current_index)
                 # Correlation context for short entries
