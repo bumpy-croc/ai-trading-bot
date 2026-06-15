@@ -36,7 +36,7 @@ class LiveLoopTimingEngineState(Protocol):
     base_check_interval: int
     min_check_interval: int
     max_check_interval: int
-    data_freshness_threshold: float
+    data_freshness_threshold: int
     live_position_tracker: LivePositionTracker
     _ws_kline_active: bool
     _kline_buffer: KlineBuffer | None

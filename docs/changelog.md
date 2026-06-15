@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `LiveTradingEngine.__init__` decomposed from a ~534-line monolith into a thin
+  ~110-line orchestrator that calls cohesive, single-purpose private
+  initializer helpers (`_validate_inputs`, `_resolve_settings`,
+  `_init_coordinators`, `_init_risk_manager`, `_init_risk_policies`,
+  `_init_partial_operations`, `_init_correlation`, `_init_database`,
+  `_init_dynamic_risk_manager`, `_init_exchange_interface`,
+  `_resume_balance_from_snapshot`, `_init_strategy_manager`,
+  `_seed_trading_state`, `_init_time_exit_policy`, `_install_signal_handlers`).
+  Each block moved verbatim — construction ordering, the full 35-param public
+  constructor signature, and every public attribute are preserved exactly.
+  Aligned `LiveLoopTimingEngineState.data_freshness_threshold` to `int` (was
+  `float`) so it matches the engine attribute (`MarketDataHandler` and the
+  sibling interval fields are already `int`); this latent inconsistency was
+  previously masked by mypy's same-`__init__` deferral. Pure refactor — backtest
+  determinism fingerprint byte-identical. (#486)
 - `LiveTradingEngine` dynamic-risk adjustment extracted into
   `LiveDynamicRiskCoordinator` (`engines/live/dynamic_risk_coordinator.py`):
   `_apply_dynamic_risk_adjustment` and `_log_dynamic_risk_adjustments` move
