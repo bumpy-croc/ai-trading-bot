@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `LiveTradingEngine` exit pipeline extracted into `LiveExitCoordinator`
+  (`engines/live/execution/exit_coordinator.py`), mirroring the entry
+  extraction. `_check_exit_conditions`, `_execute_exit`, and
+  `_execute_exit_locked` move verbatim (a mechanical `self.` → `state.`
+  rewrite against an engine backref `Protocol`); the engine keeps thin
+  delegating wrappers so all call sites and test mock points are unchanged.
+  `check_exit_conditions` invokes the close through the engine's
+  `_execute_exit` wrapper so existing engine-level test mocks still intercept;
+  the base-asset close lock (#703) and the resting-stop cancel-before-close
+  ordering (#710) are preserved. Pure refactor — backtest determinism
+  fingerprint byte-identical before/after; engine `trading_engine.py`
+  3,574 → ~3,130 lines. (#486)
+
 ### Fixed
 - Live entry stop-loss gate no longer silently skips a misconfigured `0.0`
   stop. `LiveEntryCoordinator.execute_entry_locked` now keys the server-side
