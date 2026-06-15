@@ -251,8 +251,10 @@ runner via `LiveEngineSettings.resolve()`; the engine self-resolves when omitted
   (`strategy`, `data_provider`, `current_balance`, `live_position_tracker`,
   `completed_trades`, `enable_live_trading`).
 - No tests use `__new__`; coordinator unit tests mock the `Live*EngineState` `Protocol` backref.
-- `tests/unit/live/test_order_execution.py`, `test_db_resilience.py`, `test_record_event.py`,
-  `test_order_tracking_lost.py`, `test_stop_loss_cancel_escalation_741.py` exercise the
+- `tests/unit/live/test_order_execution.py`, `tests/unit/test_db_resilience.py`,
+  `tests/unit/engines/live/test_record_event.py`,
+  `tests/unit/engines/live/test_order_tracking_lost.py`,
+  `tests/unit/engines/live/test_stop_loss_cancel_escalation_741.py` exercise the
   callback/observability methods directly via the engine wrappers — keep the wrappers.
 
 ---
