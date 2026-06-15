@@ -290,6 +290,7 @@ Real-time execution with safety controls.
 - `execution/entry_handler.py` - Entry signal processing
 - `execution/entry_coordinator.py` - Entry decision + execution pipeline (`LiveEntryCoordinator`): signal/sizing/SL-TP derivation and the base-asset-locked order path (guards, balance+fee accounting, position tracking, risk re-registration, stop-loss placement, emergency-close fallbacks, #703). Reads/writes engine state via a `Protocol` backref
 - `execution/exit_handler.py` - Exit signal processing
+- `execution/exit_coordinator.py` - Exit decision + execution pipeline (`LiveExitCoordinator`): per-position SL/TP/runtime exit evaluation and the base-asset-locked close path (resting-stop cancel-before-close #710, realized-PnL + margin-interest accounting, balance update, trade persistence/CLOSED flip #657, re-protect on failed close, #703). Reads/writes engine state via a `Protocol` backref
 - `execution/stop_loss_manager.py` - All exchange-facing stop-loss lifecycle calls (place/cancel/query/re-protect)
 - `recovery.py` - Startup recovery: session balance, persisted-position reload, exchange reconciliation (`LiveSessionRecoverer`)
 - `strategy_runtime.py` - Strategy normalization + per-candle runtime decision pipeline (`StrategyRuntimeCoordinator`): config, component risk-context provider, `RuntimeContext` construction, decision processing, risk-param merge/clone
