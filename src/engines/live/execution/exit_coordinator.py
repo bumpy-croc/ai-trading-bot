@@ -536,8 +536,16 @@ class LiveExitCoordinator:
             # the persisted trades.commission below.
             entry_fee = _close_entry_fee_usd(position, state.live_execution_engine)
             entry_slippage_cost = float(position.metadata.get("entry_slippage_cost", 0.0))
-            total_fee = entry_fee + exit_fee
-            total_slippage = entry_slippage_cost + exit_slippage_cost
+            # This close is only the remaining slice of a partially-exited position
+            # (1.0 for a full close). The Trade above is portion-level (size =
+            # current_size), so the entry leg must be scaled to the same portion or
+            # the performance metrics over-attribute the entry fee/slippage by
+            # 1/portion — and diverge from the DB ledger, which already scales the
+            # entry fee (see commission= below).
+            close_portion = _close_position_portion(position)
+            scaled_entry_fee = entry_fee * close_portion
+            total_fee = scaled_entry_fee + exit_fee
+            total_slippage = entry_slippage_cost * close_portion + exit_slippage_cost
 
             # Store GROSS P&L in Trade.pnl for parity with backtest engine
             # Fees are tracked separately via performance_tracker.record_trade()
@@ -627,8 +635,10 @@ class LiveExitCoordinator:
                     # reconciliation, so unit-ambiguous and unreliable at close time).
                     # The entry leg is scaled to the closed portion so a partial final
                     # close's commission matches its portion-level size/quantity/pnl
-                    # (ratio is 1.0 for a full close).
-                    commission=entry_fee * _close_position_portion(position) + exit_fee,
+                    # (ratio is 1.0 for a full close). Reuses the same scaled total fed
+                    # to performance_tracker.record_trade above so the metrics and the
+                    # DB ledger never diverge.
+                    commission=total_fee,
                     quantity=_closed_base_quantity(position),
                     margin_interest_cost=interest_cost,
                 )

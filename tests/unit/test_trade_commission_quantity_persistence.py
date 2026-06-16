@@ -279,12 +279,25 @@ def test_commission_scales_entry_fee_for_partial_close():
     # current_size 0.10 of original 0.25 -> entry leg scaled to 0.40 of the full entry fee.
     position = _make_position(quantity=2.5, entry_fee=0.25, size=0.25, current_size=0.10)
 
+    # Spy on the performance-metric fee so we can assert it does NOT diverge from
+    # the DB ledger commission for a partial final close (the entry leg must be
+    # scaled in both, not full in the metrics and scaled in the DB).
+    rec = Mock(wraps=engine.performance_tracker.record_trade)
+    engine.performance_tracker.record_trade = rec
+
     trade = _close(engine, position, exit_price=110.0)
 
     # entry leg = 0.25 * (0.10 / 0.25) = 0.10 ; exit notional = 1000 * 0.10 * 1.1 = 110,
     # exit_fee = 0.11 ; commission = 0.10 + 0.11 = 0.21 (NOT the full 0.25 + 0.11 = 0.36).
     assert trade["commission"] == pytest.approx(0.21, abs=0.01)
     assert trade["commission"] < 0.25  # entry leg scaled below the full entry fee
+
+    # Performance metrics must use the SAME scaled fee (no interest in paper mode),
+    # i.e. match the DB ledger rather than the full unscaled 0.36.
+    rec.assert_called_once()
+    perf_fee = rec.call_args.kwargs["fee"]
+    assert perf_fee == pytest.approx(trade["commission"], abs=1e-9)
+    assert perf_fee < 0.36  # regression guard: not the full unscaled entry fee
 
 
 @pytest.mark.parametrize(
