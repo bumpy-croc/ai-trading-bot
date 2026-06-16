@@ -409,7 +409,7 @@ class KellySizer(PositionSizer):
         self.lookback_period = lookback_period
 
         # Trade history for updating statistics
-        self.trade_history = []
+        self.trade_history: list[dict[str, Any]] = []
 
     def calculate_size(
         self,
@@ -1010,7 +1010,7 @@ class RegimeAdaptiveSizer(PositionSizer):
 
         self.regime_multipliers.update(new_multipliers)
 
-    def get_regime_allocation(self, regime: Optional["RegimeContext"]) -> dict[str, float]:
+    def get_regime_allocation(self, regime: Optional["RegimeContext"]) -> dict[str, float | str]:
         """
         Get detailed allocation breakdown for a regime
 

@@ -6,14 +6,13 @@ discrepancy handling, close-only mode, and audit events.
 
 from __future__ import annotations
 
-import threading
-import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, call, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, call, create_autospec, patch
 
 import pytest
 
+from src.data_providers.exchange_interface import OrderLookupError
 from src.engines.live.reconciliation import (
     AuditEvent,
     PeriodicReconciler,
@@ -61,6 +60,9 @@ class MockExchangeOrder:
     average_price: float | None = 50100.0
     filled_quantity: float = 0.001
     commission: float = 0.05
+    # Quote-asset commission (the common SELL case); converted to USD as-is by
+    # order_commission_usd. A base-asset (BUY/short-SL) commission would be priced in.
+    commission_asset: str = "USDT"
     quantity: float = 0.001
     side: object = None
     client_order_id: str | None = None
@@ -79,6 +81,11 @@ class MockBalance:
 def mock_exchange():
     exchange = MagicMock()
     exchange.get_order.return_value = None
+    # Fail-closed lookup (#713) delegates to get_order by default so tests can
+    # keep driving order responses through get_order (.return_value or
+    # .side_effect) for both accessors; fail-closed tests override this with
+    # side_effect = OrderLookupError(...).
+    exchange.get_order_checked.side_effect = lambda oid, sym: exchange.get_order(oid, sym)
     exchange.get_order_by_client_id.return_value = None
     exchange.get_all_orders.return_value = []
     exchange.get_my_trades.return_value = []
@@ -726,14 +733,21 @@ class TestCloseOnlyMode:
     """Tests for close-only mode behavior in trading engine context."""
 
     def test_close_only_mode_skips_entries(self):
-        """Close-only mode causes _check_entry_conditions to return early."""
-        from src.engines.live.trading_engine import LiveTradingEngine
+        """Close-only mode causes the entry check to return early.
 
-        engine = MagicMock(spec=LiveTradingEngine)
-        engine._close_only_mode = True
-        # Call the real method on the mock instance
-        LiveTradingEngine._check_entry_conditions(
-            engine,
+        The entry-decision logic lives in ``LiveEntryCoordinator.check_entry_conditions``
+        (the engine's ``_check_entry_conditions`` is a thin wrapper, #486); the
+        close-only guard reads engine state through the coordinator's backref.
+        """
+        from src.engines.live.execution.entry_coordinator import (
+            LiveEntryCoordinator,
+            LiveEntryEngineState,
+        )
+
+        state = create_autospec(LiveEntryEngineState, instance=True)
+        state._close_only_mode = True
+        coordinator = LiveEntryCoordinator(engine_state=state)
+        coordinator.check_entry_conditions(
             df=MagicMock(),
             current_index=0,
             symbol="BTCUSDT",
@@ -741,22 +755,25 @@ class TestCloseOnlyMode:
             current_time=datetime.now(UTC),
         )
         # _is_runtime_strategy should NOT be called — early return before it
-        engine._is_runtime_strategy.assert_not_called()
+        state._is_runtime_strategy.assert_not_called()
 
     def test_close_only_mode_allows_exits(self):
         """Close-only mode does not block when disabled (entry check proceeds)."""
-        from src.engines.live.trading_engine import LiveTradingEngine
+        from src.engines.live.execution.entry_coordinator import (
+            LiveEntryCoordinator,
+            LiveEntryEngineState,
+        )
 
-        engine = MagicMock(spec=LiveTradingEngine)
-        engine._close_only_mode = False
+        state = create_autospec(LiveEntryEngineState, instance=True)
+        state._close_only_mode = False
         # The method will proceed past the guard and call _is_runtime_strategy.
         # Let it raise to short-circuit the rest — we only care that the guard
         # did NOT block execution.
-        engine._is_runtime_strategy.side_effect = StopIteration("short-circuit")
+        state._is_runtime_strategy.side_effect = StopIteration("short-circuit")
+        coordinator = LiveEntryCoordinator(engine_state=state)
 
         with pytest.raises(StopIteration):
-            LiveTradingEngine._check_entry_conditions(
-                engine,
+            coordinator.check_entry_conditions(
                 df=MagicMock(),
                 current_index=0,
                 symbol="BTCUSDT",
@@ -764,7 +781,7 @@ class TestCloseOnlyMode:
                 current_time=datetime.now(UTC),
             )
         # _is_runtime_strategy IS called — not blocked by close-only mode
-        engine._is_runtime_strategy.assert_called_once()
+        state._is_runtime_strategy.assert_called_once()
 
 
 # ---------- _find_matching_order Tests ----------
@@ -1000,7 +1017,7 @@ class TestAssetHoldingsVerification:
         assert result.status == "corrected"
         assert result.severity == Severity.HIGH
         assert any("closed externally" in c.reason for c in result.corrections)
-        mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
+        mock_position_tracker.pop_position.assert_called_once_with(pos.order_id)
         mock_db.close_position.assert_called_once_with(10)
 
     def test_position_with_sufficient_balance_not_flagged(
@@ -1106,7 +1123,7 @@ class TestAssetHoldingsVerification:
 
         result = reconciler.reconcile_position(pos)
         assert result.status == "corrected"
-        mock_position_tracker.remove_position.assert_called_once()
+        mock_position_tracker.pop_position.assert_called_once()
         mock_db.close_position.assert_not_called()
 
 
@@ -2125,6 +2142,7 @@ class TestPeriodicReconcilerSLVerification:
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         pos = MockPosition(
+            order_id="entry_1",
             stop_loss_order_id="sl_periodic_1",
             exchange_order_id="entry_1",
             db_position_id=50,
@@ -2138,6 +2156,11 @@ class TestPeriodicReconcilerSLVerification:
         )
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
         mock_exchange.get_open_orders.return_value = []
+        # Wrapper pre-check sees the position; after the delegated close the
+        # tracker no longer has it (the handler removed it on success).
+        mock_position_tracker.get_position.side_effect = [pos, None]
+        mock_db.get_current_balance.return_value = 1000.0
+        mock_db.close_position.return_value = True
 
         reconciler = PeriodicReconciler(
             exchange_interface=mock_exchange,
@@ -2147,9 +2170,9 @@ class TestPeriodicReconcilerSLVerification:
         )
         reconciler._reconcile_cycle()
 
-        # Position removed from tracker and closed in DB
-        mock_position_tracker.remove_position.assert_called_once_with("entry_1")
+        # DB closed first, then removed from the tracker (delegated handler)
         mock_db.close_position.assert_called_once_with(50, exit_price=48000.0)
+        mock_position_tracker.remove_position.assert_called_once_with("entry_1")
         mock_db.log_audit_event.assert_any_call(
             session_id=1,
             entity_type="position",
@@ -2160,6 +2183,18 @@ class TestPeriodicReconcilerSLVerification:
             reason="Stop-loss filled @ 48000.0 (periodic check)",
             severity="HIGH",
         )
+        # Realized P&L booked to the session balance (parity with the startup
+        # path): long 0.1 qty, entry 50000 -> SL fill 48000 = -200 gross,
+        # minus the SL order's 0.05 commission. (Scoped to the reconciliation
+        # P&L write; the cycle's later balance-verification step may also call
+        # update_balance.)
+        pnl_calls = [
+            c
+            for c in mock_db.update_balance.call_args_list
+            if str(c.args[1]).startswith("reconciliation_close")
+        ]
+        assert len(pnl_calls) == 1
+        assert pnl_calls[0].args[0] == pytest.approx(1000.0 - 200.0 - 0.05)
 
     def test_cycle_replaces_cancelled_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places a cancelled SL order."""
@@ -2335,7 +2370,7 @@ class TestPartialSLFillQuantityCalculation:
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
         mock_exchange.place_stop_loss_order.return_value = "new_sl_partial"
 
-        result = reconciler.reconcile_position(pos)
+        reconciler.reconcile_position(pos)
 
         # quantity stays at 1.0; current_size reduced to reflect remaining held
         assert pos.quantity == pytest.approx(1.0)
@@ -2979,7 +3014,16 @@ class TestReconciliationFeeAccounting:
         with patch.object(reconciler, "_realize_pnl_on_close") as mock_pnl:
             reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.60)
 
-        mock_pnl.assert_called_once_with(position, 51000.0, "exit_order_recovery", exit_fee=0.60)
+        # Now opts into Trade-row logging with a stable dedup key. No real exit order id was
+        # threaded, so the synthetic reconcile_exit_<position_id> key is used.
+        mock_pnl.assert_called_once_with(
+            position,
+            51000.0,
+            "exit_order_recovery",
+            exit_fee=0.60,
+            log_trade=True,
+            exit_order_id="reconcile_exit_42",
+        )
 
     def test_stop_loss_recovery_passes_commission_to_pnl(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -3014,3 +3058,396 @@ class TestReconciliationFeeAccounting:
         mock_pnl.assert_called_once()
         call_kwargs = mock_pnl.call_args
         assert call_kwargs[1]["exit_fee"] == pytest.approx(0.35)
+
+
+class TestFailClosedSLLookup:
+    """#713: a transient order-lookup failure must NOT be treated as a missing stop.
+
+    Treating an unconfirmed lookup as "missing" clears the tracked stop-loss
+    order id and places a DUPLICATE stop while the original may still rest on
+    the exchange — reserving balance (later -2010) and able to flip the
+    position if both fill.
+    """
+
+    def test_periodic_cycle_skips_sl_replace_on_unconfirmed_lookup(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Periodic cycle: OrderLookupError -> no re-placement, SL id retained."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_transient_1",
+            exchange_order_id="entry_t1",
+            db_position_id=60,
+            quantity=0.5,
+        )
+        pos.stop_loss = 46000.0
+        mock_position_tracker.positions = {"entry_t1": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        # SL lookup cannot be confirmed (transient API failure)
+        mock_exchange.get_order_checked.side_effect = OrderLookupError("timeout")
+        mock_exchange.get_open_orders.return_value = []
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "sl_transient_1"
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+
+    def test_startup_verify_stop_loss_skips_on_unconfirmed_lookup(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """Startup _verify_stop_loss: OrderLookupError -> no audit, no re-place."""
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_transient_2",
+            db_position_id=61,
+        )
+        mock_exchange.get_order_checked.side_effect = OrderLookupError("rate limited")
+
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=61,
+            status="verified",
+            severity=Severity.LOW,
+        )
+        reconciler._verify_stop_loss(position, "sl_transient_2", result)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert position.stop_loss_order_id == "sl_transient_2"
+        # No MISSING audit event persisted for an unconfirmed lookup
+        mock_db.log_audit_event.assert_not_called()
+        assert result.severity == Severity.LOW
+
+    def test_startup_verify_stop_loss_replaces_on_confirmed_missing(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """Regression guard: a CONFIRMED-absent stop is still re-placed."""
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_gone_1",
+            db_position_id=62,
+        )
+        mock_exchange.get_order.return_value = None  # delegation -> confirmed absent
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_replaced"
+
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=62,
+            status="verified",
+            severity=Severity.LOW,
+        )
+        reconciler._verify_stop_loss(position, "sl_gone_1", result)
+
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert position.stop_loss_order_id == "new_sl_replaced"
+
+
+class TestPeriodicSLFillBooksPnl:
+    """The periodic reconciler must book a detected SL fill's P&L (it
+    previously closed the DB row with NO balance update, silently
+    overstating capital by every SL loss it detected before the engine's
+    deferred-exit drain)."""
+
+    def _make_filled_sl_cycle(self, mock_exchange, mock_position_tracker, mock_db, pos):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id=pos.stop_loss_order_id,
+            status=ExOS.FILLED,
+            average_price=48000.0,
+            commission=0.05,
+        )
+        mock_exchange.get_order.side_effect = lambda oid, sym: (
+            sl_order if oid == pos.stop_loss_order_id else entry_order
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_db.get_current_balance.return_value = 1000.0
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+
+    def test_skips_booking_when_already_processed(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """pop_position=None means the engine drain already booked this fill —
+        the reconciler must not double-book."""
+        pos = MockPosition(
+            order_id="entry_done",
+            stop_loss_order_id="sl_done",
+            exchange_order_id="entry_done",
+            db_position_id=70,
+        )
+        mock_position_tracker.positions = {"entry_done": pos}
+        mock_position_tracker.get_position.return_value = None
+        reconciler = self._make_filled_sl_cycle(mock_exchange, mock_position_tracker, mock_db, pos)
+
+        reconciler._reconcile_cycle()
+
+        pnl_calls = [
+            c
+            for c in mock_db.update_balance.call_args_list
+            if str(c.args[1]).startswith("reconciliation_close")
+        ]
+        assert pnl_calls == []
+        mock_db.close_position.assert_not_called()
+
+    def test_margin_short_sl_fill_books_pnl_not_external_close(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A short whose SL filled (AUTO_REPAY zeroes the borrow) must be
+        booked as an SL close with its fill price — not closed as 'externally
+        closed' with no exit price and no P&L."""
+        pos = MockPosition(
+            order_id="entry_short",
+            side="short",
+            stop_loss_order_id="sl_short",
+            exchange_order_id="entry_short",
+            db_position_id=71,
+        )
+        mock_position_tracker.positions = {"entry_short": pos}
+        # Realistic tracker semantics: step 1b's handler sees the position and
+        # removes it on success; step 2 (iterating the same cycle's stale
+        # snapshot) then finds it gone and skips.
+        mock_position_tracker.get_position.side_effect = [pos, None, None]
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)
+        reconciler = self._make_filled_sl_cycle(mock_exchange, mock_position_tracker, mock_db, pos)
+        reconciler._use_margin = True
+        reconciler._position_reconciler._use_margin = False  # skip interest lookup
+        mock_db.close_position.return_value = True
+
+        reconciler._reconcile_cycle()
+
+        # Booked as SL close with the fill price...
+        mock_db.close_position.assert_called_once_with(71, exit_price=48000.0)
+        # ...with realized P&L: short entry 50000 -> cover 48000 on 0.1 qty
+        # = +200 gross, minus 0.05 SL commission. Booked exactly once even
+        # though step 2 re-sees the position in its stale snapshot (the
+        # pop-claim makes the second attempt a no-op).
+        pnl_calls = [
+            c
+            for c in mock_db.update_balance.call_args_list
+            if str(c.args[1]).startswith("reconciliation_close")
+        ]
+        assert len(pnl_calls) == 1
+        assert pnl_calls[0].args[0] == pytest.approx(1000.0 + 200.0 - 0.05)
+
+    def test_margin_short_unconfirmed_sl_defers_classification(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """If the SL lookup fails while the position looks externally closed,
+        the reconciler must retain the position this cycle (fail-closed)."""
+        pos = MockPosition(
+            side="short",
+            stop_loss_order_id="sl_unknown",
+            exchange_order_id="entry_unknown",
+            db_position_id=72,
+        )
+        mock_position_tracker.positions = {"entry_unknown": pos}
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+
+        def checked(oid, sym):
+            if oid == "sl_unknown":
+                raise OrderLookupError("timeout")
+            return entry_order
+
+        mock_exchange.get_order.return_value = entry_order
+        mock_exchange.get_order_checked.side_effect = checked
+        mock_exchange.get_open_orders.return_value = []
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._use_margin = True
+
+        reconciler._reconcile_cycle()
+
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+
+
+class TestSpotSLFillNotExternalClose:
+    """Spot variant of the step-1b misclassification: a filled stop-loss also
+    empties the held balance, which the holdings heuristic alone cannot tell
+    apart from an external close."""
+
+    def test_spot_long_sl_fill_books_pnl_not_external_close(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_spot",
+            stop_loss_order_id="sl_spot",
+            exchange_order_id="entry_spot",
+            db_position_id=90,
+        )
+        mock_position_tracker.positions = {"entry_spot": pos}
+        mock_position_tracker.get_position.side_effect = [pos, None, None]
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_spot", status=ExOS.FILLED, average_price=48000.0, commission=0.05
+        )
+        mock_exchange.get_order.side_effect = lambda oid, sym: (
+            sl_order if oid == "sl_spot" else entry_order
+        )
+        # Held base emptied by the SL sale
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=1000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.0, free=0.0, locked=0.0)
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_db.get_current_balance.return_value = 1000.0
+        mock_db.close_position.return_value = True
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        # Closed as an SL fill with the real price, P&L booked...
+        mock_db.close_position.assert_called_once_with(90, exit_price=48000.0)
+        pnl_calls = [
+            c
+            for c in mock_db.update_balance.call_args_list
+            if str(c.args[1]).startswith("reconciliation_close")
+        ]
+        assert len(pnl_calls) == 1
+        # ...and NOT misclassified as an external close (no-PnL row)
+        external = [
+            c for c in mock_db.log_audit_event.call_args_list if "CLOSED_EXTERNALLY" in str(c)
+        ]
+        assert external == []
+
+    def test_spot_unconfirmed_sl_defers_classification(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_spot2",
+            stop_loss_order_id="sl_spot2",
+            exchange_order_id="entry_spot2",
+            db_position_id=91,
+        )
+        mock_position_tracker.positions = {"entry_spot2": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+
+        def checked(oid, sym):
+            if oid == "sl_spot2":
+                raise OrderLookupError("timeout")
+            return entry_order
+
+        mock_exchange.get_order.return_value = entry_order
+        mock_exchange.get_order_checked.side_effect = checked
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=1000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.0, free=0.0, locked=0.0)
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+
+
+class TestRejectedStopLossReplaced:
+    """#741: a REJECTED stop-loss is terminal (e.g. triggered limit leg hit a
+    -2010 margin reject) and must be re-placed like CANCELLED/EXPIRED — it
+    previously fell through every cycle, leaving the position unprotected."""
+
+    def test_periodic_cycle_replaces_rejected_sl(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_rejected",
+            exchange_order_id="entry_rej",
+            db_position_id=80,
+            quantity=0.5,
+        )
+        pos.stop_loss = 46000.0
+        mock_position_tracker.positions = {"entry_rej": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_rejected", status=ExOS.REJECTED, filled_quantity=0.0
+        )
+        mock_exchange.get_order.side_effect = lambda oid, sym: (
+            sl_order if oid == "sl_rejected" else entry_order
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_after_reject"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert pos.stop_loss_order_id == "new_sl_after_reject"
+
+    def test_startup_verify_replaces_rejected_sl(self, reconciler, mock_exchange, mock_db):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_rej_startup",
+            db_position_id=81,
+        )
+        sl_order = MockExchangeOrder(
+            order_id="sl_rej_startup", status=ExOS.REJECTED, filled_quantity=0.0
+        )
+        mock_exchange.get_order.return_value = sl_order
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_startup"
+
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=81,
+            status="verified",
+            severity=Severity.LOW,
+        )
+        reconciler._verify_stop_loss(position, "sl_rej_startup", result)
+
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert position.stop_loss_order_id == "new_sl_startup"

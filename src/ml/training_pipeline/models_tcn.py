@@ -33,17 +33,11 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None  # type: ignore
-    Model = None  # type: ignore
-    callbacks = None  # type: ignore
-    layers = None  # type: ignore
-
-if TYPE_CHECKING:
-    from tensorflow.keras import callbacks as CallbacksType
-    from tensorflow.keras.models import Model as ModelType
-else:
-    ModelType = Any  # type: ignore
-    CallbacksType = Any  # type: ignore
+    if not TYPE_CHECKING:
+        tf = None
+        Model = None
+        callbacks = None
+        layers = None
 
 
 def _ensure_tensorflow_available() -> None:
@@ -89,12 +83,12 @@ class ResidualBlock(layers.Layer):
         self.dropout_rate = dropout
         self.use_weight_norm = use_weight_norm
 
-        # Layers will be built in build() method
-        self.conv1 = None
-        self.conv2 = None
-        self.dropout1 = None
-        self.dropout2 = None
-        self.downsample = None
+        # Layers will be built in build() method; Keras layer types are untyped (Any)
+        self.conv1: Any = None
+        self.conv2: Any = None
+        self.dropout1: Any = None
+        self.dropout2: Any = None
+        self.downsample: Any = None
 
     def build(self, input_shape):
         """Build the residual block layers."""

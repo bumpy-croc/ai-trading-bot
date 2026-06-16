@@ -19,7 +19,6 @@ from src.config.constants import (
     DEFAULT_KELLY_FRACTION,
     DEFAULT_KELLY_LOOKBACK_TRADES,
     DEFAULT_KELLY_MIN_TRADES,
-    DEFAULT_STRATEGY_MIN_CONFIDENCE_AGGRESSIVE,
 )
 from src.strategies.components import (
     EnhancedRegimeDetector,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, SupportsFloat, cast
 
 import pandas as pd
 
@@ -38,7 +38,9 @@ def coerce_float(value: object, fallback: float) -> float:
     if value is None:
         return fallback
     try:
-        result = float(value)
+        # cast: float() accepts numbers and strings; non-coercible inputs raise
+        # TypeError/ValueError which the except below converts to the fallback.
+        result = float(cast(SupportsFloat | str, value))
         # Return fallback for NaN/infinity to prevent state corruption
         if not math.isfinite(result):
             return fallback

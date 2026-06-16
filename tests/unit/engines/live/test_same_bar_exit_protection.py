@@ -86,9 +86,7 @@ class TestSameBarExitProtection:
     def test_none_candle_time_allows_exit_evaluation(self) -> None:
         """When candle_time is None, positions are always evaluated."""
         # Arrange
-        position = _make_position(
-            entry_time=datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
-        )
+        position = _make_position(entry_time=datetime(2026, 3, 18, 12, 0, tzinfo=UTC))
 
         # Act
         skipped = is_same_bar_entry(position.entry_time, candle_time=None)
@@ -99,9 +97,7 @@ class TestSameBarExitProtection:
     def test_none_entry_time_allows_exit_evaluation(self) -> None:
         """When entry_time is None, positions are always evaluated."""
         # Arrange
-        position = _make_position(
-            entry_time=datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
-        )
+        position = _make_position(entry_time=datetime(2026, 3, 18, 12, 0, tzinfo=UTC))
         position.entry_time = None  # type: ignore[assignment]
 
         candle_time = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)

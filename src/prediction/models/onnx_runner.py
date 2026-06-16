@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, cast
 
 import numpy as np
 import onnxruntime as ort
@@ -73,8 +73,10 @@ class OnnxRunner:
         self.model_path = model_path
         self.config = config
         self.cache_manager = cache_manager
-        self.session = None
-        self.model_metadata = None
+        # onnxruntime is untyped, so the session is Any at the boundary;
+        # it stays None until _load_model() succeeds (constructor raises otherwise).
+        self.session: Any = None
+        self.model_metadata: dict[str, Any] | None = None
         self._load_model()
 
     def _load_model(self) -> None:
@@ -142,7 +144,7 @@ class OnnxRunner:
         """Enter context manager - return self for use in with statements."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:
         """Exit context manager - ensure resources are cleaned up."""
         self.close()
         return False  # Do not suppress exceptions
@@ -370,14 +372,16 @@ class OnnxRunner:
         Raises:
             ValueError: If features shape doesn't match metadata
         """
-        norm_params = self.model_metadata["normalization_params"]
+        # Cast: _prepare_input only calls this after verifying metadata holds normalization_params.
+        metadata = cast(dict[str, Any], self.model_metadata)
+        norm_params = metadata["normalization_params"]
 
         # Ensure features is 3D
         if len(features.shape) != 3:
             raise ValueError(f"Features must be 3D for normalization, got shape {features.shape}")
 
         # Get explicit feature ordering from metadata (if available)
-        feature_names = self.model_metadata.get("feature_names", [])
+        feature_names = metadata.get("feature_names", [])
 
         # Validate feature count matches if feature_names is provided
         if feature_names:
@@ -494,7 +498,9 @@ class OnnxRunner:
 
     def _denormalize_price(self, pred: float) -> float:
         """Denormalize price prediction"""
-        price_params = self.model_metadata["price_normalization"]
+        # Cast: _process_output only calls this after verifying metadata holds price_normalization.
+        metadata = cast(dict[str, Any], self.model_metadata)
+        price_params = metadata["price_normalization"]
         # Validate required normalization parameters exist
         if "std" not in price_params or "mean" not in price_params:
             logging.warning(

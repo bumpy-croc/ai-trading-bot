@@ -26,6 +26,7 @@ from src.strategies.components import (
     EnhancedRegimeDetector,
     MLBasicSignalGenerator,
     MomentumSignalGenerator,
+    SignalGenerator,
     Strategy,
     VolatilityRiskManager,
 )
@@ -71,6 +72,8 @@ def create_leveraged_regime_strategy(
         raise ValueError(f"signal_source must be one of {valid_sources}, got '{signal_source}'")
 
     # Create signal generator based on source preference
+    # (declared up-front: branches assign different subtypes)
+    signal_generator: SignalGenerator
     if signal_source == "ml":
         signal_generator = MLBasicSignalGenerator(name=f"{name}_signals")
     else:

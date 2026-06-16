@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import pandas as pd
 
@@ -44,6 +44,7 @@ from .exchange_interface import (
     AccountBalance,
     ExchangeInterface,
     Order,
+    OrderLookupError,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -285,7 +286,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.api_key = api_key
             self.api_secret = api_secret
             self.testnet = testnet
-            self._client = None
+            # Untyped boundary: holds a python-binance Client or the offline stub
+            # after _initialize_client(); None only during construction.
+            self._client: Any = None
             logger.info("Binance provider initialized in read-only mode (no credentials)")
             self._initialize_client()
 
@@ -1465,6 +1468,47 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error("Failed to get order %s: %s", order_id, e)
             return None
 
+    def get_order_checked(self, order_id: str, symbol: str) -> Order | None:
+        """Fail-closed order lookup (see ExchangeInterface.get_order_checked).
+
+        Unlike :meth:`get_order` (which swallows every error into ``None``),
+        this returns ``None`` only when Binance confirms the order does not
+        exist (error code -2013) and raises :class:`OrderLookupError` on any
+        unconfirmed lookup, so safety logic (e.g. the reconciler's stop-loss
+        re-placement) never mistakes a transient API failure for a missing
+        order and places a duplicate.
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            raise OrderLookupError(
+                f"Binance client unavailable — cannot confirm order {order_id} for {symbol}"
+            )
+
+        # Binance's orderId parameter only accepts numeric strings; route
+        # alphanumeric IDs (our atb_... idempotency keys) via origClientOrderId.
+        params: dict[str, Any] = {"symbol": symbol}
+        if order_id.isdigit():
+            params["orderId"] = order_id
+        else:
+            params["origClientOrderId"] = order_id
+
+        try:
+            order_data = self._call_get_order(**params)
+        except (BinanceAPIException, BinanceOrderException) as e:
+            if getattr(e, "code", None) == -2013 or "-2013" in str(e):
+                return None  # confirmed: order does not exist on the exchange
+            raise OrderLookupError(f"Order {order_id} lookup failed for {symbol}: {e}") from e
+        except Exception as e:
+            raise OrderLookupError(f"Order {order_id} lookup failed for {symbol}: {e}") from e
+
+        parsed = self._parse_order_data(order_data)
+        if parsed is None:
+            # Got a response but could not parse it — the order may well exist,
+            # so this is "unknown", not "confirmed absent".
+            raise OrderLookupError(
+                f"Order {order_id} response for {symbol} could not be parsed: {order_data!r}"
+            )
+        return parsed
+
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:
         """Get recent trades for a symbol"""
         if not BINANCE_AVAILABLE or not self._client:
@@ -2234,8 +2278,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 on_kline(msg)
 
             self._kline_event_received = False  # Reset until first event confirms
+            # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
+            # an attribute inside the closure.
             self._kline_socket_key = self._socket_on_twm_loop(
-                lambda: self._twm.start_kline_socket(
+                lambda: cast(Any, self._twm).start_kline_socket(
                     callback=_kline_callback, symbol=symbol, interval=timeframe
                 )
             )
@@ -2295,13 +2341,15 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     return
                 on_user_event(msg)
 
+            # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
+            # an attribute inside the closures.
             if self._use_margin:
                 self._user_socket_key = self._socket_on_twm_loop(
-                    lambda: self._twm.start_margin_socket(callback=_user_callback)
+                    lambda: cast(Any, self._twm).start_margin_socket(callback=_user_callback)
                 )
             else:
                 self._user_socket_key = self._socket_on_twm_loop(
-                    lambda: self._twm.start_user_socket(callback=_user_callback)
+                    lambda: cast(Any, self._twm).start_user_socket(callback=_user_callback)
                 )
             self._last_user_event_time = datetime.now(UTC)
             self._user_ws_state = WebSocketState.PRIMARY
@@ -2452,8 +2500,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 if self._kline_socket_key and self._twm:
                     self._twm.stop_socket(self._kline_socket_key)
                     self._kline_socket_key = None
+                # cast: reconnect only runs after start_kline_stream() stored these;
+                # mypy cannot prove that cross-method invariant.
                 if self.start_kline_stream(
-                    self._active_symbol, self._active_timeframe, self._on_kline_cb
+                    cast(str, self._active_symbol),
+                    cast(str, self._active_timeframe),
+                    cast(Callable[[dict], None], self._on_kline_cb),
                 ):
                     return True
             except Exception as e:

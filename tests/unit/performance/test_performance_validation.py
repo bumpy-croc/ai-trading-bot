@@ -11,9 +11,9 @@ import pytest
 
 from src.performance.metrics import (
     Side,
+    cagr,
     calmar_ratio,
     cash_pnl,
-    cagr,
     expectancy,
     pnl_percent,
     sortino_ratio,

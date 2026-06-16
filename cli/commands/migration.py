@@ -9,10 +9,13 @@ from contextlib import redirect_stdout
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 # Ensure project root and src are importable when packaged
 from src.infrastructure.runtime.paths import get_project_root
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -60,10 +63,11 @@ def _json_safe(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, dict):
         return {key: _json_safe(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_json_safe(item) for item in value]
     if is_dataclass(value):
-        return _json_safe(asdict(value))
+        # cast: is_dataclass narrows to instance-or-class; callers only pass instances
+        return _json_safe(asdict(cast("DataclassInstance", value)))
     try:
         json.dumps(value)
     except TypeError:
@@ -77,7 +81,8 @@ def _serialize_trades(trades: Iterable[Any]) -> list[dict[str, Any]]:
         if isinstance(trade, dict):
             serialised.append({key: _json_safe(val) for key, val in trade.items()})
         elif is_dataclass(trade):
-            serialised.append(_json_safe(asdict(trade)))
+            # cast: is_dataclass narrows to instance-or-class; callers only pass instances
+            serialised.append(_json_safe(asdict(cast("DataclassInstance", trade))))
         else:
             data: dict[str, Any] = {}
             for attr in dir(trade):

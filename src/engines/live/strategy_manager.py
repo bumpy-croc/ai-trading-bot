@@ -54,8 +54,8 @@ class StrategyManager:
         self.current_strategy: Strategy | None = None
         self.current_version: StrategyVersion | None = None
 
-        # Strategy registry with factory functions
-        self.strategy_registry = {}
+        # Strategy registry with factory functions (signatures vary per strategy)
+        self.strategy_registry: dict[str, Callable[..., Strategy]] = {}
 
         # Register strategy factory functions
         try:
@@ -271,8 +271,9 @@ class StrategyManager:
                     not self.current_strategy
                     or self.current_strategy.name.lower() != strategy_name.lower()
                 ):
+                    current_name = self.current_strategy.name if self.current_strategy else "<none>"
                     raise ValueError(
-                        f"Current strategy {self.current_strategy.name} doesn't match {strategy_name}"
+                        f"Current strategy {current_name} doesn't match {strategy_name}"
                     )
 
                 # Validate model if requested

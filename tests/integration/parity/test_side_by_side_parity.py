@@ -221,7 +221,6 @@ class TestPnLCalculationParity:
         )
 
         # Verify entry fee was deducted from balance
-        expected_entry_fee = initial_balance * position_size * fee_rate
         assert live_engine.current_balance < balance_before_entry, "Entry fee should reduce balance"
 
         position = list(live_engine.live_position_tracker._positions.values())[0]

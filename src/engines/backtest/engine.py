@@ -13,11 +13,12 @@ import math
 import os
 from collections import Counter
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 from pandas import DataFrame
 from sqlalchemy.exc import SQLAlchemyError
+from threadpoolctl import threadpool_limits
 
 from src.config.config_manager import get_config
 from src.config.constants import (
@@ -58,6 +59,7 @@ from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
+from src.engines.shared.side_utils import to_side_string
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
@@ -77,6 +79,7 @@ if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
     from src.data_providers.sentiment_provider import SentimentDataProvider
     from src.database.manager import DatabaseManager
+    from src.strategies.components.runtime import SupportsRuntimeHooks
 
 logger = logging.getLogger(__name__)
 
@@ -376,8 +379,12 @@ class Backtester:
         self.regime_detector: RegimeDetector | None = None
         try:
             self.regime_detector = RegimeDetector()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Failed to initialize regime detector: %s. "
+                "Backtests will run without regime detection.",
+                exc,
+            )
 
         # Regime switching
         self.enable_regime_switching = enable_regime_switching
@@ -591,8 +598,12 @@ class Backtester:
                 try:
                     cfg = get_config()
                     selected_db_url = cfg.get("PRODUCTION_DATABASE_URL")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to read PRODUCTION_DATABASE_URL from config: %s. "
+                        "Falling back to the default database URL.",
+                        exc,
+                    )
 
             self.db_manager = DatabaseManager(selected_db_url)
             if self.db_manager and hasattr(self.strategy, "set_database_manager"):
@@ -611,7 +622,9 @@ class Backtester:
                 logger.warning("Fallback SQLite also failed: %s", sqlite_err)
                 self.db_manager = None
 
-    def _configure_strategy(self, strategy: ComponentStrategy | StrategyRuntime) -> None:
+    def _configure_strategy(
+        self, strategy: ComponentStrategy | StrategyRuntime | SupportsRuntimeHooks
+    ) -> None:
         """Normalize strategy inputs and prepare runtime state."""
         runtime = strategy if isinstance(strategy, StrategyRuntime) else None
         base_strategy = runtime.strategy if runtime is not None else strategy
@@ -621,6 +634,7 @@ class Backtester:
             base_strategy if isinstance(base_strategy, ComponentStrategy) else None
         )
 
+        self._runtime: StrategyRuntime | None
         if runtime is not None:
             self._runtime = runtime
         elif self._component_strategy is not None:
@@ -643,7 +657,7 @@ class Backtester:
 
     def _resolve_execution_fill_policy(self) -> FillPolicy:
         """Resolve execution fill policy from configuration."""
-        policy_name = DEFAULT_EXECUTION_FILL_POLICY
+        policy_name: str | None = DEFAULT_EXECUTION_FILL_POLICY
         try:
             cfg = get_config()
             policy_name = cfg.get("EXECUTION_FILL_POLICY", DEFAULT_EXECUTION_FILL_POLICY)
@@ -710,7 +724,9 @@ class Backtester:
         if not self._is_runtime_strategy():
             return df
 
-        dataset = self._runtime.prepare_data(df)
+        # cast: _is_runtime_strategy() above guarantees _runtime is not None
+        runtime = cast(StrategyRuntime, self._runtime)
+        dataset = runtime.prepare_data(df)
         self._runtime_dataset = dataset
         self._runtime_warmup = max(0, int(dataset.warmup_period or 0))
         return dataset.data
@@ -725,20 +741,38 @@ class Backtester:
         if trade is not None:
             notional = getattr(trade, "component_notional", None)
             if notional is None:
-                notional = float(trade.current_size) * float(balance)
+                # cast: BasePosition.__post_init__ auto-initializes current_size
+                # from size, so it is never None after construction.
+                notional = float(cast(float, trade.current_size)) * float(balance)
             try:
                 positions.append(
                     ComponentPosition(
                         symbol=trade.symbol,
-                        side=trade.side,
+                        # ComponentPosition validates side against the strings
+                        # "long"/"short"; convert the PositionSide enum exactly
+                        # like the live engine does (parity, #756).
+                        side=to_side_string(trade.side),
                         size=float(notional),
                         entry_price=float(trade.entry_price),
                         current_price=float(current_price),
                         entry_time=trade.entry_time,
                     )
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # Per-candle hot loop while a position is open: WARN once per
+                # engine instance so an unexpected translation failure is
+                # visible, then drop to debug to avoid flooding the run.
+                if not getattr(self, "_runtime_position_translation_warned", False):
+                    self._runtime_position_translation_warned = True
+                    logger.warning(
+                        "Failed to translate active trade into runtime context position "
+                        "(suppressing to debug for the rest of this run): %s",
+                        exc,
+                    )
+                else:
+                    logger.debug(
+                        "Failed to translate active trade into runtime context position: %s", exc
+                    )
 
         return RuntimeContext(balance=float(balance), current_positions=positions or None)
 
@@ -753,7 +787,8 @@ class Backtester:
 
         context = self._build_runtime_context(self.balance, current_price, current_time)
         try:
-            decision = self._runtime.process(index, context)
+            # cast: _is_runtime_strategy() guard above guarantees _runtime is not None
+            decision = cast(StrategyRuntime, self._runtime).process(index, context)
             self._apply_policies_from_decision(decision)
             return decision
         except Exception as e:
@@ -771,7 +806,8 @@ class Backtester:
         """Clean up runtime state after backtest."""
         if self._is_runtime_strategy():
             try:
-                self._runtime.finalize()
+                # cast: _is_runtime_strategy() guard above guarantees _runtime is not None
+                cast(StrategyRuntime, self._runtime).finalize()
             finally:
                 self._runtime_dataset = None
                 self._runtime_warmup = 0
@@ -844,44 +880,53 @@ class Backtester:
             Dictionary with backtest results including metrics and trades.
         """
         try:
-            # Reset all mutable state from any previous run so that reusing
-            # a Backtester instance produces correct, isolated results.
-            self._reset_run_state()
+            # Pin BLAS/OpenMP thread pools to 1 for the duration of the run so
+            # the backtest is bit-reproducible: multi-threaded parallel float
+            # reduction is non-associative, so its run-to-run ordering can perturb
+            # a feature value and flip a near-threshold ML signal — changing the
+            # trade count and breaking the backtest↔live parity fingerprint
+            # (#486). ONNX Runtime keeps its own (deterministic) thread pool, so
+            # inference stays multi-threaded and fast; measured wall-time is
+            # neutral-to-faster since this also avoids thread oversubscription.
+            with threadpool_limits(limits=1):
+                # Reset all mutable state from any previous run so that reusing
+                # a Backtester instance produces correct, isolated results.
+                self._reset_run_state()
 
-            # Set logging context
-            set_context(
-                component="backtester",
-                strategy=getattr(self.strategy, "__class__", type("_", (), {})).__name__,
-                symbol=symbol,
-                timeframe=timeframe,
-            )
-            log_engine_event(
-                "backtest_start",
-                initial_balance=self.initial_balance,
-                start=start.isoformat(),
-                end=end.isoformat() if end else None,
-            )
+                # Set logging context
+                set_context(
+                    component="backtester",
+                    strategy=getattr(self.strategy, "__class__", type("_", (), {})).__name__,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                )
+                log_engine_event(
+                    "backtest_start",
+                    initial_balance=self.initial_balance,
+                    start=start.isoformat(),
+                    end=end.isoformat() if end else None,
+                )
 
-            # Create trading session
-            self._create_trading_session(symbol, timeframe, start)
+                # Create trading session
+                self._create_trading_session(symbol, timeframe, start)
 
-            # Fetch and prepare data
-            df = self._fetch_and_prepare_data(symbol, timeframe, start, end)
-            if df.empty:
-                return self._build_empty_results()
+                # Fetch and prepare data
+                df = self._fetch_and_prepare_data(symbol, timeframe, start, end)
+                if df.empty:
+                    return self._build_empty_results()
 
-            # Calculate hold return for comparison
-            hold_return = self._calculate_hold_return(df)
+                # Calculate hold return for comparison
+                hold_return = self._calculate_hold_return(df)
 
-            logger.info("Starting backtest with %d candles", len(df))
+                logger.info("Starting backtest with %d candles", len(df))
 
-            # Run main backtest loop
-            balance_history, yearly_balance = self._run_main_loop(df, symbol, timeframe)
+                # Run main backtest loop
+                balance_history, yearly_balance = self._run_main_loop(df, symbol, timeframe)
 
-            # Compute final metrics
-            return self._build_final_results(
-                df, start, end, balance_history, yearly_balance, hold_return
-            )
+                # Compute final metrics
+                return self._build_final_results(
+                    df, start, end, balance_history, yearly_balance, hold_return
+                )
 
         except Exception as e:
             logger.error("Error running backtest: %s", e)
@@ -1097,7 +1142,9 @@ class Backtester:
                     current_time=current_time,
                     timeframe=timeframe,
                     balance=self.balance,
-                    current_strategy=self.strategy,
+                    # cast: the handler only reads .name from current_strategy, which
+                    # every engine strategy (SupportsRuntimeHooks) exposes.
+                    current_strategy=cast(ComponentStrategy, self.strategy),
                 )
                 if switched and new_strategy:
                     self._switch_strategy(new_strategy, df)
@@ -1240,7 +1287,11 @@ class Backtester:
                 timeframe=timeframe,
                 action_taken="closed_position" if exit_check.should_exit else "hold_position",
                 signal_strength=1.0 if exit_check.should_exit else 0.0,
-                confidence_score=indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE),
+                # cast: extract_indicators only stores str for the 'regime' key;
+                # prediction_confidence is always a float when present.
+                confidence_score=cast(
+                    float, indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE)
+                ),
                 position_size=(
                     self.position_tracker.current_trade.size
                     if self.position_tracker.current_trade
@@ -1281,7 +1332,7 @@ class Backtester:
             entry_slippage_logged = float(entry_meta.get("entry_slippage_cost", 0.0) or 0.0)
             total_fee = entry_fee_logged + float(exit_fee)
             total_slippage = entry_slippage_logged + float(slippage)
-            # Update performance tracking
+            # Update performance tracking.
             self.performance_tracker.record_trade(
                 trade=completed_trade, fee=total_fee, slippage=total_slippage
             )
@@ -1302,6 +1353,9 @@ class Backtester:
                 symbol=symbol,
                 strategy_name=self.strategy.__class__.__name__,
                 source=TradeSource.BACKTEST,
+                # USD round-trip fee (entry + exit) so backtest trades carry commission like
+                # live (parity); quantity is read from the trade inside log_completed_trade.
+                commission=total_fee,
             )
 
             return True, completed_trade

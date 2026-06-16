@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import subprocess
+import subprocess  # nosec B404 — fixed-argv tf2onnx conversion only
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -21,12 +21,8 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None
-
-if TYPE_CHECKING:
-    from tensorflow.keras.models import Model as ModelType
-else:
-    ModelType = Any  # type: ignore
+    if not TYPE_CHECKING:
+        tf = None
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +257,7 @@ def convert_to_onnx(model: Any, output_path: Path) -> Path | None:
         tmp_dir = tempfile.mkdtemp()
         saved_model_path = Path(tmp_dir) / "saved_model"
         model.export(saved_model_path)
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 — argv is fixed, no untrusted input
             [
                 sys.executable,
                 "-m",

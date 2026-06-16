@@ -37,7 +37,7 @@ class TestStatisticalTestResult:
         assert result.p_value == 0.05
         assert result.critical_value == 1.96
         assert result.confidence_level == 0.95
-        assert result.reject_null == True
+        assert result.reject_null is True
         assert result.interpretation == "Significant result"
         assert result.notes == "Test notes"
 
@@ -132,7 +132,7 @@ class TestFinancialStatisticalTests:
 
         # All results should have valid statistics
         for result in results:
-            assert isinstance(result.statistic, (int, float))
+            assert isinstance(result.statistic, int | float)
             assert 0 <= result.p_value <= 1
             assert isinstance(result.reject_null, bool)
 
@@ -151,7 +151,7 @@ class TestFinancialStatisticalTests:
 
         # All results should have valid statistics
         for result in results:
-            assert isinstance(result.statistic, (int, float))
+            assert isinstance(result.statistic, int | float)
             assert 0 <= result.p_value <= 1
             assert isinstance(result.reject_null, bool)
 
@@ -170,7 +170,7 @@ class TestFinancialStatisticalTests:
         # For normal data, most tests should not reject normality
         # (though this is probabilistic, so we just check structure)
         for result in results:
-            assert isinstance(result.statistic, (int, float))
+            assert isinstance(result.statistic, int | float)
             assert 0 <= result.p_value <= 1
             assert isinstance(result.reject_null, bool)
 
@@ -181,10 +181,7 @@ class TestFinancialStatisticalTests:
         # Should have multiple normality tests
         assert len(results) >= 1
 
-        # For clearly non-normal data, at least some tests should reject normality
-        rejection_count = sum(1 for r in results if r.reject_null)
-        # We expect at least one test to detect non-normality, but this is probabilistic
-        # so we just check that tests ran
+        # Rejecting non-normality is probabilistic, so we just check that tests ran
         assert len(results) > 0
 
     def test_normality_tests_insufficient_data(self, test_engine):
@@ -212,7 +209,7 @@ class TestFinancialStatisticalTests:
         assert result.test_name == "Ljung-Box Autocorrelation Test"
         assert result.statistic == 3.0  # Last statistic
         assert result.p_value == 0.1  # Last p-value
-        assert result.reject_null == False  # p > 0.05
+        assert result.reject_null is False  # p > 0.05
         assert "3 lags" in result.notes
 
     def test_autocorrelation_test_insufficient_data(self, test_engine):
@@ -238,17 +235,17 @@ class TestFinancialStatisticalTests:
         adf_results = [r for r in results if "Augmented Dickey-Fuller" in r.test_name]
         assert len(adf_results) == 1
         adf_result = adf_results[0]
-        assert isinstance(adf_result.statistic, (int, float))
-        assert isinstance(adf_result.p_value, (int, float))
+        assert isinstance(adf_result.statistic, int | float)
+        assert isinstance(adf_result.p_value, int | float)
         assert isinstance(adf_result.reject_null, bool)
 
         # Check KPSS result exists
         kpss_results = [r for r in results if "KPSS" in r.test_name]
         assert len(kpss_results) == 1
         kpss_result = kpss_results[0]
-        assert isinstance(kpss_result.statistic, (int, float))
-        assert isinstance(kpss_result.p_value, (int, float))
-        assert kpss_result.reject_null == False  # p > 0.05
+        assert isinstance(kpss_result.statistic, int | float)
+        assert isinstance(kpss_result.p_value, int | float)
+        assert kpss_result.reject_null is False  # p > 0.05
 
     def test_stationarity_tests_insufficient_data(self, test_engine):
         """Test stationarity tests with insufficient data."""
@@ -285,7 +282,7 @@ class TestFinancialStatisticalTests:
             assert category in results
 
         # Each category should have test results
-        for category, test_list in results.items():
+        for test_list in results.values():
             if test_list:  # Some categories might be empty due to insufficient data
                 assert all(isinstance(test, StatisticalTestResult) for test in test_list)
 

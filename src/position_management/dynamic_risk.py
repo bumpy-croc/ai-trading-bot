@@ -4,7 +4,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
@@ -145,7 +145,7 @@ class DynamicRiskManager:
 
         # Cache for performance calculations with thread safety
         self._performance_cache: dict[str, Any] = {}
-        self._cache_timestamp = None
+        self._cache_timestamp: datetime | None = None
         self._cache_ttl_seconds = 300  # 5 minutes
         self._cache_lock = threading.Lock()  # Prevents race conditions in cache access
         self._computing = False  # Flag to prevent duplicate calculations
@@ -403,9 +403,14 @@ class DynamicRiskManager:
         self, current_drawdown: float, recovery_return: float = 0.0
     ) -> RiskAdjustments:
         """Calculate adjustments based on current drawdown level and recovery"""
+        # cast: __post_init__ replaces None defaults with concrete lists at construction
+        recovery_thresholds = cast(list[float], self.config.recovery_thresholds)
+        drawdown_thresholds = cast(list[float], self.config.drawdown_thresholds)
+        risk_reduction_factors = cast(list[float], self.config.risk_reduction_factors)
+
         # Check for recovery first (de-throttling)
         if recovery_return > 0:
-            for threshold in sorted(self.config.recovery_thresholds, reverse=True):
+            for threshold in sorted(recovery_thresholds, reverse=True):
                 if recovery_return >= threshold:
                     # Recovery allows aggressive position scaling up to 2x when performance is strong.
                     # This is intentional: asymmetric response (conservative on drawdown, aggressive
@@ -431,10 +436,10 @@ class DynamicRiskManager:
         stop_loss_factor = 1.0
         daily_risk_factor = 1.0
 
-        for i, threshold in enumerate(self.config.drawdown_thresholds):
+        for i, threshold in enumerate(drawdown_thresholds):
             if current_drawdown >= threshold:
-                position_factor = self.config.risk_reduction_factors[i]
-                daily_risk_factor = self.config.risk_reduction_factors[i]
+                position_factor = risk_reduction_factors[i]
+                daily_risk_factor = risk_reduction_factors[i]
                 # Widen stop distance progressively based on drawdown level
                 stop_loss_factor = 1.0 + (DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT * i)
 

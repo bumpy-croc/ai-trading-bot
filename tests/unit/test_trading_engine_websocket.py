@@ -1,7 +1,7 @@
 """Tests for LiveTradingEngine WebSocket integration."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -87,7 +87,7 @@ class TestGetLatestDataWithWebSocket:
         mock_engine._kline_buffer = mock_buffer
         mock_engine._ws_kline_provider = mock_ws_provider
 
-        result = mock_engine._get_latest_data("BTCUSDT", "1h")
+        mock_engine._get_latest_data("BTCUSDT", "1h")
         mock_engine.data_provider.get_live_data.assert_called_once()
 
     @pytest.mark.fast
@@ -117,13 +117,13 @@ class TestGetLatestDataWithWebSocket:
         mock_engine._kline_buffer = MagicMock()
         mock_engine._kline_buffer.is_fresh = False
 
-        result = mock_engine._get_latest_data("BTCUSDT", "1h")
+        mock_engine._get_latest_data("BTCUSDT", "1h")
         mock_engine.data_provider.get_live_data.assert_called_once()
 
     @pytest.mark.fast
     def test_no_ws_falls_back_to_rest(self, mock_engine):
         """Without WS setup, falls back to REST (existing behavior)."""
-        result = mock_engine._get_latest_data("BTCUSDT", "1h")
+        mock_engine._get_latest_data("BTCUSDT", "1h")
         mock_engine.data_provider.get_live_data.assert_called_once()
 
 

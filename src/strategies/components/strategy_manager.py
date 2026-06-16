@@ -519,7 +519,7 @@ class ComponentStrategyManager:
         )
 
         # Signal distribution
-        signal_counts = {}
+        signal_counts: dict[str, int] = {}
         confidence_sum = 0.0
         strength_sum = 0.0
 
@@ -593,7 +593,7 @@ class ComponentStrategyManager:
         )
 
         # Signal analysis
-        signals_by_direction = {}
+        signals_by_direction: dict[str, int] = {}
         position_sizes = []
 
         for exec in recent_executions:

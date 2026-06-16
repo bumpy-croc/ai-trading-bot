@@ -9,7 +9,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -76,7 +76,7 @@ class SwitchingConfig:
 
     # Enhanced regime detection
     enable_multi_timeframe: bool = True  # Use multiple timeframes for confirmation
-    timeframes: list = None  # Timeframes to analyze ['1h', '4h', '1d']
+    timeframes: list[str] | None = None  # Timeframes to analyze ['1h', '4h', '1d']
     require_timeframe_agreement: float = DEFAULT_REGIME_TIMEFRAME_AGREEMENT
 
     # Position management during switches
@@ -150,10 +150,12 @@ class RegimeStrategySwitcher:
 
         if timeframe in config_map:
             cfg = config_map[timeframe]
+            # DEFAULT_REGIME_CONFIG_* hold integral window/dwell values; the mixed
+            # int/float dict literal widens them to float, so cast back to int.
             return RegimeConfig(
-                slope_window=cfg["slope_window"],
-                hysteresis_k=cfg["hysteresis_k"],
-                min_dwell=cfg["min_dwell"],
+                slope_window=cast(int, cfg["slope_window"]),
+                hysteresis_k=cast(int, cfg["hysteresis_k"]),
+                min_dwell=cast(int, cfg["min_dwell"]),
                 trend_threshold=cfg["trend_threshold"],
             )
 
@@ -173,8 +175,9 @@ class RegimeStrategySwitcher:
 
         regime_results = {}
 
-        # Analyze each timeframe
-        for timeframe in self.switching_config.timeframes:
+        # Analyze each timeframe (__init__ resolves a None timeframes config
+        # to the default list, so the cast is safe here).
+        for timeframe in cast(list[str], self.switching_config.timeframes):
             if timeframe not in price_data:
                 continue
 

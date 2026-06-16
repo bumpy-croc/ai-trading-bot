@@ -13,7 +13,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -435,7 +435,9 @@ class StrategySwitcher:
 
             # Activate new strategy
             try:
-                success = strategy_activation_callback(request.to_strategy)
+                # cast: every SwitchRequest construction site sets a concrete
+                # target; to_strategy=None (auto-selection) is never produced.
+                success = strategy_activation_callback(cast(str, request.to_strategy))
             except (ValueError, TypeError, RuntimeError) as activation_error:
                 # Handle activation callback exceptions the same way as False returns
                 self.logger.exception("Strategy activation callback raised exception")
@@ -509,10 +511,10 @@ class StrategySwitcher:
             switch_record.completed_at = datetime.now(UTC)
 
             # Execute post-switch callbacks with timeout protection (non-blocking)
-            for i, callback in enumerate(self.post_switch_callbacks):
+            for i, post_callback in enumerate(self.post_switch_callbacks):
                 try:
                     execute_with_timeout(
-                        callback,
+                        post_callback,
                         30,  # 30 second timeout for callbacks
                         request.from_strategy,
                         request.to_strategy,
@@ -537,10 +539,10 @@ class StrategySwitcher:
             self.logger.exception("Strategy switch failed")
 
             # Execute post-switch callbacks with failure flag and timeout protection
-            for i, callback in enumerate(self.post_switch_callbacks):
+            for i, post_callback in enumerate(self.post_switch_callbacks):
                 try:
                     execute_with_timeout(
-                        callback,
+                        post_callback,
                         30,  # 30 second timeout for callbacks
                         request.from_strategy,
                         request.to_strategy,
@@ -648,7 +650,7 @@ class StrategySwitcher:
         success_rate = successful_switches / total_switches if total_switches > 0 else 0.0
 
         # Trigger analysis
-        trigger_counts = {}
+        trigger_counts: dict[str, int] = {}
         for record in history:
             trigger = record.request.trigger.value
             trigger_counts[trigger] = trigger_counts.get(trigger, 0) + 1
@@ -903,9 +905,12 @@ class StrategySwitcher:
 
     def _capture_performance_snapshot(
         self, strategy_id: str, performance_tracker: PerformanceTracker | None = None
-    ) -> dict[str, float]:
+    ) -> dict[str, Any]:
         """Capture performance snapshot before/after switch"""
-        snapshot = {"timestamp": datetime.now(UTC).timestamp(), "strategy_id": strategy_id}
+        snapshot: dict[str, Any] = {
+            "timestamp": datetime.now(UTC).timestamp(),
+            "strategy_id": strategy_id,
+        }
 
         # If performance tracker is provided, capture detailed metrics
         if performance_tracker:
@@ -986,9 +991,11 @@ class StrategySwitcher:
 
     def _calculate_performance_impact(
         self, pre_performance: dict[str, float], post_performance: dict[str, float]
-    ) -> dict[str, float]:
+    ) -> dict[str, Any]:
         """Calculate performance impact of a switch"""
-        impact = {"calculated_at": datetime.now(UTC).timestamp()}
+        # Values are floats, except *_change_pct entries which may be None
+        # when the pre-switch baseline is near zero.
+        impact: dict[str, Any] = {"calculated_at": datetime.now(UTC).timestamp()}
 
         # Calculate changes in key metrics
         metrics_to_compare = [

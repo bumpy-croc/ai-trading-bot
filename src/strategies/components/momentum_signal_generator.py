@@ -61,8 +61,12 @@ class MomentumSignalGenerator(SignalGenerator):
         ema_26 = self._ema(df, "close", self.ema_mid, index)
         ema_50 = self._ema(df, "close", self.ema_slow, index)
 
-        trend_strength = self._safe_div(ema_12 - ema_26, ema_26)
-        long_trend = self._safe_div(ema_26 - ema_50, ema_50)
+        # NOTE: _ema() returns None on extraction failure, so these
+        # subtractions can raise TypeError before _safe_div's None handling
+        # runs; Strategy._generate_signal catches it and degrades to HOLD.
+        # Suppressed rather than guarded to preserve existing behavior.
+        trend_strength = self._safe_div(ema_12 - ema_26, ema_26)  # type: ignore[operator]
+        long_trend = self._safe_div(ema_26 - ema_50, ema_50)  # type: ignore[operator]
 
         # Breakout vs N-high
         breakout = self._is_breakout(df, index, self.breakout_lookback)

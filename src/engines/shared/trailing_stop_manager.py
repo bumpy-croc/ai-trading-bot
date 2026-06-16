@@ -120,7 +120,6 @@ class TrailingStopManager:
         pnl_pct = pnl_percent(entry_price, current_price, side_enum, 1.0)
 
         # Check breakeven first
-        breakeven_triggered = False
         if not getattr(position, "breakeven_triggered", False):
             breakeven_result = self._check_breakeven(
                 position, current_price, pnl_pct, side, entry_price

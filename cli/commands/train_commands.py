@@ -16,8 +16,8 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None  # type: ignore
-    callbacks = None  # type: ignore
+    tf = None
+    callbacks = None
 
 from src.infrastructure.runtime.paths import get_project_root
 from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext

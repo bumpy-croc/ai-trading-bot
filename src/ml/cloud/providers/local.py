@@ -11,7 +11,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from src.ml.cloud.exceptions import ArtifactSyncError
 from src.ml.cloud.providers.base import (
@@ -19,6 +19,9 @@ from src.ml.cloud.providers.base import (
     TrainingJobSpec,
     TrainingJobStatus,
 )
+
+if TYPE_CHECKING:
+    from src.ml.training_pipeline.artifacts import ArtifactPaths
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +196,10 @@ class LocalProvider(CloudTrainingProvider):
                 if has_valid_artifacts:
                     self._jobs[job_id].status = "Completed"
                     self._jobs[job_id].end_time = datetime.now(UTC)
-                    self._jobs[job_id].output_s3_path = str(result.artifact_paths.directory)
+                    # cast: has_valid_artifacts confirms artifact_paths is not None,
+                    # but mypy cannot narrow through the intermediate boolean
+                    artifact_paths = cast("ArtifactPaths", result.artifact_paths)
+                    self._jobs[job_id].output_s3_path = str(artifact_paths.directory)
                     self._jobs[job_id].metrics = result.metadata.get("evaluation_results", {})
                     self._job_results[job_id] = result
                     logger.info(f"Local training completed: {job_id}")

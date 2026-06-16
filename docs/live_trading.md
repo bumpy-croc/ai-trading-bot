@@ -1,6 +1,6 @@
 # Live trading
 
-> **Last Updated**: 2025-12-26
+> **Last Updated**: 2026-06-15
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
 `src/engines/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
@@ -20,6 +20,32 @@ continuous polling, account synchronisation, and resilience features required fo
   known state.
 - **Sentiment and regime inputs** – pass a `SentimentDataProvider` (Fear & Greed) or enable the `RegimeStrategySwitcher` to swap
   strategies when market conditions change.
+
+## Handler decomposition & lock ownership (#486)
+
+`LiveTradingEngine` orchestrates; exchange- and observability-facing work is delegated:
+
+| Component | Module | Responsibility | Lock ownership |
+|-----------|--------|----------------|----------------|
+| `LiveStopLossManager` | `engines/live/execution/stop_loss_manager.py` | All exchange-facing stop-loss calls: placement (with retry), cancel, fill/held queries, re-protect, offline-fill detection | None — stateless; reads `enable_live_trading`/`exchange_interface`/`order_tracker` off the engine at call time; position mutations go through `LivePositionTracker`'s internal lock |
+| `LiveAccountMonitor` | `engines/live/monitoring/account_monitor.py` | Balance/equity snapshots, status lines, performance summaries | None — stateless; reads positions via `LivePositionTracker.positions` (thread-safe snapshot) |
+| `LiveSessionRecoverer` | `engines/live/recovery.py` | Startup recovery: session balance, persisted-position reload, risk-manager re-registration, startup exchange reconciliation | None — runs on the startup path before the trading loop; engine state it mutates (session id, balance, close-only flag) is written through the engine as before |
+| `LiveStartupSequencer` | `engines/live/startup.py` | Bootstrap orchestration (`start()` delegates to `run()`): session recover/create + wiring, #668 carry-forward, #657 self-heal, account sync, runtime-service startup, main-loop launch | None — runs once on the startup path (main thread) before the trading loop; all engine state written through the backref as before |
+| `StrategyRuntimeCoordinator` | `engines/live/strategy_runtime.py` | Strategy normalization, component risk-context provider, runtime dataframe prep + `RuntimeContext` construction, per-candle runtime decision processing, risk-param merge/clone | None — reads/writes engine strategy-runtime state (`strategy`, `_runtime`, `_runtime_dataset`, context cache) at call time; all touched only on the single trading-loop thread (per-candle + loop-applied hot-swap) |
+| `StrategyHotSwapCoordinator` | `engines/live/strategy_hot_swap.py` | Public `hot_swap_strategy`/`update_model`, StrategyManager callbacks, loop-applied pending-update application, post-swap refresh of trailing-stop/partial-ops/time-exit policies + component risk re-binding | None — entry points/callbacks only queue a `StrategyManager`-locked pending update (caller thread); all engine-state mutation runs in `apply_pending_strategy_update` on the trading-loop thread |
+| `WebSocketHealthMonitor` | `engines/live/ws_health.py` | WS stream startup, the background health-monitor thread, kline/user-stream staleness + reconnect/probe decisions, degraded-user hard-reconnect, draining the order-fill exit queue on the loop thread | None — the monitor holds no locks. It owns a single daemon thread (handle on the engine, `state._ws_health_thread`) and writes its reconnect-failure counters / `_ws_kline_active` flag only from that one thread (GIL-atomic single-writer); the trading loop reads them. Cross-thread order-fill handoff goes through the thread-safe `_pending_fill_exits` `SimpleQueue`, drained on the loop thread. Provider-owned WS connection state is read-only here |
+| `LiveEntryCoordinator` | `engines/live/execution/entry_coordinator.py` | Entry decision (signal/sizing/SL-TP derivation) + base-asset-locked order execution: duplicate/limit guards, balance+fee accounting, position tracking, risk re-registration, stop-loss placement, emergency-close fallbacks | Serialises each entry on the symbol's base-asset lock (`state._base_asset_locks`) across submit → track → SL placement; the lock lives on the engine and the emergency-close fallback re-acquires it re-entrantly via `state._execute_exit` (#703). Runs on the trading-loop thread; all engine state mutated through the backref as before |
+| `LiveExitCoordinator` | `engines/live/execution/exit_coordinator.py` | Exit decision (`check_exit_conditions`: per-position SL/TP/runtime evaluation + strategy-execution logging) and base-asset-locked close (`execute_exit` → `execute_exit_locked`): resting-stop cancel-before-close (#710), realized-PnL + margin-interest accounting, balance update, trade persistence/CLOSED flip (#657), re-protect on failed close | Serialises each close on the symbol's base-asset lock (`state._base_asset_locks`, #703); the lock lives on the engine and is re-entrant (an entry's failed-SL emergency close routes through the engine's `_execute_exit` wrapper on the same thread). `check_exit_conditions` invokes the close via `state._execute_exit` (the engine wrapper) so engine-level test mocks still intercept. Runs on the trading-loop thread; all engine state mutated through the backref as before |
+| `LiveDynamicRiskCoordinator` | `engines/live/dynamic_risk_coordinator.py` | Per-entry dynamic-risk position-size adjustment (drawdown/peak-aware, via the shared `DynamicRiskHandler`) + its observability/audit logging | None — holds no state of its own. Runs on the trading-loop thread; called by the loop and by `LiveEntryCoordinator` via the engine `_apply_dynamic_risk_adjustment` wrapper |
+| `LiveLoopTimingCoordinator` | `engines/live/loop_timing.py` | Trading-loop cadence + data-freshness helpers: interruptible sleep, activity/time-of-day-aware poll interval, candle-age / WS-buffer freshness gate | None — leaf helpers, no order placement/balance mutation/engine-method calls. Runs on the trading-loop thread; `is_data_fresh` is also reached by `LiveMarketDataCoordinator` via the engine `_is_data_fresh` wrapper. Holds no state of its own |
+| `LiveMarketDataCoordinator` | `engines/live/execution/market_data_coordinator.py` | Per-candle read path: latest-frame fetch (WS-cache vs REST, resync handling), sentiment enrichment, the strategy-context readiness gate, and correlation-sizing context | None — read path, no order placement/balance mutation (only writes `last_data_update`). Runs on the trading-loop thread; `build_correlation_context` is also called by `StrategyRuntimeCoordinator` via the engine wrapper. Holds no state of its own; defers freshness to the engine's `_is_data_fresh` via `state` |
+| `LiveOrderFillCoordinator` | `engines/live/execution/order_fill_coordinator.py` | The `OrderTracker` callbacks: full fill (queues stop-loss-fill closes), partial fill (critical SL-partial alert), cancel/reject (entry-fee refund for the unfilled fraction + stop-loss-cancel escalation #741), tracking-lost (fail-closed: keep position, escalate) | None — holds no coordinator-local state. Runs on the **OrderTracker poll thread**: a stop-loss fill is handed to the loop via the thread-safe `state._pending_fill_exits` SimpleQueue (never closed inline, #631); position reads/mutations use `LivePositionTracker`'s thread-safe copy + atomic `pop_position`/`set_stop_loss_order_id`; the cancel refund uses `db_manager.atomic_balance_update`. `_record_event`/`_send_alert` invoked via `state` so engine mocks still intercept |
+| `LivePositionTracker` | `engines/live/execution/position_tracker.py` | Position state | Owns `_positions_lock`; `positions` property returns a defensive copy |
+| `OrderTracker` | `engines/live/order_tracker.py` | Order fill polling + callbacks | Owns its internal lock; engine callbacks (now `LiveOrderFillCoordinator`) defer closes to the trading loop via `_pending_fill_exits` |
+| `SharedEntryHandlerMixin` | `engines/shared/execution/entry_handler_mixin.py` | Entry-plan extraction + dynamic-risk sizing, identical for backtest and live | None — delegates to shared `DynamicRiskHandler` |
+
+The engine itself keeps thin private wrappers (`_cancel_stop_loss_order`, `_check_stop_loss_filled`, `_log_account_snapshot`, …) so
+call sites and test mock points are stable while the implementations live in the modules above.
 
 ## State recovery & account sync
 
@@ -98,6 +124,61 @@ All performance metrics are persisted to PostgreSQL tables:
 - **performance_metrics** - Aggregated metrics including consecutive streaks, fees, slippage
 
 The database schema supports historical analysis and comparison with backtest results.
+
+### Trade fee accounting (`trades.commission` unit convention)
+
+Each closed `trades` row stores fees so consumers can compute true net P&L:
+
+- **`trades.pnl`** — GROSS dollar P&L (price movement only), for parity with the
+  backtest engine. Fees are **not** netted into `pnl`.
+- **`trades.commission`** — total round-trip fee in **USD**, equal to
+  `entry_fee + exit_fee`. These are the **same values booked to
+  `account_balances`**: the entry leg is the `entry_fee_<symbol>` ledger event
+  (deducted at open), and the exit leg is folded into the `realized_pnl_<symbol>`
+  balance update at close. The entry leg is reconciled to the actual exchange fill
+  commission where available (`LiveExecutionEngine.execute_entry/_exit`). For a
+  position **recovered after a restart** (the `positions` table does not persist entry
+  fee), the entry leg is reconstructed from the fee model applied to the recovered
+  entry notional, so it is not silently dropped.
+- **`trades.margin_interest_cost`** — borrow interest in USD (short margin
+  positions), from `MarginInterestTracker`.
+- **`trades.quantity`** — actual filled base-asset quantity for the closed portion.
+
+**Net P&L = `pnl - commission - margin_interest_cost`.**
+
+> `trades.commission` is deliberately **not** the raw `orders.actual_commission`.
+> That column stores the exchange commission in the *received asset* (base on buys,
+> quote on sells) with no `commission_asset` column to disambiguate, and it is
+> populated asynchronously by reconciliation — so it is both unit-ambiguous and
+> unreliable at close time. Booking `commission` from the engine's USD fee
+> accounting keeps `trades` consistent with the `account_balances` ledger.
+
+> **Known limitation — partial exits.** Partial exits book their realized P&L to the
+> `account_balances` ledger but do **not** write a `trades` row (only the final close
+> does, recording the remaining slice). So `recover_last_balance` — the degraded
+> fallback that reconstructs balance as `initial_balance + Σ _trade_net_pnl` when the
+> ledger is unavailable — reconciles *exactly* for full round trips but is **approximate**
+> for positions that took partial exits (their intermediate P&L and fees are in the ledger,
+> not in `trades`). Logging partial-exit trade rows is tracked as a follow-up.
+
+> **Reconciler-closed trades.** When a position is closed during reconciliation rather than by
+> the engine, a `trades` row is still written so fees/quantity/P&L are not lost. Two kinds:
+> - **Closes the bot can price** — offline stop-loss (`_close_position_from_filled_sl`) and
+>   crash-recovery `FULL_EXIT` (`_reconcile_filled_exit`) — know the exit fill, so they realize
+>   P&L **and** log the trade (only after the DB position is confirmed closed; deduped by the
+>   exit order id or a synthetic `reconcile_exit_<position_id>` key).
+> - **External/manual closes** (operator sells on the exchange UI, or a liquidation) detected by
+>   a holdings/borrow check (`_verify_asset_holdings` spot, `_remove_phantom_position` margin)
+>   carry no fill. They log a **balance-neutral** trade row only (commission = reconstructed
+>   entry leg, GROSS pnl priced mark-to-market from the data provider, falling back to entry
+>   price → pnl 0), keyed by a synthetic `reconcile_ext_<position_id>`. They do **not** touch the
+>   balance: that capital is reconciled by startup Step C (`_reconcile_balance`, spot) or
+>   `AccountSynchronizer._sync_margin_equity` (margin), so realizing P&L here too would
+>   double-book the ledger. Because that GROSS pnl is a mark-to-market **estimate** (not the real
+>   external fill), it is an approximation wherever `trades.pnl` is summed — session metrics and
+>   the degraded `recover_last_balance` fallback — in the same spirit as the partial-exit caveat
+>   above; the authoritative `account_balances` ledger is unaffected. (`PeriodicReconciler`'s
+>   runtime external-close detection does not yet log a trade row — tracked as a follow-up.)
 
 ## CLI usage
 

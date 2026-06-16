@@ -17,7 +17,10 @@ class _ExchangeWithInterestHistory(Protocol):
     """Protocol for exchanges that support margin interest history queries."""
 
     def get_margin_interest_history(
-        self, asset: str, start_time: int, end_time: int | None = None,
+        self,
+        asset: str,
+        start_time: int,
+        end_time: int | None = None,
         page: int = 1,
     ) -> list[dict[str, Any]]: ...
 
@@ -66,14 +69,20 @@ class MarginInterestTracker:
                 if attempt < retries:
                     logger.info(
                         "Retrying margin interest fetch for %s (attempt %d/%d): %s",
-                        asset, attempt + 1, 1 + retries, e,
+                        asset,
+                        attempt + 1,
+                        1 + retries,
+                        e,
                     )
                     time.sleep(_RETRY_DELAY_SECONDS)
 
         if last_error is not None:
             logger.warning(
                 "Failed to fetch margin interest history for %s after %d attempts: %s",
-                asset, 1 + retries, last_error, exc_info=True,
+                asset,
+                1 + retries,
+                last_error,
+                exc_info=True,
             )
             return 0.0
 
@@ -83,9 +92,7 @@ class MarginInterestTracker:
         total = 0.0
         for record in records:
             if not isinstance(record, dict):
-                logger.warning(
-                    "Skipping non-dict interest record: %s", type(record).__name__
-                )
+                logger.warning("Skipping non-dict interest record: %s", type(record).__name__)
                 continue
             try:
                 value = float(record["interest"])
@@ -123,9 +130,7 @@ class MarginInterestTracker:
     _MAX_PAGES = 10  # Safety limit to prevent runaway pagination
     _PAGE_SIZE = 100  # Must match size param passed to Binance API
 
-    def _fetch_all_records(
-        self, asset: str, start_time_ms: int
-    ) -> list[dict[str, Any]]:
+    def _fetch_all_records(self, asset: str, start_time_ms: int) -> list[dict[str, Any]]:
         """Fetch all interest records using page-number pagination."""
         all_records: list[dict[str, Any]] = []
 
@@ -144,14 +149,18 @@ class MarginInterestTracker:
             if page_num > 1:
                 logger.info(
                     "Paginating interest history for %s (page %d, %d records so far)",
-                    asset, page_num, len(all_records),
+                    asset,
+                    page_num,
+                    len(all_records),
                 )
         else:
             # Loop exhausted MAX_PAGES without breaking
             logger.warning(
                 "Interest history for %s hit %d-page limit (%d records) — "
                 "total may be understated for very long-held positions",
-                asset, self._MAX_PAGES, len(all_records),
+                asset,
+                self._MAX_PAGES,
+                len(all_records),
             )
 
         return all_records

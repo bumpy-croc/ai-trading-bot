@@ -23,7 +23,7 @@ References:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 try:
     import tensorflow as tf
@@ -32,17 +32,11 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None  # type: ignore
-    Model = None  # type: ignore
-    callbacks = None  # type: ignore
-    layers = None  # type: ignore
-
-if TYPE_CHECKING:
-    from tensorflow.keras import callbacks as CallbacksType
-    from tensorflow.keras.models import Model as ModelType
-else:
-    ModelType = Any  # type: ignore
-    CallbacksType = Any  # type: ignore
+    if not TYPE_CHECKING:
+        tf = None
+        Model = None
+        callbacks = None
+        layers = None
 
 
 def _ensure_tensorflow_available() -> None:
@@ -82,13 +76,13 @@ class GatedResidualNetwork(layers.Layer):
         self.output_size = output_size or hidden_size
         self.dropout_rate = dropout
 
-        # Layers initialized in build()
-        self.dense_hidden = None
-        self.dense_gate_linear = None
-        self.dense_gate_sigmoid = None
-        self.dense_skip = None
-        self.dropout_layer = None
-        self.layer_norm = None
+        # Layers initialized in build(); Keras layer types are untyped (Any)
+        self.dense_hidden: Any = None
+        self.dense_gate_linear: Any = None
+        self.dense_gate_sigmoid: Any = None
+        self.dense_skip: Any = None
+        self.dropout_layer: Any = None
+        self.layer_norm: Any = None
 
     def build(self, input_shape: Any) -> None:
         """Build GRN layers based on input shape."""
@@ -183,10 +177,10 @@ class VariableSelectionNetwork(layers.Layer):
         self.hidden_size = hidden_size
         self.dropout_rate = dropout
 
-        # Layers initialized in build()
+        # Layers initialized in build(); Keras layer types are untyped (Any)
         self.feature_grns: list[Any] = []
-        self.selection_grn = None
-        self.selection_dense = None
+        self.selection_grn: GatedResidualNetwork | None = None
+        self.selection_dense: Any = None
 
     def build(self, input_shape: Any) -> None:
         """Build VSN layers."""
@@ -246,7 +240,8 @@ class VariableSelectionNetwork(layers.Layer):
 
         # Compute selection weights from flattened input
         # Use the raw input to determine which features matter
-        selection_input = self.selection_grn(inputs, training=training)
+        # cast: Keras invokes build() before call(), so selection_grn is set here
+        selection_input = cast(GatedResidualNetwork, self.selection_grn)(inputs, training=training)
         # Weights: (batch, timesteps, n_features)
         weights = self.selection_dense(selection_input)
 
@@ -298,11 +293,11 @@ class TemporalFusionDecoder(layers.Layer):
         self.hidden_size = hidden_size
         self.dropout_rate = dropout
 
-        # Layers initialized in build()
-        self.attention = None
-        self.attention_dropout = None
-        self.attention_norm = None
-        self.post_attention_grn = None
+        # Layers initialized in build(); Keras layer types are untyped (Any)
+        self.attention: Any = None
+        self.attention_dropout: Any = None
+        self.attention_norm: Any = None
+        self.post_attention_grn: GatedResidualNetwork | None = None
 
     def build(self, input_shape: Any) -> None:
         """Build decoder layers."""
@@ -355,7 +350,8 @@ class TemporalFusionDecoder(layers.Layer):
         x = self.attention_norm(x)
 
         # Post-attention GRN for additional processing
-        x = self.post_attention_grn(x, training=training)
+        # cast: Keras invokes build() before call(), so post_attention_grn is set here
+        x = cast(GatedResidualNetwork, self.post_attention_grn)(x, training=training)
 
         if return_attention_scores:
             return x, attention_scores

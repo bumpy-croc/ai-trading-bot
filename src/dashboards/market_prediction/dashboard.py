@@ -58,7 +58,7 @@ class MarketPredictionDashboard:
         self._setup_routes()
 
         # Providers – create lazily to avoid heavy imports during unit tests
-        self._price_provider = None
+        self._price_provider: BinanceProvider | None = None
         self._sentiment_provider = FearGreedProvider()
 
     # ------------------------------------------------------------------
@@ -121,7 +121,9 @@ class MarketPredictionDashboard:
                 return pd.DataFrame()
             df = pd.read_csv(csv_path, parse_dates=["timestamp"])
             df = df.set_index("timestamp").sort_index()
-            df = df.loc[start_dt:]  # trim to lookback window
+            # Trim to lookback window; datetime-based .loc slicing is valid pandas,
+            # but mypy only accepts int-like slice operands.
+            df = df.loc[start_dt:]  # type: ignore[misc]
         # Ensure datetime index is timezone aware
         if df.index.tzinfo is None or df.index.tz is None:
             df.index = df.index.tz_localize(UTC)
@@ -228,7 +230,7 @@ class MarketPredictionDashboard:
         # Decide server kwargs based on whether gevent is enabled.
         # With gevent enabled, Flask runs a production-safe gevent server.
         # Without gevent, allow Werkzeug only for local development.
-        server_kwargs = {
+        server_kwargs: dict[str, Any] = {
             "host": host,
             "port": port,
             "debug": debug,

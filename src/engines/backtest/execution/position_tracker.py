@@ -10,6 +10,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING, cast
 
 from src.config.constants import (
     DEFAULT_FEE_RATE,
@@ -21,6 +22,9 @@ from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.engines.shared.side_utils import to_side_string
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
+
+if TYPE_CHECKING:
+    from src.engines.shared.models import PositionSide
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +80,7 @@ class PositionTracker:
         return self.current_trade is not None
 
     @property
-    def position_side(self) -> str | None:
+    def position_side(self) -> PositionSide | str | None:
         """Get the side of the current position."""
         if self.current_trade is None:
             return None
@@ -182,8 +186,11 @@ class PositionTracker:
             )
             return 0.0
 
-        # Update position state only after P&L validation passes
-        self.current_trade.current_size = max(0.0, self.current_trade.current_size - exit_fraction)
+        # Update position state only after P&L validation passes.
+        # cast: BasePosition.__post_init__ auto-initializes current_size from size,
+        # so it is never None after construction.
+        current_size = cast(float, self.current_trade.current_size)
+        self.current_trade.current_size = max(0.0, current_size - exit_fraction)
         self.current_trade.partial_exits_taken += 1
 
         logger.debug(
@@ -206,7 +213,9 @@ class PositionTracker:
         if self.current_trade is None:
             return
 
-        new_current_size = self.current_trade.current_size + additional_size
+        # cast: BasePosition.__post_init__ auto-initializes current_size from size,
+        # so it is never None after construction.
+        new_current_size = cast(float, self.current_trade.current_size) + additional_size
         self.current_trade.current_size = min(1.0, new_current_size)
         self.current_trade.size = min(1.0, self.current_trade.size + additional_size)
         self.current_trade.scale_ins_taken += 1
@@ -219,14 +228,17 @@ class PositionTracker:
 
     def update_trailing_stop(
         self,
-        new_stop_loss: float,
+        new_stop_loss: float | None,
         activated: bool,
         breakeven_triggered: bool,
     ) -> bool:
         """Update trailing stop state for active position.
 
         Args:
-            new_stop_loss: New stop loss price.
+            new_stop_loss: New stop loss price, or None when trailing just
+                activated without producing a stop improvement (e.g. ATR
+                unavailable on the activation candle); flag updates still
+                apply. Mirrors the live tracker's None handling.
             activated: Whether trailing stop is now activated.
             breakeven_triggered: Whether breakeven has been triggered.
 
@@ -238,18 +250,19 @@ class PositionTracker:
 
         changed = False
 
-        # Only update if new stop is better
-        current_sl = self.current_trade.stop_loss
-        side_str = to_side_string(self.current_trade.side)
-        if side_str == "long":
-            should_update = current_sl is None or new_stop_loss > float(current_sl)
-        else:
-            should_update = current_sl is None or new_stop_loss < float(current_sl)
+        if new_stop_loss is not None:
+            # Only update if new stop is better
+            current_sl = self.current_trade.stop_loss
+            side_str = to_side_string(self.current_trade.side)
+            if side_str == "long":
+                should_update = current_sl is None or new_stop_loss > float(current_sl)
+            else:
+                should_update = current_sl is None or new_stop_loss < float(current_sl)
 
-        if should_update:
-            self.current_trade.stop_loss = new_stop_loss
-            self.current_trade.trailing_stop_price = new_stop_loss
-            changed = True
+            if should_update:
+                self.current_trade.stop_loss = new_stop_loss
+                self.current_trade.trailing_stop_price = new_stop_loss
+                changed = True
 
         if activated != self.current_trade.trailing_stop_activated:
             self.current_trade.trailing_stop_activated = activated

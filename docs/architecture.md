@@ -1,6 +1,6 @@
 # System Architecture
 
-> **Last Updated**: 2026-02-18
+> **Last Updated**: 2026-06-10
 > **Maintainer Note**: This is a living document. Update after major architectural changes or new component additions. Use the `/update-docs` command to keep this in sync.
 
 ---
@@ -86,6 +86,8 @@ ai-trading-bot/
 │   │   │
 │   │   ├── live/                 # Live trading engine
 │   │   │   ├── trading_engine.py # Real-time execution
+│   │   │   ├── startup.py        # Bootstrap sequence (LiveStartupSequencer)
+│   │   │   ├── loop_timing.py    # Trading-loop timing helpers
 │   │   │   ├── strategy_manager.py # Hot-swap strategy management
 │   │   │   └── execution/        # Entry/exit handling
 │   │   │
@@ -285,10 +287,28 @@ See [Risk Management Architecture](risk_management_architecture.md) for complete
 Real-time execution with safety controls.
 
 **Key Files:**
-- `trading_engine.py` - Main execution loop
+- `trading_engine.py` - Orchestration: main loop, component wiring, lifecycle
 - `strategy_manager.py` - Hot-swap orchestration
 - `execution/entry_handler.py` - Entry signal processing
+- `execution/entry_coordinator.py` - Entry decision + execution pipeline (`LiveEntryCoordinator`): signal/sizing/SL-TP derivation and the base-asset-locked order path (guards, balance+fee accounting, position tracking, risk re-registration, stop-loss placement, emergency-close fallbacks, #703). Reads/writes engine state via a `Protocol` backref
 - `execution/exit_handler.py` - Exit signal processing
+- `execution/exit_coordinator.py` - Exit decision + execution pipeline (`LiveExitCoordinator`): per-position SL/TP/runtime exit evaluation and the base-asset-locked close path (resting-stop cancel-before-close #710, realized-PnL + margin-interest accounting, balance update, trade persistence/CLOSED flip #657, re-protect on failed close, #703). Reads/writes engine state via a `Protocol` backref
+- `execution/stop_loss_manager.py` - All exchange-facing stop-loss lifecycle calls (place/cancel/query/re-protect)
+- `execution/market_data_coordinator.py` - Per-candle market-data + context read path (`LiveMarketDataCoordinator`): latest-frame fetch (WS-cache vs REST + resync), sentiment enrichment, strategy-context readiness gate, correlation-sizing context. Read-only path; reads/writes engine state via a `Protocol` backref
+- `execution/order_fill_coordinator.py` - The `OrderTracker` callbacks (`LiveOrderFillCoordinator`): full/partial fills, cancel/reject (entry-fee refund + stop-loss-cancel escalation #741), tracking-lost (fail-closed). Runs on the OrderTracker poll thread; stop-loss fills are handed to the loop via the thread-safe `_pending_fill_exits` queue (#631). Reads/writes engine state via a `Protocol` backref
+- `loop_timing.py` - Trading-loop cadence + data-freshness helpers (`LiveLoopTimingCoordinator`): interruptible sleep, adaptive poll interval, candle-age/WS-buffer freshness gate. Leaf helpers behind a `Protocol` backref
+- `dynamic_risk_coordinator.py` - Per-entry dynamic-risk position-size adjustment + audit logging (`LiveDynamicRiskCoordinator`): drawdown/peak-aware sizing via the shared `DynamicRiskHandler`. Behind a `Protocol` backref
+- `recovery.py` - Startup recovery: session balance, persisted-position reload, exchange reconciliation (`LiveSessionRecoverer`)
+- `startup.py` - Bootstrap sequence (`LiveStartupSequencer`): session recover/create + wiring, #668 carry-forward, #657 self-heal, account sync, runtime-service startup, loop launch. The engine's public `start()` delegates here. Behind a `Protocol` backref
+- `strategy_runtime.py` - Strategy normalization + per-candle runtime decision pipeline (`StrategyRuntimeCoordinator`): config, component risk-context provider, `RuntimeContext` construction, decision processing, risk-param merge/clone
+- `strategy_hot_swap.py` - Hot-swap / model-update lifecycle (`StrategyHotSwapCoordinator`): public entry points, StrategyManager callbacks, loop-applied pending-update application, post-swap policy/risk refresh
+- `ws_health.py` - WebSocket stream-health subsystem (`WebSocketHealthMonitor`): WS startup, background health-monitor thread + loop, kline/user-stream staleness + reconnect/probe decisions, degraded-user hard-reconnect/restore, order-fill exit-queue drain. Lock-free single-writer model (health thread is the only writer of reconnect counters / `_ws_kline_active`; trading loop reads); state stays on the engine via a `Protocol` backref
+- `trade_close_accounting.py` - Close-accounting helpers (closed quantity, entry-fee USD, position portion) shared by exit and recovery paths
+- `monitoring/` - Account snapshots, status lines, performance summaries (`LiveAccountMonitor`)
+- `config.py` - Construction-time settings resolution (`LiveEngineSettings`): the #734 partial-ops feature gate, regime-detection env flag, and execution fill policy. `runner.py` resolves and injects `settings=LiveEngineSettings.resolve()`; the engine self-resolves when not injected. Runtime-dynamic flags stay runtime reads.
+
+The engine delegates to these handlers through thin private wrappers; see the
+handler decomposition and lock-ownership table in `docs/live_trading.md` (#486).
 
 **Safety Features:**
 - Paper trading mode (no real orders)
@@ -323,6 +343,7 @@ Unified logic extracted from both backtest and live engines to ensure consistenc
 | `models.py` | Unified `Position`, `Trade`, `PositionSide` types |
 | `cost_calculator.py` | Fee and slippage calculation |
 | `dynamic_risk_handler.py` | Dynamic risk adjustments during drawdowns |
+| `execution/entry_handler_mixin.py` | Entry-plan extraction + dynamic-risk sizing shared verbatim by both engines' entry handlers |
 | `partial_operations_manager.py` | Partial exit and scale-in logic |
 | `policy_hydration.py` | Extract policies from runtime decisions |
 | `risk_configuration.py` | Merge strategy risk overrides with base config |

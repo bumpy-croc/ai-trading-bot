@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 
 @dataclass(frozen=True)
@@ -92,7 +92,11 @@ class DynamicRiskDescriptor:
             volatility_window_days=int(self.volatility_window_days),
             high_volatility_threshold=float(self.high_volatility_threshold),
             low_volatility_threshold=float(self.low_volatility_threshold),
-            volatility_risk_multipliers=tuple(self.volatility_risk_multipliers),
+            # cast: the field is declared as a 2-tuple; tuple() only
+            # re-normalizes list values arriving from runtime config.
+            volatility_risk_multipliers=cast(
+                "tuple[float, float]", tuple(self.volatility_risk_multipliers)
+            ),
         )
 
 

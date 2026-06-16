@@ -1,9 +1,10 @@
 """Unit tests for FallbackProvider."""
 
-import pytest
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
+
 import pandas as pd
+import pytest
 
 from src.data_providers.fallback_provider import FallbackProvider
 
@@ -124,11 +125,11 @@ def test_skips_binance_after_first_failure(mock_binance_blocked, mock_coingecko_
     end = datetime(2024, 1, 31, tzinfo=UTC)
 
     # First call - tries Binance, gets 403, uses CoinGecko
-    df1 = provider.get_historical_data("BTCUSDT", "1h", start, end)
+    provider.get_historical_data("BTCUSDT", "1h", start, end)
     assert provider._binance_failed is True
 
     # Second call - should skip Binance entirely
-    df2 = provider.get_historical_data("ETHUSDT", "1h", start, end)
+    provider.get_historical_data("ETHUSDT", "1h", start, end)
 
     # Binance should only have been called once (first request)
     assert provider.primary_provider.get_historical_data.call_count == 1

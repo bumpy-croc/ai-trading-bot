@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pandas as pd
-import requests
+import requests  # type: ignore[import-untyped]  # requests ships no inline types; stubs not installed
 
 from src.infrastructure.network_retry import with_network_retry
 

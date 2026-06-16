@@ -73,12 +73,14 @@ def tracker(mock_exchange, dedup):
     on_fill = Mock()
     on_partial_fill = Mock()
     on_cancel = Mock()
+    on_tracking_lost = Mock()
     t = OrderTracker(
         exchange=mock_exchange,
         poll_interval=0.1,
         on_fill=on_fill,
         on_partial_fill=on_partial_fill,
         on_cancel=on_cancel,
+        on_tracking_lost=on_tracking_lost,
         event_deduplicator=dedup,
     )
     return t
