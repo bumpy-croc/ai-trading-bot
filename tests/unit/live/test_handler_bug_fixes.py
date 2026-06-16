@@ -617,8 +617,10 @@ class TestDailyPnLTracking:
 
     def test_daily_pnl_initialized_on_first_snapshot(self) -> None:
         """Daily P&L should be 0 on first snapshot (balance = day start balance)."""
-        # Arrange
+        # Arrange: no persisted snapshot exists for the day (#766 recovery
+        # returns None), so the first call anchors to the current balance.
         db_manager = MagicMock()
+        db_manager.get_first_snapshot_of_day.return_value = None
         logger = LiveEventLogger(
             db_manager=db_manager,
             log_to_database=True,
@@ -639,8 +641,10 @@ class TestDailyPnLTracking:
 
     def test_daily_pnl_calculated_from_day_start_balance(self) -> None:
         """Daily P&L should be calculated from day start balance."""
-        # Arrange
+        # Arrange: no persisted snapshot exists for the day (#766 recovery
+        # returns None), so the first call anchors to the current balance.
         db_manager = MagicMock()
+        db_manager.get_first_snapshot_of_day.return_value = None
         logger = LiveEventLogger(
             db_manager=db_manager,
             log_to_database=True,

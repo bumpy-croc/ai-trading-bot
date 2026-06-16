@@ -36,7 +36,7 @@ class SentimentFeatureExtractor(FeatureExtractor):
         self.enabled = enabled
         self._feature_names = SENTIMENT_FEATURES_SCHEMA.get_feature_names()
         # Lazily instantiate the provider only if/when needed
-        self._provider = None
+        self._provider: FearGreedProvider | None = None
 
     def extract(self, data: pd.DataFrame) -> pd.DataFrame:
         """

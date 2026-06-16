@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -596,7 +597,9 @@ def plot_regime_accuracy(
     if ax is None:
         fig, ax = plt.subplots(figsize=(10, 5))
     else:
-        fig = ax.figure
+        # Cast: a caller-supplied Axes is attached to a Figure (matplotlib types
+        # the attribute as Figure | SubFigure | None).
+        fig = cast(plt.Figure, ax.figure)
 
     x = working.index
     ax.plot(x, working["rolling_accuracy"], label="Regime accuracy", linewidth=2)

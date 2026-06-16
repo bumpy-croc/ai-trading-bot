@@ -34,11 +34,11 @@ class TestComparisonConfig:
         assert config.equivalence_margin == 0.01
         assert config.initial_balance == 10000.0
         assert config.commission_rate == 0.001
-        assert config.generate_detailed_report == True
-        assert config.export_results == True
+        assert config.generate_detailed_report is True
+        assert config.export_results is True
         assert config.export_directory is None
-        assert config.require_statistical_equivalence == True
-        assert config.require_performance_parity == True
+        assert config.require_statistical_equivalence is True
+        assert config.require_performance_parity is True
         assert config.minimum_correlation_threshold == 0.95
 
     def test_custom_config(self):
@@ -57,7 +57,7 @@ class TestComparisonConfig:
         assert config.statistical_significance_level == 0.01
         assert config.equivalence_margin == 0.02
         assert config.initial_balance == 50000.0
-        assert config.export_results == False
+        assert config.export_results is False
 
 
 class TestStrategyComparisonResult:
@@ -685,7 +685,7 @@ class TestConvenienceFunctions:
             legacy_strategy, new_strategy, sample_market_data, strict_validation=True
         )
 
-        assert is_ready == True
+        assert is_ready is True
         assert len(issues) == 0
 
     @patch(
@@ -727,7 +727,7 @@ class TestConvenienceFunctions:
             legacy_strategy, new_strategy, sample_market_data, strict_validation=True
         )
 
-        assert is_ready == False
+        assert is_ready is False
         assert len(issues) > 0
         assert any("Fix performance issues" in issue for issue in issues)
         assert any("Total Return" in issue for issue in issues)
@@ -754,7 +754,7 @@ class TestConvenienceFunctions:
             legacy_strategy, new_strategy, sample_market_data, strict_validation=False
         )
 
-        assert is_ready == True  # WARNING is acceptable for lenient validation
+        assert is_ready is True  # WARNING is acceptable for lenient validation
 
         # Check that lenient tolerances were used
         call_args = mock_engine_class.call_args[0][0]  # First positional argument (config)

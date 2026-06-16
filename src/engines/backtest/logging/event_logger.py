@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from src.config.constants import DEFAULT_CONFIDENCE_SCORE
+from src.engines.shared.side_utils import to_side_string
 
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
@@ -98,8 +99,10 @@ class EventLogger:
         if not self.enabled:
             return
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.log_strategy_execution(
+            db_manager.log_strategy_execution(
                 strategy_name=strategy_name,
                 symbol=symbol,
                 signal_type="entry",
@@ -158,8 +161,10 @@ class EventLogger:
         if not self.enabled:
             return
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.log_strategy_execution(
+            db_manager.log_strategy_execution(
                 strategy_name=strategy_name,
                 symbol=symbol,
                 signal_type="exit",
@@ -190,6 +195,7 @@ class EventLogger:
         symbol: str,
         strategy_name: str,
         source: TradeSource,
+        commission: float | None = None,
     ) -> None:
         """Log a completed trade to the database.
 
@@ -198,6 +204,9 @@ class EventLogger:
             symbol: Trading symbol.
             strategy_name: Name of the strategy.
             source: Trade source (BACKTEST).
+            commission: Round-trip fee in USD (entry + exit). Persisted so backtest
+                `trades` rows carry `commission`/`quantity` like live ones (Backtest-Live
+                Parity) — consumers can compute net P&L consistently across both engines.
         """
         if not self.enabled:
             return
@@ -217,10 +226,15 @@ class EventLogger:
         except (TypeError, ValueError):
             margin_interest_cost = None
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.log_trade(
+            db_manager.log_trade(
                 symbol=symbol,
-                side=trade.side,
+                # log_trade expects str or the database PositionSide; convert
+                # the shared engines enum so long/short classifies correctly
+                # and pnl_percent persists with the right formula (#758).
+                side=to_side_string(trade.side),
                 entry_price=trade.entry_price,
                 exit_price=trade.exit_price,
                 size=trade.size,
@@ -240,6 +254,8 @@ class EventLogger:
                 mfe_time=trade.mfe_time,
                 mae_time=trade.mae_time,
                 margin_interest_cost=margin_interest_cost,
+                commission=commission,
+                quantity=getattr(trade, "quantity", None),
             )
         except Exception as e:
             if not self._logging_error_warned:
@@ -270,8 +286,10 @@ class EventLogger:
         if not self.enabled:
             return
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.log_strategy_execution(
+            db_manager.log_strategy_execution(
                 strategy_name=strategy_name,
                 symbol=symbol,
                 signal_type="risk_adjustment",
@@ -315,10 +333,12 @@ class EventLogger:
         if not self.enabled:
             return None
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
             date_str = start_time.strftime("%Y%m%d") if start_time else "unknown"
             session_name = f"Backtest_{symbol}_{date_str}"
-            session_id = self.db_manager.create_trading_session(
+            session_id = db_manager.create_trading_session(
                 strategy_name=strategy_name,
                 symbol=symbol,
                 timeframe=timeframe,
@@ -342,8 +362,10 @@ class EventLogger:
         if not self.enabled or self.session_id is None:
             return
 
+        # cast: the enabled guard above guarantees db_manager is not None
+        db_manager = cast("DatabaseManager", self.db_manager)
         try:
-            self.db_manager.end_trading_session(
+            db_manager.end_trading_session(
                 session_id=self.session_id,
                 final_balance=final_balance,
             )

@@ -1,11 +1,31 @@
 # Project Status
 
-> **Last Updated**: 2026-04-27
+> **Last Updated**: 2026-06-15
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## In Flight
+
+- **Backtest determinism / parity fingerprint (#486 parity, PR #811)** — the
+  parity oracle the refactor series depends on. Found the ml_basic backtest
+  varied across processes under load (49/50/51 trades on identical inputs).
+  Root cause: multi-threaded BLAS/OpenMP float non-associativity (ONNX,
+  `PYTHONHASHSEED`, prediction cache all ruled out; NOT the refactors). Fix:
+  `Backtester.run` pins BLAS/OpenMP to 1 thread (`threadpoolctl`); ONNX stays
+  multi-threaded. Verified byte-identical across 5 processes + a mechanism
+  regression test. Perf neutral-to-faster. Lands before resuming refactors.
+
+- **Live-capital bug-audit remediation (2026-06-10)** — a multi-agent code
+  audit produced 17 tracked findings (#734–#750) across order execution,
+  reconciliation, balance integrity, risk enforcement, and sync. Fix PRs in
+  flight: fail-closed stop-loss lookup (#733 → fixes #713), partial-ops
+  hard-disable (#734 interim), order-tracker tracking-lost handling, and
+  periodic-reconciler SL-fill PnL booking. Highest open items after the
+  PR train: close-quantity derivation (#737), balance-ledger serialization
+  (#735/#736), dead rate-limit retries (#738), stale-snapshot stop re-arm
+  (#739), live max-drawdown enforcement (#749), backtest partial-PnL
+  inflation (#748).
 
 - **Monitoring dashboard V2 redesign** — chart-led layout (left rail + KPI
   strip + hero equity chart + position inspector) replacing the legacy
@@ -54,6 +74,7 @@ warning, per-trade sequence tie-break.
 - [x] **Feature Schema Saving** - ML models save feature schemas for validation (#530)
 - [x] **Cloud Training Automation** - Auto data download/upload for cloud training (#532)
 - [x] **CI/CD Pipeline** - Claude Code GitHub Workflow with tests (#551)
+- [x] **Live Trading Engine Modularization (#486)** - Decomposed the `LiveTradingEngine` god-class (~6,560 lines at the start of the effort) into a thin orchestrator over a coordinator family. The handover-doc plan (Steps A–E) landed via #823–#826: `__init__` 534→~110 lines (15 phase helpers), `start()` 327→~18 lines (7 phase helpers), `_trading_loop` 390→~250 lines (short-entry + periodic-account extracted), and entry/exit coordinator `Protocol`s tightened to concrete types. Every step proven byte-identical against the deterministic backtest parity fingerprint. Engine now ~2,620 lines; optional further extraction (e.g. `LiveEngineBuilder`, `LiveStartupSequencer`) remains as future polish. Plan: `docs/refactor/live_engine_modularization.md`.
 
 ### In Progress
 
@@ -104,19 +125,23 @@ warning, per-trade sequence tie-break.
 
 ## Last Session Summary
 
-**Date**: 2026-02-18
+**Date**: 2026-06-15
 
 **Work Completed**:
-- Implemented PSB high-priority improvements: updated changelog, project status, architecture docs
-- Added `#` hashtag regression prevention pattern to CLAUDE.md
-- Verified `/update-docs` slash command is complete
+- Completed the #486 live-engine modularization plan (Steps A–E) across four
+  PRs (#823–#826): decomposed `__init__`, `start()`, and `_trading_loop` into
+  cohesive helpers; tightened the entry/exit coordinator `Protocol`s to concrete
+  types and moved their tests to `create_autospec`; documented the deliberate
+  non-extractions. Every PR proven byte-identical against the backtest parity
+  fingerprint and merged CI-green.
 
 **Ended At**:
-- PSB high-priority documentation improvements
+- #486 modularization plan complete; engine is a thin ~2,620-line orchestrator.
 
 **Next Steps**:
-- Implement PSB medium-priority items (feature reference docs, additional slash commands)
-- Continue performance optimization work
+- Optional further extraction if pursued: `_process_legacy_short_entry` →
+  `LiveEntryCoordinator`; a `LiveEngineBuilder` for construction; a
+  `LiveStartupSequencer` for the bootstrap sequence.
 
 ---
 

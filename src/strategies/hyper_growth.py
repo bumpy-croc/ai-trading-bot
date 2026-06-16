@@ -33,13 +33,14 @@ Reference: docs/research/500_percent_annual_returns.md
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from src.strategies.components import (
     EnhancedRegimeDetector,
     FixedFractionSizer,
     MLBasicSignalGenerator,
     MomentumSignalGenerator,
+    SignalGenerator,
     Strategy,
 )
 from src.strategies.components.leverage_manager import LeverageManager
@@ -92,9 +93,9 @@ class FlatRiskManager(RiskManager):
 
     def calculate_position_size(
         self,
-        signal: "Signal",
+        signal: Signal,
         balance: float,
-        regime: Optional["RegimeContext"] = None,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> float:
         """Return balance * risk_fraction without confidence/strength scaling.
@@ -117,7 +118,7 @@ class FlatRiskManager(RiskManager):
         self,
         position: Any,
         current_data: Any,
-        regime: Optional["RegimeContext"] = None,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> bool:
         """Exit when unrealized loss exceeds stop_loss_pct."""
@@ -128,8 +129,8 @@ class FlatRiskManager(RiskManager):
     def get_stop_loss(
         self,
         entry_price: float,
-        signal: "Signal",
-        regime: Optional["RegimeContext"] = None,
+        signal: Signal,
+        regime: RegimeContext | None = None,
         **context: Any,
     ) -> float:
         """Calculate stop loss based on fixed percentage."""
@@ -206,7 +207,8 @@ def create_hyper_growth_strategy(
     Returns:
         Configured Strategy instance.
     """
-    # Signal generator
+    # Signal generator (declared up-front: branches assign different subtypes)
+    signal_generator: SignalGenerator
     if signal_source == "momentum":
         signal_generator = MomentumSignalGenerator(
             name=f"{name}_signals",

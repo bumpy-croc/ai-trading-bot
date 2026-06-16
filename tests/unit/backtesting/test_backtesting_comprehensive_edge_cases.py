@@ -476,7 +476,7 @@ class TestPositionSizingEdgeCases:
             log_to_database=False,
         )
 
-        results = backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
+        backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
 
         # Verify no position ever exceeded balance
         for trade in backtester.trades:

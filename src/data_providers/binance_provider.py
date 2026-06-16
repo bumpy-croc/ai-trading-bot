@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import pandas as pd
 
@@ -44,6 +44,7 @@ from .exchange_interface import (
     AccountBalance,
     ExchangeInterface,
     Order,
+    OrderLookupError,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -285,7 +286,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.api_key = api_key
             self.api_secret = api_secret
             self.testnet = testnet
-            self._client = None
+            # Untyped boundary: holds a python-binance Client or the offline stub
+            # after _initialize_client(); None only during construction.
+            self._client: Any = None
             logger.info("Binance provider initialized in read-only mode (no credentials)")
             self._initialize_client()
 
@@ -307,6 +310,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         self._last_user_event_time = datetime.now(UTC)
         self._kline_event_received = False  # True after first kline WS event
         self._user_event_received = False  # True after first user WS event
+        # Monotonic token identifying the current user-socket "generation" (#717).
+        # Bumped before every teardown (stop_user_stream / stop_streams) and on
+        # each (re)start; the user callback captures the generation live at start
+        # and drops any event whose generation no longer matches. This defeats the
+        # stale-callback false-recovery race: a python-binance read_ready callback
+        # from a torn-down socket can still fire on the shared TWM loop after we
+        # opened the circuit, and without this guard it would set
+        # _user_event_received=True and trick the watchdog into "recovering".
+        self._user_stream_generation = 0
+        # Serialises the generation check-and-record in _user_callback (TWM loop
+        # thread) against the generation bump + _user_event_received reset in
+        # start/stop (WS health-monitor thread). Without it the generation guard is
+        # check-then-act: a stale callback could pass the check, be preempted by a
+        # teardown+restart, then write _user_event_received=True under the NEW
+        # generation — a false recovery that disables REST polling on a possibly
+        # dead socket (a TOCTOU blackout). The lock makes that compound update
+        # atomic (#717). Held only around the flag mutations, never around the
+        # downstream on_user_event forwarding or the socket start/stop loop calls.
+        self._user_stream_lock = threading.Lock()
 
     @staticmethod
     def _validate_credentials(
@@ -1446,6 +1468,47 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error("Failed to get order %s: %s", order_id, e)
             return None
 
+    def get_order_checked(self, order_id: str, symbol: str) -> Order | None:
+        """Fail-closed order lookup (see ExchangeInterface.get_order_checked).
+
+        Unlike :meth:`get_order` (which swallows every error into ``None``),
+        this returns ``None`` only when Binance confirms the order does not
+        exist (error code -2013) and raises :class:`OrderLookupError` on any
+        unconfirmed lookup, so safety logic (e.g. the reconciler's stop-loss
+        re-placement) never mistakes a transient API failure for a missing
+        order and places a duplicate.
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            raise OrderLookupError(
+                f"Binance client unavailable — cannot confirm order {order_id} for {symbol}"
+            )
+
+        # Binance's orderId parameter only accepts numeric strings; route
+        # alphanumeric IDs (our atb_... idempotency keys) via origClientOrderId.
+        params: dict[str, Any] = {"symbol": symbol}
+        if order_id.isdigit():
+            params["orderId"] = order_id
+        else:
+            params["origClientOrderId"] = order_id
+
+        try:
+            order_data = self._call_get_order(**params)
+        except (BinanceAPIException, BinanceOrderException) as e:
+            if getattr(e, "code", None) == -2013 or "-2013" in str(e):
+                return None  # confirmed: order does not exist on the exchange
+            raise OrderLookupError(f"Order {order_id} lookup failed for {symbol}: {e}") from e
+        except Exception as e:
+            raise OrderLookupError(f"Order {order_id} lookup failed for {symbol}: {e}") from e
+
+        parsed = self._parse_order_data(order_data)
+        if parsed is None:
+            # Got a response but could not parse it — the order may well exist,
+            # so this is "unknown", not "confirmed absent".
+            raise OrderLookupError(
+                f"Order {order_id} response for {symbol} could not be parsed: {order_data!r}"
+            )
+        return parsed
+
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:
         """Get recent trades for a symbol"""
         if not BINANCE_AVAILABLE or not self._client:
@@ -2077,9 +2140,85 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # loop has no run_until_complete nesting, so it does NOT reintroduce the
             # "cannot enter context" re-entrancy spam that #646 fixed.
             self._twm_loop = asyncio.new_event_loop()
+            # Intercept the benign teardown KeyError raised inside python-binance's
+            # start_listener task on socket stop (#716). The exception fires inside the
+            # library coroutine on THIS loop, so a try/except around stop_socket can't
+            # reach it — only the loop's own exception handler can.
+            self._twm_loop.set_exception_handler(self._twm_loop_exception_handler)
             twm_kwargs["loop"] = self._twm_loop
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
             self._twm.start()
+
+    def _twm_loop_exception_handler(
+        self, loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+    ) -> None:
+        """Suppress python-binance's benign socket-teardown ``KeyError`` (#716).
+
+        When a user/kline socket is stopped, ``stop_socket`` flips
+        ``self._socket_running[path]`` to ``False`` and the library's
+        ``start_listener`` coroutine then ``del``s that key on exit. A race in
+        the library re-evaluates ``while self._socket_running[path]`` after the
+        key is gone, raising ``KeyError(path)`` inside the listener task. The
+        socket is being torn down on purpose (e.g. the #616 circuit-open drop to
+        REST polling), so this is teardown noise — but it surfaces as
+        ``Task exception was never retrieved`` (3× per circuit-open) and trips
+        monitoring that greps ``Traceback``.
+
+        The exception is raised inside the library task on this loop, so it is
+        unreachable from a ``try/except`` around our ``stop_socket`` call; the
+        loop's exception handler is the only interception point. Only the
+        specific library teardown ``KeyError`` (one raised by the
+        ``while self._socket_running[path]`` subscript in python-binance's
+        ``threaded_stream.start_listener``) is downgraded to DEBUG — every other
+        loop exception, including a real ``KeyError`` raised by our user-data
+        callback that python-binance invokes *inside* ``start_listener``, is
+        delegated to asyncio's default handler so genuine errors keep their
+        normal ERROR visibility.
+        """
+        if self._is_socket_teardown_keyerror(context.get("exception")):
+            logger.debug(
+                "Suppressed python-binance socket-teardown KeyError(%s) on stop (#716)",
+                self._keyerror_path(context.get("exception")),
+            )
+            return
+        loop.default_exception_handler(context)
+
+    @staticmethod
+    def _is_socket_teardown_keyerror(exc: BaseException | None) -> bool:
+        """True iff ``exc`` is the library's ``start_listener`` teardown KeyError.
+
+        The teardown ``KeyError`` is raised directly by the
+        ``while self._socket_running[path]`` subscript, so its *deepest*
+        traceback frame is ``start_listener`` in python-binance's
+        ``binance/ws/threaded_stream.py``. A real ``KeyError`` raised by the
+        user-data callback (which the library invokes *inside* ``start_listener``
+        via ``callback(msg)``) has frames *below* ``start_listener`` and so is
+        NOT matched — checking only the deepest frame (plus the module path)
+        keeps a genuine live-trading failure from being silently swallowed.
+        """
+        if not isinstance(exc, KeyError):
+            return False
+        tb = exc.__traceback__
+        if tb is None:
+            return False
+        while tb.tb_next is not None:
+            tb = tb.tb_next  # Walk to the deepest (raise-site) frame.
+        code = tb.tb_frame.f_code
+        # Separator-agnostic path anchor (POSIX '/' and Windows '\\' both keep
+        # the 'binance' and 'threaded_stream.py' substrings intact).
+        filename = code.co_filename
+        return (
+            code.co_name == "start_listener"
+            and filename.endswith("threaded_stream.py")
+            and "binance" in filename
+        )
+
+    @staticmethod
+    def _keyerror_path(exc: BaseException | None) -> str:
+        """Best-effort socket path from a KeyError for diagnostic logging."""
+        if isinstance(exc, KeyError) and exc.args:
+            return str(exc.args[0])
+        return "unknown"
 
     def _socket_on_twm_loop(self, start_fn: Callable[[], Any]) -> Any:
         """Invoke a TWM ``start_*_socket`` call with the manager's own loop installed
@@ -2139,8 +2278,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 on_kline(msg)
 
             self._kline_event_received = False  # Reset until first event confirms
+            # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
+            # an attribute inside the closure.
             self._kline_socket_key = self._socket_on_twm_loop(
-                lambda: self._twm.start_kline_socket(
+                lambda: cast(Any, self._twm).start_kline_socket(
                     callback=_kline_callback, symbol=symbol, interval=timeframe
                 )
             )
@@ -2164,23 +2305,51 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._ensure_twm()
             self._on_user_event_cb = on_user_event
 
+            # New generation: this start invalidates any in-flight callback from a
+            # prior (torn-down) socket. Capture it in the closure so this callback
+            # only counts while it remains the current generation (#717). The bump,
+            # the capture, and the _user_event_received reset (Defense A — clear the
+            # stale "healthy" flag until the first real event of THIS generation;
+            # mirrors kline at ~line 2217) are done together under the lock so a
+            # concurrent stale callback cannot interleave between them.
+            with self._user_stream_lock:
+                self._user_stream_generation += 1
+                generation = self._user_stream_generation
+                self._user_event_received = False
+
             def _user_callback(msg: dict) -> None:
                 """Route user data events, handling errors before user callback."""
-                if msg.get("e") == "error":
+                is_error = msg.get("e") == "error"
+                # Drop events from a superseded socket, and record freshness/the
+                # event flag, atomically w.r.t. the generation bump in start/stop. A
+                # python-binance read_ready callback can still fire on the shared TWM
+                # loop after stop_socket; without the lock the check-then-write could
+                # land _user_event_received=True under a newer generation and fake a
+                # recovery the watchdog acts on (#717).
+                with self._user_stream_lock:
+                    if generation != self._user_stream_generation:
+                        return
+                    if is_error:
+                        self._on_user_disconnect()
+                    else:
+                        self._last_user_event_time = datetime.now(UTC)
+                        self._user_event_received = True
+                # Forwarding + logging happen outside the lock (CODE.md: no callbacks
+                # or long-running work under a lock).
+                if is_error:
                     logger.error("User data WS error: %s", msg.get("m", "unknown"))
-                    self._on_user_disconnect()
                     return
-                self._last_user_event_time = datetime.now(UTC)
-                self._user_event_received = True
                 on_user_event(msg)
 
+            # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
+            # an attribute inside the closures.
             if self._use_margin:
                 self._user_socket_key = self._socket_on_twm_loop(
-                    lambda: self._twm.start_margin_socket(callback=_user_callback)
+                    lambda: cast(Any, self._twm).start_margin_socket(callback=_user_callback)
                 )
             else:
                 self._user_socket_key = self._socket_on_twm_loop(
-                    lambda: self._twm.start_user_socket(callback=_user_callback)
+                    lambda: cast(Any, self._twm).start_user_socket(callback=_user_callback)
                 )
             self._last_user_event_time = datetime.now(UTC)
             self._user_ws_state = WebSocketState.PRIMARY
@@ -2191,6 +2360,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     def stop_user_stream(self) -> None:
         """Stop only the user data WebSocket stream."""
+        # Invalidate the current generation FIRST (under the lock, atomically with
+        # clearing the event flag) so any callback still draining on the TWM loop
+        # during teardown is dropped and can't fake a recovery (#717).
+        with self._user_stream_lock:
+            self._user_stream_generation += 1
+            self._user_event_received = False
         if self._user_socket_key and self._twm:
             try:
                 self._twm.stop_socket(self._user_socket_key)
@@ -2198,10 +2373,15 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.error("Failed to stop user socket: %s", e)
             self._user_socket_key = None
             self._user_ws_state = WebSocketState.DISCONNECTED
-            self._user_event_received = False
 
     def stop_streams(self) -> None:
         """Stop all WebSocket streams. Recreates TWM on reconnect."""
+        # Invalidate the current user generation FIRST (before teardown), atomically
+        # with clearing the event flag under the lock, so a callback still draining
+        # on the TWM loop is dropped and can't fake a recovery during shutdown (#717).
+        with self._user_stream_lock:
+            self._user_stream_generation += 1
+            self._user_event_received = False
         if self._twm:
             twm, loop = self._twm, self._twm_loop
             twm.stop()
@@ -2221,7 +2401,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._kline_ws_state = WebSocketState.DISCONNECTED
             self._user_ws_state = WebSocketState.DISCONNECTED
             self._kline_event_received = False
-            self._user_event_received = False
+            # _user_event_received is cleared above under _user_stream_lock (atomic
+            # with the generation bump); not repeated here to keep a single locked
+            # writer of that flag (#717).
 
     @property
     def ws_state(self) -> WebSocketState:
@@ -2318,8 +2500,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 if self._kline_socket_key and self._twm:
                     self._twm.stop_socket(self._kline_socket_key)
                     self._kline_socket_key = None
+                # cast: reconnect only runs after start_kline_stream() stored these;
+                # mypy cannot prove that cross-method invariant.
                 if self.start_kline_stream(
-                    self._active_symbol, self._active_timeframe, self._on_kline_cb
+                    cast(str, self._active_symbol),
+                    cast(str, self._active_timeframe),
+                    cast(Callable[[dict], None], self._on_kline_cb),
                 ):
                     return True
             except Exception as e:
@@ -2368,6 +2554,63 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.info("Retrying user stream reconnect in %ds...", backoff)
                 time.sleep(backoff)
         return False
+
+    def hard_reconnect_user(self, on_user_event: Callable[[dict], None] | None = None) -> bool:
+        """Fully rebuild the user stream on a fresh AsyncClient/ws_api socket (#723).
+
+        Unlike ``reconnect_user`` (which only ``stop_socket`` + re-subscribes over the
+        SAME shared ``client.ws_api`` object), this tears the whole TWM down via
+        ``stop_streams`` — which calls ``AsyncClient.close_connection`` and drops
+        ``ws_api`` — then ``_ensure_twm`` builds a NEW ``ThreadedWebsocketManager`` →
+        new ``AsyncClient`` → brand-new ``WebsocketAPI`` (empty subscription/route map,
+        fresh read loop, fresh TCP socket), and ``start_user_stream`` subscribes over
+        it. This is the margin analogue of what makes the kline stream recover (a
+        genuinely fresh socket), and the only supported-library way to escape an
+        object-level-degraded ws_api the in-place re-subscribe can't restore (#616 M1).
+
+        Gated OFF by default behind ``FEATURE_WS_USER_HARD_RECONNECT`` at the call site
+        (the engine), so this method only runs when deliberately enabled. It does NOT
+        touch the kline stream (kline lives on a separate provider/TWM) and CANNOT
+        sever order placement or stop-loss submission (those use the separate
+        synchronous ``self._client``, never the TWM's ``AsyncClient``).
+
+        The generation token is bumped under ``_user_stream_lock`` inside both
+        ``stop_streams`` and ``start_user_stream`` (reused as-is), so a stale callback
+        from the torn-down AsyncClient is dropped and cannot fake recovery. Like
+        ``reconnect_user``, returning True means only that a socket was *opened* — real
+        WS-primary recovery is still gated on a confirmed event via the engine's single
+        ``_restore_user_ws_primary`` disable site, so a fire-and-forget start on a still-
+        broken (M2 server-side) socket cannot blackout order tracking.
+
+        Args:
+            on_user_event: Fresh callback for the rebuilt stream. If None, reuses the
+                previously stored callback.
+
+        Returns:
+            True if the stream was restarted, False otherwise.
+        """
+        callback = on_user_event or self._on_user_event_cb
+        if not callback:
+            return False
+        try:
+            # Full teardown: closes the AsyncClient (ws_api=None) and the TWM loop. The
+            # user generation is bumped under the lock here, invalidating any in-flight
+            # callback from the old socket before the new one is built.
+            self.stop_streams()
+        except Exception as e:
+            # A failed teardown must not be reported as a recovered stream. Leave the
+            # caller to keep REST polling on / re-mark degraded (no false PRIMARY).
+            logger.error("Hard user-stream reconnect: teardown (stop_streams) failed: %s", e)
+            return False
+        try:
+            # Rebuild the TWM → new AsyncClient → fresh ws_api, then subscribe over it.
+            # start_user_stream calls _ensure_twm internally, but call it explicitly so a
+            # rebuild failure surfaces here distinctly from a subscribe failure.
+            self._ensure_twm()
+            return self.start_user_stream(callback)
+        except Exception as e:
+            logger.error("Hard user-stream reconnect: rebuild/start failed: %s", e)
+            return False
 
 
 # Aliases for backward compatibility

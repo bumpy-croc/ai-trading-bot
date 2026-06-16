@@ -175,8 +175,9 @@ class StrategyLineageTracker:
         self.logger = logging.getLogger(__name__)
 
         # Core data structures - simple graph implementation
-        self.lineage_graph = defaultdict(list)  # Simple adjacency list for lineage relationships
-        self.graph_edges = {}  # Store edge metadata
+        # Simple adjacency list for lineage relationships
+        self.lineage_graph: defaultdict[str, list[str]] = defaultdict(list)
+        self.graph_edges: dict[str, dict[str, Any]] = {}  # Store edge metadata
         self.strategies: dict[str, dict[str, Any]] = {}  # Strategy metadata
         self.changes: dict[str, list[ChangeRecord]] = defaultdict(list)  # Changes per strategy
         self.branches: dict[str, EvolutionBranch] = {}  # Evolution branches
@@ -251,7 +252,7 @@ class StrategyLineageTracker:
         # The visited set includes strategy_id AND parent_id to guard against
         # cycles: strategy_id prevents re-enqueueing ourselves, parent_id
         # prevents backward traversal that would inflate ancestor generations.
-        propagation_queue = deque()
+        propagation_queue: deque[tuple[str, str]] = deque()
         visited_propagation: set[str] = {strategy_id}
         if parent_id and parent_id in self.strategies:
             visited_propagation.add(parent_id)
@@ -750,7 +751,7 @@ class StrategyLineageTracker:
         )
 
         # Change frequency analysis
-        change_frequency = defaultdict(int)
+        change_frequency: defaultdict[ChangeType, int] = defaultdict(int)
         for changes_list in self.changes.values():
             for change in changes_list:
                 change_frequency[change.change_type] += 1

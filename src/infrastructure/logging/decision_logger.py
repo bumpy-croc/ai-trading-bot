@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from src.database import DatabaseManager
+    from src.database.manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

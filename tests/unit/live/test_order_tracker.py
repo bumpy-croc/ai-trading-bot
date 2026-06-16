@@ -23,6 +23,7 @@ def order_tracker(mock_exchange):
     on_fill = Mock()
     on_partial_fill = Mock()
     on_cancel = Mock()
+    on_tracking_lost = Mock()
 
     tracker = OrderTracker(
         exchange=mock_exchange,
@@ -30,6 +31,7 @@ def order_tracker(mock_exchange):
         on_fill=on_fill,
         on_partial_fill=on_partial_fill,
         on_cancel=on_cancel,
+        on_tracking_lost=on_tracking_lost,
     )
     return tracker
 
@@ -422,8 +424,12 @@ class TestApiErrorHandling:
         # Assert - order force-removed after max retries
         assert order_tracker.get_tracked_count() == 0
 
-    def test_persistent_api_errors_trigger_cancel_callback(self, order_tracker, mock_exchange):
-        """Test that force-removal after API errors calls the cancel callback."""
+    def test_persistent_api_errors_trigger_tracking_lost_not_cancel(
+        self, order_tracker, mock_exchange
+    ):
+        """A polling give-up is NOT a confirmed cancel: it must fire
+        on_tracking_lost (fail-closed escalation) and never on_cancel, which
+        would delete a possibly-live position and refund its entry fee."""
         # Arrange
         mock_exchange.get_order.side_effect = Exception("Binance -1100: Illegal characters")
         order_tracker.track_order("atb_bad_id", "BTCUSDT")
@@ -432,13 +438,16 @@ class TestApiErrorHandling:
         for _ in range(MAX_API_ERROR_RETRIES):
             order_tracker._check_orders()
 
-        # Assert - cancel callback invoked with last_filled_qty=0.0
-        order_tracker.on_cancel.assert_called_once_with("atb_bad_id", "BTCUSDT", 0.0)
+        # Assert - tracking-lost fired; cancel callback NOT invoked
+        order_tracker.on_tracking_lost.assert_called_once_with(
+            "atb_bad_id", "BTCUSDT", MAX_API_ERROR_RETRIES
+        )
+        order_tracker.on_cancel.assert_not_called()
 
-    def test_persistent_api_errors_with_partial_fill_passes_filled_qty(
+    def test_persistent_api_errors_with_partial_fill_fires_tracking_lost(
         self, order_tracker, mock_exchange
     ):
-        """Test that force-removal passes cumulative filled_qty from prior partial fills."""
+        """A partial fill before the API outage doesn't make the give-up a cancel."""
         # Arrange - first poll: partial fill, then persistent errors
         partial_order = MagicMock()
         partial_order.status = OrderStatus.PARTIALLY_FILLED
@@ -459,8 +468,31 @@ class TestApiErrorHandling:
         for _ in range(MAX_API_ERROR_RETRIES):
             order_tracker._check_orders()
 
-        # Assert - cancel callback receives the partial fill qty
-        order_tracker.on_cancel.assert_called_once_with("order456", "BTCUSDT", 0.3)
+        # Assert - abandoned as state-unknown (NOT a confirmed cancel, even
+        # with a prior partial fill); on_cancel must not fire
+        order_tracker.on_tracking_lost.assert_called_once_with(
+            "order456", "BTCUSDT", MAX_API_ERROR_RETRIES
+        )
+        order_tracker.on_cancel.assert_not_called()
+        assert order_tracker.get_tracked_count() == 0
+
+    def test_persistent_none_lookups_trigger_tracking_lost_not_cancel(
+        self, order_tracker, mock_exchange
+    ):
+        """get_order returning None (swallowed errors) is also state-unknown."""
+        # Arrange
+        mock_exchange.get_order.return_value = None
+        order_tracker.track_order("order_none", "BTCUSDT")
+
+        # Act
+        for _ in range(MAX_API_ERROR_RETRIES):
+            order_tracker._check_orders()
+
+        # Assert
+        order_tracker.on_tracking_lost.assert_called_once_with(
+            "order_none", "BTCUSDT", MAX_API_ERROR_RETRIES
+        )
+        order_tracker.on_cancel.assert_not_called()
         assert order_tracker.get_tracked_count() == 0
 
     def test_api_errors_below_threshold_keep_tracking(self, order_tracker, mock_exchange):
@@ -476,14 +508,15 @@ class TestApiErrorHandling:
         # Assert - order still tracked
         assert order_tracker.get_tracked_count() == 1
         order_tracker.on_cancel.assert_not_called()
+        order_tracker.on_tracking_lost.assert_not_called()
 
-    def test_cancel_callback_failure_during_force_remove_does_not_crash(
+    def test_tracking_lost_callback_failure_during_abandon_does_not_crash(
         self, order_tracker, mock_exchange
     ):
-        """Test that a failing cancel callback during force-removal is handled gracefully."""
+        """A failing tracking-lost callback during abandonment is handled gracefully."""
         # Arrange
         mock_exchange.get_order.side_effect = Exception("API error")
-        order_tracker.on_cancel.side_effect = RuntimeError("Callback bug")
+        order_tracker.on_tracking_lost.side_effect = RuntimeError("Callback bug")
         order_tracker.track_order("order_cb_fail", "BTCUSDT")
 
         # Act - exhaust retries (should not raise)

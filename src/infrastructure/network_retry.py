@@ -12,7 +12,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any, TypeVar
 
-import requests
+import requests  # type: ignore[import-untyped]  # requests ships untyped; stubs not installed
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,10 @@ def with_network_retry(
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> T:
+        # type ignore: the final loop iteration always returns or re-raises
+        # (both `continue` branches are guarded by `attempt < max_retries`),
+        # so the implicit-None fall-through mypy flags is unreachable.
+        def wrapper(*args: Any, **kwargs: Any) -> T:  # type: ignore[return-value]
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
@@ -204,7 +207,8 @@ def _calculate_delay(
     # Add jitter (±25% randomization to prevent thundering herd)
     if jitter:
         jitter_range = delay * 0.25
-        delay = delay + random.uniform(-jitter_range, jitter_range)
+        # Non-cryptographic backoff jitter — `random` is appropriate here.
+        delay = delay + random.uniform(-jitter_range, jitter_range)  # nosec B311
         delay = max(0.1, delay)  # Ensure minimum delay
 
     return delay

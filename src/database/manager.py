@@ -9,15 +9,16 @@ import math
 import os
 from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from enum import Enum
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import sqlalchemy as sa
-from sqlalchemy import and_, create_engine, text  # type: ignore
-from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # type: ignore
-from sqlalchemy.orm import Session, sessionmaker  # type: ignore
-from sqlalchemy.pool import QueuePool  # type: ignore
+from sqlalchemy import and_, create_engine, text
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import QueuePool
 
 from src.config.config_manager import get_config
 
@@ -47,6 +48,9 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+# Database enum type for _normalize_db_enum
+_DbEnumT = TypeVar("_DbEnumT", bound=Enum)
+
 
 # Query timeout categories for differentiated timeout handling
 class QueryTimeout:
@@ -65,14 +69,24 @@ MAX_PROFIT_FACTOR = 999999.99
 
 
 def _trade_net_pnl(trade: Any) -> float:
-    """Return trade PnL net of margin interest cost.
+    """Return trade PnL net of fees: gross ``pnl`` minus ``commission`` and
+    ``margin_interest_cost``.
 
-    Handles float, int, and Decimal types from SQLAlchemy Numeric columns.
-    Gracefully returns gross PnL when margin_interest_cost is missing or invalid.
+    ``trade.pnl`` is stored GROSS (price movement only), so true net P&L must
+    subtract both the round-trip commission (USD) and any margin borrow interest.
+    This matches the actual account balance, which had both deducted — so balance
+    reconstruction (``recover_last_balance``) and performance metrics stay accurate.
+    Historical rows predating commission persistence carry ``commission = 0`` and are
+    therefore unaffected.
+
+    Handles float, int, and Decimal types from SQLAlchemy Numeric columns, and
+    gracefully treats a missing/invalid commission or interest as 0.0.
     """
-    raw = getattr(trade, "margin_interest_cost", None)
-    interest = float(raw) if isinstance(raw, (int, float, Decimal)) else 0.0
-    return float(trade.pnl) - interest
+    raw_interest = getattr(trade, "margin_interest_cost", None)
+    interest = float(raw_interest) if isinstance(raw_interest, int | float | Decimal) else 0.0
+    raw_commission = getattr(trade, "commission", None)
+    commission = float(raw_commission) if isinstance(raw_commission, int | float | Decimal) else 0.0
+    return float(trade.pnl) - interest - commission
 
 
 # Connection pool configuration constants.
@@ -82,11 +96,12 @@ MAX_OVERFLOW = 20  # Burst capacity above pool_size for peak load
 
 
 if TYPE_CHECKING:  # pragma: no cover
-    # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
-    # Import only for static analysis; guarded to avoid hard runtime dependency.
-    from sqlalchemy.engine import Result as _Result  # type: ignore
+    # Import engine types only for static analysis; guarded to avoid any
+    # runtime import coupling.
+    from sqlalchemy.engine import CursorResult as _CursorResult
+    from sqlalchemy.engine import Result as _Result
     from sqlalchemy.engine.base import Connection as _Connection
-    from sqlalchemy.engine.base import Engine as _Engine  # type: ignore
+    from sqlalchemy.engine.base import Engine as _Engine
 
 
 class DatabaseManager:
@@ -111,7 +126,7 @@ class DatabaseManager:
         """
         self.database_url = database_url
         self.engine: _Engine | None = None
-        self.session_factory = None
+        self.session_factory: sessionmaker[Session] | None = None
         self._current_session_id: int | None = None
         self._is_postgres: bool = False  # Set during _init_database
 
@@ -209,7 +224,7 @@ class DatabaseManager:
 
         # Helper for creating a SQLite engine config
         def _sqlite_engine_config(url: str) -> tuple[str, dict[str, Any]]:
-            from sqlalchemy.pool import StaticPool  # type: ignore
+            from sqlalchemy.pool import StaticPool
 
             engine_kwargs: dict[str, Any] = {
                 "pool_pre_ping": True,
@@ -423,11 +438,12 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def check_pool_health(self) -> dict[str, int]:
+    def check_pool_health(self) -> dict[str, int] | dict[str, str]:
         """Check database connection pool health and warn if near exhaustion.
 
         Returns:
             Dictionary with pool statistics (size, checked_out, overflow, etc.)
+            or a string diagnostic when pool metrics are unavailable.
 
         Note:
             Only works with QueuePool (PostgreSQL). StaticPool (SQLite) doesn't
@@ -443,11 +459,17 @@ class DatabaseManager:
         if not hasattr(pool, "size") or not hasattr(pool, "checkedout"):
             return {"skipped": "Pool type does not support health checks"}
 
+        # Past the guard only QueuePool (the PostgreSQL engine config) remains, but
+        # the base Pool stubs lack overflow(); cast for static analysis only.
+        queue_pool = cast(QueuePool, pool)
+
         stats = {
             "size": pool.size(),
             "checked_out": pool.checkedout(),
-            "overflow": pool.overflow(),
-            "total_available": pool.size() - pool.checkedout() + (MAX_OVERFLOW - pool.overflow()),
+            "overflow": queue_pool.overflow(),
+            "total_available": pool.size()
+            - pool.checkedout()
+            + (MAX_OVERFLOW - queue_pool.overflow()),
         }
 
         # Warn if pool is >80% utilized (high contention risk)
@@ -486,20 +508,21 @@ class DatabaseManager:
         Returns:
             Dictionary with database connection details
         """
+        if self.engine is None:
+            raise ValueError("Database engine not initialized")
+        # Bind to a local so the closure below sees the narrowed non-None engine.
+        engine = self.engine
 
         def _get_pool_attr(*names, default=0):
             try:
                 for nm in names:
-                    if hasattr(self.engine.pool, nm):
-                        val = getattr(self.engine.pool, nm)
+                    if hasattr(engine.pool, nm):
+                        val = getattr(engine.pool, nm)
                         return val() if callable(val) else val
             except Exception as e:
                 logger.debug(f"Failed to get pool attribute {nm}: {e}")
                 pass
             return default
-
-        if self.engine is None:
-            raise ValueError("Database engine not initialized")
 
         try:
             # Support multiple attribute name variants across SQLAlchemy/mocks
@@ -668,7 +691,7 @@ class DatabaseManager:
 
                 if account_history:
                     peak_balance = trading_session.initial_balance
-                    max_drawdown = 0
+                    max_drawdown: float = 0
 
                     for record in account_history:
                         if record.balance > peak_balance:
@@ -698,6 +721,22 @@ class DatabaseManager:
             )
 
             logger.info(f"Ended trading session #{session_id}")
+
+    @staticmethod
+    def _normalize_db_enum(value: str | Enum, enum_cls: type[_DbEnumT]) -> _DbEnumT:
+        """Normalize a string or foreign-enum value onto a database enum.
+
+        Engines pass their own enums (e.g. ``engines/shared`` ``PositionSide``)
+        whose members never compare equal to the database enums — values are
+        therefore matched by their string value, case-insensitively (#758).
+
+        Raises:
+            KeyError: If the value does not name a member of ``enum_cls``.
+        """
+        if isinstance(value, enum_cls):
+            return value
+        raw = str(value.value) if isinstance(value, Enum) else value
+        return enum_cls[raw.upper()]
 
     def log_trade(
         self,
@@ -780,22 +819,24 @@ class DatabaseManager:
 
         # Use WRITE timeout - trade logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
-            # Convert string enums if necessary
-            if isinstance(side, str):
-                side = PositionSide[side.upper()]
-            if isinstance(source, str):
-                source = TradeSource[source.upper()]
+            # Normalize sides/sources to the DATABASE enums (fresh locals, no
+            # argument reassignment). Engines pass their own PositionSide
+            # (engines/shared), and cross-enum equality is always False — that
+            # misclassified every long backtest trade onto the short
+            # pnl_percent formula (#758).
+            db_side = self._normalize_db_enum(side, PositionSide)
+            db_source = self._normalize_db_enum(source, TradeSource)
 
             # Calculate percentage P&L (entry_price validated positive above)
-            if side == PositionSide.LONG:
+            if db_side == PositionSide.LONG:
                 pnl_percent = ((exit_price - entry_price) / entry_price) * 100
             else:
                 pnl_percent = ((entry_price - exit_price) / entry_price) * 100
 
             trade = Trade(
                 symbol=symbol,
-                side=side,
-                source=source,
+                side=db_side,
+                source=db_source,
                 entry_price=entry_price,
                 exit_price=exit_price,
                 size=size,
@@ -876,7 +917,7 @@ class DatabaseManager:
                 raise
 
             logger.info(
-                f"Logged trade #{trade.id}: {symbol} {side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
+                f"Logged trade #{trade.id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
             )
 
             # Update performance metrics - handle None session_id
@@ -1342,8 +1383,11 @@ class DatabaseManager:
                 )
                 raise
 
+            # session.execute() on a textual UPDATE returns a CursorResult at runtime;
+            # the TextClause overload in the stubs types it as Result, which lacks
+            # rowcount. Cast for static analysis only.
             fixes_applied = {
-                "orphaned_to_closed": result_orphaned.rowcount,
+                "orphaned_to_closed": cast("_CursorResult[Any]", result_orphaned).rowcount,
             }
 
             if fixes_applied["orphaned_to_closed"] > 0:
@@ -1613,9 +1657,9 @@ class DatabaseManager:
         def _sanitize_scalar(val):
             import numpy as np
 
-            if isinstance(val, (np.integer,)):
+            if isinstance(val, np.integer):
                 return int(val)
-            elif isinstance(val, (np.floating,)):
+            elif isinstance(val, np.floating):
                 return float(val)
             elif hasattr(val, "item") and callable(val.item):
                 return val.item()
@@ -1760,6 +1804,9 @@ class DatabaseManager:
                         # * Include exchange order IDs for live trading recovery
                         "entry_order_id": getattr(p, "entry_order_id", None),
                         "stop_loss_order_id": getattr(p, "stop_loss_order_id", None),
+                        # Idempotency key; recovery paths (engine and tracker)
+                        # hydrate LivePosition.client_order_id from this.
+                        "client_order_id": getattr(p, "client_order_id", None),
                     }
                 )
 
@@ -2029,7 +2076,7 @@ class DatabaseManager:
 
             # Some unit tests mock the session and return a MagicMock instead of
             # a list.  Gracefully degrade when the result is not list-like.
-            if not isinstance(account_history, (list, tuple)):
+            if not isinstance(account_history, list | tuple):
                 account_history = []
 
             max_drawdown = 0.0
@@ -2168,7 +2215,7 @@ class DatabaseManager:
 
             logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
 
-    def execute_query(self, query: str, params: tuple | None = None) -> list[dict[str, Any]]:  # type: ignore[override]
+    def execute_query(self, query: str, params: tuple | None = None) -> list[dict[str, Any]]:
         """Run a raw SQL query and return list of dict rows.
 
         Uses SQLAlchemy 2.x ``exec_driver_sql`` API so plain SQL strings work
@@ -2181,26 +2228,26 @@ class DatabaseManager:
             return []
 
         # Local import to avoid top-level circular dependencies and keep stubs optional
-        from sqlalchemy import text as _sql_text  # type: ignore
+        from sqlalchemy import text as _sql_text
 
-        engine_typed: _Engine = self.engine  # type: ignore[assignment]
+        engine_typed: _Engine = self.engine
         connection_raw = engine_typed.connect()
-        conn: _Connection = connection_raw  # type: ignore[assignment]
+        conn: _Connection = connection_raw
 
         try:
             with conn as connection:
                 # Prefer SQLAlchemy 2.x driver-level exec
                 try:
-                    result: _Result = connection.exec_driver_sql(query, params)  # type: ignore[arg-type]
+                    result: _Result = connection.exec_driver_sql(query, params)
                 except AttributeError:
                     # Fallback for <1.4
-                    result = connection.execute(_sql_text(query), params)  # type: ignore[arg-type]
+                    result = connection.execute(_sql_text(query), params)
 
                 # Map rows to plain dictionaries
                 try:
-                    rows: list[dict[str, Any]] = [dict(row) for row in result.mappings()]  # type: ignore[attr-defined]
+                    rows: list[dict[str, Any]] = [dict(row) for row in result.mappings()]
                 except AttributeError:
-                    rows = [dict(row.items()) for row in result]  # type: ignore[attr-defined]
+                    rows = [dict(row.items()) for row in result]
                 return rows
         except SQLAlchemyError as exc:
             logger.error(f"Raw query error: {exc}")
@@ -2242,6 +2289,65 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to update balance: {e}")
             return False
+
+    def get_first_snapshot_of_day(
+        self,
+        session_id: int | None = None,
+        target_date: date | None = None,
+        fallback_session_id: int | None = None,
+    ) -> AccountHistory | None:
+        """Get the earliest account snapshot of a UTC calendar day for a session.
+
+        Used by the live event logger to recover the day-start balance after a
+        restart, so daily P&L remains anchored to the day's first snapshot
+        rather than the restart-time balance.
+
+        Day semantics are UTC: snapshots are written with ``datetime.now(UTC)``
+        timestamps, so the day window is ``[00:00 UTC, 24:00 UTC)`` of
+        ``target_date``.
+
+        Args:
+            session_id: Trading session ID (defaults to the current session).
+            target_date: UTC calendar date (defaults to today in UTC).
+            fallback_session_id: Prior session whose snapshots also count. A
+                clean restart creates a NEW session while the day's earlier
+                snapshots live under the recovered inactive session — without
+                this the primary use case (restart continuity) finds nothing.
+
+        Returns:
+            The day's earliest ``AccountHistory`` row across the session(s),
+            or None when no snapshot exists that day.
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return None
+
+        if target_date is None:
+            target_date = datetime.now(UTC).date()
+
+        day_start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=UTC)
+        day_end = day_start + timedelta(days=1)
+
+        session_ids = [session_id]
+        if fallback_session_id is not None and fallback_session_id != session_id:
+            session_ids.append(fallback_session_id)
+
+        # Use ANALYTICS timeout - day-start recovery is a non-critical read
+        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
+            snapshot = (
+                session.query(AccountHistory)
+                .filter(
+                    AccountHistory.session_id.in_(session_ids),
+                    AccountHistory.timestamp >= day_start,
+                    AccountHistory.timestamp < day_end,
+                )
+                .order_by(AccountHistory.timestamp.asc())
+                .first()
+            )
+            if snapshot is not None:
+                # Detach so attributes stay readable after the session closes.
+                session.expunge(snapshot)
+            return snapshot
 
     def get_balance_history(self, session_id: int | None = None, limit: int = 100) -> list[dict]:
         """Get balance change history"""
@@ -2813,9 +2919,9 @@ class DatabaseManager:
             if math.isnan(obj) or math.isinf(obj):
                 return None
             return obj
-        elif isinstance(obj, (np.integer,)):
+        elif isinstance(obj, np.integer):
             return int(obj)
-        elif isinstance(obj, (np.floating,)):
+        elif isinstance(obj, np.floating):
             val = float(obj)
             # Check for NaN/Inf after converting numpy float to Python float
             if math.isnan(val) or math.isinf(val):
@@ -3785,7 +3891,9 @@ class DatabaseManager:
                 ),
                 {"now": now, "sid": session_id, "cutoff": cutoff},
             )
-            failed = int(result.rowcount or 0)
+            # Textual UPDATE returns a CursorResult at runtime; the stubs type it as
+            # Result, which lacks rowcount. Cast for static analysis only.
+            failed = int(cast("_CursorResult[Any]", result).rowcount or 0)
             session.commit()
         if failed:
             logger.info(

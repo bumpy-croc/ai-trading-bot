@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
@@ -24,10 +24,8 @@ from src.config.constants import (
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import ActiveTrade
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
-from src.engines.shared.entry_utils import (
-    extract_entry_plan,
-    resolve_stop_loss_take_profit_pct,
-)
+from src.engines.shared.entry_utils import resolve_stop_loss_take_profit_pct
+from src.engines.shared.execution.entry_handler_mixin import SharedEntryHandlerMixin
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -42,6 +40,7 @@ from src.utils.price_targets import PriceTargetCalculator
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
     from src.engines.backtest.execution.position_tracker import PositionTracker
+    from src.engines.shared.entry_utils import StopLossStrategyLike
     from src.position_management.dynamic_risk import DynamicRiskManager
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
@@ -79,14 +78,14 @@ class EntryExecutionResult:
     reasons: list[str] | None = None
 
 
-class EntryHandler:
+class EntryHandler(SharedEntryHandlerMixin):
     """Processes entry signals and coordinates entry execution.
 
     This class encapsulates entry-related logic including:
     - Runtime entry signal processing
     - Position sizing with risk adjustments
     - Correlation control
-    - Dynamic risk adjustments
+    - Dynamic risk adjustments (shared with live via SharedEntryHandlerMixin)
     - Stop loss and take profit calculation
     """
 
@@ -529,11 +528,12 @@ class EntryHandler:
             # Open position in tracker
             self.position_tracker.open_position(result.trade)
 
-            # Update risk manager
+            # Update risk manager (update_position validates string sides,
+            # so the PositionSide enum must be converted)
             try:
                 self.risk_manager.update_position(
                     symbol=symbol,
-                    side=result.trade.side,
+                    side=to_side_string(result.trade.side),
                     size=result.trade.size,
                     entry_price=result.trade.entry_price,
                 )
@@ -550,25 +550,6 @@ class EntryHandler:
             slippage_cost=result.slippage_cost,
             executed=result.executed,
         )
-
-    def _extract_entry_plan(
-        self,
-        decision: Any,
-        balance: float,
-    ) -> tuple[PositionSide | None, float]:
-        """Extract entry side and size from runtime decision.
-
-        Args:
-            decision: Runtime decision from strategy.
-            balance: Current account balance.
-
-        Returns:
-            Tuple of (side, size_fraction).
-        """
-        plan = extract_entry_plan(decision, balance)
-        if plan is None:
-            return None, 0.0
-        return plan.side, plan.size_fraction
 
     def _calculate_sl_tp_pct(
         self,
@@ -594,51 +575,13 @@ class EntryHandler:
             current_price=current_price,
             entry_side=entry_side,
             runtime_decision=runtime_decision,
-            component_strategy=self.component_strategy,
+            # cast: Strategy provides take_profit_pct/get_stop_loss_price but fails
+            # the protocol on parameter naming/optionality; the resolver accesses
+            # both defensively (getattr + broad except), so this is runtime-safe.
+            component_strategy=cast("StopLossStrategyLike | None", self.component_strategy),
             default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
             default_take_profit_pct=self.default_take_profit_pct,
             min_stop_loss_pct=DEFAULT_MIN_STOP_LOSS_PCT,
             max_stop_loss_pct=DEFAULT_MAX_STOP_LOSS_PCT,
             use_strategy_take_profit=True,
         )
-
-    def _apply_dynamic_risk(
-        self,
-        original_size: float,
-        current_time: datetime,
-        balance: float,
-        peak_balance: float,
-        trading_session_id: int | None,
-    ) -> float:
-        """Apply dynamic risk adjustments to position size.
-
-        Delegates to shared DynamicRiskHandler for consistent logic
-        between backtest and live engines.
-
-        Args:
-            original_size: Original position size fraction.
-            current_time: Current timestamp.
-            balance: Current account balance.
-            peak_balance: Peak account balance.
-            trading_session_id: Session ID for logging.
-
-        Returns:
-            Adjusted position size fraction.
-        """
-        # Update handler's manager in case it changed
-        self._dynamic_risk_handler.set_manager(self.dynamic_risk_manager)
-        return self._dynamic_risk_handler.apply_dynamic_risk(
-            original_size=original_size,
-            current_time=current_time,
-            balance=balance,
-            peak_balance=peak_balance,
-            trading_session_id=trading_session_id,
-        )
-
-    def get_dynamic_risk_adjustments(self) -> list[dict]:
-        """Get and clear dynamic risk adjustments tracked by this handler.
-
-        Returns:
-            List of dynamic risk adjustment records.
-        """
-        return self._dynamic_risk_handler.get_adjustments(clear=True)

@@ -1,7 +1,7 @@
 """Session management tests for DatabaseManager."""
 
-from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock, call, patch
+from datetime import UTC, datetime
+from unittest.mock import Mock, patch
 
 import pytest
 

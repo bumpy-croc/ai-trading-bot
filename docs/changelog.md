@@ -11,7 +11,550 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `LiveTradingEngine.start()` bootstrap sequence extracted into a new
+  `LiveStartupSequencer` (`engines/live/startup.py`, #486 follow-up): the public
+  `start()` is now a thin delegator to `LiveStartupSequencer.run()`, and the
+  seven bootstrap phase helpers (session recover/create + wiring, #668
+  open-position carry-forward, #657 self-heal, account sync, runtime services,
+  main-loop launch) move verbatim behind an engine-backref `Protocol`
+  (mechanical `self.` → `state.`). The capital-critical startup ordering and the
+  public `start()` signature are preserved exactly. Adds a direct
+  `LiveStartupSequencer` unit test file. Pure refactor — backtest determinism
+  fingerprint byte-identical. (#486)
+- Legacy duck-typed short-entry path moved off `LiveTradingEngine` into
+  `LiveEntryCoordinator.process_legacy_short_entry` (#486 follow-up): the
+  ~100-line `_process_legacy_short_entry` body is now a verbatim coordinator
+  method (mechanical `self.` → `state.`, with the entry execution routed through
+  the coordinator's own `execute_entry`); the trading loop calls the coordinator
+  directly (the engine wrapper was removed — no test-mock seam or other caller).
+  Hardens a carried-over bare `except Exception` around `get_risk_overrides()` to
+  log at WARNING (was a silent swallow on a live short-entry path). Adds seven
+  direct `LiveEntryCoordinator` unit tests for the moved path. Pure refactor —
+  backtest determinism fingerprint byte-identical. (#486)
+- Live entry/exit coordinator `Protocol` types tightened (#486 Step D): the
+  engine-state backref `Protocol`s (`LiveEntryEngineState`,
+  `LiveExitEngineState`) now declare `data_provider: DataProvider`,
+  `db_manager: DatabaseManager`, `_base_asset_locks: BaseAssetLockRegistry`, and
+  `_component_strategy: ComponentStrategy | None` (were bare `Any`), matching the
+  concrete-typing standard set by the later coordinators / `LiveSessionRecoverer`.
+  `exchange_interface` / `strategy` stay `Any` (genuinely duck-typed). Their unit
+  tests now build the mocked backref with `create_autospec(..., instance=True)`
+  instead of `MagicMock(spec=...)`, so call-signature drift on the spec'd engine
+  helpers is caught, not just attribute-name drift. Typing/test-only — no runtime
+  change; backtest determinism fingerprint byte-identical. (#486)
+- `LiveTradingEngine._trading_loop` readability: extracted the ~100-line legacy
+  duck-typed short-entry path into `_process_legacy_short_entry()` and the
+  periodic account snapshot + exchange-sync block into
+  `_log_periodic_account_state()`. Both are behavior-preserving moves (the loop
+  body shrinks ~390 → ~250 lines); the loop, its per-iteration control flow, and
+  the capital-critical error-handling/backoff block stay inline on the engine.
+  Pure refactor — backtest determinism fingerprint byte-identical. (#486)
+- `LiveTradingEngine.start()` decomposed from a ~327-line bootstrap monolith into
+  a thin ~18-line phase orchestrator that calls cohesive, single-purpose private
+  helpers (`_begin_session_runtime`, `_bootstrap_trading_session`,
+  `_carry_forward_open_positions`, `_self_heal_terminal_positions`,
+  `_synchronize_account_on_start`, `_start_runtime_services`,
+  `_run_main_loop_until_stopped`). Each block moved verbatim — the
+  capital-critical startup ordering (recover → create session → #668
+  carry-forward → #657 self-heal → account sync → runtime services → loop
+  kickoff) and the public `start()` signature are preserved exactly. Pure
+  refactor — backtest determinism fingerprint byte-identical. (#486)
+- `LiveTradingEngine.__init__` decomposed from a ~534-line monolith into a thin
+  ~110-line orchestrator that calls cohesive, single-purpose private
+  initializer helpers (`_validate_inputs`, `_resolve_settings`,
+  `_init_coordinators`, `_init_risk_manager`, `_init_risk_policies`,
+  `_init_partial_operations`, `_init_correlation`, `_init_database`,
+  `_init_dynamic_risk_manager`, `_init_exchange_interface`,
+  `_resume_balance_from_snapshot`, `_init_strategy_manager`,
+  `_seed_trading_state`, `_init_time_exit_policy`, `_install_signal_handlers`).
+  Each block moved verbatim — construction ordering, the full 35-param public
+  constructor signature, and every public attribute are preserved exactly.
+  Aligned `LiveLoopTimingEngineState.data_freshness_threshold` to `int` (was
+  `float`) so it matches the engine attribute (`MarketDataHandler` and the
+  sibling interval fields are already `int`); this latent inconsistency was
+  previously masked by mypy's same-`__init__` deferral. Pure refactor — backtest
+  determinism fingerprint byte-identical. (#486)
+- `LiveTradingEngine` dynamic-risk adjustment extracted into
+  `LiveDynamicRiskCoordinator` (`engines/live/dynamic_risk_coordinator.py`):
+  `_apply_dynamic_risk_adjustment` and `_log_dynamic_risk_adjustments` move
+  verbatim (mechanical `self.` → `state.` against an engine backref
+  `Protocol`); the engine keeps thin delegating wrappers (still called by the
+  trading loop and by `LiveEntryCoordinator` via `state._apply_dynamic_risk_adjustment`).
+  Adds direct `LiveDynamicRiskCoordinator` unit tests. Pure refactor — backtest
+  determinism fingerprint byte-identical; engine `trading_engine.py` ~2,570 →
+  ~2,490 lines. (#486)
+- `LiveTradingEngine` trading-loop timing helpers extracted into
+  `LiveLoopTimingCoordinator` (`engines/live/loop_timing.py`):
+  `_sleep_with_interrupt`, `_calculate_adaptive_interval`, and `_is_data_fresh`
+  move verbatim (mechanical `self.` → `state.` against an engine backref
+  `Protocol`); the engine keeps thin delegating wrappers (still called by the
+  trading loop, and `_is_data_fresh` by `LiveMarketDataCoordinator`). Leaf
+  helpers — no order placement or balance mutation. Pure refactor — backtest
+  determinism fingerprint byte-identical; engine `trading_engine.py` ~2,630 →
+  ~2,570 lines. (#486)
+- `LiveTradingEngine` per-candle market-data + context read path extracted into
+  `LiveMarketDataCoordinator` (`engines/live/execution/market_data_coordinator.py`):
+  `_is_context_ready`, `_get_latest_data`, `_add_sentiment_data`, and
+  `_build_correlation_context` move verbatim (mechanical `self.` → `state.`
+  against an engine backref `Protocol`); the engine keeps thin delegating
+  wrappers (still called by the trading loop and, for the correlation context,
+  by `StrategyRuntimeCoordinator`). Read-only path — no order placement or
+  balance mutation. Pure refactor — backtest determinism fingerprint
+  byte-identical; engine `trading_engine.py` ~2,880 → ~2,630 lines. (#486)
+- `LiveTradingEngine` order-fill callbacks extracted into
+  `LiveOrderFillCoordinator` (`engines/live/execution/order_fill_coordinator.py`).
+  The `OrderTracker` callbacks — `_handle_order_fill`, `_handle_partial_fill`,
+  `_handle_order_cancel` (+ its `_handle_stop_loss_cancelled` escalation), and
+  `_handle_order_tracking_lost` — move verbatim (mechanical `self.` → `state.`
+  against an engine backref `Protocol`); the engine keeps thin delegating
+  wrappers and still registers those wrappers with `OrderTracker`. These run on
+  the OrderTracker poll thread; the coordinator holds no state of its own, so
+  the single-writer / thread-safe-handoff discipline (stop-loss fills enqueued
+  on `_pending_fill_exits`, #631; atomic tracker mutations) is unchanged. Pure
+  refactor — backtest determinism fingerprint byte-identical; engine
+  `trading_engine.py` ~3,117 → ~2,880 lines. (#486)
+- `LiveTradingEngine` exit pipeline extracted into `LiveExitCoordinator`
+  (`engines/live/execution/exit_coordinator.py`), mirroring the entry
+  extraction. `_check_exit_conditions`, `_execute_exit`, and
+  `_execute_exit_locked` move verbatim (a mechanical `self.` → `state.`
+  rewrite against an engine backref `Protocol`); the engine keeps thin
+  delegating wrappers so all call sites and test mock points are unchanged.
+  `check_exit_conditions` invokes the close through the engine's
+  `_execute_exit` wrapper so existing engine-level test mocks still intercept;
+  the base-asset close lock (#703) and the resting-stop cancel-before-close
+  ordering (#710) are preserved. Pure refactor — backtest determinism
+  fingerprint byte-identical before/after; engine `trading_engine.py`
+  3,574 → ~3,130 lines. (#486)
+
 ### Fixed
+- Hardened `LiveOrderFillCoordinator` CODE.md compliance after the #486
+  order-fill extraction (issues carried over verbatim from the engine): the
+  order-fill `logger.info` uses lazy `%s` formatting (was an f-string); the
+  cancel-refund's original-quantity fallback uses an explicit
+  `quantity is not None` check instead of `or 0.0` (Position-Fields rule — a
+  legitimate `0.0` is valid state, not "unset"; behaviour-neutral here given
+  the downstream `> 0` guard); and the entry-fee-refund-failure
+  `logger.critical` now passes `exc_info=True` (balance-integrity failure
+  where the traceback matters most). Adds direct `LiveOrderFillCoordinator`
+  unit tests covering the deferred stop-loss-close queue handoff, the
+  stop-loss-cancel escalation seam, the cancel-refund full/partial/`None`-qty
+  branches, and the fail-closed tracking-lost contract. (#486 follow-up)
+- Hardened `LiveExitCoordinator` CODE.md compliance after the #486 exit
+  extraction (issues carried over verbatim from the engine): the exit-logging
+  `logger.error` calls use lazy `%s` formatting (were f-strings); the
+  position-age log reason uses `datetime.now(UTC)` instead of the deprecated
+  `datetime.utcnow()` (behaviour-preserving — both sides compared tz-naive);
+  the realized-P&L balance-failure `logger.error` now passes `exc_info=True`
+  (financial-state failure where the traceback matters most); and
+  `check_exit_conditions` / `execute_exit` / `execute_exit_locked` gained
+  `Any` annotations on `runtime_decision`/`candle` and a `-> None` return.
+  Adds direct `LiveExitCoordinator` unit tests covering the close-routing seam
+  (`state._execute_exit`), the base-asset-lock delegation, and the
+  `execute_exit_locked` early-return guards. (#486 follow-up)
+- Live entry stop-loss gate no longer silently skips a misconfigured `0.0`
+  stop. `LiveEntryCoordinator.execute_entry_locked` now keys the server-side
+  stop-loss placement on `stop_loss is not None` (was a truthy check), so a
+  `0.0` stop enters the placement path and fails there → emergency-close,
+  rather than leaving the position open and unprotected. Also hardened the
+  surrounding CODE.md issues carried over in the #486 entry extraction: the
+  stop-loss-calc and risk-override failure paths now log at WARNING (were
+  silent / `debug`), the emergency-close error log uses lazy `%s` formatting,
+  and the entry-reason `stop_loss`/`take_profit` checks use `is not None`.
+  Adds direct `LiveEntryCoordinator.execute_entry_locked` unit-test coverage
+  for the guard, tracking-failure, balance-failure, risk-failure, ambiguous,
+  and stop-loss-placement branches. (#486 follow-up)
+- Backtests are now bit-reproducible — `Backtester.run` pins BLAS/OpenMP thread
+  pools to 1 (`threadpoolctl`) for the duration of the run. Multi-threaded
+  parallel float reduction is non-associative, so its run-to-run ordering could
+  perturb a feature value enough to flip a near-threshold ML signal, changing
+  the trade count (49 vs 50 vs 51 observed on the same inputs) and breaking the
+  backtest↔live parity fingerprint that refactor work relies on. Investigation
+  ruled out ONNX inference (byte-identical within and across processes,
+  multi- and single-threaded), `PYTHONHASHSEED` (10 fixed seeds identical), and
+  the prediction cache (varied with caching disabled); the cause was BLAS thread
+  scheduling. ONNX keeps its own (deterministic) thread pool, so inference stays
+  multi-threaded — measured backtest wall-time is neutral-to-faster, since
+  pinning also avoids thread oversubscription across concurrent backtest
+  processes. A new `tests/integration/parity/test_backtest_determinism.py`
+  guards the guarantee. (#486 parity work)
+
+### Changed
+- Entry decision + execution pipeline extracted from `LiveTradingEngine` into
+  `src/engines/live/execution/entry_coordinator.py` (`LiveEntryCoordinator`,
+  #486): `check_entry_conditions` (signal/sizing/SL-TP derivation) and the
+  base-asset-locked `execute_entry` → `execute_entry_locked` order path
+  (duplicate/limit guards, balance + fee accounting, position tracking, risk
+  re-registration, server-side stop-loss placement, and the emergency-close
+  fallbacks). This is a real-money path, so the move is verbatim — the methods
+  are unchanged except for `self.`→`state.` against an engine backref; the
+  base-asset locking and ordering (#703) are preserved. The two engine methods
+  callers mock (`_execute_exit`, `_record_event`) are invoked through the
+  backref so test mocks still intercept. The engine keeps thin delegating
+  wrappers, dropping ~620 lines (to ~3,575). The deterministic backtest↔live
+  parity fingerprint is byte-identical before and after the extraction.
+- WebSocket stream-health subsystem extracted from `LiveTradingEngine` into
+  `src/engines/live/ws_health.py` (`WebSocketHealthMonitor`, #486): WS stream
+  startup, the background health-monitor thread and its loop, kline/user-stream
+  staleness detection, reconnect/probe decisions, degraded-user hard-reconnect +
+  primary restore, and draining the order-fill exit queue on the trading-loop
+  thread. The lock-free single-writer threading model is preserved byte-for-byte
+  — the daemon-thread handle, the reconnect-failure counters, the
+  `_ws_kline_active` flag, and the thread-safe `_pending_fill_exits` queue all
+  stay on the engine and are accessed by the monitor via a narrow `Protocol`
+  backref, so the single writer (the health thread) and the single reader (the
+  trading loop) are unchanged. The engine keeps thin delegating wrappers so the
+  loop call sites and all test mock points are unchanged; the three test-mocked
+  sibling calls route back through the engine wrappers. The deterministic
+  backtest↔live parity fingerprint is byte-identical before and after the
+  extraction.
+- Strategy hot-swap / model-update lifecycle extracted from `LiveTradingEngine`
+  into `src/engines/live/strategy_hot_swap.py` (`StrategyHotSwapCoordinator`,
+  #486): the public `hot_swap_strategy` / `update_model` entry points, the
+  `StrategyManager` callbacks, the loop-applied `_apply_pending_strategy_update`,
+  and the post-swap refresh of all strategy-derived engine state (trailing-stop
+  / partial-operations / time-exit policies, component risk re-binding,
+  correlation-handler strategy reference). The engine keeps thin delegating
+  wrappers so the public API, the `__init__` callback registrations, the
+  trading-loop call site, and test mock points are unchanged. The coordinator
+  reads/writes engine state at call time via a narrow `Protocol`; all mutation
+  runs on the single trading-loop thread (the entry points/callbacks only queue
+  a `StrategyManager`-locked pending update), so the lock-free design is
+  preserved. Pure refactor (live-engine only; no backtest/shared code touched);
+  full unit suite incl. the hot-swap behavior tests stays green. Engine: 5,107
+  → 4,790 lines.
+- Strategy-runtime coordination extracted from `LiveTradingEngine` into
+  `src/engines/live/strategy_runtime.py` (`StrategyRuntimeCoordinator`, #486):
+  strategy normalization (`_configure_strategy`), the component risk-context
+  provider (correlation hydration), runtime dataframe prep, `RuntimeContext`
+  construction from live positions, per-candle runtime decision processing, and
+  the construction-time risk-parameter merge/clone helpers. The engine keeps
+  thin delegating wrappers so all call sites and test mock points are unchanged;
+  the coordinator reads/writes the engine's strategy-runtime state at call time
+  via a narrow `Protocol`, all on the single trading-loop thread. Pure refactor
+  (no behavior change): full unit suite, parity suite, and the deterministic
+  backtest fingerprint are byte-identical before/after. Engine: 5,383 → 5,105
+  lines.
+- `LiveTradingEngine` construction-time settings resolution (feature flags /
+  env / app config) moved to `src/engines/live/config.py`
+  (`LiveEngineSettings`, #486 step d): the #734 `live_partial_operations`
+  gate, the `FEATURE_ENABLE_REGIME_DETECTION` env flag, and the
+  `EXECUTION_FILL_POLICY` fill-policy read. `runner.py` resolves and injects
+  settings explicitly; the engine self-resolves when not injected (using its
+  module-level lookups so existing test patch points keep working).
+  Runtime-dynamic flag reads (`ws_user_hard_reconnect`, hot-swap partial-ops
+  re-check, heartbeat steps) intentionally stay runtime.
+- Live trading engine refactor, steps 1–3 of #486 (pure refactor, no behavior
+  change; verified by the full unit suite, the parity suite, and a
+  deterministic backtest fingerprint that is byte-identical before/after):
+  - Exchange-facing stop-loss lifecycle (placement with retry, cancellation,
+    fill/held-inventory queries, re-protection, offline-fill detection for the
+    legacy reconciliation fallback) moved from `LiveTradingEngine` into
+    `src/engines/live/execution/stop_loss_manager.py` (`LiveStopLossManager`).
+    The engine no longer calls `place_stop_loss_order`, `cancel_order`,
+    `get_open_orders`, or `get_order` directly — it orchestrates via thin
+    delegating wrappers.
+  - Account monitoring glue (balance/equity snapshots, status lines,
+    performance summaries, dataframe extraction helpers) moved to
+    `src/engines/live/monitoring/` (`LiveAccountMonitor`).
+  - Session/crash-recovery startup sequence (balance recovery, persisted
+    position reload with stale-OPEN self-healing, risk-manager
+    re-registration, startup exchange reconciliation incl. the legacy
+    SL-based fallback) moved to `src/engines/live/recovery.py`
+    (`LiveSessionRecoverer`). Close-accounting helpers shared by the exit and
+    recovery paths moved to `src/engines/live/trade_close_accounting.py`
+    (re-exported from `trading_engine`). Engine across all four extractions:
+    6,558 → 5,368 lines.
+  - The three byte-identical entry-handler methods (`_extract_entry_plan`,
+    `_apply_dynamic_risk`, `get_dynamic_risk_adjustments`) now live once in
+    `src/engines/shared/execution/entry_handler_mixin.py`
+    (`SharedEntryHandlerMixin`), inherited by both the backtest and live
+    entry handlers so this slice of backtest-live parity holds by
+    construction. Divergent orchestration (`process_runtime_decision`,
+    `execute_entry`, exit checks) is intentionally left engine-specific.
+
+### Fixed
+- Backtest risk tracking now covers next-bar (pending) entries (#757):
+  the post-fill `RiskManager.update_position` call passed the `PositionSide`
+  enum, whose string validation (`side in VALID_SIDES`) raised `ValueError`
+  on every call — swallowed with a warning — so `daily_risk_used` and
+  position tracking for correlation control silently omitted every pending
+  entry. Backtests could take position sequences a correctly-accounted run
+  would have rejected. The side now converts via `to_side_string`, like the
+  immediate-entry path.
+- Live daily P&L survives restarts now (#766): day-start balance recovery
+  queried `DatabaseManager.get_first_snapshot_of_day`, which was never
+  implemented (`AttributeError` swallowed as a "graceful fallback"), and the
+  recovery helper itself was never invoked — so every intraday restart reset
+  the daily P&L baseline to the restart-time balance. The method now exists
+  (earliest `account_history` row of the UTC day for the session) and is
+  wired into the first snapshot after engine start. Trading-day semantics are
+  explicitly UTC throughout the event logger (was local `date.today()`,
+  skewing day boundaries on non-UTC hosts).
+- Backtest trades persist the correct `pnl_percent` for longs (#758):
+  the backtest event logger passed the engines' `PositionSide` enum into
+  `log_trade`, which compares against the **database** `PositionSide` —
+  cross-enum equality is always False, so every long backtest trade was
+  stored with the short formula (sign-flipped). `log_trade` now normalizes
+  any Enum side/source by value before classification (hardens all callers)
+  and the backtest call site converts via `to_side_string`.
+- Correlation control no longer silently drops peer symbols (#759): the
+  no-window fallback omitted the required `start` argument, so every call
+  raised `TypeError` (swallowed) and the peer vanished from correlated-
+  exposure accounting in BOTH engines. A failed window computation now falls
+  back to the default correlation window; when no time window is derivable
+  at all (non-datetime index), peers are skipped with an explicit WARNING
+  instead of fabricating a wall-clock window (backtest lookahead).
+- Backtest strategies can finally see their open position (#756):
+  `_build_runtime_context` passed the `PositionSide` enum into
+  `ComponentPosition`, whose validation expects "long"/"short" strings, so
+  construction raised `ValueError` on every candle (swallowed) and component
+  strategies always received `current_positions=None` — while live populated
+  it correctly. Position-aware logic (pyramiding guards, exposure checks) was
+  silently inert in backtests. The side now converts via `to_side_string`,
+  exactly like live.
+- CoinbaseProvider no longer submits every order as MARKET (#762):
+  `_convert_to_cb_type` was keyed by lowercase strings while `OrderType`
+  enum values are uppercase, so the lookup always fell back to "market" —
+  limit orders lost price protection and stop orders fired immediately.
+  Mapping is now enum-keyed, unknown types raise instead of defaulting to
+  the most dangerous order type, and GTD time_in_force is rejected before
+  the API call (it requires an end_time this client cannot send).
+- `LivePositionTracker.recover_positions` actually recovers positions now
+  (#764): it called `DatabaseManager.get_open_positions`, a method that does
+  not exist, so the swallowed `AttributeError` made it always return `[]` —
+  a silent fail-open trap for any future recovery caller. It now maps the
+  dict rows from the real `get_active_positions` API with the same
+  normalization and hydration as the engine's `_recover_active_positions`
+  (uppercase DB side, tracker key fallback to row id, partial-op state,
+  reconciliation ids), skips invalid-entry-price rows with a CRITICAL log,
+  and isolates per-row failures.
+- `TradeProtocol` members are now read-only properties (#767), so concrete
+  trade classes with narrower types (non-Optional datetimes, `PositionSide`
+  enum side) conform structurally — the three `cast("TradeProtocol", ...)`
+  workarounds at the engines' `record_trade` call sites are gone. The `side`
+  member is honestly typed `str | Enum | None` (record_trade stringifies it).
+- Backtest trailing-stop updates no longer crash the run when trailing
+  activates without a stop improvement (#761): `TrailingStopManager.update`
+  legitimately returns `updated=True, new_stop_price=None` (e.g. ATR
+  unavailable on the activation candle), and the backtest tracker compared
+  that `None` against the current stop (`TypeError`, unwrapped). The tracker
+  now mirrors the live tracker: flag updates apply, price comparison skipped.
+- `build_time_exit_policy` (engines/shared) can now actually build a policy
+  (#760): it passed `exit_time`/`exit_days` kwargs that `TimeExitPolicy` does
+  not accept, so it always raised `TypeError` internally and returned `None`.
+  It now maps the same `time_exits` config shape as both engines' builders
+  (max holding, end-of-day/weekend flat, timezone, restrictions) and honors
+  both `params.time_exits` and the legacy `params.max_holding_hours` fallback.
+- `StrategyManager.update_model` with no strategy loaded now fails with the
+  intended descriptive `ValueError` (#765) instead of an `AttributeError`
+  raised while formatting the error message itself (`self.current_strategy.name`
+  on `None`), which surfaced as a misleading generic failed update.
+- `atb data populate-dummy` works again (#763): `log_trade` was called with the
+  nonexistent `order_id` kwarg (the parameter is `exit_order_id`), so the first
+  generated trade raised `TypeError` and the command always failed. Same bug
+  class as #732; an autospec'd regression test now enforces the real signature.
+- A REJECTED stop-loss is now re-placed and an unexpected stop-loss
+  termination escalates (#741). The reconciler's re-placement branches
+  (periodic loop and startup `_verify_stop_loss`) matched only
+  CANCELLED/EXPIRED/missing, so a triggered STOP_LOSS_LIMIT whose limit
+  leg was rejected by margin checks (-2010 class) fell through every
+  cycle — position permanently unprotected, no escalation. Both branches
+  now treat REJECTED as terminal. The engine's `_handle_order_cancel`
+  also no longer ignores stop-loss order ids: when a tracked position's
+  stop terminates unexpectedly it clears the stale id (so the
+  reconciler's missing-stop path re-protects next cycle), logs CRITICAL,
+  and emits a `system_events` row (`STOP_LOSS_CANCELLED`) with webhook
+  alert. Deliberate close-path cancels are unaffected (they stop
+  tracking the order before the callback can fire).
+- Repo-wide static-analysis debt cleared — `atb dev quality` (black, ruff,
+  mypy, bandit) now passes from a red baseline of 26 unformatted files, 171
+  ruff errors, ~700 mypy errors across ~90 files, and 25 bandit findings.
+  All fixes are type/lint-level with no runtime behavior change: annotations
+  (`X | None` lazy-init attributes, honest container/dict types, SQLAlchemy
+  `Mapped[...]` column annotations), justified `cast()`s at untyped
+  numpy/onnx/keras/exchange boundaries, removal of ~45 stale `type: ignore`
+  comments, and isinstance tuples → PEP 604 unions. Bandit
+  try/except-pass/continue sites now log (breadth unchanged; debug in
+  per-candle hot loops, WARNING elsewhere); false positives carry justified
+  `# nosec` markers; the one `assert` in `src/` is an explicit raise.
+  Repaired silently-dead tooling config: `mypy.ini` per-module ignore
+  sections stopped matching after the `src/` layout migration (modules
+  gained the `src.` prefix) and its `exclude` regex had a trailing `|`
+  matching every path; `types-PyYAML` is now pinned so `yaml` imports
+  type-check. TensorFlow guarded imports use a `TYPE_CHECKING`-stable
+  pattern so mypy results match whether TF is installed or not.
+  Static analysis exposed several pre-existing behavioral defects which are
+  deliberately NOT fixed here — each is marked with a `KNOWN BUG` comment at
+  the site: backtest strategies never see open positions in
+  `RuntimeContext` (enum-vs-string side validation always raises, swallowed
+  per candle); risk tracking silently skipped for next-bar entries;
+  persisted `pnl_percent` uses the short formula for long backtest trades;
+  correlation control silently drops peer symbols on a missing-argument
+  `TypeError`; `build_time_exit_policy` can never produce a policy;
+  Coinbase enum order types map to lowercase keys that never match (limit
+  orders would submit as market); `atb data populate-dummy` crashes on a
+  nonexistent `log_trade(order_id=...)` kwarg.
+- Periodic reconciler now books realized P&L when it detects a filled
+  stop-loss. Both detection paths previously corrupted tracked capital:
+  the stop-verification branch closed the DB row with NO balance update
+  (and no trade record), and the margin holdings check misclassified a
+  just-filled short stop-loss (AUTO_REPAY zeroes the borrow) as
+  "externally closed" (the spot holdings check had the identical flaw:
+  a filled stop also empties the held balance), closing the row with no
+  exit price at all. Every
+  SL loss the reconciler processed before the engine's deferred-exit
+  drain (~equal ~2-minute cadences, so a large fraction) silently never
+  hit the balance → overstated capital → oversized subsequent positions.
+  Both the margin and spot holdings checks now consult the tracked stop
+  order before classifying an external close.
+  Both paths now delegate to the startup reconciler's filled-SL handler
+  (#731): DB close first (a failed close leaves the position tracked for
+  retry), P&L with USD-normalized commission and margin interest, plus a
+  deduplicated `trades` row. The periodic wrapper skips when the engine's
+  deferred-exit drain already processed the fill (no double-booking) and
+  defers classification (fail-closed) when the stop's state cannot be
+  confirmed.
+- OrderTracker no longer converts an API outage into a position deletion.
+  After `MAX_API_ERROR_RETRIES` (10) consecutive failed/`None` polls
+  (~50 s at the live 5 s interval) the tracker fired `on_cancel`, and
+  `_handle_order_cancel` popped the (possibly live) position from the
+  tracker and refunded its entry fee — manufacturing untracked exchange
+  exposure, a corrupted balance, and room for a double entry on the next
+  signal, exactly during exchange API degradations (LESSONS §1.8 fail-open
+  class). Polling give-up now routes to a new `on_tracking_lost` callback;
+  the engine's `_handle_order_tracking_lost` keeps the position tracked,
+  leaves the balance untouched, and escalates with a critical
+  `system_events` row (`ORDER_TRACKING_LOST`) + webhook alert so the
+  periodic reconciler resolves the order's true state from the exchange.
+  `on_cancel` now fires only for exchange-confirmed terminal states.
+- Closed live `trades` rows now persist `commission` and `quantity` (previously
+  always `0` / `NULL`). The live close path (`LiveTradingEngine._close_position`
+  and the offline stop-loss reconciliation path) now passes `commission` and
+  `quantity` to `DatabaseManager.log_trade`, which already supported both.
+  `trades.commission` is the round-trip fee in **USD** (`entry_fee + exit_fee`) —
+  the same values booked to `account_balances` (entry as the `entry_fee_<symbol>`
+  ledger event, exit folded into `realized_pnl_<symbol>`), **not** the raw
+  `orders.actual_commission` (which is denominated in the received asset and
+  populated asynchronously, so unit-ambiguous and unreliable at close time).
+  `trades.quantity` is the actual filled base quantity, scaled by
+  `current_size/original_size` for partially-exited positions (NULL for scale-in
+  positions, whose held quantity is not derivable, and for corrupt sizing).
+  `DatabaseManager._trade_net_pnl` now also subtracts `commission`, so true net P&L
+  (`pnl - commission - margin_interest_cost`) flows through performance metrics and
+  `recover_last_balance` reconstruction — correcting a latent overstatement now that
+  commission is populated (historical rows carry `commission = 0` and are unaffected).
+  For positions recovered after a restart, the entry-fee leg is reconstructed from the
+  fee model (the `positions` table does not persist entry fee) rather than dropped, and
+  scaled to the closed portion so a partial final close's commission matches its
+  portion-level pnl/quantity. The `PositionReconciler` offline stop-loss path
+  (`_realize_pnl_on_close`) now also inserts a `trades` row — previously it
+  balance-corrected and DB-closed the position but recorded **no trade at all** (deduped
+  via the exit order id + `uq_trade_order_session`). `LiveExecutionEngine` now converts an
+  exchange fill commission to USD via its `commission_asset` (a base-asset commission on a
+  buy, e.g. ETH, is priced into USD; an unconvertible asset like BNB falls back to the
+  modelled fee) — fixing a latent bug where a base-asset commission could be booked as if
+  it were USD. Relatedly, `_recover_active_positions` now hydrates
+  `original_size`/`current_size` and partial-operation counters from the DB, so a position
+  partially exited before a restart closes at its remaining size. The commission→USD
+  conversion is shared via `src/engines/shared/commission.py` and applied on the
+  reconciler offline-SL path too (a short's stop-loss is a base-asset buy), so it is
+  never booked wrong-unit. The reconciler logs its trade row only after the DB position
+  is actually closed and with a stable, non-NULL dedup key (real exit order id, else a
+  synthetic id from the position) so a re-run cannot insert a duplicate
+  (`uq_trade_order_session`; NULL≠NULL in Postgres) — guarding the #657/#668 phantom-trade
+  class; a failure to persist the row after the balance was corrected now escalates to
+  CRITICAL rather than a silent warning. See the "Trade fee accounting" note in
+  `docs/live_trading.md`.
+- Reconciler accounting hardening (review follow-ups): the offline stop-loss close now
+  realizes P&L **only after** the DB position is actually closed (a failed close no longer
+  double-subtracts P&L on the next reconcile), and a failed balance write skips the audit +
+  trade row (no `trades`/`account_balances` divergence). Fees route through the shared
+  `CostCalculator` (no duplicated fee modelling); the SL exit-fee fallback and the recovered
+  entry/exit reconciler bookings now normalize commission to USD via `commission_asset` like
+  the rest of the change. A scaled-in position closed by the reconciler stores NULL quantity
+  and an un-inflated entry fee, matching the engine close path. `_extract_base_asset` now
+  delegates to the shared `split_base_quote`. The mock DB enforces `uq_trade_order_session`
+  so the dedup path is unit-tested.
+- Live engine hard-disables partial exits / scale-ins behind the default-OFF
+  `live_partial_operations` feature flag (#734). The live engine executed
+  partial operations as bookkeeping only — `_execute_partial_exit` /
+  `_execute_scale_in` mutate the tracker/DB but **never place an exchange
+  order** — and with mismatched units (policy fractions of the original
+  position applied to fraction-of-balance state), so on a real account a
+  winner reaching the default +2%/+3% triggers desynced tracked size from
+  actual holdings (stranded inventory, un-repaid margin borrows, -2010 close
+  failures), booked phantom realized PnL, and freed daily-risk budget that
+  was still deployed. All three activation paths are gated (constructor,
+  strategy hot-swap overrides, runtime policy hydration via the existing
+  opt-in state). Re-enable only for development of the #734 fix.
+- Reconciler no longer places a DUPLICATE stop-loss when an order lookup
+  fails transiently (#713). `BinanceProvider.get_order` swallows every
+  exception into `None`, and both stop-loss verifiers (startup
+  `PositionReconciler._verify_stop_loss` and the periodic reconciler's
+  stop-verification loop) treated `None` as "stop missing" — clearing the
+  tracked `stop_loss_order_id` and re-placing a new stop while the original
+  could still be resting on the exchange (reserving base/margin, able to
+  cause -2010 on a later close, and able to flip the position if both
+  stops fill). Added a fail-closed `ExchangeInterface.get_order_checked`
+  (Binance override returns `None` only on a confirmed -2013
+  "order does not exist" and raises `OrderLookupError` on any unconfirmed
+  lookup), and both verifiers now skip the cycle on an unconfirmed lookup
+  instead of re-placing. Confirmed-missing stops are still re-placed.
+- Live trade recovery on the `emergency_sync` path no longer silently fails.
+  `AccountSynchronizer.recover_missing_trades` called
+  `DatabaseManager.log_trade(order_id=...)`, but `log_trade` has no `order_id`
+  parameter (the field is `exit_order_id`) and no `**kwargs`, so every recovered
+  trade raised `TypeError` — swallowed by the per-trade `except` — and was never
+  persisted to the ledger. Maps `trade.order_id` onto `exit_order_id` (which feeds
+  the `Trade.order_id` column). Adds a regression test that drives
+  `recover_missing_trades` with an autospec'd `DatabaseManager`, so the real
+  `log_trade` signature is enforced. Also clears pre-existing mypy loop-variable
+  and ruff `UP038` debt on `account_sync.py` (behaviour-neutral).
+- Reconciler `trades` rows now cover two more close paths that previously corrected state
+  but recorded no trade row (extending #731's offline stop-loss trade-row logging). (1) The **crash-recovery
+  FULL_EXIT** path (`_reconcile_filled_exit`) opts into `log_trade=True` with a stable dedup
+  key — the real exchange exit order id, else a synthetic `reconcile_exit_<position_id>` — and
+  realizes P&L **only after** the DB position is actually closed (a failed close no longer
+  double-corrects the balance on the next reconcile pass). (2) **External/manual closes**
+  (operator sells on the exchange UI, or a liquidation) detected by `_verify_asset_holdings`
+  (spot) and `_remove_phantom_position` (margin) now persist a **balance-neutral** audit trade
+  row — commission (reconstructed entry leg) + quantity + GROSS pnl, priced mark-to-market via
+  the data provider (degrading to entry price → pnl 0 when no price source) — deduped by a
+  synthetic `reconcile_ext_<position_id>` key, gated on the DB close succeeding. These paths
+  deliberately do **not** realize P&L: a spot external close's capital is already reconciled by
+  startup Step C (`_reconcile_balance`), and a margin external close's by
+  `AccountSynchronizer._sync_margin_equity`, so writing the balance here too would double-book
+  the `account_balances` ledger. `PositionReconciler` now accepts an optional `data_provider`
+  for the mark-to-market estimate. Hardening on all reconciler close paths: the DB-close gate now
+  reads `close_position`'s actual return (it returns `False` **without raising** on a missing row
+  or a rolled-back commit, so "did not raise" was not "closed"); the external-close paths use
+  `pop_position` so a position already reconciled earlier in the same run is not logged twice (the
+  `reconcile_exit_`/`reconcile_ext_` keys do not collide); and a failed trade-row write on a
+  balance-neutral path now escalates as a missing-audit-row alert rather than a false
+  "account_balances/trades DIVERGED" page. (Known follow-up: `PeriodicReconciler._reconcile_cycle`
+  has parallel inline external-close detection that still records no trade row — its capital is
+  reconciled each cycle by the periodic balance step (notional check, like startup Step C), so this
+  is an audit-row gap, not a balance gap.)
+- Margin-equity balance corrections are now audited and alertable.
+  `margin_equity_sync_correction` book-downs (written by
+  `AccountSynchronizer._sync_margin_equity`) previously updated the balance ledger
+  without recording a `reconciliation_audit_events` row or a warning-level
+  `system_events` row, so the single largest capital event a margin session can
+  produce was invisible to monitoring/auditing — a −$15.75 (−15.8%) production
+  book-down on 2026-06-03 (and a second −$1.37 on 2026-06-05) left zero audit
+  trail. The path now emits both records via a new best-effort
+  `_record_equity_correction_audit` helper: an immutable audit row
+  (`entity_type='balance'`, `field='total_balance'`, before/after values, severity
+  `HIGH`, escalating to `CRITICAL` when divergence ≥ 5%) and a `BALANCE_ADJUSTMENT`
+  system event at `warning` severity (`critical` when ≥ 5%) so alerting can see large
+  book-downs. Both writes are independently guarded so a logging failure can neither
+  raise into the sync loop nor unwind the already-persisted correction; emission is
+  skipped entirely if `update_balance` itself reports failure (no audit for a
+  correction that never persisted). The audit binds to the same session the balance
+  write used — resolved via `update_balance`'s own `_current_session_id` fallback — so
+  the first post-restart correction (when `AccountSynchronizer.session_id` has not yet
+  been assigned) is captured too, not just steady-state periodic syncs.
 - Live position/trade recovery no longer crashes on `Decimal`-vs-`float`
   arithmetic. `DatabaseManager.get_active_positions` and `get_recent_trades`
   now coerce SQLAlchemy `Numeric(18,8)` columns (which read back from

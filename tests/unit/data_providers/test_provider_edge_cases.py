@@ -23,7 +23,6 @@ import requests
 
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
-from src.data_providers.data_provider import DataProvider
 from src.trading.symbols import SymbolFactory
 
 # ============================================================================

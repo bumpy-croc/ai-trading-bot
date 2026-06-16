@@ -81,6 +81,9 @@ class TestReconciliationIntegration:
         """MagicMock exchange with sensible defaults."""
         exchange = MagicMock()
         exchange.get_order.return_value = None
+        # Fail-closed lookup (#713) delegates to get_order so tests keep
+        # driving order responses through get_order for both accessors.
+        exchange.get_order_checked.side_effect = lambda oid, sym: exchange.get_order(oid, sym)
         exchange.get_order_by_client_id.return_value = None
         exchange.get_all_orders.return_value = []
         exchange.get_open_orders.return_value = []
@@ -649,9 +652,18 @@ class TestReconciliationIntegration:
             position_tracker,
             stop_loss_order_id="sl_active_001",
         )
-        # Entry order is FILLED (valid)
+        # Entry order is FILLED (valid); the stop-loss was CANCELLED by the
+        # external actor before they market-sold the inventory. (A FILLED
+        # stop here would — correctly — classify as a stop-loss close and
+        # book P&L instead of an external close.)
         mock_exchange.get_order.side_effect = lambda oid, sym: (
             MockExchangeOrder(
+                order_id=oid,
+                status=ExOrderStatus.CANCELLED,
+                filled_quantity=0.0,
+            )
+            if oid == "sl_active_001"
+            else MockExchangeOrder(
                 order_id=oid,
                 status=ExOrderStatus.FILLED,
                 average_price=50000.0,

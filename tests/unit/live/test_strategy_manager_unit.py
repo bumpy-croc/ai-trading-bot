@@ -155,3 +155,44 @@ class TestStrategyVersioning:
         manager.load_strategy("ml_basic", version="v1.1")
         comparison = manager.get_performance_comparison()
         assert isinstance(comparison, dict)
+
+    def test_update_model_without_current_strategy_reports_descriptive_error(
+        self, temp_directory, caplog
+    ):
+        """Regression for #765: with no strategy loaded, update_model must fail
+        with the descriptive mismatch ValueError, not an AttributeError from
+        dereferencing ``self.current_strategy.name`` inside the f-string."""
+        import logging
+
+        manager = StrategyManager(staging_dir=str(temp_directory))
+        assert manager.current_strategy is None
+
+        model_path = temp_directory / "model.onnx"
+        model_path.write_bytes(b"dummy")
+
+        with caplog.at_level(logging.ERROR):
+            result = manager.update_model("ml_basic", str(model_path), validate_model=False)
+
+        assert result is False
+        assert "doesn't match" in caplog.text
+        assert "<none>" in caplog.text
+        assert "AttributeError" not in caplog.text
+        assert "NoneType" not in caplog.text
+
+    def test_update_model_mismatched_strategy_name_reports_current_name(
+        self, temp_directory, caplog
+    ):
+        """The mismatch error still names the loaded strategy when one exists."""
+        import logging
+
+        manager = StrategyManager(staging_dir=str(temp_directory))
+        manager.load_strategy("ml_basic")
+
+        model_path = temp_directory / "model.onnx"
+        model_path.write_bytes(b"dummy")
+
+        with caplog.at_level(logging.ERROR):
+            result = manager.update_model("other_strategy", str(model_path), validate_model=False)
+
+        assert result is False
+        assert "doesn't match other_strategy" in caplog.text

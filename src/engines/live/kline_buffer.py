@@ -16,10 +16,20 @@ logger = logging.getLogger(__name__)
 
 # Map timeframe strings to expected candle intervals in milliseconds
 _TIMEFRAME_MS: dict[str, int] = {
-    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
-    "30m": 1_800_000, "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
-    "6h": 21_600_000, "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
-    "3d": 259_200_000, "1w": 604_800_000,
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "8h": 28_800_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+    "3d": 259_200_000,
+    "1w": 604_800_000,
 }
 
 
@@ -93,7 +103,10 @@ class KlineBuffer:
                 if self._interval_ms and gap_ms >= self._interval_ms * 2:
                     logger.warning(
                         "KlineBuffer gap detected for %s %s: expected %dms, got %dms — flagging resync",
-                        self._symbol, self._timeframe, self._interval_ms, gap_ms,
+                        self._symbol,
+                        self._timeframe,
+                        self._interval_ms,
+                        gap_ms,
                     )
                     self._needs_resync = True
                     return  # Don't append gapped data
@@ -151,7 +164,8 @@ class KlineBuffer:
                     logger.info(
                         "REST resync skipped — buffer tail %s is newer than REST tail %s, "
                         "needs_resync remains set for retry",
-                        self._df.index[-1], new_df.index[-1],
+                        self._df.index[-1],
+                        new_df.index[-1],
                     )
                     return  # Keep _needs_resync=True for next attempt
             self._df = new_df

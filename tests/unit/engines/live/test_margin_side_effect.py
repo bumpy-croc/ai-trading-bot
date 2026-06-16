@@ -141,17 +141,18 @@ def test_execution_engine_exit_auto_repay():
 def test_trading_engine_stop_loss_auto_repay():
     """Stop-loss call in the entry body includes side_effect_type='AUTO_REPAY'.
 
-    The stop-loss is placed inline in the entry body (``_execute_entry_locked`` — the
-    real work; ``_execute_entry`` is a thin wrapper that only takes the base-asset
-    lock, #703) with retry logic. Rather than constructing the full entry flow (which
+    The entry body lives in ``LiveEntryCoordinator.execute_entry_locked`` (the
+    real work; the engine's ``_execute_entry``/``_execute_entry_locked`` are thin
+    wrappers — the former takes the base-asset lock, #703, both delegate to the
+    coordinator, #486). Rather than constructing the full entry flow (which
     requires extensive mocking), we verify the source contains the kwarg on the
-    place_stop_loss_order call.
+    place_order emergency-close call.
     """
     import inspect
 
-    from src.engines.live.trading_engine import LiveTradingEngine
+    from src.engines.live.execution.entry_coordinator import LiveEntryCoordinator
 
-    source = inspect.getsource(LiveTradingEngine._execute_entry_locked)
+    source = inspect.getsource(LiveEntryCoordinator.execute_entry_locked)
     assert "side_effect_type=SideEffectType.AUTO_REPAY" in source, (
         "the entry body must pass side_effect_type=SideEffectType.AUTO_REPAY "
         "to place_stop_loss_order"

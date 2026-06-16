@@ -62,26 +62,22 @@ class FixtureProvider(DataProvider):
 
     def get_historical_data(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
-    ) -> pd.DataFrame:  # type: ignore[override]
+    ) -> pd.DataFrame:
         if self.df.empty:
             return self.df
         end_ts = _to_utc_timestamp(end) if end is not None else pd.Timestamp.now(tz="UTC")
         start_ts = _to_utc_timestamp(start)
         return self.df.loc[(self.df.index >= start_ts) & (self.df.index <= end_ts)].copy()
 
-    def get_live_data(
-        self, symbol: str, timeframe: str, limit: int = 100
-    ) -> pd.DataFrame:  # type: ignore[override]
+    def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         if self.df.empty:
             return self.df
         return self.df.tail(limit).copy()
 
-    def update_live_data(
-        self, symbol: str, timeframe: str
-    ) -> pd.DataFrame:  # type: ignore[override]
+    def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
         return self.get_live_data(symbol, timeframe, limit=1)
 
-    def get_current_price(self, symbol: str) -> float:  # type: ignore[override]
+    def get_current_price(self, symbol: str) -> float:
         if self.df.empty:
             return 0.0
         return float(self.df["close"].iloc[-1])
@@ -159,22 +155,18 @@ class RandomWalkProvider(DataProvider):
 
     def get_historical_data(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
-    ) -> pd.DataFrame:  # type: ignore[override]
+    ) -> pd.DataFrame:
         end_ts = _to_utc_timestamp(end) if end is not None else pd.Timestamp.now(tz="UTC")
         start_ts = _to_utc_timestamp(start)
         return self.df.loc[(self.df.index >= start_ts) & (self.df.index <= end_ts)].copy()
 
-    def get_live_data(
-        self, symbol: str, timeframe: str, limit: int = 100
-    ) -> pd.DataFrame:  # type: ignore[override]
+    def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         return self.df.tail(limit).copy()
 
-    def update_live_data(
-        self, symbol: str, timeframe: str
-    ) -> pd.DataFrame:  # type: ignore[override]
+    def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
         return self.get_live_data(symbol, timeframe, limit=1)
 
-    def get_current_price(self, symbol: str) -> float:  # type: ignore[override]
+    def get_current_price(self, symbol: str) -> float:
         if self.df.empty:
             return 0.0
         return float(self.df["close"].iloc[-1])

@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 
-import requests
+import requests  # type: ignore[import-untyped]  # requests ships untyped; stubs not installed
 
 logger = logging.getLogger(__name__)
 

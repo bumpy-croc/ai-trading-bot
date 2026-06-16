@@ -7,8 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.risk.risk_manager import PortfolioRiskManager
-from src.risk.risk_manager import RiskParameters
+from src.risk.risk_manager import PortfolioRiskManager, RiskParameters
 
 from .policies import (
     DynamicRiskDescriptor,
@@ -295,7 +294,9 @@ class CoreRiskAdapter(RiskManager):
             return "normal"
         trend = getattr(regime, "trend", None)
         if hasattr(trend, "value"):
-            return str(trend.value)
+            # hasattr() guarantees the attribute; mypy cannot narrow
+            # ``Any | None`` through hasattr, hence the suppression.
+            return str(trend.value)  # type: ignore[union-attr]
         if isinstance(regime, str):
             return regime
         return "normal"

@@ -6,8 +6,9 @@ allowing detailed analysis of how each component contributes to overall strategy
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -74,8 +75,8 @@ class AttributionReport:
     sizing_attribution: ComponentAttribution | None = None
 
     # Cross-component analysis
-    component_correlations: dict[str, dict[str, float]] = None
-    interaction_effects: dict[str, float] = None
+    component_correlations: dict[str, dict[str, float]] | None = None
+    interaction_effects: dict[str, float] | None = None
 
     # Overall attribution summary
     explained_performance: float = 0.0  # % of performance explained by components
@@ -85,10 +86,10 @@ class AttributionReport:
     # Optimization insights
     primary_performance_driver: str = ""
     weakest_component: str = ""
-    optimization_priority: list[str] = None
+    optimization_priority: list[str] | None = None
 
     # Replacement analysis
-    component_replacement_impact: dict[str, float] = None
+    component_replacement_impact: dict[str, float] | None = None
 
 
 class PerformanceAttributionAnalyzer:
@@ -242,8 +243,10 @@ class PerformanceAttributionAnalyzer:
             component_contributions["position_sizer"] = sizing_attribution.total_contribution
 
         if component_contributions and len(component_contributions) > 0:
-            primary_driver = max(component_contributions, key=component_contributions.get)
-            weakest_component = min(component_contributions, key=component_contributions.get)
+            # cast: max/min iterate the dict's own keys, so .get never returns None here
+            contribution_of = cast(Callable[[str], float], component_contributions.get)
+            primary_driver = max(component_contributions, key=contribution_of)
+            weakest_component = min(component_contributions, key=contribution_of)
         else:
             primary_driver = ""
             weakest_component = ""
@@ -666,7 +669,7 @@ class PerformanceAttributionAnalyzer:
             return 0.0
 
         # Match signals to trades and calculate accuracy
-        accurate_signals = 0
+        accurate_signals: float = 0  # HOLD signals score 0.5, so this accumulates fractions
         total_signals = 0
 
         for signal_data in signals:
@@ -1024,7 +1027,8 @@ class PerformanceAttributionAnalyzer:
         if component_type == "signal_generator":
             return Strategy(
                 name=f"{original_strategy.name}_modified_signal",
-                signal_generator=replacement_component,
+                # cast: caller contract pairs component_type with a matching component instance
+                signal_generator=cast(SignalGenerator, replacement_component),
                 risk_manager=original_strategy.risk_manager,
                 position_sizer=original_strategy.position_sizer,
                 regime_detector=original_strategy.regime_detector,
@@ -1034,7 +1038,8 @@ class PerformanceAttributionAnalyzer:
             return Strategy(
                 name=f"{original_strategy.name}_modified_risk",
                 signal_generator=original_strategy.signal_generator,
-                risk_manager=replacement_component,
+                # cast: caller contract pairs component_type with a matching component instance
+                risk_manager=cast(RiskManager, replacement_component),
                 position_sizer=original_strategy.position_sizer,
                 regime_detector=original_strategy.regime_detector,
                 enable_logging=False,
@@ -1044,7 +1049,8 @@ class PerformanceAttributionAnalyzer:
                 name=f"{original_strategy.name}_modified_sizer",
                 signal_generator=original_strategy.signal_generator,
                 risk_manager=original_strategy.risk_manager,
-                position_sizer=replacement_component,
+                # cast: caller contract pairs component_type with a matching component instance
+                position_sizer=cast(PositionSizer, replacement_component),
                 regime_detector=original_strategy.regime_detector,
                 enable_logging=False,
             )

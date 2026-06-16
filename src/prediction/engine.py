@@ -13,7 +13,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -819,7 +819,7 @@ class PredictionEngine:
         Returns:
             Dict containing health status of all components
         """
-        health = {
+        health: dict[str, Any] = {
             "status": "healthy",
             "components": {},
             "timestamp": datetime.now(UTC).isoformat(),
@@ -1047,7 +1047,8 @@ class PredictionEngine:
         """Get average inference time for specific model"""
         # Return per-model timing if available
         if model_name in self._model_inference_times and self._model_inference_times[model_name]:
-            return np.mean(self._model_inference_times[model_name])
+            # Cast: np.mean returns np.float64, which subclasses builtin float at runtime.
+            return cast(float, np.mean(self._model_inference_times[model_name]))
 
         # Fallback to global average when no model-specific data is available
         return (

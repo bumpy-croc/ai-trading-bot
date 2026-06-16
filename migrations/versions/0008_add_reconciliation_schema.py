@@ -45,22 +45,14 @@ def upgrade() -> None:
 
         for value in new_order_status_values:
             try:
-                op.execute(
-                    sa.text(
-                        f"ALTER TYPE orderstatus ADD VALUE IF NOT EXISTS '{value}'"
-                    )
-                )
+                op.execute(sa.text(f"ALTER TYPE orderstatus ADD VALUE IF NOT EXISTS '{value}'"))
             except Exception:
                 # Type does not exist (non-native enum) — safe to skip
                 pass
 
         for value in new_order_type_values:
             try:
-                op.execute(
-                    sa.text(
-                        f"ALTER TYPE ordertype ADD VALUE IF NOT EXISTS '{value}'"
-                    )
-                )
+                op.execute(sa.text(f"ALTER TYPE ordertype ADD VALUE IF NOT EXISTS '{value}'"))
             except Exception:
                 # Type does not exist (non-native enum) — safe to skip
                 pass
@@ -79,7 +71,9 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=False),
         sa.Column("severity", sa.String(10), nullable=False),
     )
-    op.create_index("idx_audit_session_time", "reconciliation_audit_events", ["session_id", "timestamp"])
+    op.create_index(
+        "idx_audit_session_time", "reconciliation_audit_events", ["session_id", "timestamp"]
+    )
     op.create_index("idx_audit_severity", "reconciliation_audit_events", ["severity", "timestamp"])
 
     # --- 2. Orders table: new columns ---
@@ -87,7 +81,9 @@ def upgrade() -> None:
     op.add_column("orders", sa.Column("actual_fill_price", sa.Numeric(18, 8)))
     op.add_column("orders", sa.Column("actual_fill_quantity", sa.Numeric(18, 8)))
     op.add_column("orders", sa.Column("actual_commission", sa.Numeric(18, 8)))
-    op.add_column("orders", sa.Column("replaced_order_id", sa.Integer(), sa.ForeignKey("orders.id")))
+    op.add_column(
+        "orders", sa.Column("replaced_order_id", sa.Integer(), sa.ForeignKey("orders.id"))
+    )
     op.create_index("idx_order_client_id", "orders", ["client_order_id"])
 
     # Make position_id nullable (entry orders journaled before position creation)

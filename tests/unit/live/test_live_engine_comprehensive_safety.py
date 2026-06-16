@@ -957,8 +957,11 @@ class TestEdgeCasesAndStress:
             assert engine.enable_hot_swapping is False
 
     def test_partial_operations_configuration(self, mock_data_provider, minimal_strategy):
-        """Partial operations should be configurable"""
-        with patch("src.engines.live.trading_engine.DatabaseManager"):
+        """Partial operations are configurable when the dev flag is enabled (#734)."""
+        with (
+            patch("src.engines.live.trading_engine.DatabaseManager"),
+            patch("src.engines.live.trading_engine.is_enabled", return_value=True),
+        ):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -970,15 +973,18 @@ class TestEdgeCasesAndStress:
             # Partial manager may be initialized
             assert hasattr(engine, "partial_manager")
 
-    def test_partial_operations_enabled_by_default(self, mock_data_provider, minimal_strategy):
-        """Partial operations should be enabled by default."""
+    def test_partial_operations_disabled_by_default(self, mock_data_provider, minimal_strategy):
+        """Partial operations are hard-disabled until #734 lands a real
+        implementation: the live engine executes them as bookkeeping only
+        (no exchange order, mismatched units)."""
         with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
             )
-            assert engine.enable_partial_operations is True
+            assert engine.enable_partial_operations is False
+            assert engine.partial_manager is None
 
     def test_regime_detector_optional(self, mock_data_provider, minimal_strategy):
         """Regime detector should be optional feature"""

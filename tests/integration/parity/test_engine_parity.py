@@ -759,26 +759,9 @@ class TestEndToEndParityScenario:
 
     def test_profitable_long_trade_parity(self):
         """Test that a profitable long trade produces identical results."""
-        # Create identical data
-        idx = pd.date_range("2024-01-01", periods=10, freq="1h")
-        data = pd.DataFrame(
-            {
-                "open": [100, 100, 101, 102, 103, 104, 105, 106, 107, 108],
-                "high": [101, 101, 102, 103, 104, 105, 106, 107, 108, 109],
-                "low": [99, 99, 100, 101, 102, 103, 104, 105, 106, 107],
-                "close": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
-                "volume": [1000] * 10,
-                "atr": [1.0] * 10,
-            },
-            index=idx,
-        )
-
-        provider = MockDataProvider(data)
-
         # Use consistent fee/slippage
         fee_rate = 0.001
         slippage_rate = 0.0005
-        initial_balance = 10000.0
 
         # Test shared cost calculator produces same results
         calc = CostCalculator(fee_rate=fee_rate, slippage_rate=slippage_rate)

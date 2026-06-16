@@ -121,9 +121,7 @@ class UserDataProcessor(threading.Thread):
                         self._order_tracker.process_execution_event(event)
                         drained += 1
                     except Exception as e:
-                        logger.error(
-                            "Error draining execution event: %s", e, exc_info=True
-                        )
+                        logger.error("Error draining execution event: %s", e, exc_info=True)
             except queue.Empty:
                 break
 

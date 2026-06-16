@@ -1,7 +1,7 @@
 """Tests for atb backtest command."""
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -98,8 +98,6 @@ class TestGetDateRange:
             mock_datetime.now.return_value = mock_now
             mock_datetime_class = MagicMock()
             mock_datetime_class.now.return_value = mock_now
-            # Need to patch timedelta calculation properly
-            expected_start = mock_now - timedelta(days=7)
 
             start_date, end_date = _get_date_range(args)
 

@@ -10,7 +10,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
@@ -283,7 +283,7 @@ class LiveExitHandler:
             )
 
         hit_time_exit = False
-        time_reason = ""
+        time_reason: str | None = ""
         if self.time_exit_policy is not None:
             hit_time_exit, time_reason = self.time_exit_policy.check_time_exit_conditions(
                 position.entry_time, datetime.now(UTC)
@@ -410,7 +410,8 @@ class LiveExitHandler:
         # Execute via execution engine
         execution_result = self.execution_engine.execute_exit(
             symbol=position.symbol,
-            side=position.side,
+            # __post_init__ guarantees side is a PositionSide enum.
+            side=cast(PositionSide, position.side),
             order_id=position.order_id,
             base_price=base_exit_price,
             position_notional=position_notional,
@@ -724,7 +725,8 @@ class LiveExitHandler:
                 logger.info(
                     "Trailing stop updated for %s %s: SL=%.4f (activated=%s, BE=%s)",
                     position.symbol,
-                    position.side.value,
+                    # __post_init__ guarantees side is a PositionSide enum.
+                    cast(PositionSide, position.side).value,
                     position.stop_loss or 0.0,
                     position.trailing_stop_activated,
                     position.breakeven_triggered,
@@ -783,11 +785,17 @@ class LiveExitHandler:
                     if not exit_result.should_exit:
                         break
 
-                    # Convert from fraction of original to fraction of current
-                    exit_size_of_original = exit_result.exit_fraction
+                    # Convert from fraction of original to fraction of current.
+                    # should_exit=True guarantees exit_fraction/target_index are set.
+                    exit_size_of_original = cast(float, exit_result.exit_fraction)
+                    exit_target_level = cast(int, exit_result.target_index)
+                    # __post_init__ initializes current/original size from size,
+                    # so they are never None on a constructed position.
+                    current_size = cast(float, position.current_size)
+                    original_size = cast(float, position.original_size)
                     if is_position_fully_closed(
-                        position.current_size,
-                        position.original_size,
+                        current_size,
+                        original_size,
                         epsilon=EPSILON,
                     ):
                         logger.debug(
@@ -798,8 +806,8 @@ class LiveExitHandler:
 
                     exit_size_of_current = convert_exit_fraction_to_current(
                         exit_fraction_of_original=exit_size_of_original,
-                        current_size=position.current_size,
-                        original_size=position.original_size,
+                        current_size=current_size,
+                        original_size=original_size,
                         epsilon=EPSILON,
                     )
                     if exit_size_of_current is None:
@@ -810,7 +818,7 @@ class LiveExitHandler:
                         position=position,
                         delta_fraction=exit_size_of_current,
                         price=current_price,
-                        target_level=exit_result.target_index,
+                        target_level=exit_target_level,
                         fraction_of_original=exit_size_of_original,
                         current_balance=current_balance,
                     )
@@ -825,7 +833,8 @@ class LiveExitHandler:
                 )
 
                 if scale_result.should_scale:
-                    add_size_of_original = scale_result.scale_fraction
+                    # should_scale=True guarantees scale_fraction/target_index are set.
+                    add_size_of_original = cast(float, scale_result.scale_fraction)
 
                     # Clamp scale-in size by remaining daily-risk budget so
                     # the live engine never exceeds the per-day exposure
@@ -881,7 +890,8 @@ class LiveExitHandler:
                             position=position,
                             delta_fraction=add_effective,
                             price=current_price,
-                            threshold_level=scale_result.target_index,
+                            # should_scale=True guarantees target_index is set.
+                            threshold_level=cast(int, scale_result.target_index),
                             fraction_of_original=add_effective,
                         )
 

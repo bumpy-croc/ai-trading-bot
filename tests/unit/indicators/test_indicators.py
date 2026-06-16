@@ -139,9 +139,7 @@ class TestRSI:
         assert len(valid_sma) > 0
         # They should differ (different algorithms)
         common_idx = valid_wilder.index.intersection(valid_sma.index)
-        assert not np.allclose(
-            rsi_wilder.loc[common_idx].values, rsi_sma.loc[common_idx].values
-        )
+        assert not np.allclose(rsi_wilder.loc[common_idx].values, rsi_sma.loc[common_idx].values)
 
     def test_rsi_training_inference_parity(self):
         """Verify calculate_rsi and _calculate_rsi_fast produce identical values."""

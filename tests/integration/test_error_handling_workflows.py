@@ -312,7 +312,6 @@ class TestErrorHandlingWorkflows:
             strategy.process_candle(df, i, balance)
 
         # Simulate state corruption by clearing history
-        original_history_length = len(strategy.decision_history)
         strategy.decision_history.clear()
 
         # Should continue working after state loss

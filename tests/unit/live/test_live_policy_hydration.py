@@ -95,6 +95,11 @@ def test_component_policy_hydration_respects_disabled_flags(
 
 
 def test_component_policy_hydration_updates_when_opted_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Partial ops are disabled by default (#734); this test exercises the
+    # opted-in hydration path, so enable the dev flag.
+    monkeypatch.setattr(
+        "src.engines.live.trading_engine.is_enabled", lambda key, default=False: True
+    )
     risk_params = RiskParameters()
 
     engine = _build_engine(

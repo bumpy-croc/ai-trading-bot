@@ -92,7 +92,7 @@ class TestEvolutionBranch:
 
         assert branch.branch_id == "branch_123"
         assert branch.branch_name == "experimental_features"
-        assert branch.active == True
+        assert branch.active is True
         assert len(branch.strategies) == 2
 
     def test_evolution_branch_serialization(self):
@@ -113,7 +113,7 @@ class TestEvolutionBranch:
         branch_dict = branch.to_dict()
         assert branch_dict["branch_name"] == "performance_optimization"
         assert branch_dict["created_at"] == timestamp.isoformat()
-        assert branch_dict["active"] == False
+        assert branch_dict["active"] is False
 
         # Test deserialization
         restored_branch = EvolutionBranch.from_dict(branch_dict)
@@ -247,7 +247,7 @@ class TestStrategyLineageTracker:
         branch = tracker.branches[branch_id]
         assert branch.branch_name == "experimental"
         assert branch.parent_strategy_id == "parent_001"
-        assert branch.active == True
+        assert branch.active is True
         assert "parent_001" in branch.strategies
 
         # Parent strategy should be updated with branch ID
@@ -731,7 +731,7 @@ class TestStrategyLineageTracker:
         tracker.add_strategy_to_branch("perf_v1", perf_branch)
 
         # Merge experimental into main
-        merge_id = tracker.merge_strategies("main_v2", ["exp_v2"], "best_performance")
+        tracker.merge_strategies("main_v2", ["exp_v2"], "best_performance")
 
         # Verify complex structure
         assert len(tracker.strategies) >= 6  # 5 strategies + merged strategy

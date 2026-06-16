@@ -16,10 +16,10 @@ import math
 import time
 import zipfile
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
-import requests
+import requests  # type: ignore[import-untyped]  # requests ships no inline types; stubs not installed
 
 from src.config import get_config
 from src.config.constants import DEFAULT_DATA_FETCH_TIMEOUT
@@ -94,9 +94,15 @@ class CoinGeckoProvider(DataProvider):
         self._session.headers.update({"User-Agent": "ai-trading-bot/1.0"})
         self._last_request_time = 0.0  # Track last request for rate limiting
 
-        # Configurable timeout via DATA_FETCH_TIMEOUT_SECONDS env var
+        # Configurable timeout via DATA_FETCH_TIMEOUT_SECONDS env var.
+        # cast: Config.get returns the non-None float default when the key is
+        # missing, but its signature loses the default's type (says str | None).
         config = get_config()
-        self._timeout = float(config.get("DATA_FETCH_TIMEOUT_SECONDS", DEFAULT_DATA_FETCH_TIMEOUT))
+        self._timeout = float(
+            cast(
+                "str | float", config.get("DATA_FETCH_TIMEOUT_SECONDS", DEFAULT_DATA_FETCH_TIMEOUT)
+            )
+        )
 
         if self.api_key:
             self._session.headers.update({"x-cg-pro-api-key": self.api_key})

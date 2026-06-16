@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
@@ -24,10 +24,8 @@ from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
-from src.engines.shared.entry_utils import (
-    extract_entry_plan,
-    resolve_stop_loss_take_profit_pct,
-)
+from src.engines.shared.entry_utils import resolve_stop_loss_take_profit_pct
+from src.engines.shared.execution.entry_handler_mixin import SharedEntryHandlerMixin
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -40,6 +38,7 @@ from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
     from src.engines.shared.correlation_handler import CorrelationHandler
+    from src.engines.shared.entry_utils import StopLossStrategyLike
     from src.position_management.dynamic_risk import DynamicRiskManager
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
@@ -76,7 +75,7 @@ class LiveEntryResult:
     ambiguous: bool = False
 
 
-class LiveEntryHandler:
+class LiveEntryHandler(SharedEntryHandlerMixin):
     """Processes entry signals and coordinates entry execution for live trading.
 
     This class encapsulates entry-related logic including:
@@ -387,8 +386,8 @@ class LiveEntryHandler:
         actual_qty = getattr(exec_result, "quantity", 0.0) or 0.0
         requested_qty = getattr(exec_result, "requested_quantity", 0.0) or 0.0
         if (
-            isinstance(actual_qty, (int, float))
-            and isinstance(requested_qty, (int, float))
+            isinstance(actual_qty, int | float)
+            and isinstance(requested_qty, int | float)
             and actual_qty > 0
             and requested_qty > 0
         ):
@@ -415,25 +414,6 @@ class LiveEntryHandler:
             reasons=signal.reasons,
             ambiguous=exec_result.ambiguous,
         )
-
-    def _extract_entry_plan(
-        self,
-        decision: Any,
-        balance: float,
-    ) -> tuple[PositionSide | None, float]:
-        """Extract entry side and size from runtime decision.
-
-        Args:
-            decision: Runtime decision from strategy.
-            balance: Current account balance.
-
-        Returns:
-            Tuple of (side, size_fraction).
-        """
-        plan = extract_entry_plan(decision, balance)
-        if plan is None:
-            return None, 0.0
-        return plan.side, plan.size_fraction
 
     def _calculate_sl_tp(
         self,
@@ -467,7 +447,9 @@ class LiveEntryHandler:
             current_price=current_price,
             entry_side=entry_side,
             runtime_decision=runtime_decision,
-            component_strategy=self.component_strategy,
+            # Strategy satisfies StopLossStrategyLike structurally at runtime;
+            # mutable-attribute invariance rejects its narrower take_profit_pct.
+            component_strategy=cast("StopLossStrategyLike | None", self.component_strategy),
             default_stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
             default_take_profit_pct=self.default_take_profit_pct,
             min_stop_loss_pct=DEFAULT_MIN_STOP_LOSS_PCT,
@@ -485,44 +467,3 @@ class LiveEntryHandler:
         )
 
         return stop_loss, take_profit
-
-    def _apply_dynamic_risk(
-        self,
-        original_size: float,
-        current_time: datetime,
-        balance: float,
-        peak_balance: float,
-        trading_session_id: int | None,
-    ) -> float:
-        """Apply dynamic risk adjustments to position size.
-
-        Delegates to shared DynamicRiskHandler for consistent logic
-        between backtest and live engines.
-
-        Args:
-            original_size: Original position size fraction.
-            current_time: Current timestamp.
-            balance: Current account balance.
-            peak_balance: Peak account balance.
-            trading_session_id: Session ID for logging.
-
-        Returns:
-            Adjusted position size fraction.
-        """
-        # Update handler's manager in case it changed
-        self._dynamic_risk_handler.set_manager(self.dynamic_risk_manager)
-        return self._dynamic_risk_handler.apply_dynamic_risk(
-            original_size=original_size,
-            current_time=current_time,
-            balance=balance,
-            peak_balance=peak_balance,
-            trading_session_id=trading_session_id,
-        )
-
-    def get_dynamic_risk_adjustments(self) -> list[dict]:
-        """Get and clear dynamic risk adjustments tracked by this handler.
-
-        Returns:
-            List of dynamic risk adjustment records.
-        """
-        return self._dynamic_risk_handler.get_adjustments(clear=True)
