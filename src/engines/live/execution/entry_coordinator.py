@@ -592,17 +592,34 @@ class LiveEntryCoordinator:
                                 )
                             else:
                                 # Use quantity from position - LiveEntryResult.position.quantity
-                                state.exchange_interface.place_order(
+                                emergency_order = state.exchange_interface.place_order(
                                     symbol=symbol,
                                     side=close_side,
                                     order_type=OrderType.MARKET,
                                     quantity=result.position.quantity,
                                     side_effect_type=SideEffectType.AUTO_REPAY,
                                 )
-                            logger.warning(
-                                "Emergency close placed for %s due to balance update failure",
-                                symbol,
-                            )
+                                if emergency_order is None:
+                                    # None is an ambiguous/failed placement, NOT a
+                                    # confirmed close: the position may still be open
+                                    # and unprotected on the exchange. Escalate to
+                                    # close-only instead of logging a false success;
+                                    # the reconciler resolves it on restart.
+                                    logger.critical(
+                                        "CRITICAL: Emergency close for %s UNCONFIRMED "
+                                        "(place_order returned None) after balance update "
+                                        "failure — position may remain open on the exchange. "
+                                        "Entering close-only mode until restart reconciles. "
+                                        "MANUAL INTERVENTION REQUIRED.",
+                                        symbol,
+                                    )
+                                    state._enter_close_only_mode()
+                                else:
+                                    logger.warning(
+                                        "Emergency close placed for %s due to balance "
+                                        "update failure",
+                                        symbol,
+                                    )
                         except Exception as close_err:
                             logger.critical(
                                 "CRITICAL: Emergency close FAILED after balance update failure for %s. "
@@ -644,7 +661,9 @@ class LiveEntryCoordinator:
                     symbol,
                     tracker_err,
                 )
-                if state.enable_live_trading and state.exchange_interface:
+                emergency_close_confirmed = False
+                live_emergency_path = bool(state.enable_live_trading and state.exchange_interface)
+                if live_emergency_path:
                     try:
                         close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
 
@@ -659,16 +678,32 @@ class LiveEntryCoordinator:
                                 result.position.quantity,
                             )
                         else:
-                            state.exchange_interface.place_order(
+                            emergency_order = state.exchange_interface.place_order(
                                 symbol=symbol,
                                 side=close_side,
                                 order_type=OrderType.MARKET,
                                 quantity=result.position.quantity,
                                 side_effect_type=SideEffectType.AUTO_REPAY,
                             )
-                            logger.info(
-                                "Emergency close order placed for orphaned position %s", symbol
-                            )
+                            if emergency_order is None:
+                                # Ambiguous/failed placement (not a confirmed close):
+                                # the orphaned position may still be open on the
+                                # exchange. Escalate to close-only; the reconciler
+                                # resolves the untracked position on restart.
+                                logger.critical(
+                                    "CRITICAL: Emergency close for orphaned position %s "
+                                    "UNCONFIRMED (place_order returned None) — position may "
+                                    "remain open on the exchange. Entering close-only mode "
+                                    "until restart reconciles. MANUAL INTERVENTION REQUIRED.",
+                                    symbol,
+                                )
+                                state._enter_close_only_mode()
+                            else:
+                                emergency_close_confirmed = True
+                                logger.info(
+                                    "Emergency close order placed for orphaned position %s",
+                                    symbol,
+                                )
                     except Exception as close_err:
                         logger.critical(
                             "CRITICAL: Emergency close FAILED for %s. "
@@ -676,26 +711,32 @@ class LiveEntryCoordinator:
                             symbol,
                             close_err,
                         )
-                # Restore balance since position tracking failed (atomic refund)
-                if state.trading_session_id is not None:
-                    try:
-                        with state.db_manager.atomic_balance_update(
-                            balance_change=entry_fee,
-                            reason=f"refund_entry_fee_{symbol}_tracking_failed",
-                            updated_by="live_engine",
-                            correlation_id=position.order_id,
-                        ) as balance_result:
-                            state.current_balance = balance_result["new_balance"]
-                    except Exception as refund_err:
-                        logger.critical(
-                            "CRITICAL: Failed to refund entry fee after position tracking failure for %s. "
-                            "Balance state inconsistent. Error: %s",
-                            symbol,
-                            refund_err,
-                        )
-                else:
-                    # No trading session - update balance directly
-                    state.current_balance += entry_fee
+                # Refund the entry fee only when no possibly-open live position was left
+                # behind: paper (no live path) always refunds; a live path refunds only
+                # on a CONFIRMED close. On an unconfirmed/failed live close the position
+                # may still be open, so keep the fee charged (the reconciler resolves the
+                # real state on restart) rather than optimistically crediting the balance.
+                should_refund = (not live_emergency_path) or emergency_close_confirmed
+                if should_refund:
+                    if state.trading_session_id is not None:
+                        try:
+                            with state.db_manager.atomic_balance_update(
+                                balance_change=entry_fee,
+                                reason=f"refund_entry_fee_{symbol}_tracking_failed",
+                                updated_by="live_engine",
+                                correlation_id=position.order_id,
+                            ) as balance_result:
+                                state.current_balance = balance_result["new_balance"]
+                        except Exception as refund_err:
+                            logger.critical(
+                                "CRITICAL: Failed to refund entry fee after position tracking "
+                                "failure for %s. Balance state inconsistent. Error: %s",
+                                symbol,
+                                refund_err,
+                            )
+                    else:
+                        # No trading session - update balance directly
+                        state.current_balance += entry_fee
                 return
 
             # Update risk manager tracking for new position.
