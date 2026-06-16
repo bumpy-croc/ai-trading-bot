@@ -834,7 +834,14 @@ class LiveEntryCoordinator:
                     # exchange - a critical fund loss risk.
                     try:
                         emergency_price = state.data_provider.get_current_price(symbol)
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to fetch current price for emergency close of %s; "
+                            "falling back to entry price %s for exit pricing: %s",
+                            symbol,
+                            price,
+                            exc,
+                        )
                         emergency_price = price
                     state._execute_exit(
                         position,

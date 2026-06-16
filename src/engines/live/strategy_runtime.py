@@ -201,7 +201,9 @@ class StrategyRuntimeCoordinator:
             try:
                 previous_component.set_additional_risk_context_provider(None)
             except Exception as exc:  # pragma: no cover - defensive cleanup
-                logger.debug("Failed to clear risk context provider on previous strategy: %s", exc)
+                logger.warning(
+                    "Failed to clear risk context provider on previous strategy: %s", exc
+                )
 
         if runtime is not None:
             state._runtime = runtime
@@ -269,7 +271,7 @@ class StrategyRuntimeCoordinator:
             try:
                 overrides = strategy.get_risk_overrides()
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.debug(
+                logger.warning(
                     "Failed to fetch component risk overrides for correlation context: %s",
                     exc,
                 )
@@ -343,9 +345,11 @@ class StrategyRuntimeCoordinator:
                         state._component_dynamic_risk_config = dynamic_descriptor.to_config()
                 except Exception as exc:
                     # Benign: shared hydration above already applied the policy;
-                    # only the live-engine state cache misses this descriptor.
-                    # Debug level: runs per decision in the trading loop.
-                    logger.debug("Dynamic risk config cache update skipped: %s", exc)
+                    # only the live-engine state cache misses this descriptor. The
+                    # except only fires on an actual error (not every decision), so
+                    # warning-level here surfaces a real, repeating failure rather
+                    # than hiding it at debug.
+                    logger.warning("Dynamic risk config cache update skipped: %s", exc)
 
     # Runtime integration helpers -------------------------------------------------
 
@@ -417,7 +421,14 @@ class StrategyRuntimeCoordinator:
                 )
                 positions.append(component_position)
             except Exception as exc:
-                logger.debug("Failed to translate live position for runtime: %s", exc)
+                # Warning-level: a dropped position means the strategy runtime sees
+                # an incomplete open-position set and could make an unintended entry,
+                # so this must be visible rather than silently swallowed at debug.
+                logger.warning(
+                    "Failed to translate live position %s for runtime: %s",
+                    getattr(position, "symbol", "?"),
+                    exc,
+                )
         return positions
 
     def build_runtime_context(
