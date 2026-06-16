@@ -93,9 +93,12 @@ class CorrelationHandler:
                 corr_cfg = overrides.get("correlation_control", {})
                 max_exposure_override = corr_cfg.get("max_correlated_exposure")
             except Exception as exc:
-                # Debug level: runs on every entry evaluation (per-candle hot loop
-                # in backtests); malformed overrides fall back to engine defaults.
-                logger.debug("Failed to read correlation_control overrides for %s: %s", symbol, exc)
+                # Fires only on malformed overrides (not the normal per-candle path);
+                # falls back to engine defaults. Warning-level so a real, repeating
+                # config problem is visible rather than hidden at debug.
+                logger.warning(
+                    "Failed to read correlation_control overrides for %s: %s", symbol, exc
+                )
 
         # Build price series for correlation calculation
         price_series = self._build_price_series(symbol, timeframe, df, index, positions_snapshot)
@@ -135,9 +138,10 @@ class CorrelationHandler:
             if hasattr(self.strategy, "get_risk_overrides"):
                 return self.strategy.get_risk_overrides()
         except Exception as exc:
-            # Debug level: called on every entry evaluation (per-candle hot loop
-            # in backtests); a failing override hook falls back to engine defaults.
-            logger.debug("Strategy get_risk_overrides() failed: %s", exc)
+            # Fires only when the strategy override hook raises (not the normal
+            # per-candle path); falls back to engine defaults. Warning-level so a
+            # consistently failing hook is visible rather than hidden at debug.
+            logger.warning("Strategy get_risk_overrides() failed: %s", exc)
 
         return None
 
@@ -180,9 +184,10 @@ class CorrelationHandler:
             try:
                 end_ts = df.index[-1]
             except Exception as exc:
-                # Debug level: per-candle hot loop; missing index bounds simply
-                # skip the windowed history fetch below.
-                logger.debug("Failed to resolve end timestamp for %s: %s", symbol, exc)
+                # Fires only when both index lookups fail (not the normal path);
+                # the windowed history fetch below is simply skipped. Warning-level
+                # so a real, repeating bounds problem is visible.
+                logger.warning("Failed to resolve end timestamp for %s: %s", symbol, exc)
 
         start_ts = None
         if isinstance(end_ts, pd.Timestamp):
@@ -191,9 +196,10 @@ class CorrelationHandler:
                     days=self.risk_manager.params.correlation_window_days
                 )
             except Exception as exc:
-                # Debug level: per-candle hot loop; without start_ts the fetch
-                # below falls back to the default correlation window.
-                logger.debug("Failed to compute correlation window start for %s: %s", symbol, exc)
+                # Fires only on a Timedelta/arithmetic failure (not the normal
+                # path); the fetch below falls back to the default correlation
+                # window. Warning-level so a real, repeating problem is visible.
+                logger.warning("Failed to compute correlation window start for %s: %s", symbol, exc)
 
         # Get currently open positions from snapshot (thread-safe)
         open_symbols = set()
@@ -201,9 +207,10 @@ class CorrelationHandler:
             if positions_snapshot:
                 open_symbols = set(map(str, positions_snapshot.keys()))
         except Exception as exc:
-            # Debug level: per-candle hot loop; unreadable snapshot means no
-            # peer symbols are added to the correlation series.
-            logger.debug("Failed to read open positions snapshot for %s: %s", symbol, exc)
+            # Fires only on an unreadable snapshot (not the normal path); no peer
+            # symbols are added to the correlation series. Warning-level so a real,
+            # repeating problem is visible rather than hidden at debug.
+            logger.warning("Failed to read open positions snapshot for %s: %s", symbol, exc)
 
         # Peer symbols still needing a price series
         peers = sorted(open_symbols - set(price_series.keys()) - {str(symbol)})
