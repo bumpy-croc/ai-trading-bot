@@ -242,6 +242,61 @@ def test_stop_loss_placement_failure_triggers_emergency_exit():
     state._execute_exit.assert_called_once()
 
 
+def test_balance_update_failure_unconfirmed_emergency_close_enters_close_only():
+    """Site 1: post-entry balance update fails, then the emergency close placement
+    returns None (ambiguous — NOT a confirmed close). The position may remain open
+    and unprotected on the exchange, so the engine must escalate to close-only
+    rather than log a false success."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    state.exchange_interface.place_order.return_value = None  # ambiguous placement
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_tracking_failure_unconfirmed_emergency_close_enters_close_only_no_refund():
+    """Site 2: position tracking fails and the emergency close returns None
+    (ambiguous). The orphaned position may still be open on the exchange, so the
+    engine must escalate to close-only and must NOT optimistically refund the entry
+    fee (which would overstate the balance). No-session path: balance is the fee-
+    deducted 999.0 (not the 1000.0 it would be if refunded)."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True  # no trading_session_id → direct balance math
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    state.exchange_interface.place_order.return_value = None  # ambiguous placement
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    state._enter_close_only_mode.assert_called_once()
+    # Unconfirmed close → entry fee stays charged (deducted, not refunded).
+    assert state.current_balance == pytest.approx(999.0)
+
+
+def test_tracking_failure_confirmed_emergency_close_refunds_fee():
+    """Site 2 contrast: a CONFIRMED emergency close (place_order returns an order)
+    refunds the entry fee as before — balance returns to 1000.0 — and does not
+    enter close-only."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    state.exchange_interface.place_order.return_value = MagicMock()  # confirmed
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    state._enter_close_only_mode.assert_not_called()
+    assert state.current_balance == pytest.approx(1000.0)  # -1.0 fee then +1.0 refund
+
+
 # ---------------------------------------------------------------------------
 # CODE.md hardening: stop-loss gate keys on `is not None` (#813 follow-up)
 # ---------------------------------------------------------------------------

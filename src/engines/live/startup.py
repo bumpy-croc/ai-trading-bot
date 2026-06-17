@@ -24,10 +24,10 @@ if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
     from src.engines.live.execution.execution_engine import LiveExecutionEngine
     from src.engines.live.execution.position_tracker import LivePositionTracker
+    from src.engines.live.logging.event_logger import LiveEventLogger
     from src.engines.live.order_tracker import OrderTracker
     from src.engines.live.reconciliation import BaseAssetLockRegistry, PeriodicReconciler
-    from src.position_management.time_exit_policy import TimeExitPolicy
-    from src.trading.live_event_logger import LiveEventLogger
+    from src.position_management.time_exits import TimeExitPolicy
 
 logger = logging.getLogger(__name__)
 

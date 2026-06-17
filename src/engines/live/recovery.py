@@ -258,8 +258,10 @@ class LiveSessionRecoverer:
                     try:
                         state.risk_manager.close_position(position.symbol)
                     except (KeyError, ValueError, AttributeError) as drain_err:
-                        logger.debug(
-                            "Risk manager close_position drain skipped for %s: %s",
+                        logger.warning(
+                            "Risk manager close_position drain skipped for %s: %s — "
+                            "daily_risk_used may stay inflated and per-symbol caps stale "
+                            "for this session",
                             position.symbol,
                             drain_err,
                         )

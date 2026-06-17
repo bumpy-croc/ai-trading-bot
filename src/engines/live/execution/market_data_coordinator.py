@@ -117,7 +117,11 @@ class LiveMarketDataCoordinator:
 
             return True, ""
         except Exception as e:
-            logger.debug("Context readiness check failed: %s", e)
+            # Catch-all for unexpected readiness-check errors (the expected
+            # NaN/missing/stale cases are handled above and return their own
+            # reason). Warning-level so an unexpected failure here is visible in
+            # production rather than silently freezing trading.
+            logger.warning("Context readiness check failed: %s", e)
             return False, "readiness_check_error"
 
     def get_latest_data(self, symbol: str, timeframe: str) -> pd.DataFrame | None:
