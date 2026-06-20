@@ -3,4 +3,4 @@
 Run via: python -m cli
 """
 
-__all__ = []
+__all__: list[str] = []

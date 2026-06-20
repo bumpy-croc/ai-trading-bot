@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -70,14 +71,14 @@ def cached_indicator(func: Callable) -> Callable:
         # concurrent thread evicts between `in` check and `[]` access)
         cached = _INDICATOR_CACHE.get(cache_key)
         if cached is not None:
-            return cached.copy() if isinstance(cached, (pd.DataFrame, pd.Series)) else cached
+            return cached.copy() if isinstance(cached, pd.DataFrame | pd.Series) else cached
 
         # Calculate indicator
         result = func(df, *args, **kwargs)
 
         # Store in cache (copy to isolate from caller mutations)
         _INDICATOR_CACHE[cache_key] = (
-            result.copy() if isinstance(result, (pd.DataFrame, pd.Series)) else result
+            result.copy() if isinstance(result, pd.DataFrame | pd.Series) else result
         )
 
         # Limit cache size (remove oldest 20% when exceeded)
@@ -87,7 +88,7 @@ def cached_indicator(func: Callable) -> Callable:
                 _INDICATOR_CACHE.pop(key, None)
 
         # Return a copy for consistent mutation safety on first and subsequent calls
-        return result.copy() if isinstance(result, (pd.DataFrame, pd.Series)) else result
+        return result.copy() if isinstance(result, pd.DataFrame | pd.Series) else result
 
     return wrapper
 

@@ -1,8 +1,6 @@
 """Tests for EventDeduplicator — thread-safe duplicate event tracker."""
 
 import threading
-from collections import OrderedDict
-from datetime import UTC, datetime
 
 import pytest
 
@@ -76,9 +74,7 @@ class TestEventDeduplicator:
         threads = []
         # 100 threads each inserting a unique event
         for i in range(100):
-            t = threading.Thread(
-                target=call_is_duplicate, args=(f"order{i}", f"exec{i}")
-            )
+            t = threading.Thread(target=call_is_duplicate, args=(f"order{i}", f"exec{i}"))
             threads.append(t)
 
         for t in threads:

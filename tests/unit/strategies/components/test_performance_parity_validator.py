@@ -396,7 +396,7 @@ class TestPerformanceParityValidator:
         validator._determine_overall_result(report)
 
         assert report.overall_result == ValidationResult.PASS
-        assert report.certified == True
+        assert report.certified is True
         assert report.total_metrics_tested == 2
         assert report.metrics_passed == 2
         assert report.metrics_failed == 0
@@ -429,7 +429,7 @@ class TestPerformanceParityValidator:
         validator._determine_overall_result(report)
 
         assert report.overall_result == ValidationResult.FAIL
-        assert report.certified == False
+        assert report.certified is False
         assert report.metrics_failed == 1
 
     def test_determine_overall_result_warning(self, validator):
@@ -459,7 +459,7 @@ class TestPerformanceParityValidator:
         validator._determine_overall_result(report)
 
         assert report.overall_result == ValidationResult.WARNING
-        assert report.certified == False
+        assert report.certified is False
         assert report.metrics_warning == 1
 
     def test_full_validation_workflow(self, validator, sample_backtest_data):
@@ -543,5 +543,5 @@ class TestPerformanceComparisonReport:
         assert report.equity_curve_correlation == 0.0
         assert report.trade_count_legacy == 0
         assert report.trade_count_new == 0
-        assert report.certified == False
+        assert report.certified is False
         assert report.certification_timestamp is None

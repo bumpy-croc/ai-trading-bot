@@ -1,6 +1,6 @@
 # Live trading
 
-> **Last Updated**: 2025-12-26
+> **Last Updated**: 2026-06-10
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
 `src/engines/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
@@ -20,6 +20,21 @@ continuous polling, account synchronisation, and resilience features required fo
   known state.
 - **Sentiment and regime inputs** – pass a `SentimentDataProvider` (Fear & Greed) or enable the `RegimeStrategySwitcher` to swap
   strategies when market conditions change.
+
+## Handler decomposition & lock ownership (#486)
+
+`LiveTradingEngine` orchestrates; exchange- and observability-facing work is delegated:
+
+| Component | Module | Responsibility | Lock ownership |
+|-----------|--------|----------------|----------------|
+| `LiveStopLossManager` | `engines/live/execution/stop_loss_manager.py` | All exchange-facing stop-loss calls: placement (with retry), cancel, fill/held queries, re-protect, offline-fill detection | None — stateless; reads `enable_live_trading`/`exchange_interface`/`order_tracker` off the engine at call time; position mutations go through `LivePositionTracker`'s internal lock |
+| `LiveAccountMonitor` | `engines/live/monitoring/account_monitor.py` | Balance/equity snapshots, status lines, performance summaries | None — stateless; reads positions via `LivePositionTracker.positions` (thread-safe snapshot) |
+| `LivePositionTracker` | `engines/live/execution/position_tracker.py` | Position state | Owns `_positions_lock`; `positions` property returns a defensive copy |
+| `OrderTracker` | `engines/live/order_tracker.py` | Order fill polling + callbacks | Owns its internal lock; engine callbacks defer closes to the trading loop via `_pending_fill_exits` |
+| `SharedEntryHandlerMixin` | `engines/shared/execution/entry_handler_mixin.py` | Entry-plan extraction + dynamic-risk sizing, identical for backtest and live | None — delegates to shared `DynamicRiskHandler` |
+
+The engine itself keeps thin private wrappers (`_cancel_stop_loss_order`, `_check_stop_loss_filled`, `_log_account_snapshot`, …) so
+call sites and test mock points are stable while the implementations live in the modules above.
 
 ## State recovery & account sync
 
@@ -134,6 +149,25 @@ Each closed `trades` row stores fees so consumers can compute true net P&L:
 > ledger is unavailable — reconciles *exactly* for full round trips but is **approximate**
 > for positions that took partial exits (their intermediate P&L and fees are in the ledger,
 > not in `trades`). Logging partial-exit trade rows is tracked as a follow-up.
+
+> **Reconciler-closed trades.** When a position is closed during reconciliation rather than by
+> the engine, a `trades` row is still written so fees/quantity/P&L are not lost. Two kinds:
+> - **Closes the bot can price** — offline stop-loss (`_close_position_from_filled_sl`) and
+>   crash-recovery `FULL_EXIT` (`_reconcile_filled_exit`) — know the exit fill, so they realize
+>   P&L **and** log the trade (only after the DB position is confirmed closed; deduped by the
+>   exit order id or a synthetic `reconcile_exit_<position_id>` key).
+> - **External/manual closes** (operator sells on the exchange UI, or a liquidation) detected by
+>   a holdings/borrow check (`_verify_asset_holdings` spot, `_remove_phantom_position` margin)
+>   carry no fill. They log a **balance-neutral** trade row only (commission = reconstructed
+>   entry leg, GROSS pnl priced mark-to-market from the data provider, falling back to entry
+>   price → pnl 0), keyed by a synthetic `reconcile_ext_<position_id>`. They do **not** touch the
+>   balance: that capital is reconciled by startup Step C (`_reconcile_balance`, spot) or
+>   `AccountSynchronizer._sync_margin_equity` (margin), so realizing P&L here too would
+>   double-book the ledger. Because that GROSS pnl is a mark-to-market **estimate** (not the real
+>   external fill), it is an approximation wherever `trades.pnl` is summed — session metrics and
+>   the degraded `recover_last_balance` fallback — in the same spirit as the partial-exit caveat
+>   above; the authoritative `account_balances` ledger is unaffected. (`PeriodicReconciler`'s
+>   runtime external-close detection does not yet log a trade row — tracked as a follow-up.)
 
 ## CLI usage
 

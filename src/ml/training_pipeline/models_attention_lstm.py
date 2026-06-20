@@ -31,17 +31,11 @@ try:
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
     _TENSORFLOW_AVAILABLE = False
-    tf = None  # type: ignore
-    Model = None  # type: ignore
-    callbacks = None  # type: ignore
-    layers = None  # type: ignore
-
-if TYPE_CHECKING:
-    from tensorflow.keras import callbacks as CallbacksType
-    from tensorflow.keras.models import Model as ModelType
-else:
-    ModelType = Any  # type: ignore
-    CallbacksType = Any  # type: ignore
+    if not TYPE_CHECKING:
+        tf = None
+        Model = None
+        callbacks = None
+        layers = None
 
 
 def _ensure_tensorflow_available() -> None:
@@ -74,8 +68,9 @@ class AttentionLayer(layers.Layer):
         self.num_heads = num_heads
         self.key_dim = key_dim
         self.dropout_rate = dropout
-        self.attention = None
-        self.dropout_layer = None
+        # Layers initialized in build(); Keras layer types are untyped (Any)
+        self.attention: Any = None
+        self.dropout_layer: Any = None
 
     def build(self, input_shape):
         """Build the attention layer based on input shape."""

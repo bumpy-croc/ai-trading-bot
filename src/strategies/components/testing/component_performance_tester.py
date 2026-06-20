@@ -14,7 +14,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -67,8 +67,9 @@ class SignalTestResults:
     avg_strength: float
     confidence_accuracy_correlation: float
 
-    # Regime breakdown (if regime data available)
-    regime_breakdown: dict[str, dict[str, float]]
+    # Regime breakdown (if regime data available); inner dicts hold per-regime
+    # accuracy/count plus the raw per-signal accuracy flags
+    regime_breakdown: dict[str, dict[str, Any]]
 
     # Error analysis
     error_count: int
@@ -436,7 +437,7 @@ class ComponentPerformanceTester:
         error_count = 0
 
         # Regime breakdown tracking
-        regime_breakdown = {}
+        regime_breakdown: dict[str, dict[str, Any]] = {}
 
         # Test across all scenarios
         for scenario in test_scenarios:
@@ -585,7 +586,8 @@ class ComponentPerformanceTester:
 
         # Timing metrics
         test_duration = time.time() - start_time
-        avg_signal_time = np.mean(signal_times) if signal_times else 0.0
+        # cast: np.mean yields np.float64, a float subclass at runtime
+        avg_signal_time = cast(float, np.mean(signal_times)) if signal_times else 0.0
         signals_per_second = total_signals / test_duration if test_duration > 0 else 0.0
 
         return SignalTestResults(
@@ -811,7 +813,8 @@ class ComponentPerformanceTester:
 
         # Timing metrics
         test_duration = time.time() - start_time
-        avg_calc_time = np.mean(calculation_times) if calculation_times else 0.0
+        # cast: np.mean yields np.float64, a float subclass at runtime
+        avg_calc_time = cast(float, np.mean(calculation_times)) if calculation_times else 0.0
         calcs_per_second = total_scenarios / test_duration if test_duration > 0 else 0.0
 
         return RiskTestResults(
@@ -868,7 +871,7 @@ class ComponentPerformanceTester:
             test_scenarios = [s for s in test_scenarios if s["name"] in scenarios]
 
         # Initialize tracking variables
-        all_calculations = []
+        all_calculations: list[dict[str, Any]] = []
         calculation_times = []
         error_count = 0
         bounds_violations = 0
@@ -932,11 +935,12 @@ class ComponentPerformanceTester:
             raise ValueError("No valid position sizing calculations performed")
 
         # Size distribution analysis
-        position_sizes = [c["position_size"] for c in all_calculations]
-        size_fractions = [c["size_fraction"] for c in all_calculations]
+        position_sizes: list[float] = [c["position_size"] for c in all_calculations]
+        size_fractions: list[float] = [c["size_fraction"] for c in all_calculations]
 
-        avg_position_size = np.mean(position_sizes)
-        position_size_std = np.std(position_sizes)
+        # cast: np.mean/np.std yield np.float64, a float subclass at runtime
+        avg_position_size = cast(float, np.mean(position_sizes))
+        position_size_std = cast(float, np.std(position_sizes))
 
         # Size range utilization (how well it uses the full range)
         min_size = min(size_fractions)
@@ -944,8 +948,8 @@ class ComponentPerformanceTester:
         size_range_utilization = (max_size - min_size) / 0.2  # Assuming 20% max range
 
         # Confidence and strength responsiveness
-        confidences = [c["confidence"] for c in all_calculations]
-        strengths = [c["strength"] for c in all_calculations]
+        confidences: list[float] = [c["confidence"] for c in all_calculations]
+        strengths: list[float] = [c["strength"] for c in all_calculations]
 
         # Calculate correlations with NaN handling
         if len(confidences) > 1:
@@ -968,7 +972,8 @@ class ComponentPerformanceTester:
 
         # Timing metrics
         test_duration = time.time() - start_time
-        avg_calc_time = np.mean(calculation_times) if calculation_times else 0.0
+        # cast: np.mean yields np.float64, a float subclass at runtime
+        avg_calc_time = cast(float, np.mean(calculation_times)) if calculation_times else 0.0
         calcs_per_second = total_calculations / test_duration if test_duration > 0 else 0.0
 
         return SizingTestResults(
@@ -1057,7 +1062,10 @@ class ComponentPerformanceTester:
             ) / 2
             component_scores.append(sizing_score)
 
-        results.overall_performance_score = np.mean(component_scores) if component_scores else 0.0
+        # cast: np.mean yields np.float64, a float subclass at runtime
+        results.overall_performance_score = (
+            cast(float, np.mean(component_scores)) if component_scores else 0.0
+        )
 
         # Placeholder for component synergy analysis
         results.component_synergy_score = 0.8

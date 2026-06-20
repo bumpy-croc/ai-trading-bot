@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pandas as pd
 
@@ -264,9 +264,9 @@ class PerformanceComparisonEngine:
 
         # Run the backtest
         # Note: This is a simplified interface - actual implementation would depend on BacktestEngine API
-        results = self.backtest_engine.run_backtest(
-            strategy=strategy, data=market_data, **backtest_config
-        )
+        # cast: compare_strategies raises before calling _run_backtest when backtest_engine is None
+        engine = cast(BacktestEngineProtocol, self.backtest_engine)
+        results = engine.run_backtest(strategy=strategy, data=market_data, **backtest_config)
 
         # Ensure results have required columns
         if "balance" not in results.columns:

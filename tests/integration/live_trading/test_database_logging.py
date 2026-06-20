@@ -317,9 +317,6 @@ class TestDatabaseLogging:
         # Get trading decision
         decision = strategy.process_candle(df, 149, 10000)
 
-        # Convert decision to dict for logging
-        decision_dict = decision.to_dict()
-
         # Log strategy execution with TradingDecision data
         # Store regime and risk data in indicators dict since they're not separate fields
         # Use signal metadata instead of full decision metadata to avoid serialization issues
@@ -377,7 +374,6 @@ class TestDatabaseLogging:
                 ConfidenceWeightedSizer,
                 FixedRiskManager,
                 MLBasicSignalGenerator,
-                SignalDirection,
                 Strategy,
             )
         except ImportError:

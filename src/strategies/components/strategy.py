@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 if TYPE_CHECKING:
+    from .leverage_manager import LeverageManager
     from .runtime import FeatureGeneratorSpec, StrategyDataset
 
 from .policies import PolicyBundle
@@ -89,6 +90,22 @@ class Strategy:
     to create a unified trading strategy with comprehensive logging and decision tracking.
     """
 
+    # Engine- and test-facing configuration optionally attached by strategy
+    # factory functions (e.g. ``create_adaptive_trend_strategy``). Bare
+    # annotations only: assigning class-level defaults would change the
+    # hasattr()-based discovery in get_parameters() and
+    # _create_decision_metadata().
+    stop_loss_pct: float
+    take_profit_pct: float
+    risk_per_trade: float
+    base_fraction: float
+    base_position_size: float
+    min_position_size_ratio: float
+    max_position_size_ratio: float
+    component_weights: dict[str, float]
+    leverage_manager: LeverageManager
+    _extra_metadata: dict[str, Any]
+
     def __init__(
         self,
         name: str,
@@ -134,8 +151,8 @@ class Strategy:
         self.decision_history: list[TradingDecision] = []
         self.max_history = max_history
 
-        # Performance metrics
-        self.metrics = {
+        # Performance metrics (mixed value types: counters, averages, datetime)
+        self.metrics: dict[str, Any] = {
             "total_decisions": 0,
             "buy_signals": 0,
             "sell_signals": 0,
@@ -496,7 +513,7 @@ class Strategy:
         avg_position_size = sum(d.position_size for d in recent_decisions) / total_decisions
 
         # Regime analysis
-        regime_distribution = {}
+        regime_distribution: dict[str, int] = {}
         for decision in recent_decisions:
             if decision.regime:
                 regime_key = f"{decision.regime.trend.value}_{decision.regime.volatility.value}"

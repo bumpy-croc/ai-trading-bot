@@ -68,8 +68,6 @@ class TestRegimeTesterVolatilityParsing:
 
     def test_regime_string_parsing_with_vol_suffix(self):
         """Test that regime string parsing correctly handles _vol suffix"""
-        tester = RegimeTester(self.create_test_data())
-
         # Test the fixed parsing logic directly
         test_cases = [
             ("trend_up_low_vol", "trend_up", "low_vol"),
@@ -106,8 +104,6 @@ class TestRegimeTesterVolatilityParsing:
 
     def test_regime_string_parsing_legacy_format(self):
         """Test that regime string parsing handles legacy format without _vol suffix"""
-        tester = RegimeTester(self.create_test_data())
-
         # Test legacy format (should still work)
         test_cases = [
             ("trend_up_low", "trend_up", "low"),
@@ -138,8 +134,6 @@ class TestRegimeTesterVolatilityParsing:
 
     def test_regime_string_parsing_edge_cases(self):
         """Test regime string parsing with edge cases"""
-        tester = RegimeTester(self.create_test_data())
-
         # Test edge cases
         test_cases = [
             ("trend_up", "range", "low_vol"),  # Too few parts
@@ -171,8 +165,6 @@ class TestRegimeTesterVolatilityParsing:
     @patch("src.strategies.components.testing.regime_tester.logger")
     def test_regime_string_parsing_with_logging(self, mock_logger):
         """Test that regime string parsing logs warnings for unexpected formats"""
-        tester = RegimeTester(self.create_test_data())
-
         # Test with unexpected format
         regime_type = "unexpected_format"
         regime_parts = regime_type.split("_")

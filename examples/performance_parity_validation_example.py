@@ -287,10 +287,10 @@ def main():
 
     try:
         # Run examples
-        basic_report = example_basic_validation()
+        example_basic_validation()
         custom_report, strict_report = example_custom_tolerances()
         stat_results, equiv_result = example_statistical_analysis()
-        export_report = example_export_functionality()
+        example_export_functionality()
 
         print("\n" + "=" * 80)
         print("SUMMARY")

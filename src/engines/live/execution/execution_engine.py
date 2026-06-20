@@ -959,7 +959,7 @@ class LiveExecutionEngine:
 
         # Validate and apply step_size
         step_size = symbol_info.get("step_size")
-        if step_size is None or not isinstance(step_size, (int, float)):
+        if step_size is None or not isinstance(step_size, int | float):
             logger.warning("Invalid step_size for %s - using raw quantity", symbol)
             # Continue without step_size normalization
         elif step_size <= 0 or not math.isfinite(step_size):
@@ -986,7 +986,7 @@ class LiveExecutionEngine:
 
         # Validate min_qty constraint
         min_qty = symbol_info.get("min_qty")
-        if min_qty and isinstance(min_qty, (int, float)) and min_qty > 0:
+        if min_qty and isinstance(min_qty, int | float) and min_qty > 0:
             if quantity < min_qty:
                 logger.error(
                     "Calculated quantity %.8f below minimum %.8f for %s",
@@ -998,7 +998,7 @@ class LiveExecutionEngine:
 
         # Validate min_notional constraint
         min_notional = symbol_info.get("min_notional")
-        if min_notional and isinstance(min_notional, (int, float)) and min_notional > 0:
+        if min_notional and isinstance(min_notional, int | float) and min_notional > 0:
             if value < min_notional:
                 logger.error(
                     "Order value %.2f below minimum notional %.2f for %s",

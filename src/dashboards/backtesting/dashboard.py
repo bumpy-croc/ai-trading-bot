@@ -154,7 +154,7 @@ class BacktestDashboard:
         # Decide server kwargs based on whether gevent is enabled.
         # With gevent enabled, Flask runs a production-safe gevent server.
         # Without gevent, allow Werkzeug only for local development.
-        server_kwargs = {
+        server_kwargs: dict[str, Any] = {
             "host": host,
             "port": port,
             "debug": debug,

@@ -7,10 +7,10 @@ import math
 import os
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
-import requests
+import requests  # type: ignore[import-untyped]  # requests ships no inline types; stubs not installed
 
 from src.config import get_config
 from src.infrastructure.network_retry import with_network_retry
@@ -132,7 +132,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         if api_key and api_secret and not passphrase:
             if allow_test_credentials:
                 logger.debug("Coinbase provider allowing missing passphrase for test environment")
-                passphrase = ""
+                passphrase = ""  # nosec B105 — empty default, real value comes from config/env
             else:
                 raise ValueError(
                     "Coinbase credentials must include COINBASE_API_PASSPHRASE when providing API key and secret"
@@ -183,8 +183,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         if hasattr(self, "_session") and self._session is not None:
             try:
                 self._session.close()
-            except Exception:
-                pass  # Ignore errors during cleanup
+            except Exception as e:
+                # The session is being discarded anyway, but cleanup runs rarely
+                # enough that a WARNING cannot flood and aids leak diagnosis.
+                logger.warning("Error closing session during cleanup: %s", e)
             self._session = None
 
     def __del__(self) -> None:
@@ -342,13 +344,18 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
     def _parse_order_data(self, od: dict[str, Any]) -> Order:
         """Parse a Coinbase order response dict into an Order object."""
         now = datetime.now(UTC)
+        # Single lookups so mypy can narrow None away in the ternaries below.
+        raw_price = od.get("price")
+        raw_stop_price = od.get("stop_price")
         return Order(
-            order_id=od.get("id"),
-            symbol=od.get("product_id"),
+            # cast: Coinbase order payloads always carry id/product_id; a missing
+            # field would already break downstream consumers of Order today.
+            order_id=cast(str, od.get("id")),
+            symbol=cast(str, od.get("product_id")),
             side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
             order_type=self._convert_order_type(od.get("type")),
             quantity=float(od.get("size", 0)),
-            price=float(od.get("price")) if od.get("price") else None,
+            price=float(raw_price) if raw_price else None,
             status=self._convert_order_status(od.get("status"), od.get("done_reason")),
             filled_quantity=float(od.get("filled_size", 0)),
             average_price=(
@@ -360,7 +367,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             commission_asset="",
             create_time=self._safe_parse_iso(od.get("created_at"), now),
             update_time=self._safe_parse_iso(od.get("done_at"), now),
-            stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
+            stop_price=float(raw_stop_price) if raw_stop_price else None,
             time_in_force=od.get("time_in_force", "GTC"),
         )
 
@@ -464,6 +471,14 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         """
         try:
             cb_type = self._convert_to_cb_type(order_type)
+            if cb_type != "market" and time_in_force == "GTD":
+                # Coinbase requires an end_time for GTD orders; this client has
+                # no parameter for it, so the API would reject the order with a
+                # less actionable error.
+                raise ValueError(
+                    "GTD time_in_force requires an end_time, which CoinbaseProvider "
+                    "does not support — use GTC or IOC"
+                )
             body: dict[str, Any] = {
                 "product_id": SymbolFactory.to_exchange_symbol(symbol, "coinbase"),
                 "side": side.value.lower(),
@@ -596,7 +611,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         limit: int | None = None,
     ) -> list[list[Any]]:
         """Fetch candle data from Coinbase public API."""
-        params = {"granularity": granularity}
+        params: dict[str, int | str] = {"granularity": granularity}
         if start is not None:
             params["start"] = start.isoformat()
         if end is not None:
@@ -711,20 +726,25 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     # --------------------------- DataProvider --------------------------
 
-    def _convert_order_type(self, order_type: str) -> OrderType:
-        """Convert Coinbase order type to internal OrderType enum."""
-        mapping = {
+    def _convert_order_type(self, order_type: str | None) -> OrderType:
+        """Convert Coinbase order type to internal OrderType enum.
+
+        Missing/unknown types fall back to MARKET.
+        """
+        mapping: dict[str | None, OrderType] = {
             "market": OrderType.MARKET,
             "limit": OrderType.LIMIT,
             "stop": OrderType.STOP_LOSS,
         }
         return mapping.get(order_type, OrderType.MARKET)
 
-    def _convert_order_status(self, status: str, done_reason: str | None = None) -> OrderStatus:
+    def _convert_order_status(
+        self, status: str | None, done_reason: str | None = None
+    ) -> OrderStatus:
         """Convert Coinbase order status to internal OrderStatus enum.
 
         Args:
-            status: Coinbase order status
+            status: Coinbase order status (missing/unknown statuses map to PENDING)
             done_reason: For 'done' orders, the reason (filled, cancelled, etc.)
         """
         if status == "open":
@@ -745,16 +765,37 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         else:
             return OrderStatus.PENDING
 
-    def _convert_to_cb_type(self, order_type: str) -> str:
-        """Convert internal order type to Coinbase order type."""
+    def _convert_to_cb_type(self, order_type: OrderType | str) -> str:
+        """Convert internal order type to a Coinbase order type string.
+
+        Raises:
+            ValueError: For order types this provider cannot place. Defaulting
+                to "market" here (the old behavior) silently stripped price
+                protection: ``OrderType.LIMIT.value`` is ``"LIMIT"``, which
+                never matched the lowercase mapping keys, so every order —
+                including limit and stop orders — was submitted as a market
+                order (#762).
+        """
         mapping = {
-            "market": "market",
-            "limit": "limit",
-            "stop": "stop",
+            OrderType.MARKET: "market",
+            OrderType.LIMIT: "limit",
+            OrderType.STOP_LOSS: "stop",
         }
-        if isinstance(order_type, OrderType):
-            order_type = order_type.value
-        return mapping.get(order_type, "market")
+        if isinstance(order_type, str):
+            by_name = {
+                "market": OrderType.MARKET,
+                "limit": OrderType.LIMIT,
+                "stop": OrderType.STOP_LOSS,
+                "stop_loss": OrderType.STOP_LOSS,
+            }
+            normalized = by_name.get(order_type.strip().lower())
+            if normalized is None:
+                raise ValueError(f"Unsupported Coinbase order type: {order_type!r}")
+            order_type = normalized
+        cb_type = mapping.get(order_type)
+        if cb_type is None:
+            raise ValueError(f"Unsupported Coinbase order type: {order_type!r}")
+        return cb_type
 
 
 # Aliases for convenience

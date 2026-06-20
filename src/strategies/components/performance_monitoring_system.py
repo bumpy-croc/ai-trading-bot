@@ -123,7 +123,7 @@ class PerformanceMonitoringSystem:
         if not self.monitoring_enabled:
             return {"monitoring_enabled": False}
 
-        results = {
+        results: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "current_strategy": self.current_strategy_id,
             "monitoring_enabled": True,

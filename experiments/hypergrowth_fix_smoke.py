@@ -46,9 +46,9 @@ def main() -> int:
     gen = strategy.signal_generator
 
     # Verify the fix is live at the configuration level
-    assert getattr(gen, "model_type", None) == "basic", (
-        f"Expected model_type='basic', got {getattr(gen, 'model_type', None)!r}"
-    )
+    assert (
+        getattr(gen, "model_type", None) == "basic"
+    ), f"Expected model_type='basic', got {getattr(gen, 'model_type', None)!r}"
     print(f"  OK: signal generator model_type = {gen.model_type!r}")
 
     # Walk 2024 bars through the actual generator

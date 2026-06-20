@@ -11,26 +11,186 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Live trading engine refactor, steps 1–3 of #486 (pure refactor, no behavior
+  change; verified by the full unit suite, the parity suite, and a
+  deterministic backtest fingerprint that is byte-identical before/after):
+  - Exchange-facing stop-loss lifecycle (placement with retry, cancellation,
+    fill/held-inventory queries, re-protection, offline-fill detection for the
+    legacy reconciliation fallback) moved from `LiveTradingEngine` into
+    `src/engines/live/execution/stop_loss_manager.py` (`LiveStopLossManager`).
+    The engine no longer calls `place_stop_loss_order`, `cancel_order`,
+    `get_open_orders`, or `get_order` directly — it orchestrates via thin
+    delegating wrappers.
+  - Account monitoring glue (balance/equity snapshots, status lines,
+    performance summaries, dataframe extraction helpers) moved to
+    `src/engines/live/monitoring/` (`LiveAccountMonitor`).
+  - The three byte-identical entry-handler methods (`_extract_entry_plan`,
+    `_apply_dynamic_risk`, `get_dynamic_risk_adjustments`) now live once in
+    `src/engines/shared/execution/entry_handler_mixin.py`
+    (`SharedEntryHandlerMixin`), inherited by both the backtest and live
+    entry handlers so this slice of backtest-live parity holds by
+    construction. Divergent orchestration (`process_runtime_decision`,
+    `execute_entry`, exit checks) is intentionally left engine-specific.
+
 ### Fixed
 - Periodic reconciler now persists a balance-neutral audit `trades` row when it
   detects an externally-closed position (margin and spot branches of
-  `PeriodicReconciler._reconcile_cycle`), closing the same gap PR #731 fixed for
-  the startup paths. The closure has no real fill price, so pnl/commission are
-  valued at a proxy (current-market) exit price from the `data_provider`;
-  `Trade.pnl` stays GROSS and the row dedups on the synthetic non-NULL key
-  `reconcile_ext_<db_position_id>` over `uq_trade_order_session`. The row is
-  written only once the DB close actually succeeds — gated on the
-  `close_position` **return value** (it swallows DB errors to `False` rather than
-  raising), and the position is dropped from the tracker only on that success (no
-  memory/DB divergence). The trade-row writer is now the shared module-level
-  `reconciliation.log_reconciliation_trade` (used by both reconcilers).
-  Balance ownership: the periodic spot path now **self-heals** the session
-  balance the same cycle via the extracted `_reconcile_spot_balance`, which
-  values a **fresh** position snapshot — fixing a stale-snapshot over-correction
-  where Step 4 counted a just-closed position's notional and over-corrected the
-  balance by it for ~one cycle (~2 min) before self-healing. Margin balance stays
-  owned by `AccountSynchronizer._sync_margin_equity`. `PeriodicReconciler` gains
-  `data_provider` and `fee_rate` constructor params (wired from the engine).
+  `PeriodicReconciler._reconcile_cycle`), extending the startup external-close
+  audit row to the periodic cycle. Each branch delegates to the startup
+  reconciler's `_log_external_close_trade` (so it books identically: GROSS
+  `Trade.pnl` at a proxy mark-to-market price, dedup key
+  `reconcile_ext_<db_position_id>`, `balance_realized=False`), popping the
+  position only if still tracked and gating the row on the DB `close_position`
+  call actually returning `True` (it swallows DB errors to `False`) so a failed
+  close is re-reconciled rather than logged for a still-open position.
+  The periodic spot path also **self-heals** the session balance the same cycle
+  via a new `_reconcile_spot_balance`, which values a **fresh** position snapshot
+  — fixing a stale-snapshot over-correction where the periodic balance check
+  counted a just-closed position's notional and over-corrected the balance by it
+  for ~one cycle (~2 min) before self-healing. Margin balance stays owned by
+  `AccountSynchronizer._sync_margin_equity`.
+- Backtest risk tracking now covers next-bar (pending) entries (#757):
+  the post-fill `RiskManager.update_position` call passed the `PositionSide`
+  enum, whose string validation (`side in VALID_SIDES`) raised `ValueError`
+  on every call — swallowed with a warning — so `daily_risk_used` and
+  position tracking for correlation control silently omitted every pending
+  entry. Backtests could take position sequences a correctly-accounted run
+  would have rejected. The side now converts via `to_side_string`, like the
+  immediate-entry path.
+- Live daily P&L survives restarts now (#766): day-start balance recovery
+  queried `DatabaseManager.get_first_snapshot_of_day`, which was never
+  implemented (`AttributeError` swallowed as a "graceful fallback"), and the
+  recovery helper itself was never invoked — so every intraday restart reset
+  the daily P&L baseline to the restart-time balance. The method now exists
+  (earliest `account_history` row of the UTC day for the session) and is
+  wired into the first snapshot after engine start. Trading-day semantics are
+  explicitly UTC throughout the event logger (was local `date.today()`,
+  skewing day boundaries on non-UTC hosts).
+- Backtest trades persist the correct `pnl_percent` for longs (#758):
+  the backtest event logger passed the engines' `PositionSide` enum into
+  `log_trade`, which compares against the **database** `PositionSide` —
+  cross-enum equality is always False, so every long backtest trade was
+  stored with the short formula (sign-flipped). `log_trade` now normalizes
+  any Enum side/source by value before classification (hardens all callers)
+  and the backtest call site converts via `to_side_string`.
+- Correlation control no longer silently drops peer symbols (#759): the
+  no-window fallback omitted the required `start` argument, so every call
+  raised `TypeError` (swallowed) and the peer vanished from correlated-
+  exposure accounting in BOTH engines. A failed window computation now falls
+  back to the default correlation window; when no time window is derivable
+  at all (non-datetime index), peers are skipped with an explicit WARNING
+  instead of fabricating a wall-clock window (backtest lookahead).
+- Backtest strategies can finally see their open position (#756):
+  `_build_runtime_context` passed the `PositionSide` enum into
+  `ComponentPosition`, whose validation expects "long"/"short" strings, so
+  construction raised `ValueError` on every candle (swallowed) and component
+  strategies always received `current_positions=None` — while live populated
+  it correctly. Position-aware logic (pyramiding guards, exposure checks) was
+  silently inert in backtests. The side now converts via `to_side_string`,
+  exactly like live.
+- CoinbaseProvider no longer submits every order as MARKET (#762):
+  `_convert_to_cb_type` was keyed by lowercase strings while `OrderType`
+  enum values are uppercase, so the lookup always fell back to "market" —
+  limit orders lost price protection and stop orders fired immediately.
+  Mapping is now enum-keyed, unknown types raise instead of defaulting to
+  the most dangerous order type, and GTD time_in_force is rejected before
+  the API call (it requires an end_time this client cannot send).
+- `LivePositionTracker.recover_positions` actually recovers positions now
+  (#764): it called `DatabaseManager.get_open_positions`, a method that does
+  not exist, so the swallowed `AttributeError` made it always return `[]` —
+  a silent fail-open trap for any future recovery caller. It now maps the
+  dict rows from the real `get_active_positions` API with the same
+  normalization and hydration as the engine's `_recover_active_positions`
+  (uppercase DB side, tracker key fallback to row id, partial-op state,
+  reconciliation ids), skips invalid-entry-price rows with a CRITICAL log,
+  and isolates per-row failures.
+- `TradeProtocol` members are now read-only properties (#767), so concrete
+  trade classes with narrower types (non-Optional datetimes, `PositionSide`
+  enum side) conform structurally — the three `cast("TradeProtocol", ...)`
+  workarounds at the engines' `record_trade` call sites are gone. The `side`
+  member is honestly typed `str | Enum | None` (record_trade stringifies it).
+- Backtest trailing-stop updates no longer crash the run when trailing
+  activates without a stop improvement (#761): `TrailingStopManager.update`
+  legitimately returns `updated=True, new_stop_price=None` (e.g. ATR
+  unavailable on the activation candle), and the backtest tracker compared
+  that `None` against the current stop (`TypeError`, unwrapped). The tracker
+  now mirrors the live tracker: flag updates apply, price comparison skipped.
+- `build_time_exit_policy` (engines/shared) can now actually build a policy
+  (#760): it passed `exit_time`/`exit_days` kwargs that `TimeExitPolicy` does
+  not accept, so it always raised `TypeError` internally and returned `None`.
+  It now maps the same `time_exits` config shape as both engines' builders
+  (max holding, end-of-day/weekend flat, timezone, restrictions) and honors
+  both `params.time_exits` and the legacy `params.max_holding_hours` fallback.
+- `StrategyManager.update_model` with no strategy loaded now fails with the
+  intended descriptive `ValueError` (#765) instead of an `AttributeError`
+  raised while formatting the error message itself (`self.current_strategy.name`
+  on `None`), which surfaced as a misleading generic failed update.
+- `atb data populate-dummy` works again (#763): `log_trade` was called with the
+  nonexistent `order_id` kwarg (the parameter is `exit_order_id`), so the first
+  generated trade raised `TypeError` and the command always failed. Same bug
+  class as #732; an autospec'd regression test now enforces the real signature.
+- A REJECTED stop-loss is now re-placed and an unexpected stop-loss
+  termination escalates (#741). The reconciler's re-placement branches
+  (periodic loop and startup `_verify_stop_loss`) matched only
+  CANCELLED/EXPIRED/missing, so a triggered STOP_LOSS_LIMIT whose limit
+  leg was rejected by margin checks (-2010 class) fell through every
+  cycle — position permanently unprotected, no escalation. Both branches
+  now treat REJECTED as terminal. The engine's `_handle_order_cancel`
+  also no longer ignores stop-loss order ids: when a tracked position's
+  stop terminates unexpectedly it clears the stale id (so the
+  reconciler's missing-stop path re-protects next cycle), logs CRITICAL,
+  and emits a `system_events` row (`STOP_LOSS_CANCELLED`) with webhook
+  alert. Deliberate close-path cancels are unaffected (they stop
+  tracking the order before the callback can fire).
+- Repo-wide static-analysis debt cleared — `atb dev quality` (black, ruff,
+  mypy, bandit) now passes from a red baseline of 26 unformatted files, 171
+  ruff errors, ~700 mypy errors across ~90 files, and 25 bandit findings.
+  All fixes are type/lint-level with no runtime behavior change: annotations
+  (`X | None` lazy-init attributes, honest container/dict types, SQLAlchemy
+  `Mapped[...]` column annotations), justified `cast()`s at untyped
+  numpy/onnx/keras/exchange boundaries, removal of ~45 stale `type: ignore`
+  comments, and isinstance tuples → PEP 604 unions. Bandit
+  try/except-pass/continue sites now log (breadth unchanged; debug in
+  per-candle hot loops, WARNING elsewhere); false positives carry justified
+  `# nosec` markers; the one `assert` in `src/` is an explicit raise.
+  Repaired silently-dead tooling config: `mypy.ini` per-module ignore
+  sections stopped matching after the `src/` layout migration (modules
+  gained the `src.` prefix) and its `exclude` regex had a trailing `|`
+  matching every path; `types-PyYAML` is now pinned so `yaml` imports
+  type-check. TensorFlow guarded imports use a `TYPE_CHECKING`-stable
+  pattern so mypy results match whether TF is installed or not.
+  Static analysis exposed several pre-existing behavioral defects which are
+  deliberately NOT fixed here — each is marked with a `KNOWN BUG` comment at
+  the site: backtest strategies never see open positions in
+  `RuntimeContext` (enum-vs-string side validation always raises, swallowed
+  per candle); risk tracking silently skipped for next-bar entries;
+  persisted `pnl_percent` uses the short formula for long backtest trades;
+  correlation control silently drops peer symbols on a missing-argument
+  `TypeError`; `build_time_exit_policy` can never produce a policy;
+  Coinbase enum order types map to lowercase keys that never match (limit
+  orders would submit as market); `atb data populate-dummy` crashes on a
+  nonexistent `log_trade(order_id=...)` kwarg.
+- Periodic reconciler now books realized P&L when it detects a filled
+  stop-loss. Both detection paths previously corrupted tracked capital:
+  the stop-verification branch closed the DB row with NO balance update
+  (and no trade record), and the margin holdings check misclassified a
+  just-filled short stop-loss (AUTO_REPAY zeroes the borrow) as
+  "externally closed" (the spot holdings check had the identical flaw:
+  a filled stop also empties the held balance), closing the row with no
+  exit price at all. Every
+  SL loss the reconciler processed before the engine's deferred-exit
+  drain (~equal ~2-minute cadences, so a large fraction) silently never
+  hit the balance → overstated capital → oversized subsequent positions.
+  Both the margin and spot holdings checks now consult the tracked stop
+  order before classifying an external close.
+  Both paths now delegate to the startup reconciler's filled-SL handler
+  (#731): DB close first (a failed close leaves the position tracked for
+  retry), P&L with USD-normalized commission and margin interest, plus a
+  deduplicated `trades` row. The periodic wrapper skips when the engine's
+  deferred-exit drain already processed the fill (no double-booking) and
+  defers classification (fail-closed) when the stop's state cannot be
+  confirmed.
 - OrderTracker no longer converts an API outage into a position deletion.
   After `MAX_API_ERROR_RETRIES` (10) consecutive failed/`None` polls
   (~50 s at the live 5 s interval) the tracker fired `on_cancel`, and
@@ -127,6 +287,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recover_missing_trades` with an autospec'd `DatabaseManager`, so the real
   `log_trade` signature is enforced. Also clears pre-existing mypy loop-variable
   and ruff `UP038` debt on `account_sync.py` (behaviour-neutral).
+- Reconciler `trades` rows now cover two more close paths that previously corrected state
+  but recorded no trade row (extending #731's offline stop-loss trade-row logging). (1) The **crash-recovery
+  FULL_EXIT** path (`_reconcile_filled_exit`) opts into `log_trade=True` with a stable dedup
+  key — the real exchange exit order id, else a synthetic `reconcile_exit_<position_id>` — and
+  realizes P&L **only after** the DB position is actually closed (a failed close no longer
+  double-corrects the balance on the next reconcile pass). (2) **External/manual closes**
+  (operator sells on the exchange UI, or a liquidation) detected by `_verify_asset_holdings`
+  (spot) and `_remove_phantom_position` (margin) now persist a **balance-neutral** audit trade
+  row — commission (reconstructed entry leg) + quantity + GROSS pnl, priced mark-to-market via
+  the data provider (degrading to entry price → pnl 0 when no price source) — deduped by a
+  synthetic `reconcile_ext_<position_id>` key, gated on the DB close succeeding. These paths
+  deliberately do **not** realize P&L: a spot external close's capital is already reconciled by
+  startup Step C (`_reconcile_balance`), and a margin external close's by
+  `AccountSynchronizer._sync_margin_equity`, so writing the balance here too would double-book
+  the `account_balances` ledger. `PositionReconciler` now accepts an optional `data_provider`
+  for the mark-to-market estimate. Hardening on all reconciler close paths: the DB-close gate now
+  reads `close_position`'s actual return (it returns `False` **without raising** on a missing row
+  or a rolled-back commit, so "did not raise" was not "closed"); the external-close paths use
+  `pop_position` so a position already reconciled earlier in the same run is not logged twice (the
+  `reconcile_exit_`/`reconcile_ext_` keys do not collide); and a failed trade-row write on a
+  balance-neutral path now escalates as a missing-audit-row alert rather than a false
+  "account_balances/trades DIVERGED" page. (Known follow-up: `PeriodicReconciler._reconcile_cycle`
+  has parallel inline external-close detection that still records no trade row — its capital is
+  reconciled each cycle by the periodic balance step (notional check, like startup Step C), so this
+  is an audit-row gap, not a balance gap.)
 - Margin-equity balance corrections are now audited and alertable.
   `margin_equity_sync_correction` book-downs (written by
   `AccountSynchronizer._sync_margin_equity`) previously updated the balance ledger

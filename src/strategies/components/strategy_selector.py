@@ -110,6 +110,12 @@ class StrategySelector:
     and correlation analysis.
     """
 
+    # Lazily-created correlation-cache coordination attributes. Bare
+    # annotations only: consumers rely on hasattr()/delattr(), so no
+    # class-level default may be assigned.
+    correlation_cache_version: str
+    _computing_strategy_set: frozenset[str]
+
     def __init__(self, config: SelectionConfig | None = None):
         """
         Initialize strategy selector

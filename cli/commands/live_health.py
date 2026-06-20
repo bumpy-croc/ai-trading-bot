@@ -7,6 +7,7 @@ import os
 import threading
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 
 from cli.core.forward import forward_to_module_main
 
@@ -67,7 +68,7 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
 
     def _handle_status(self):
         try:
-            status = {
+            status: dict[str, Any] = {
                 "status": "healthy",
                 "timestamp": datetime.now(UTC).isoformat(),
                 "service": "ai-trading-bot",

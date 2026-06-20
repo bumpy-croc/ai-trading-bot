@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
+from src.data_providers.data_provider import DataProvider
 from src.data_providers.offline import FixtureProvider, RandomWalkProvider
 from src.engines.backtest.engine import Backtester
 from src.experiments.schemas import ExperimentConfig, ExperimentResult
@@ -47,6 +50,7 @@ class ExperimentRunner:
             fixture_path = Path("tests/data/BTCUSDT_1h_2023-01-01_2024-12-31.feather")
             return FixtureProvider(fixture_path)
 
+        provider: DataProvider
         if name == "coinbase":
             provider = CoinbaseProvider()
         else:
@@ -69,7 +73,7 @@ class ExperimentRunner:
         ``min_regime_bars``. For post-construction knobs like
         ``long_entry_threshold`` use ``parameters`` overrides instead.
         """
-        strategies = {
+        strategies: dict[str, Callable[..., Strategy]] = {
             "ml_basic": create_ml_basic_strategy,
             "ml_adaptive": create_ml_adaptive_strategy,
             "ml_sentiment": create_ml_sentiment_strategy,
@@ -292,7 +296,8 @@ class ExperimentRunner:
             # ``_resolve_overrides`` (merge adapter + context) sees the
             # change even for code paths that don't pass context through.
             if honors_via_dict:
-                risk_manager._strategy_overrides[attr] = numeric_value
+                # cast: honors_via_dict is True only when risk_manager is not None (checked above)
+                cast(Any, risk_manager)._strategy_overrides[attr] = numeric_value
             applied = True
 
         return applied

@@ -55,9 +55,7 @@ class _MockPosition:
 @pytest.fixture
 def mock_exchange():
     exchange = MagicMock()
-    exchange.get_order.return_value = MagicMock(
-        status=MagicMock(__eq__=lambda s, o: True)
-    )
+    exchange.get_order.return_value = MagicMock(status=MagicMock(__eq__=lambda s, o: True))
     exchange.get_order_by_client_id.return_value = None
     exchange.get_all_orders.return_value = []
     exchange.get_my_trades.return_value = []
@@ -112,9 +110,7 @@ class TestReconciliationInterestLogging:
 
         reconciler = _make_reconciler(mock_exchange, mock_tracker, mock_db)
 
-        with patch(
-            "src.engines.live.reconciliation.MarginInterestTracker"
-        ) as MockMIT:
+        with patch("src.engines.live.reconciliation.MarginInterestTracker") as MockMIT:
             instance = MockMIT.return_value
             instance.get_position_interest_cost.return_value = 0.0523
 
@@ -122,12 +118,9 @@ class TestReconciliationInterestLogging:
                 reconciler._reconcile_cycle()
 
             MockMIT.assert_called_once_with(mock_exchange)
-            instance.get_position_interest_cost.assert_called_once_with(
-                "ETH", pos.entry_time
-            )
+            instance.get_position_interest_cost.assert_called_once_with("ETH", pos.entry_time)
             assert any(
-                "Margin interest accrued for ETHUSDT" in msg
-                and "0.05230000 ETH" in msg
+                "Margin interest accrued for ETHUSDT" in msg and "0.05230000 ETH" in msg
                 for msg in caplog.messages
             )
 
@@ -139,15 +132,11 @@ class TestReconciliationInterestLogging:
         mock_tracker.positions = {"o1": pos}
 
         # Long in margin mode: balance check path, not interest
-        mock_exchange.get_balance.return_value = _MockBalance(
-            asset="BTC", total=0.1
-        )
+        mock_exchange.get_balance.return_value = _MockBalance(asset="BTC", total=0.1)
 
         reconciler = _make_reconciler(mock_exchange, mock_tracker, mock_db)
 
-        with patch(
-            "src.engines.live.reconciliation.MarginInterestTracker"
-        ) as MockMIT:
+        with patch("src.engines.live.reconciliation.MarginInterestTracker") as MockMIT:
             with caplog.at_level(logging.INFO):
                 reconciler._reconcile_cycle()
 
@@ -161,24 +150,16 @@ class TestReconciliationInterestLogging:
         mock_tracker.positions = {"o1": pos}
 
         # Need balance for spot mode asset check
-        mock_exchange.get_balance.return_value = _MockBalance(
-            asset="ETH", total=0.0
-        )
+        mock_exchange.get_balance.return_value = _MockBalance(asset="ETH", total=0.0)
 
-        reconciler = _make_reconciler(
-            mock_exchange, mock_tracker, mock_db, use_margin=False
-        )
+        reconciler = _make_reconciler(mock_exchange, mock_tracker, mock_db, use_margin=False)
 
-        with patch(
-            "src.engines.live.reconciliation.MarginInterestTracker"
-        ) as MockMIT:
+        with patch("src.engines.live.reconciliation.MarginInterestTracker") as MockMIT:
             with caplog.at_level(logging.INFO):
                 reconciler._reconcile_cycle()
 
             MockMIT.assert_not_called()
-            assert not any(
-                "Margin interest accrued" in msg for msg in caplog.messages
-            )
+            assert not any("Margin interest accrued" in msg for msg in caplog.messages)
 
     def test_interest_error_does_not_crash_reconciliation(
         self, mock_exchange, mock_tracker, mock_db, caplog
@@ -193,22 +174,15 @@ class TestReconciliationInterestLogging:
 
         reconciler = _make_reconciler(mock_exchange, mock_tracker, mock_db)
 
-        with patch(
-            "src.engines.live.reconciliation.MarginInterestTracker"
-        ) as MockMIT:
+        with patch("src.engines.live.reconciliation.MarginInterestTracker") as MockMIT:
             instance = MockMIT.return_value
-            instance.get_position_interest_cost.side_effect = RuntimeError(
-                "API timeout"
-            )
+            instance.get_position_interest_cost.side_effect = RuntimeError("API timeout")
 
             with caplog.at_level(logging.WARNING):
                 # Should NOT raise
                 reconciler._reconcile_cycle()
 
-            assert any(
-                "interest" in msg.lower() and "ETHUSDT" in msg
-                for msg in caplog.messages
-            )
+            assert any("interest" in msg.lower() and "ETHUSDT" in msg for msg in caplog.messages)
 
 
 def _make_position_reconciler(exchange, tracker, db, *, use_margin: bool = True):
@@ -224,9 +198,7 @@ def _make_position_reconciler(exchange, tracker, db, *, use_margin: bool = True)
 class TestRealizePnlOnCloseInterestDeduction:
     """Margin interest deducted from PnL when reconciliation closes a short."""
 
-    def test_interest_deducted_from_short_pnl(
-        self, mock_exchange, mock_tracker, mock_db, caplog
-    ):
+    def test_interest_deducted_from_short_pnl(self, mock_exchange, mock_tracker, mock_db, caplog):
         """Short position PnL is reduced by margin interest cost."""
         pos = _MockPosition(
             symbol="ETHUSDT",
@@ -239,9 +211,7 @@ class TestRealizePnlOnCloseInterestDeduction:
         )
         reconciler = _make_position_reconciler(mock_exchange, mock_tracker, mock_db)
 
-        with patch(
-            "src.engines.live.reconciliation.MarginInterestTracker"
-        ) as MockMIT:
+        with patch("src.engines.live.reconciliation.MarginInterestTracker") as MockMIT:
             instance = MockMIT.return_value
             instance.get_position_interest_cost.return_value = 0.002
 
@@ -256,14 +226,9 @@ class TestRealizePnlOnCloseInterestDeduction:
             new_balance = call_args[0][0]
             assert new_balance == pytest.approx(1000.0 + 6.20)
 
-            assert any(
-                "Margin interest $3.80" in msg
-                for msg in caplog.messages
-            )
+            assert any("Margin interest $3.80" in msg for msg in caplog.messages)
 
-    def test_no_interest_deduction_for_long(
-        self, mock_exchange, mock_tracker, mock_db
-    ):
+    def test_no_interest_deduction_for_long(self, mock_exchange, mock_tracker, mock_db):
         """Long positions do not have interest deducted."""
         pos = _MockPosition(
             symbol="ETHUSDT",
@@ -276,9 +241,7 @@ class TestRealizePnlOnCloseInterestDeduction:
         )
         reconciler = _make_position_reconciler(mock_exchange, mock_tracker, mock_db)
 
-        with patch(
-            "src.engines.live.reconciliation.MarginInterestTracker"
-        ) as MockMIT:
+        with patch("src.engines.live.reconciliation.MarginInterestTracker") as MockMIT:
             reconciler._realize_pnl_on_close(pos, exit_price=2000.0, reason="test")
 
             # Should not even instantiate the tracker for a long position
@@ -289,9 +252,7 @@ class TestRealizePnlOnCloseInterestDeduction:
             new_balance = mock_db.update_balance.call_args[0][0]
             assert new_balance == pytest.approx(1000.0 + 10.0)
 
-    def test_no_interest_deduction_when_not_margin_mode(
-        self, mock_exchange, mock_tracker, mock_db
-    ):
+    def test_no_interest_deduction_when_not_margin_mode(self, mock_exchange, mock_tracker, mock_db):
         """Interest is not deducted when use_margin is False."""
         pos = _MockPosition(
             symbol="ETHUSDT",
@@ -306,9 +267,7 @@ class TestRealizePnlOnCloseInterestDeduction:
             mock_exchange, mock_tracker, mock_db, use_margin=False
         )
 
-        with patch(
-            "src.engines.live.reconciliation.MarginInterestTracker"
-        ) as MockMIT:
+        with patch("src.engines.live.reconciliation.MarginInterestTracker") as MockMIT:
             reconciler._realize_pnl_on_close(pos, exit_price=1900.0, reason="test")
 
             MockMIT.assert_not_called()
@@ -333,9 +292,7 @@ class TestRealizePnlOnCloseInterestDeduction:
         )
         reconciler = _make_position_reconciler(mock_exchange, mock_tracker, mock_db)
 
-        with patch(
-            "src.engines.live.reconciliation.MarginInterestTracker"
-        ) as MockMIT:
+        with patch("src.engines.live.reconciliation.MarginInterestTracker") as MockMIT:
             instance = MockMIT.return_value
             instance.get_position_interest_cost.side_effect = RuntimeError("API down")
 
@@ -348,7 +305,4 @@ class TestRealizePnlOnCloseInterestDeduction:
             new_balance = mock_db.update_balance.call_args[0][0]
             assert new_balance == pytest.approx(1000.0 + 10.0)
 
-            assert any(
-                "Failed to query margin interest" in msg
-                for msg in caplog.messages
-            )
+            assert any("Failed to query margin interest" in msg for msg in caplog.messages)

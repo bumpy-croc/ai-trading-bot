@@ -21,6 +21,8 @@ Ideal for:
 
 from __future__ import annotations
 
+from typing import cast
+
 from src.config.constants import (
     DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_MAX_POSITION_SIZE,
@@ -37,7 +39,9 @@ from src.strategies.components import (
     FixedFractionSizer,
     HoldSignalGenerator,
     MLBasicSignalGenerator,
+    PositionSizer,
     RegimeContext,
+    SignalGenerator,
     Strategy,
     TrendLabel,
     VolLabel,
@@ -104,6 +108,10 @@ def create_ml_basic_strategy(
         ),
     }
 
+    # Declared up-front so both branches can assign component subtypes.
+    signal_generator: SignalGenerator
+    position_sizer: PositionSizer
+
     if fast_mode:
 
         class _FastRegimeDetector:
@@ -128,7 +136,9 @@ def create_ml_basic_strategy(
         risk_manager = CoreRiskAdapter(core_risk_manager)
         risk_manager.set_strategy_overrides(risk_overrides)
         position_sizer = FixedFractionSizer(fraction=0.001)
-        regime_detector = _FastRegimeDetector()
+        # cast: duck-typed test-only stand-in; Strategy uses only
+        # detect_regime(), warmup_period, and get_feature_generators().
+        regime_detector = cast(EnhancedRegimeDetector, _FastRegimeDetector())
     else:
         # Create signal generator with ML Basic parameters
         signal_generator = MLBasicSignalGenerator(

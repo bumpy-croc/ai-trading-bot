@@ -138,8 +138,8 @@ class TestPredictionEngineIntegration:
             if result.error is None:
                 assert result.features_used > 0
                 assert result.model_name in models
-                assert isinstance(result.price, (int, float))
-                assert isinstance(result.confidence, (int, float))
+                assert isinstance(result.price, int | float)
+                assert isinstance(result.confidence, int | float)
                 assert result.direction in [-1, 0, 1]
             else:
                 # If error occurred, check error message is informative

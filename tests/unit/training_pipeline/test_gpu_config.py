@@ -1,6 +1,5 @@
 """Tests for ml.training_pipeline.gpu_config module."""
 
-import platform
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,7 +12,6 @@ class TestConfigureGpu:
         """Test that None is returned when TensorFlow is not available."""
         with patch.dict("sys.modules", {"tensorflow": None}):
             # Need to reload module to pick up the change
-            import importlib
 
             import src.ml.training_pipeline.gpu_config as gpu_config
 
@@ -152,9 +150,8 @@ class TestGetComputeDevice:
 
     def test_returns_cpu_when_tensorflow_unavailable(self):
         """Test that CPU is returned when TensorFlow not available."""
-        from src.ml.training_pipeline.gpu_config import get_compute_device
-
         import src.ml.training_pipeline.gpu_config as gpu_config
+        from src.ml.training_pipeline.gpu_config import get_compute_device
 
         original_available = gpu_config._TENSORFLOW_AVAILABLE
         gpu_config._TENSORFLOW_AVAILABLE = False

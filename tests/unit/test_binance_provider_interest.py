@@ -49,7 +49,8 @@ class TestGetMarginInterestHistory:
         ]
         # Binance API returns {rows: [...], total: N} envelope
         margin_provider._client.get_margin_interest_history.return_value = {
-            "rows": expected_rows, "total": 1
+            "rows": expected_rows,
+            "total": 1,
         }
 
         result = margin_provider.get_margin_interest_history(asset="BTC")
@@ -91,9 +92,7 @@ class TestGetMarginInterestHistory:
 
     def test_propagates_api_error(self, margin_provider):
         """Should propagate API errors so callers can retry."""
-        margin_provider._client.get_margin_interest_history.side_effect = Exception(
-            "API timeout"
-        )
+        margin_provider._client.get_margin_interest_history.side_effect = Exception("API timeout")
 
         with pytest.raises(Exception, match="API timeout"):
             margin_provider.get_margin_interest_history(asset="BTC")
@@ -102,9 +101,7 @@ class TestGetMarginInterestHistory:
         """Should pass asset, startTime, endTime to client when all provided."""
         margin_provider._client.get_margin_interest_history.return_value = {"rows": [], "total": 0}
 
-        margin_provider.get_margin_interest_history(
-            asset="ETH", start_time=1000, end_time=2000
-        )
+        margin_provider.get_margin_interest_history(asset="ETH", start_time=1000, end_time=2000)
 
         margin_provider._client.get_margin_interest_history.assert_called_once_with(
             asset="ETH", size=100, current=1, startTime=1000, endTime=2000

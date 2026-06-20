@@ -657,9 +657,18 @@ class TestReconciliationIntegration:
             position_tracker,
             stop_loss_order_id="sl_active_001",
         )
-        # Entry order is FILLED (valid)
+        # Entry order is FILLED (valid); the stop-loss was CANCELLED by the
+        # external actor before they market-sold the inventory. (A FILLED
+        # stop here would — correctly — classify as a stop-loss close and
+        # book P&L instead of an external close.)
         mock_exchange.get_order.side_effect = lambda oid, sym: (
             MockExchangeOrder(
+                order_id=oid,
+                status=ExOrderStatus.CANCELLED,
+                filled_quantity=0.0,
+            )
+            if oid == "sl_active_001"
+            else MockExchangeOrder(
                 order_id=oid,
                 status=ExOrderStatus.FILLED,
                 average_price=50000.0,
@@ -695,7 +704,7 @@ class TestReconciliationIntegration:
             ext_rows = [r for r in rows if r.order_id == f"reconcile_ext_{db_id}"]
             assert len(ext_rows) == 1
             t = ext_rows[0]
-            assert t.exit_reason == "closed_externally"
+            assert t.exit_reason == "external_close_recovery"
             # GROSS long pnl at the proxy price 52000 vs entry 50000 on quantity 0.001.
             assert float(t.pnl) == pytest.approx((52000.0 - 50000.0) * 0.001)
         assert db_manager.get_current_balance(session_id) == pytest.approx(balance_before)

@@ -12,7 +12,7 @@ import time
 import traceback
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
@@ -48,9 +48,6 @@ from src.data_providers.binance_provider import BinanceProvider, WebSocketState
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
 from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
-from src.data_providers.exchange_interface import (
-    OrderStatus as ExchangeOrderStatus,
-)
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import EventType, TradeSource
@@ -64,9 +61,16 @@ from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
 )
+from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
+from src.engines.live.monitoring import (
+    LiveAccountMonitor,
+    extract_indicators,
+    extract_ml_predictions,
+    extract_sentiment_data,
+)
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
@@ -104,6 +108,12 @@ from src.strategies.components import Strategy as ComponentStrategy
 
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
+
+if TYPE_CHECKING:
+    from src.config.config_manager import ConfigManager
+    from src.engines.live.kline_buffer import KlineBuffer
+    from src.engines.live.reconciliation import PeriodicReconciler
+    from src.engines.live.user_data_processor import UserDataProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -239,12 +249,12 @@ def _close_position_portion(position: Position) -> float:
     return ratio
 
 
-def _create_exchange_provider(provider: str, config: dict, testnet: bool = False):
+def _create_exchange_provider(provider: str, config: ConfigManager, testnet: bool = False):
     """Factory to create exchange provider and return (provider_instance, provider_name).
 
     Args:
         provider: Exchange provider name ('binance' or 'coinbase')
-        config: Configuration dict containing API credentials
+        config: Configuration manager containing API credentials
         testnet: If True, use testnet credentials and endpoint
     """
     if provider == "coinbase":
@@ -358,7 +368,8 @@ class LiveTradingEngine:
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
 
-        component_risk = None
+        # Duck-typed component risk adapter; attribute access is hasattr-guarded.
+        component_risk: Any = None
         component_risk_params = None
         if isinstance(self.strategy, ComponentStrategy):
             component_risk = getattr(self.strategy, "risk_manager", None)
@@ -457,7 +468,7 @@ class LiveTradingEngine:
             partial_manager = None
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
-            self.partial_manager = partial_manager
+            self.partial_manager: PartialExitPolicy | None = partial_manager
         elif enable_partial_operations:
             # Check strategy overrides first, then fall back to risk parameters
             strategy_overrides = (
@@ -497,7 +508,7 @@ class LiveTradingEngine:
                 max_correlated_exposure=self.risk_manager.params.max_correlated_exposure,
                 correlation_update_frequency_hours=self.risk_manager.params.correlation_update_frequency_hours,
             )
-            self.correlation_engine = CorrelationEngine(config=corr_cfg)
+            self.correlation_engine: CorrelationEngine | None = CorrelationEngine(config=corr_cfg)
         except Exception:
             self.correlation_engine = None
 
@@ -555,15 +566,17 @@ class LiveTradingEngine:
                 self.dynamic_risk_manager = None
         self._dynamic_risk_handler = DynamicRiskHandler(self.dynamic_risk_manager)
 
-        # Initialize exchange interface, account synchronizer, and order tracker
-        self.exchange_interface = None
+        # Initialize exchange interface, account synchronizer, and order tracker.
+        # Typed Any: the provider factory is untyped and concrete providers expose
+        # duck-typed margin/WS extensions beyond the base interface.
+        self.exchange_interface: Any = None
         self.account_synchronizer = None
         self.order_tracker: OrderTracker | None = None
         if enable_live_trading:
             try:
-                config = get_config()
+                app_config = get_config()
                 self.exchange_interface, provider_name = _create_exchange_provider(
-                    provider, config, testnet
+                    provider, app_config, testnet
                 )
                 if self.exchange_interface:
                     use_margin = getattr(self.exchange_interface, "is_margin_mode", False)
@@ -639,7 +652,8 @@ class LiveTradingEngine:
         # Trading state
         self.is_running = False
         self._close_only_mode = False  # No new entries when True; exits still run
-        self._periodic_reconciler = None  # Set during start() for live trading
+        # Set during start() for live trading
+        self._periodic_reconciler: PeriodicReconciler | None = None
         # Shared per-base-asset cooldown for the orphaned-borrow sweep, so the
         # startup sweep and the periodic reconciler don't both act in one window.
         self._orphan_sweep_cooldown: dict[str, float] = {}
@@ -650,17 +664,19 @@ class LiveTradingEngine:
 
         self._base_asset_locks = BaseAssetLockRegistry()
         self.completed_trades: list[Trade] = []
-        self.last_data_update = None
-        self.last_account_snapshot = None  # Track when we last logged account state
+        self.last_data_update: datetime | None = None
+        # Track when we last logged account state
+        self.last_account_snapshot: datetime | None = None
         self.timeframe: str | None = None  # Will be set when trading starts
         self._active_symbol: str | None = None
 
         # WebSocket stream state (populated during start() if provider supports it)
-        self._kline_buffer = None
-        self._user_data_processor = None
+        self._kline_buffer: KlineBuffer | None = None
+        self._user_data_processor: UserDataProcessor | None = None
         self._ws_kline_active = False
-        self._ws_kline_provider = None
-        self._ws_health_thread = None
+        # Duck-typed: the unwrapped provider exposing WS kline extensions.
+        self._ws_kline_provider: Any = None
+        self._ws_health_thread: threading.Thread | None = None
         # Consecutive unproductive user-stream reconnects; trips a circuit breaker
         # that stops the futile reconnect loop and runs REST-only (#616).
         self._user_reconnect_failures = 0
@@ -733,7 +749,7 @@ class LiveTradingEngine:
                 self.time_exit_policy = None
 
         # Threading
-        self.main_thread = None
+        self.main_thread: threading.Thread | None = None
         # Set when the trading loop dies abnormally (unhandled crash or error
         # exhaustion) so start() can exit non-zero for an orchestrator restart (#630).
         self._loop_crashed = False
@@ -842,8 +858,9 @@ class LiveTradingEngine:
             session_id=self.trading_session_id,
         )
 
-        # Position tracker
-        self.live_position_tracker = position_tracker or LivePositionTracker(
+        # Position tracker (explicit annotation: the positions property reads
+        # this attribute before mypy can infer it through the init cycle)
+        self.live_position_tracker: LivePositionTracker = position_tracker or LivePositionTracker(
             db_manager=self.db_manager,
             fee_rate=self.fee_rate,
             slippage_rate=self.slippage_rate,
@@ -894,6 +911,17 @@ class LiveTradingEngine:
             use_high_low_for_stops=self.use_high_low_for_stops,
             max_filled_price_deviation=self.max_filled_price_deviation,
         )
+
+        # Stop-loss lifecycle handler — owns every exchange-facing stop-loss
+        # call (place/cancel/query/re-protect) so the engine orchestrates
+        # without touching the exchange interface directly (#486).
+        self.stop_loss_manager = LiveStopLossManager(
+            engine_state=self,
+            send_alert=self._send_alert,
+        )
+
+        # Account monitor — snapshots, status lines, performance summaries.
+        self.account_monitor = LiveAccountMonitor(engine_state=self)
 
     def _apply_dynamic_risk_adjustment(
         self,
@@ -1116,7 +1144,7 @@ class LiveTradingEngine:
                 logger.debug("Failed to clear risk context provider on previous strategy: %s", exc)
 
         if runtime is not None:
-            self._runtime = runtime
+            self._runtime: StrategyRuntime | None = runtime
         elif self._component_strategy is not None:
             self._runtime = StrategyRuntime(self._component_strategy)
         else:
@@ -1247,8 +1275,11 @@ class LiveTradingEngine:
                     dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
                     if dynamic_descriptor is not None:
                         self._component_dynamic_risk_config = dynamic_descriptor.to_config()
-                except Exception:
-                    pass  # Ignore - shared function handles the main logic
+                except Exception as exc:
+                    # Benign: shared hydration above already applied the policy;
+                    # only the live-engine state cache misses this descriptor.
+                    # Debug level: runs per decision in the trading loop.
+                    logger.debug("Dynamic risk config cache update skipped: %s", exc)
 
     # Runtime integration helpers -------------------------------------------------
 
@@ -1284,7 +1315,8 @@ class LiveTradingEngine:
             # They compute indicators on-demand in process_candle()
             return df
 
-        dataset = self._runtime.prepare_data(df)
+        # _is_runtime_strategy() guard above ensures _runtime is not None.
+        dataset = cast(StrategyRuntime, self._runtime).prepare_data(df)
         self._runtime_dataset = dataset
         self._runtime_warmup = max(0, int(dataset.warmup_period or 0))
         return dataset.data
@@ -1307,7 +1339,8 @@ class LiveTradingEngine:
                 quantity = self._compute_component_quantity(position)
                 component_position = ComponentPosition(
                     symbol=position.symbol,
-                    side=position.side.value,
+                    # __post_init__ guarantees side is a PositionSide enum.
+                    side=cast(PositionSide, position.side).value,
                     size=quantity,
                     entry_price=float(position.entry_price),
                     current_price=float(current_price),
@@ -1370,7 +1403,8 @@ class LiveTradingEngine:
 
         context = self._build_runtime_context(balance, current_price, current_time)
         try:
-            decision = self._runtime.process(index, context)
+            # _is_runtime_strategy() guard above ensures _runtime is not None.
+            decision = cast(StrategyRuntime, self._runtime).process(index, context)
             self._apply_policies_from_decision(decision)
             return decision
         except (ValueError, KeyError, IndexError, AttributeError) as exc:
@@ -1380,7 +1414,8 @@ class LiveTradingEngine:
     def _finalize_runtime(self) -> None:
         if self._is_runtime_strategy():
             try:
-                self._runtime.finalize()
+                # _is_runtime_strategy() guard ensures _runtime is not None.
+                cast(StrategyRuntime, self._runtime).finalize()
             finally:
                 self._runtime_dataset = None
                 self._runtime_warmup = 0
@@ -1492,6 +1527,12 @@ class LiveTradingEngine:
             # Wire session_id and strategy_name to execution engine for order journaling
             self.live_execution_engine.session_id = self.trading_session_id
             self.live_execution_engine.strategy_name = self._strategy_name()
+
+            # Wire the event logger so snapshot/daily-P&L logging is session
+            # scoped; on a clean restart also point day-start recovery at the
+            # prior session, where today's earlier snapshots live (#766).
+            self.event_logger.set_session_id(self.trading_session_id)
+            self.event_logger.set_recovery_session_id(self._recovered_inactive_session_id)
 
         # Carry OPEN positions forward on a clean restart (#668). The inactive
         # session recovered above (balance only) still owns any OPEN position via
@@ -1667,7 +1708,6 @@ class LiveTradingEngine:
                     sweep_cooldown=self._orphan_sweep_cooldown,
                     lock_registry=self._base_asset_locks,
                     data_provider=self.data_provider,
-                    fee_rate=self.fee_rate,
                 )
                 self._periodic_reconciler.start()
                 logger.info("🔄 Periodic reconciler started")
@@ -2276,8 +2316,11 @@ class LiveTradingEngine:
         # recovering the WS or keep serving the loop from REST in the meantime.
         if self._kline_buffer:
             try:
+                # start() sets _active_symbol/timeframe before the buffer exists.
                 self._kline_buffer.resync_from_rest(
-                    self.data_provider, self._active_symbol, self.timeframe
+                    self.data_provider,
+                    cast(str, self._active_symbol),
+                    cast(str, self.timeframe),
                 )
             except Exception as e:
                 logger.error("Kline REST resync failed: %s", e)
@@ -2444,7 +2487,8 @@ class LiveTradingEngine:
                         logger.error(
                             "Failed to close position %s: %s", position.order_id, e, exc_info=True
                         )
-                        self.live_position_tracker.remove_position(position.order_id)
+                        # Tracked positions always carry a non-None order_id.
+                        self.live_position_tracker.remove_position(cast(str, position.order_id))
             else:
                 # PAPER: preserve open positions in DB so they survive restart.
                 # _recover_active_positions() will reload them on next start().
@@ -2530,7 +2574,8 @@ class LiveTradingEngine:
         cfg = get_config()
         self._active_symbol = symbol
         try:
-            heartbeat_every = int(cfg.get("ENGINE_HEARTBEAT_STEPS", "60"))
+            # get() with a non-None default always returns str.
+            heartbeat_every = int(cast(str, cfg.get("ENGINE_HEARTBEAT_STEPS", "60")))
         except Exception:
             heartbeat_every = 60
         while self.is_running and not self.stop_event.is_set():
@@ -2700,7 +2745,9 @@ class LiveTradingEngine:
                     if (not self._is_runtime_strategy()) and callable(
                         getattr(self.strategy, "check_short_entry_conditions", None)
                     ):
-                        short_entry_signal = self.strategy.check_short_entry_conditions(
+                        # Legacy duck-typed hook; presence is verified by the
+                        # callable(getattr(...)) guard above.
+                        short_entry_signal = cast(Any, self.strategy).check_short_entry_conditions(
                             df, current_index
                         )
                         if short_entry_signal:
@@ -3076,25 +3123,25 @@ class LiveTradingEngine:
         consume a sequence_length window saw materially different inputs
         between the two engines.
         """
+        # The trading loop calls this only when sentiment_provider is set.
+        sentiment_provider = cast(SentimentDataProvider, self.sentiment_provider)
         try:
             # Step 1: backfill historical sentiment over the buffer if the
             # provider supports it. Mirrors backtest's `_merge_sentiment_data`
             # join + ffill so older candles carry real sentiment values.
-            if hasattr(self.sentiment_provider, "get_historical_sentiment") and not df.empty:
+            if hasattr(sentiment_provider, "get_historical_sentiment") and not df.empty:
                 try:
                     start = df.index.min().to_pydatetime()
                     end = df.index.max().to_pydatetime()
-                    sentiment_df = self.sentiment_provider.get_historical_sentiment(
-                        symbol, start, end
-                    )
+                    sentiment_df = sentiment_provider.get_historical_sentiment(symbol, start, end)
                     if sentiment_df is not None and not sentiment_df.empty:
                         # Aggregate when the provider supports it. Fall back
                         # to "1h" when self.timeframe is not yet set (e.g.
                         # warmup paths) so the join shape is well-defined
                         # rather than producing NaN-padded raw rows that
                         # silently diverge from backtest.
-                        if hasattr(self.sentiment_provider, "aggregate_sentiment"):
-                            sentiment_df = self.sentiment_provider.aggregate_sentiment(
+                        if hasattr(sentiment_provider, "aggregate_sentiment"):
+                            sentiment_df = sentiment_provider.aggregate_sentiment(
                                 sentiment_df, window=self.timeframe or "1h"
                             )
                         # Restrict the merge to the sentiment namespace and
@@ -3146,8 +3193,8 @@ class LiveTradingEngine:
             # The 4h window matches the live sentiment provider's
             # freshness contract — bars older than that rely on the
             # historical backfill above.
-            if hasattr(self.sentiment_provider, "get_live_sentiment"):
-                live_sentiment = self.sentiment_provider.get_live_sentiment()
+            if hasattr(sentiment_provider, "get_live_sentiment"):
+                live_sentiment = sentiment_provider.get_live_sentiment()
                 if live_sentiment and not df.empty:
                     # 4h: live sentiment freshness window (see step-2 comment).
                     recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
@@ -3191,8 +3238,13 @@ class LiveTradingEngine:
             if symbol:
                 try:
                     price_series[str(symbol)] = df["close"].copy()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "Failed to seed candidate price series for %s from current "
+                        "frame: %s — correlation sizing degrades to history-only.",
+                        symbol,
+                        e,
+                    )
             for sym in symbols_to_check:
                 s = str(sym)
                 if s in price_series:
@@ -3209,7 +3261,15 @@ class LiveTradingEngine:
                         )
                         if not hist.empty and "close" in hist:
                             price_series[s] = hist["close"]
-                except Exception:
+                except Exception as e:
+                    # Best-effort per-symbol history fetch inside a per-candle
+                    # loop; transient provider errors are expected, so log at
+                    # debug to avoid flooding while keeping the trace visible.
+                    logger.debug(
+                        "Skipping %s in correlation matrix — history fetch failed: %s",
+                        s,
+                        e,
+                    )
                     continue
             corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
             return {
@@ -3692,7 +3752,7 @@ class LiveTradingEngine:
 
     def _resolve_execution_fill_policy(self) -> FillPolicy:
         """Resolve execution fill policy from configuration."""
-        policy_name = DEFAULT_EXECUTION_FILL_POLICY
+        policy_name: str | None = DEFAULT_EXECUTION_FILL_POLICY
         try:
             cfg = get_config()
             policy_name = cfg.get("EXECUTION_FILL_POLICY", DEFAULT_EXECUTION_FILL_POLICY)
@@ -3899,8 +3959,9 @@ class LiveTradingEngine:
                         close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
 
                         # Use quantity from position - LiveEntryResult.position.quantity
-                        # No need to recalculate from entry_price which could introduce errors
-                        if result.position.quantity <= 0:
+                        # No need to recalculate from entry_price which could introduce errors.
+                        # Live executed entries always carry the filled quantity.
+                        if cast(float, result.position.quantity) <= 0:
                             logger.critical(
                                 "CRITICAL: Cannot place emergency close for %s - "
                                 "invalid quantity %.8f. MANUAL INTERVENTION REQUIRED.",
@@ -4032,10 +4093,6 @@ class LiveTradingEngine:
 
             # Place server-side stop-loss order for protection with retry logic
             if self.enable_live_trading and stop_loss and self.exchange_interface:
-                sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-                sl_order_id = None
-                max_retries = 3
-                retry_delay = 1.0
                 # Use stored quantity directly to ensure stop-loss covers exact position size
                 if position.quantity is not None and position.quantity > 0:
                     quantity = position.quantity
@@ -4053,46 +4110,19 @@ class LiveTradingEngine:
                         else 0.0
                     )
 
-                for attempt in range(max_retries):
-                    try:
-                        sl_order_id = self.exchange_interface.place_stop_loss_order(
-                            symbol=symbol,
-                            side=sl_side,
-                            quantity=quantity,
-                            stop_price=stop_loss,
-                            side_effect_type=SideEffectType.AUTO_REPAY,
-                        )
-                        if sl_order_id:
-                            break
-                    except Exception as sl_err:
-                        logger.warning(
-                            "Stop-loss placement attempt %s/%s failed: %s",
-                            attempt + 1,
-                            max_retries,
-                            sl_err,
-                        )
+                sl_order_id = self.stop_loss_manager.place_protection(
+                    position=position,
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    stop_price=stop_loss,
+                )
 
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-
-                if sl_order_id:
-                    logger.info(
-                        "Server-side stop-loss placed: %s @ $%.2f order_id=%s",
-                        symbol,
-                        stop_loss,
-                        sl_order_id,
-                    )
-                    self.live_position_tracker.set_stop_loss_order_id(
-                        position.order_id, sl_order_id
-                    )
-                    if self.order_tracker:
-                        self.order_tracker.track_order(sl_order_id, symbol)
-                else:
+                if not sl_order_id:
                     logger.critical(
                         "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
                         "closing position on exchange to prevent unprotected exposure",
-                        max_retries,
+                        3,  # placement retry budget lives in LiveStopLossManager
                         symbol,
                     )
                     # Record the structured event and fire the alert in one call
@@ -4248,6 +4278,43 @@ class LiveTradingEngine:
                 )
                 return
 
+    def _handle_stop_loss_cancelled(self, order_id: str, symbol: str) -> bool:
+        """Escalate when a tracked position's stop-loss order terminates unexpectedly.
+
+        Clears the stale in-memory ``stop_loss_order_id`` so the periodic
+        reconciler's missing-stop path re-places protection on its next cycle
+        (which also persists the NEW id over the stale DB value), and emits a
+        critical ``system_events`` row + webhook alert. Deliberate cancels from
+        the close path don't reach here — that path stops tracking the SL order
+        before the callback can fire.
+
+        Returns True when ``order_id`` matched a tracked position's stop-loss.
+        """
+        matched_key: str | None = None
+        for pos_key, position in self.live_position_tracker.positions.items():
+            if getattr(position, "stop_loss_order_id", None) == order_id:
+                matched_key = pos_key
+                break
+        if matched_key is None:
+            return False
+
+        self.live_position_tracker.set_stop_loss_order_id(matched_key, None)
+        message = (
+            f"Stop-loss order {order_id} for OPEN {symbol} position {matched_key} was "
+            f"cancelled/rejected/expired on the exchange — position is UNPROTECTED until "
+            f"the reconciler re-places it (next cycle)."
+        )
+        logger.critical("CRITICAL: %s", message)
+        self._record_event(
+            EventType.ERROR,
+            message,
+            severity="critical",
+            component="order_tracker",
+            error_code="STOP_LOSS_CANCELLED",
+            alert=True,
+        )
+        return True
+
     def _handle_order_cancel(self, order_id: str, symbol: str, filled_qty: float = 0.0) -> None:
         """Handle an order cancellation/rejection notification from OrderTracker.
 
@@ -4267,6 +4334,14 @@ class LiveTradingEngine:
             order_id=order_id,
             symbol=symbol,
         )
+        # Not an entry order? Check whether a tracked position's STOP-LOSS was
+        # cancelled/rejected/expired out from under it (#741). Must run before
+        # pop_position: popping by an SL order id can never match (positions
+        # are keyed by entry order id), but the position it protects must not
+        # be left silently unprotected.
+        if self._handle_stop_loss_cancelled(order_id, symbol):
+            return
+
         # Check if this was an entry order for a position we thought we had.
         # Use atomic pop_position() for thread safety - combines get + remove
         # in a single lock acquisition (called from OrderTracker background thread).
@@ -4420,9 +4495,12 @@ class LiveTradingEngine:
                 )
                 return
 
+            # Tracked positions always carry a non-None order_id; __post_init__
+            # guarantees side is a PositionSide enum.
             metrics = self.live_position_tracker.mfe_mae_tracker.get_position_metrics(
-                position.order_id
+                cast(str, position.order_id)
             )
+            position_side = cast(PositionSide, position.side)
 
             sl_already_filled = False
             sl_fill_price: float | None = None
@@ -4664,7 +4742,7 @@ class LiveTradingEngine:
                     )
                 self.db_manager.log_trade(
                     symbol=position.symbol,
-                    side=position.side.value,
+                    side=position_side.value,
                     entry_price=position.entry_price,
                     exit_price=exit_price,
                     size=float(
@@ -4707,7 +4785,7 @@ class LiveTradingEngine:
             # exit handler.
             logger.info(
                 "📈 Closed %s position for %s: PnL=$%.2f, Reason=%s, Balance=$%.2f",
-                position.side.value,
+                position_side.value,
                 position.symbol,
                 gross_pnl,
                 reason,
@@ -4717,7 +4795,7 @@ class LiveTradingEngine:
                 "close_position",
                 order_id=position.order_id,
                 symbol=position.symbol,
-                side=position.side.value,
+                side=position_side.value,
                 exit_price=exit_price,
                 pnl=gross_pnl,
                 pnl_percent=trade.pnl_percent,
@@ -4735,33 +4813,7 @@ class LiveTradingEngine:
         the order may still rest, or may have just filled, so the caller must NOT
         submit a close (it would -2010, or over-sell an already-closed position).
         """
-        if not (
-            self.enable_live_trading and self.exchange_interface and position.stop_loss_order_id
-        ):
-            return False
-        cancelled = False
-        try:
-            cancelled = bool(
-                self.exchange_interface.cancel_order(position.stop_loss_order_id, position.symbol)
-            )
-            if cancelled:
-                logger.info(
-                    "Cancelled stop-loss order %s for %s before close",
-                    position.stop_loss_order_id,
-                    position.symbol,
-                )
-        except Exception as e:
-            logger.warning(
-                "Error cancelling stop-loss order %s for %s: %s",
-                position.stop_loss_order_id,
-                position.symbol,
-                e,
-            )
-        # Only stop tracking when the cancel is confirmed; otherwise the order may
-        # still be live on the exchange and must remain watched.
-        if cancelled and self.order_tracker:
-            self.order_tracker.stop_tracking(position.stop_loss_order_id)
-        return cancelled
+        return self.stop_loss_manager.cancel(position)
 
     def _stop_loss_filled_quantity(self, position: Position) -> float | None:
         """Return the filled (executed) base quantity of a position's stop-loss order.
@@ -4772,23 +4824,7 @@ class LiveTradingEngine:
         the reconciler — a partially-filled stop means held base != tracked size, so a
         full-size close would over-sell (long) / over-buy (short). (#710)
         """
-        if not (
-            self.enable_live_trading and self.exchange_interface and position.stop_loss_order_id
-        ):
-            return 0.0
-        try:
-            order = self.exchange_interface.get_order(position.stop_loss_order_id, position.symbol)
-        except Exception as e:
-            logger.warning(
-                "Could not read stop-loss order %s for %s: %s",
-                position.stop_loss_order_id,
-                position.symbol,
-                e,
-            )
-            return None
-        if order is None:
-            return None
-        return float(getattr(order, "filled_quantity", 0.0) or 0.0)
+        return self.stop_loss_manager.filled_quantity(position)
 
     def _position_still_held(self, position: Position) -> bool:
         """Whether the position's inventory is still actually held on the exchange.
@@ -4798,34 +4834,7 @@ class LiveTradingEngine:
         stop). Conservative: any unreadable/uncertain state returns ``False`` (do not
         re-place; the reconciler reconciles exchange truth). (#710)
         """
-        if not (self.enable_live_trading and self.exchange_interface):
-            return False
-        from src.engines.live.reconciliation import PositionReconciler
-
-        base = PositionReconciler._extract_base_asset(position.symbol)
-        dust = float(BORROW_DUST_EPSILON)
-        try:
-            get_asset = getattr(self.exchange_interface, "get_margin_account_asset", None)
-            if getattr(self.exchange_interface, "is_margin_mode", False) and callable(get_asset):
-                asset = get_asset(base)
-                if not asset:
-                    return False
-                if position.side == PositionSide.SHORT:
-                    # A short is still held while base remains borrowed (owed).
-                    return float(asset.get("borrowed", 0.0) or 0.0) > dust
-                free = float(asset.get("free", 0.0) or 0.0)
-                locked = float(asset.get("locked", 0.0) or 0.0)
-                return (free + locked) > dust
-            # Spot / no margin-asset accessor: long inventory is the base balance.
-            bal = self.exchange_interface.get_balance(base)
-            if not bal:
-                return False
-            return (
-                float(getattr(bal, "free", 0.0) or 0.0) + float(getattr(bal, "locked", 0.0) or 0.0)
-            ) > dust
-        except Exception as e:
-            logger.warning("Could not confirm held inventory for %s: %s", position.symbol, e)
-            return False
+        return self.stop_loss_manager.position_still_held(position)
 
     def _held_protection_quantity(self, position: Position) -> float:
         """Base quantity to protect, scaled for any prior partial exits.
@@ -4833,14 +4842,7 @@ class LiveTradingEngine:
         Mirrors the reconciler's re-placement sizing ``quantity * current/original`` so
         a re-protected stop covers the *remaining* held size, not the full entry size.
         """
-        quantity = getattr(position, "quantity", None)
-        if not quantity or quantity <= 0:
-            return 0.0
-        current = getattr(position, "current_size", None)
-        original = getattr(position, "original_size", None)
-        if current is not None and original is not None and original > 0:
-            return float(quantity) * (float(current) / float(original))
-        return float(quantity)
+        return self.stop_loss_manager.held_protection_quantity(position)
 
     def _reprotect_position(self, position: Position) -> None:
         """Re-place a stop-loss after a failed close left a position momentarily naked.
@@ -4852,294 +4854,41 @@ class LiveTradingEngine:
         to avoid orphaning a stop, and size for any prior partial exits. The reconciler
         is the ultimate backstop if this attempt cannot run or also fails.
         """
-        if not (self.enable_live_trading and self.exchange_interface):
-            return
-        if not self._position_still_held(position):
-            logger.warning(
-                "%s appears no longer held after a failed close — not re-placing a "
-                "stop (the reconciler will reconcile exchange state).",
-                position.symbol,
-            )
-            return
-
-        stop_price = getattr(position, "stop_loss", None)
-        quantity = self._held_protection_quantity(position)
-        if not stop_price or stop_price <= 0 or quantity <= 0:
-            logger.critical(
-                "CRITICAL: %s close failed after its stop-loss was cancelled and it "
-                "cannot be re-protected inline (stop_price=%s, quantity=%s) — position "
-                "is UNPROTECTED pending the reconciler. MANUAL REVIEW REQUIRED.",
-                position.symbol,
-                stop_price,
-                quantity,
-            )
-            self._send_alert(
-                f"🚨 {position.symbol} UNPROTECTED: close failed after stop-loss "
-                f"cancel and it could not be re-placed inline. Reconciler backstop "
-                f"engaged. MANUAL REVIEW REQUIRED."
-            )
-            return
-
-        sl_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
-        sl_order_id = None
-        retry_delay = 1.0
-        for attempt in range(3):
-            try:
-                sl_order_id = self.exchange_interface.place_stop_loss_order(
-                    symbol=position.symbol,
-                    side=sl_side,
-                    quantity=float(quantity),
-                    stop_price=float(stop_price),
-                    side_effect_type=SideEffectType.AUTO_REPAY,
-                )
-                if sl_order_id:
-                    break
-            except Exception as e:
-                logger.warning(
-                    "Re-protect attempt %s/3 for %s failed: %s",
-                    attempt + 1,
-                    position.symbol,
-                    e,
-                )
-            if attempt < 2:
-                time.sleep(retry_delay)
-                retry_delay *= 2
-
-        if sl_order_id:
-            if position.order_id is not None:
-                self.live_position_tracker.set_stop_loss_order_id(position.order_id, sl_order_id)
-            if self.order_tracker:
-                self.order_tracker.track_order(sl_order_id, position.symbol)
-            logger.warning(
-                "Re-protected %s after a failed close: new stop-loss %s @ $%.2f (qty=%.8f)",
-                position.symbol,
-                sl_order_id,
-                float(stop_price),
-                float(quantity),
-            )
-        else:
-            logger.critical(
-                "CRITICAL: %s close failed AND re-placing its stop-loss failed after "
-                "retries — position is UNPROTECTED pending the periodic reconciler. "
-                "MANUAL REVIEW REQUIRED.",
-                position.symbol,
-            )
-            self._send_alert(
-                f"🚨 {position.symbol} UNPROTECTED: close failed and stop-loss "
-                f"re-placement failed. Reconciler is the only backstop. REVIEW NOW."
-            )
+        self.stop_loss_manager.reprotect(position)
 
     def _check_stop_loss_filled(self, position: Position) -> tuple[bool, float | None]:
         """Check if a stop-loss order already filled on the exchange."""
-        if (
-            not self.enable_live_trading
-            or not self.exchange_interface
-            or not position.stop_loss_order_id
-        ):
-            return False, None
-
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
-                sl_order = self.exchange_interface.get_order(
-                    position.stop_loss_order_id, position.symbol
-                )
-                if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
-                    logger.info(
-                        "Stop-loss order %s already filled at $%.2f - using actual fill price",
-                        position.stop_loss_order_id,
-                        sl_order.average_price,
-                    )
-                    return True, sl_order.average_price
-                return False, None
-            except (ConnectionError, TimeoutError, OSError) as e:
-                logger.warning(
-                    "Transient error checking stop-loss order %s (attempt %s/%s): %s",
-                    position.stop_loss_order_id,
-                    attempt + 1,
-                    max_attempts,
-                    e,
-                )
-                if attempt < max_attempts - 1:
-                    time.sleep(2**attempt)
-            except Exception as e:
-                logger.error(
-                    "Unexpected error checking stop-loss order %s: %s",
-                    position.stop_loss_order_id,
-                    e,
-                    exc_info=True,
-                )
-                return False, None
-
-        logger.error(
-            "Failed to check stop-loss order %s after %s attempts; assuming not filled",
-            position.stop_loss_order_id,
-            max_attempts,
-        )
-        log_order_event(
-            "sl_check_failed",
-            order_id=position.stop_loss_order_id,
-            symbol=position.symbol,
-        )
-        return False, None
+        return self.stop_loss_manager.check_filled(position)
 
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
-        # Update performance tracker on every metric update cycle
-        # Note: Less frequent than backtest (every candle vs every update cycle)
-        # This trade-off reduces overhead while maintaining statistical validity for risk metrics
-        self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now(UTC))
+        self.account_monitor.update_performance_metrics()
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
-        if index >= len(df):
-            return {}
-
-        indicators = {}
-        current_row = df.iloc[index]
-
-        # Common indicators to extract
-        indicator_columns = [
-            "rsi",
-            "macd",
-            "macd_signal",
-            "macd_hist",
-            "atr",
-            "volatility",
-            "trend_ma",
-            "short_ma",
-            "long_ma",
-            "volume_ma",
-            "trend_strength",
-            "regime",
-            "body_size",
-            "upper_wick",
-            "lower_wick",
-        ]
-
-        for col in indicator_columns:
-            if col in df.columns and not pd.isna(current_row[col]):
-                indicators[col] = float(current_row[col])
-
-        # Add basic OHLCV data
-        for col in ["open", "high", "low", "close", "volume"]:
-            if col in df.columns:
-                indicators[col] = float(current_row[col])
-
-        return indicators
+        return extract_indicators(df, index)
 
     def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> dict:
         """Extract sentiment data from dataframe for logging"""
-        if index >= len(df):
-            return {}
-
-        sentiment_data = {}
-        current_row = df.iloc[index]
-
-        # Sentiment columns to extract
-        sentiment_columns = [
-            "sentiment_primary",
-            "sentiment_momentum",
-            "sentiment_volatility",
-            "sentiment_extreme_positive",
-            "sentiment_extreme_negative",
-            "sentiment_ma_3",
-            "sentiment_ma_7",
-            "sentiment_ma_14",
-            "sentiment_confidence",
-            "sentiment_freshness",
-        ]
-
-        for col in sentiment_columns:
-            if col in df.columns and not pd.isna(current_row[col]):
-                sentiment_data[col] = float(current_row[col])
-
-        return sentiment_data
+        return extract_sentiment_data(df, index)
 
     def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> dict:
         """Extract ML prediction data from dataframe for logging"""
-        if index >= len(df):
-            return {}
-
-        ml_data = {}
-        current_row = df.iloc[index]
-
-        # ML prediction columns to extract
-        ml_columns = ["ml_prediction", "prediction_confidence", "onnx_pred"]
-
-        for col in ml_columns:
-            if col in df.columns and not pd.isna(current_row[col]):
-                ml_data[col] = float(current_row[col])
-
-        return ml_data
+        return extract_ml_predictions(df, index)
 
     def _log_account_snapshot(self):
-        """Log current account state to database"""
-        try:
-            # Calculate total exposure using the active fraction per position
-            positions_snapshot = self.live_position_tracker.positions
-            total_exposure = sum(
-                float(pos.current_size if pos.current_size is not None else pos.size)
-                * (
-                    float(pos.entry_balance)
-                    if pos.entry_balance is not None and pos.entry_balance > 0
-                    else float(self.current_balance)
-                )
-                for pos in positions_snapshot.values()
-            )
+        """Log current account state to database via the event logger.
 
-            # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in positions_snapshot.values())
-            equity = float(self.current_balance) + unrealized_pnl
-
-            # Calculate current drawdown percentage
-            current_drawdown = 0
-            perf_metrics = self.performance_tracker.get_metrics()
-            if perf_metrics.peak_balance > 0:
-                current_drawdown = (
-                    (perf_metrics.peak_balance - self.current_balance)
-                    / perf_metrics.peak_balance
-                    * 100
-                )
-
-            # TODO: Calculate daily P&L (requires tracking of day start balance)
-            daily_pnl = 0  # Placeholder
-
-            # Log snapshot to database
-            if self.trading_session_id is not None:
-                self.db_manager.log_account_snapshot(
-                    balance=self.current_balance,
-                    equity=equity,
-                    total_pnl=perf_metrics.total_pnl,
-                    open_positions=self.live_position_tracker.position_count,
-                    total_exposure=total_exposure,
-                    drawdown=current_drawdown,
-                    daily_pnl=daily_pnl,
-                    session_id=self.trading_session_id,
-                )
-            else:
-                logger.warning(
-                    "⚠️ Cannot log account snapshot to database - no trading session ID available"
-                )
-
-        except Exception as e:
-            logger.error("Failed to log account snapshot: %s", e)
+        ``LiveAccountMonitor`` routes through
+        ``LiveEventLogger.log_account_snapshot`` so daily P&L tracking — and
+        its day-start recovery across restarts (#766) — stays on the live
+        path.
+        """
+        self.account_monitor.log_account_snapshot()
 
     def _log_status(self, symbol: str, current_price: float):
         """Log current trading status"""
-        total_unrealized = sum(
-            float(pos.unrealized_pnl) for pos in self.live_position_tracker.positions.values()
-        )
-        perf_metrics = self.performance_tracker.get_metrics()
-        win_rate = perf_metrics.win_rate * 100
-
-        logger.info(
-            f"📊 Status: {symbol} @ ${current_price:.2f} | "
-            f"Balance: ${self.current_balance:.2f} | "
-            f"Positions: {self.live_position_tracker.position_count} | "
-            f"Unrealized: ${total_unrealized:.2f} | "
-            f"Trades: {perf_metrics.total_trades} ({win_rate:.1f}% win)"
-        )
+        self.account_monitor.log_status(symbol, current_price)
 
     def _log_trade(self, trade: Trade):
         """Log trade to file"""
@@ -5151,7 +4900,8 @@ class LiveTradingEngine:
             trade_data = {
                 "timestamp": trade.exit_time.isoformat(),
                 "symbol": trade.symbol,
-                "side": trade.side.value,
+                # BaseTrade.__post_init__ normalizes str sides to PositionSide.
+                "side": cast(PositionSide, trade.side).value,
                 "size": trade.size,
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
@@ -5235,7 +4985,7 @@ class LiveTradingEngine:
             return False
 
         try:
-            import requests
+            import requests  # type: ignore[import-untyped]  # types-requests not installed
 
             payload = {
                 "text": f"🤖 Trading Bot: {message}",
@@ -5262,8 +5012,8 @@ class LiveTradingEngine:
 
     def _calculate_adaptive_interval(self, current_price: float | None = None) -> int:
         """Calculate adaptive check interval based on recent trading activity and market conditions"""
-        # Base interval from configuration
-        interval = self.base_check_interval
+        # Base interval from configuration (float: off-hours scaling is fractional)
+        interval: float = self.base_check_interval
 
         # Factor in recent trading activity — use naive UTC for comparison
         # since positions from the database store naive UTC timestamps
@@ -5332,84 +5082,11 @@ class LiveTradingEngine:
 
     def _print_final_stats(self):
         """Print final trading statistics"""
-        # Validate initial_balance before division to prevent crashes
-        if self.initial_balance <= 0:
-            logger.error(
-                "Cannot calculate total return - invalid initial_balance: %.8f. "
-                "Skipping final statistics.",
-                self.initial_balance,
-            )
-            return
-
-        total_return = ((self.current_balance - self.initial_balance) / self.initial_balance) * 100
-        perf_metrics = self.performance_tracker.get_metrics()
-        win_rate = perf_metrics.win_rate * 100
-
-        print("\n" + "=" * 60)
-        print("🏁 FINAL TRADING STATISTICS")
-        print("=" * 60)
-        print(f"Initial Balance: ${self.initial_balance:,.2f}")
-        print(f"Final Balance: ${self.current_balance:,.2f}")
-        print(f"Total Return: {total_return:+.2f}%")
-        print(f"Total PnL: ${perf_metrics.total_pnl:+,.2f}")
-        print(f"Max Drawdown: {perf_metrics.max_drawdown * 100:.2f}%")
-        print(f"Total Trades: {perf_metrics.total_trades}")
-        print(f"Winning Trades: {perf_metrics.winning_trades}")
-        print(f"Win Rate: {win_rate:.1f}%")
-        print(f"Active Positions: {self.live_position_tracker.position_count}")
-
-        if self.completed_trades:
-            avg_trade = sum(trade.pnl for trade in self.completed_trades) / len(
-                self.completed_trades
-            )
-            print(f"Average Trade: ${avg_trade:.2f}")
-
-        print("=" * 60)
+        self.account_monitor.print_final_stats()
 
     def get_performance_summary(self) -> dict[str, Any]:
         """Get current performance summary"""
-        # Get comprehensive metrics from performance tracker
-        perf_metrics = self.performance_tracker.get_metrics()
-
-        # Convert to percentages for backward compatibility
-        win_rate = perf_metrics.win_rate * 100
-        current_drawdown = perf_metrics.current_drawdown * 100
-        max_drawdown_pct = perf_metrics.max_drawdown * 100
-
-        return {
-            # Core metrics from tracker
-            "initial_balance": self.initial_balance,
-            "current_balance": self.current_balance,
-            "total_return": perf_metrics.total_return_pct,
-            "total_return_pct": perf_metrics.total_return_pct,
-            "total_pnl": perf_metrics.total_pnl,
-            "current_drawdown": current_drawdown,
-            "max_drawdown_pct": max_drawdown_pct,
-            "total_trades": perf_metrics.total_trades,
-            "winning_trades": perf_metrics.winning_trades,
-            "win_rate": win_rate,
-            "win_rate_pct": win_rate,
-            # New metrics from tracker
-            "sharpe_ratio": perf_metrics.sharpe_ratio,
-            "sortino_ratio": perf_metrics.sortino_ratio,
-            "calmar_ratio": perf_metrics.calmar_ratio,
-            "var_95": perf_metrics.var_95,
-            "expectancy": perf_metrics.expectancy,
-            "profit_factor": perf_metrics.profit_factor,
-            "avg_win": perf_metrics.avg_win,
-            "avg_loss": perf_metrics.avg_loss,
-            "largest_win": perf_metrics.largest_win,
-            "largest_loss": perf_metrics.largest_loss,
-            "avg_trade_duration_hours": perf_metrics.avg_trade_duration_hours,
-            "consecutive_wins": perf_metrics.consecutive_wins,
-            "consecutive_losses": perf_metrics.consecutive_losses,
-            "total_fees_paid": perf_metrics.total_fees_paid,
-            "total_slippage_cost": perf_metrics.total_slippage_cost,
-            # Live-specific metrics
-            "active_positions": self.live_position_tracker.position_count,
-            "last_update": self.last_data_update.isoformat() if self.last_data_update else None,
-            "is_running": self.is_running,
-        }
+        return self.account_monitor.performance_summary()
 
     def _recover_existing_session(self) -> float | None:
         """Try to recover balance from an existing session.
@@ -5485,6 +5162,9 @@ class LiveTradingEngine:
                     # Wire session context to execution engine so journaling works
                     self.live_execution_engine.session_id = session_id
                     self.live_execution_engine.strategy_name = self._strategy_name()
+                    # Crash recovery reuses the session, so day-start snapshots
+                    # already live under it — no recovery fallback needed (#766).
+                    self.event_logger.set_session_id(session_id)
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,
@@ -5564,7 +5244,8 @@ class LiveTradingEngine:
                     continue
                 self.risk_manager.update_position(
                     symbol=position.symbol,
-                    side=position.side.value,
+                    # __post_init__ guarantees side is a PositionSide enum.
+                    side=cast(PositionSide, position.side).value,
                     size=effective_size,
                     entry_price=position.entry_price,
                 )
@@ -5708,7 +5389,8 @@ class LiveTradingEngine:
                     try:
                         self.risk_manager.update_position(
                             symbol=position.symbol,
-                            side=position.side.value,
+                            # __post_init__ guarantees side is a PositionSide enum.
+                            side=cast(PositionSide, position.side).value,
                             size=position.size,
                             entry_price=position.entry_price,
                         )
@@ -5763,6 +5445,7 @@ class LiveTradingEngine:
                     max_position_size=self.max_position_size,
                     use_margin=use_margin,
                     fee_rate=self.live_execution_engine.fee_rate,
+                    data_provider=self.data_provider,
                 )
 
                 if not positions_snapshot:
@@ -5867,31 +5550,9 @@ class LiveTradingEngine:
             return
 
         try:
-            exchange_orders = self.exchange_interface.get_open_orders()
-            exchange_order_ids = {order.order_id for order in exchange_orders}
-
-            positions_to_close = []
-            for _order_id, position in positions_snapshot.items():
-                if position.stop_loss_order_id:
-                    if position.stop_loss_order_id not in exchange_order_ids:
-                        logger.warning(
-                            "⚠️ Stop-loss order %s not found on exchange for %s - position may have closed",
-                            position.stop_loss_order_id,
-                            position.symbol,
-                        )
-                        try:
-                            sl_order = self.exchange_interface.get_order(
-                                position.stop_loss_order_id, position.symbol
-                            )
-                            if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
-                                logger.info(
-                                    "✅ Confirmed: Stop-loss triggered for %s @ $%s",
-                                    position.symbol,
-                                    sl_order.average_price or "unknown",
-                                )
-                                positions_to_close.append((position, sl_order.average_price))
-                        except Exception as e:
-                            logger.warning("Could not verify stop-loss order status: %s", e)
+            positions_to_close = self.stop_loss_manager.find_offline_filled_stops(
+                positions_snapshot
+            )
 
             # Close positions that were stopped out
             for position, exit_price in positions_to_close:
@@ -6030,7 +5691,8 @@ class LiveTradingEngine:
                     if self.trading_session_id is not None:
                         self.db_manager.log_trade(
                             symbol=position.symbol,
-                            side=position.side.value,
+                            # __post_init__ guarantees side is a PositionSide enum.
+                            side=cast(PositionSide, position.side).value,
                             entry_price=position.entry_price,
                             exit_price=exit_price,
                             size=fraction,
@@ -6073,7 +5735,8 @@ class LiveTradingEngine:
 
                 # Close in database
                 db_ids = self.live_position_tracker.position_db_ids
-                position_db_id = db_ids.get(position.order_id)
+                # Tracked positions always carry a non-None order_id.
+                position_db_id = db_ids.get(cast(str, position.order_id))
                 if position_db_id:
                     self.db_manager.close_position(position_id=position_db_id)
 
@@ -6226,7 +5889,8 @@ class LiveTradingEngine:
             return False
 
         self._finalize_runtime()
-        updated_strategy = self.strategy_manager.current_strategy
+        # apply_pending_update() success guarantees a current strategy is set.
+        updated_strategy = cast(ComponentStrategy, self.strategy_manager.current_strategy)
         self._configure_strategy(updated_strategy)
         self._runtime_dataset = None
         self._runtime_warmup = 0

@@ -417,7 +417,7 @@ class TestPerformanceTracker:
             tracker1.record_trade(trade)
 
         # Add different trades to second tracker (modify PnL)
-        for i, trade in enumerate(sample_trades[5:]):
+        for _i, trade in enumerate(sample_trades[5:]):
             modified_trade = TradeResult(
                 timestamp=trade.timestamp,
                 symbol=trade.symbol,

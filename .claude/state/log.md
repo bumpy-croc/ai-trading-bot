@@ -23,3 +23,15 @@ Log initialized.
 3. Filed **#683** to redesign #679 as exchange-verified-before-adopt; #679 to be reverted on develop (interim parity with prod = #677-only).
 
 Refs: #668, #677, #679, #671, #648/#15, #28 (booking-while-held), #674 (margin Decimal, in prod).
+
+---
+
+## 2026-06-10 · refactor · claude(session, human-directed)
+**#486 live-engine refactor steps 1–3 landed on `claude/live-trading-engine-refactor-09koj9` (pure refactor, parity-proven).**
+- `LiveStopLossManager` (`engines/live/execution/stop_loss_manager.py`) now owns every exchange-facing stop-loss call (place/retry, cancel, fill/held queries, re-protect, offline-fill detection). Engine keeps thin wrappers; original #486 acceptance criteria met — no direct `place_stop_loss_order`/`cancel_order`/`get_open_orders`/`get_order` in the engine.
+- Monitoring glue → `engines/live/monitoring/` (`LiveAccountMonitor` + dataframe extractors). Engine 6,558 → 6,110 lines.
+- The 3 byte-identical entry-handler methods (AST-verified) → `engines/shared/execution/entry_handler_mixin.py`; divergent orchestration deliberately NOT merged.
+- Parity proof: 3,965 unit tests green; 51 parity tests green; deterministic backtest fingerprint byte-identical before/after every commit; new end-to-end paper-session smoke test (real strategy + real in-memory DB, start→entry→exit→shutdown) asserts gross P&L equals shared `pnl_percent` on recorded fills.
+- Reviews: code-reviewer (no findings), architecture-reviewer (no blockers; P2+nits applied), risk-officer **APPROVE, high confidence** (all UNPROTECTED paths verified equivalent to origin/develop).
+- Residual pre-existing risks noted by risk-officer (refactor-neutral): webhook alert delivery is fire-and-forget; SL retry budget hardcoded (3×, 1s backoff) in two places; `position_still_held` defers to ~120s reconciler on API errors.
+Commits: 0e3c0c5, 9a8a1c0, d49b3d5, a5729d3, d12eb12. Remaining #486 scope (recovery extraction, config dataclass, <1,500-line target) intentionally deferred to follow-up PRs.

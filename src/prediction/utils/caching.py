@@ -904,8 +904,9 @@ def cache_prediction(ttl: int = 600):
 
             return result
 
-        # Expose cache for testing/debugging
-        wrapper._cache = cache
+        # Expose cache for testing/debugging; dynamic attribute on the wrapped
+        # function is not modeled by functools.wraps stubs.
+        wrapper._cache = cache  # type: ignore[attr-defined]
         return wrapper
 
     return decorator

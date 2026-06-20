@@ -1,18 +1,14 @@
 """Unit tests for ML training pipeline orchestration module."""
 
 from datetime import datetime
+from importlib.util import find_spec
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
-try:
-    import tensorflow
-
-    _TENSORFLOW_AVAILABLE = True
-except ImportError:
-    _TENSORFLOW_AVAILABLE = False
+_TENSORFLOW_AVAILABLE = find_spec("tensorflow") is not None
 
 from src.ml.training_pipeline.config import TrainingConfig, TrainingContext, TrainingPaths
 from src.ml.training_pipeline.pipeline import (

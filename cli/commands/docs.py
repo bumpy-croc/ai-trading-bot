@@ -18,7 +18,7 @@ class DocValidator:
         self.warnings: list[dict[str, Any]] = []
 
     def find_markdown_files(self) -> list[Path]:
-        files = []
+        files: list[Path] = []
         files.extend(self.root.glob("docs/**/*.md"))
         files.extend(self.root.glob("src/**/README.md"))
         readme = self.root / "README.md"
