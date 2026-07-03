@@ -205,7 +205,7 @@ def _scale_in_position(*, current_size: float) -> Mock:
 def test_exit_handler_scale_in_clamped_to_max_position_headroom():
     position = _scale_in_position(current_size=0.08)
     handler, tracker = _make_exit_handler(
-        max_position_size=0.10, scale_fraction=0.06, position=position
+        max_position_size=0.10, scale_fraction=0.50, position=position
     )
 
     handler.check_partial_operations(
@@ -217,7 +217,8 @@ def test_exit_handler_scale_in_clamped_to_max_position_headroom():
 
     tracker.apply_scale_in.assert_called_once()
     kwargs = tracker.apply_scale_in.call_args.kwargs
-    # Requested +0.06 but only 0.02 headroom below the 0.10 cap.
+    # Requested 50% of original (0.50 x 0.08 = +0.04 of balance) but only
+    # 0.02 headroom below the 0.10 cap.
     assert kwargs["delta_fraction"] == pytest.approx(0.02)
     assert kwargs["max_position_size"] == pytest.approx(0.10)
 
@@ -241,7 +242,7 @@ def test_exit_handler_scale_in_skipped_when_at_cap():
 def test_exit_handler_scale_in_within_headroom_unclamped():
     position = _scale_in_position(current_size=0.08)
     handler, tracker = _make_exit_handler(
-        max_position_size=0.20, scale_fraction=0.06, position=position
+        max_position_size=0.20, scale_fraction=0.50, position=position
     )
 
     handler.check_partial_operations(
@@ -252,7 +253,9 @@ def test_exit_handler_scale_in_within_headroom_unclamped():
     )
 
     tracker.apply_scale_in.assert_called_once()
-    assert tracker.apply_scale_in.call_args.kwargs["delta_fraction"] == pytest.approx(0.06)
+    # 50% of original (0.50 x 0.08 = +0.04 of balance) fits inside the
+    # 0.12 headroom below the 0.20 cap: no clamp.
+    assert tracker.apply_scale_in.call_args.kwargs["delta_fraction"] == pytest.approx(0.04)
 
 
 # ---------------------------------------------------------------------------
