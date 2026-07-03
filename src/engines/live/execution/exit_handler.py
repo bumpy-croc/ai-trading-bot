@@ -876,13 +876,37 @@ class LiveExitHandler:
                                 e,
                             )
 
+                    # Enforce the engine-wide max-position cap on scale-ins.
+                    # Entries are clamped at the coordinator, but the daily-risk
+                    # budget resets each day, so without this clamp a scale-in
+                    # could grow an at-cap position past --max-position
+                    # (observed live: ~10% entry + 6% daily-budget scale-in
+                    # reached ~16% exposure against a 10% cap).
+                    if add_effective > 0:
+                        current_exposure = float(
+                            position.current_size
+                            if position.current_size is not None
+                            else position.size
+                        )
+                        headroom = max(0.0, self.max_position_size - current_exposure)
+                        if add_effective > headroom:
+                            logger.info(
+                                "Clamping %s scale-in to max-position headroom: "
+                                "requested=%.4f, headroom=%.4f (current=%.4f, cap=%.4f)",
+                                position.symbol,
+                                add_effective,
+                                headroom,
+                                current_exposure,
+                                self.max_position_size,
+                            )
+                            add_effective = headroom
+
                     if add_effective <= 0:
                         logger.info(
-                            "Skipping %s scale-in: daily-risk budget exhausted "
-                            "(requested=%.4f, remaining=%.4f)",
+                            "Skipping %s scale-in: no daily-risk budget or "
+                            "max-position headroom remaining (requested=%.4f)",
                             position.symbol,
                             add_size_of_original,
-                            add_effective,
                         )
                     else:
                         self._execute_scale_in(

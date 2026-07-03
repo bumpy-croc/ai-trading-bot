@@ -64,6 +64,10 @@ def _make_handler(
         risk_manager=risk_manager,
         execution_model=ExecutionModel(default_fill_policy()),
         partial_manager=partial_manager,
+        # Ample max-position headroom so the daily-risk budget is the binding
+        # constraint under test (the max-position clamp has its own tests in
+        # tests/unit/engines/live/test_max_position_cap.py).
+        max_position_size=1.0,
     )
 
     # Spy on the actual scale-in execution.
