@@ -25,6 +25,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default (`"entry_pause": false`) lives in `feature_flags.json`; the
   `FEATURE_ENTRY_PAUSE` env var remains the override path.
 
+### Fixed
+- **Backtest partial-exit accounting booked fraction-of-position as
+  fraction-of-balance** — a units-collision family that fabricated returns in
+  every backtest with partial exits (a kelly_momentum ETHUSDT 30d run booked
+  +$14.19 of phantom credits on $0.07–0.29 of notional and reported +16.67%
+  where reality was ~0%):
+  - Both engines' exit handlers now convert the policy's fraction-of-original
+    to balance-fraction units (`fraction_of_original × original_size`) before
+    P&L computation AND the size decrement; the shared
+    `PartialExitExecutor` docstring now pins this units contract.
+  - Phantom position zeroing fixed: `current_size` decrements in consistent
+    units, and the backtest tracker clamps the exit to the remaining size
+    (mirroring live), so final closes no longer book `Trade.pnl = 0.0`
+    (0%-win-rate artifacts).
+  - Zombie scale-ins guarded in both engines: a position fully consumed by
+    partial exits can no longer be revived by a scale-in. When partials fully
+    consume a backtest position, the engine now closes it immediately
+    ("Partial exits complete @ level N", parity with live).
+  - Live scale-ins now convert policy units the same way (dev-flagged path,
+    #734 — no production behavior change; `live_partial_operations` is off).
+  - Backtest max drawdown now marks open positions to market: the equity
+    series fed to the performance tracker includes open-position unrealized
+    P&L, so adverse excursions appear in MaxDD (previously invisible —
+    a −9.4% excursion read as 0.026% MaxDD).
+  - Strategy-declared `partial_operations` overrides now hydrate in backtests
+    (previously `DEFAULT_PARTIAL_EXIT_TARGETS` always won); hydration moved to
+    a shared `build_partial_exit_policy` used by both engines.
+  - Backtest partial-exit fees/slippage now use the engine's configured rates
+    (previously always the defaults, ignoring `fee_rate`/`slippage_rate`).
+  - Backtest scale-ins now respect the max-position cap with live's
+    never-shrink semantics (#835 parity): growth clamps to headroom,
+    over-cap positions are never shrunk.
+  - NOTE: deterministic backtest fingerprints change — the old numbers were
+    fabricated. All historical backtest results with partial exits are suspect.
+
 ### Changed
 - HyperGrowth default sizing raised: `risk_fraction` / `base_fraction`
   0.20 → 0.25 (`stop_loss_pct` stays 0.10). Board-approved 2026-07-03 with the

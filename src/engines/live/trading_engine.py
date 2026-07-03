@@ -94,6 +94,7 @@ from src.engines.shared.models import (
 )
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.risk_configuration import (
+    build_partial_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
@@ -515,30 +516,13 @@ class LiveTradingEngine:
         if partial_manager is not None:
             self.partial_manager: PartialExitPolicy | None = partial_manager
         elif enable_partial_operations:
-            # Check strategy overrides first, then fall back to risk parameters
-            strategy_overrides = (
-                self.strategy.get_risk_overrides()
-                if hasattr(self.strategy, "get_risk_overrides")
-                else None
+            # Strategy-declared partial_operations win; risk-parameter
+            # defaults apply only when the strategy specifies nothing
+            # (shared hydration, parity with backtest).
+            self.partial_manager = build_partial_exit_policy(
+                strategy=self.strategy,
+                risk_parameters=self.risk_manager.params if self.risk_manager else None,
             )
-            if isinstance(strategy_overrides, dict) and "partial_operations" in strategy_overrides:
-                partial_config = strategy_overrides["partial_operations"]
-                self.partial_manager = PartialExitPolicy(
-                    exit_targets=partial_config.get("exit_targets", []),
-                    exit_sizes=partial_config.get("exit_sizes", []),
-                    scale_in_thresholds=partial_config.get("scale_in_thresholds", []),
-                    scale_in_sizes=partial_config.get("scale_in_sizes", []),
-                    max_scale_ins=partial_config.get("max_scale_ins", 0),
-                )
-            else:
-                rp = self.risk_manager.params if self.risk_manager else RiskParameters()
-                self.partial_manager = PartialExitPolicy(
-                    exit_targets=rp.partial_exit_targets or [],
-                    exit_sizes=rp.partial_exit_sizes or [],
-                    scale_in_thresholds=rp.scale_in_thresholds or [],
-                    scale_in_sizes=rp.scale_in_sizes or [],
-                    max_scale_ins=rp.max_scale_ins,
-                )
         else:
             self.partial_manager = None
         self._partial_operations_opt_in = bool(

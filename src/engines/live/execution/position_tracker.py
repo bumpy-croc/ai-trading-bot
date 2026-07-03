@@ -587,10 +587,13 @@ class LivePositionTracker:
 
         Args:
             order_id: Order ID of position.
-            delta_fraction: Fraction of current position to exit.
+            delta_fraction: Exited slice in balance-fraction units (same
+                units as ``current_size``; the PartialExitExecutor contract).
+                Values exceeding the remaining ``current_size`` are clamped.
             price: Current market price for P&L calculation.
             target_level: Which profit target level triggered this exit.
-            fraction_of_original: Fraction of original position being exited.
+            fraction_of_original: Fraction of original position being exited
+                (policy units, persisted to the DB).
             basis_balance: Fallback balance for P&L calculation.
             fee_rate: Fee rate for exit calculation (overrides executor default).
             slippage_rate: Slippage rate for exit cost (overrides executor default).
