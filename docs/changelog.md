@@ -11,7 +11,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `FEATURE_ENTRY_PAUSE` feature flag: when truthy the live engine blocks all
+  exposure INCREASES — new positions (long, short, and the legacy duck-typed
+  short path) AND scale-ins — while exits, partial exits, stop-loss
+  management, reconciliation, and monitoring continue untouched. Lets a human
+  flatten risk ahead of macro events (FOMC/CPI) with a single env var and no
+  code redeploy. Skips log one rate-limited WARNING per
+  `ENTRY_PAUSE_WARNING_INTERVAL_SECONDS` (300s) via the shared
+  `EntryPauseGate` (`src/engines/live/execution/entry_pause.py`), consulted by
+  `LiveEntryCoordinator` (entry evaluation, entry execution defense-in-depth,
+  legacy short path) and `LiveExitHandler` (scale-in decision). Discoverable
+  default (`"entry_pause": false`) lives in `feature_flags.json`; the
+  `FEATURE_ENTRY_PAUSE` env var remains the override path.
+
 ### Changed
+- HyperGrowth default sizing raised: `risk_fraction` / `base_fraction`
+  0.20 → 0.25 (`stop_loss_pct` stays 0.10). Board-approved 2026-07-03 with the
+  risk-officer condition of ≤2% realized risk per trade: live confidence
+  scaling lands realized notional at ~0.46–0.80 of base (≈11–20% of balance),
+  so the 10% stop bounds loss at ≈1.1–2.0% per trade.
+- Live max-position cap made explicit and enforced end-to-end:
+  `railway.json` `startCommand` (the value prod actually runs) and the
+  Dockerfile CMD now pass `--max-position 0.20` (prod previously ran an
+  implicit `0.5`). The engine now wires `max_position_size` into
+  `LiveExitHandler`, scale-ins are clamped to the remaining max-position
+  headroom (previously only the daily-risk budget bounded them, which resets
+  daily and allowed an at-cap position to keep growing), and
+  `LivePositionTracker.apply_scale_in` caps `current_size` growth at the cap
+  (was hardcoded 1.0) without shrinking already-over-cap adopted positions.
+  Consciously accepted gaps: (a) the backtest engine does not yet enforce the
+  scale-in max-position clamp — the parity clamp + test land in the sibling
+  backtest PR (`fix/backtest-partial-exit-units`); (b) HyperGrowth's
+  strategy-level `max_fraction` override is 0.25 while live is pinned to 0.20
+  via `railway.json` — default backtests of HyperGrowth should pass
+  `--max-position-size 0.20` to match prod.
 - `LiveTradingEngine.start()` bootstrap sequence extracted into a new
   `LiveStartupSequencer` (`engines/live/startup.py`, #486 follow-up): the public
   `start()` is now a thin delegator to `LiveStartupSequencer.run()`, and the

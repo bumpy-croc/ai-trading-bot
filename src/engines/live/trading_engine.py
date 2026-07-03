@@ -925,7 +925,8 @@ class LiveTradingEngine:
             else None
         )
 
-        # Exit handler
+        # Exit handler. max_position_size caps scale-in growth — without it
+        # the runner's --max-position never reaches the scale-in path.
         self.live_exit_handler = exit_handler or LiveExitHandler(
             execution_engine=self.live_execution_engine,
             position_tracker=self.live_position_tracker,
@@ -935,6 +936,7 @@ class LiveTradingEngine:
             partial_manager=partial_ops_manager,
             time_exit_policy=self.time_exit_policy,
             use_high_low_for_stops=self.use_high_low_for_stops,
+            max_position_size=self.max_position_size,
             max_filled_price_deviation=self.max_filled_price_deviation,
         )
 

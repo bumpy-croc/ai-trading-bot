@@ -723,8 +723,15 @@ class LivePositionTracker:
             if position.current_size is None:
                 position.current_size = position.size
 
-            position.current_size = min(1.0, float(position.current_size) + float(delta_fraction))
-            position.size = min(max_position_size, float(position.size) + float(delta_fraction))
+            # Cap growth at max_position_size without shrinking already-over-cap
+            # state: an adopted position that exceeds the cap must keep its real
+            # tracked exposure (reducing it here would diverge from exchange
+            # holdings) — it just can't grow any further.
+            current_size = float(position.current_size)
+            size = float(position.size)
+            delta = float(delta_fraction)
+            position.current_size = min(current_size + delta, max(max_position_size, current_size))
+            position.size = min(size + delta, max(max_position_size, size))
             position.scale_ins_taken += 1
             position.last_scale_in_price = price
 

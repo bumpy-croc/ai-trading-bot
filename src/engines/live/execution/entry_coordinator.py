@@ -32,6 +32,7 @@ from src.config.constants import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
 from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
+from src.engines.live.execution.entry_pause import EntryPauseGate
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
@@ -148,6 +149,13 @@ class LiveEntryCoordinator:
     def __init__(self, engine_state: LiveEntryEngineState) -> None:
         """Bind to the engine's live state (see protocol for the surface)."""
         self._state = engine_state
+        # FEATURE_ENTRY_PAUSE gate for new entries (scale-ins are gated by the
+        # exit handler's own instance — see EntryPauseGate).
+        self._entry_pause = EntryPauseGate()
+
+    def _entry_paused(self, context: str) -> bool:
+        """True when FEATURE_ENTRY_PAUSE suppresses new entries (rate-limit logged)."""
+        return self._entry_pause.paused(context)
 
     def check_entry_conditions(
         self,
@@ -164,6 +172,9 @@ class LiveEntryCoordinator:
         # Close-only mode: skip all entry signals, exits/stops still active
         if state._close_only_mode:
             logger.debug("Close-only mode active — skipping entry check")
+            return
+
+        if self._entry_paused(f"entry evaluation for {symbol}"):
             return
 
         use_runtime = state._is_runtime_strategy()
@@ -491,6 +502,9 @@ class LiveEntryCoordinator:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         state = self._state
+        # Defense-in-depth: refuse any entry routed around check_entry_conditions.
+        if self._entry_paused(f"entry execution for {symbol}"):
+            return
         try:
             # Prevent duplicate positions on the same symbol (guards against multi-slot
             # risk managers with max_concurrent_positions > 1).
@@ -919,6 +933,8 @@ class LiveEntryCoordinator:
     ) -> None:
         """Evaluate and execute a legacy duck-typed short entry (non-runtime strategies)."""
         state = self._state
+        if self._entry_paused(f"legacy short entry for {symbol}"):
+            return
         if (not state._is_runtime_strategy()) and callable(
             getattr(state.strategy, "check_short_entry_conditions", None)
         ):

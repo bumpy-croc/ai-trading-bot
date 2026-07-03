@@ -86,6 +86,7 @@ DEFAULT_ORPHANED_BORROW_REPAY_CAP_USD = (
 NET_FLAT_DUST_USD = 1.0  # |netAsset| * price below this counts as flat (no real position)
 BORROW_DUST_EPSILON = 1e-8  # Borrowed amounts at/below this are treated as zero
 ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS = 300  # Min seconds between sweep attempts per base asset
+ENTRY_PAUSE_WARNING_INTERVAL_SECONDS = 300  # Min seconds between entry-pause skip warnings
 
 # Core Trading Defaults (used across backtest and live engines)
 DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss

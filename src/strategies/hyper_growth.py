@@ -4,7 +4,7 @@ Hyper Growth Strategy - Aggressive Component-Based Implementation
 Targets high annual returns by combining three mechanisms from research:
 1. ML-driven signal generation using the basic (price-only) model for
    directional alpha
-2. High base position sizing (20% of balance per trade)
+2. High base position sizing (25% of balance per trade)
 3. Aggressive risk overrides: tight stops (10%), wide drawdown tolerance,
    partial exits, trailing stops
 
@@ -168,8 +168,11 @@ _HYPER_LEVERAGE_MAP: dict[tuple[TrendLabel, VolLabel], float] = {
 def create_hyper_growth_strategy(
     name: str = "HyperGrowth",
     signal_source: str = "ml",
-    risk_fraction: float = 0.20,
-    base_fraction: float = 0.20,
+    # 0.25 keeps realized risk/trade at or below 2%: live confidence scaling
+    # lands realized notional at 0.46-0.80 of base_fraction (~11-20% of
+    # balance), and the 10% stop bounds the loss at ~1.1-2.0% per trade.
+    risk_fraction: float = 0.25,
+    base_fraction: float = 0.25,
     min_confidence: float = 0.05,
     max_leverage: float = 1.0,
     leverage_decay_rate: float = 0.20,
