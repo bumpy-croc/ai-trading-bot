@@ -50,3 +50,10 @@ Scenarios checked: corrupt-balance fail-fast propagation, offline-SL balance-bas
 - Reviews: code-reviewer *correct* (normalized diff of all 4 methods = zero semantic differences); risk-officer **APPROVE high confidence** (condition: CI green before merge).
 - Remaining #486 scope: (d) config dataclass + <1,500-line target — next stacked PR after these merge.
 Commits: 2ec7a8b, 2e5eb75, 2487564 (+ 5cf5862 on the PR branch).
+
+---
+
+## 2026-07-03 21:25 · decision · pm
+Human (Board) filled charter.md TODOs and confirmed a high-risk-appetite autonomy envelope: daemon may change live capital, deploy to production, and promote a live-trading symbol's model `latest` symlink without per-action human approval. Risk-tolerance numbers set to match risk-limits.json (20% max drawdown, 6% max daily loss, 10% max position, 3x leverage; breach = halt new entries + page human).
+Per explicit human instruction, relaxed the conflicting hard rules in CLAUDE.md and `.claude/agents/ml-engineer.md`: model promotion for live-trading symbols no longer requires human sign-off or `board_required: true`. The eval bar (held-out temporal split, per-regime breakdown, calibration check, >=48h paper validation) and a clean risk-officer review (`risk_review_required: true`) remain mandatory — self-certifying without running them does not count as "verified." All other `board_required: true` gates (e.g. kill-switch, charter.md changes) are unchanged.
+Ref: charter.md (risk tolerance, autonomy envelope), CLAUDE.md (daemon hard rules), .claude/agents/ml-engineer.md
