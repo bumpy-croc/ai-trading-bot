@@ -2,5 +2,6 @@
   "use_prediction_engine": true,
   "enable_regime_detection": false,
   "optimizer_canary_fraction": "0.1",
-  "optimizer_auto_apply": false
+  "optimizer_auto_apply": false,
+  "entry_pause": false
 }

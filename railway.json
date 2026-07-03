@@ -4,7 +4,7 @@
   },
   "deploy": {
     "preDeployCommand": "atb db verify --apply-migrations",
-    "startCommand": "atb live-health hyper_growth --max-position 0.5",
+    "startCommand": "atb live-health hyper_growth --max-position 0.20",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
