@@ -173,7 +173,7 @@ def test_pause_warning_is_rate_limited(entry_pause_on, caplog):
     assert len(pause_warnings) == 1
 
     # After the rate-limit window elapses, the warning fires again.
-    coordinator._entry_pause_last_warning = (
+    coordinator._entry_pause._last_warning = (
         time.monotonic() - ENTRY_PAUSE_WARNING_INTERVAL_SECONDS - 1
     )
     with caplog.at_level(logging.WARNING):
@@ -186,6 +186,90 @@ def test_pause_warning_is_rate_limited(entry_pause_on, caplog):
         )
     pause_warnings = [r for r in caplog.records if "FEATURE_ENTRY_PAUSE" in r.message]
     assert len(pause_warnings) == 2
+
+
+# ---------------------------------------------------------------------------
+# Flag ON: scale-ins (exposure increases) are suppressed too
+# ---------------------------------------------------------------------------
+
+
+def _make_partial_ops_handler(*, should_exit: bool = False, should_scale: bool = True):
+    """LiveExitHandler wired for check_partial_operations with one position."""
+    position = MagicMock()
+    position.symbol = "BTCUSDT"
+    position.order_id = "order-1"
+    position.entry_time = datetime(2024, 1, 1, tzinfo=UTC)
+    position.current_size = 0.08
+    position.original_size = 0.08
+    position.size = 0.08
+
+    execution_engine = MagicMock()
+    execution_engine.fee_rate = 0.0
+    execution_engine.slippage_rate = 0.0
+    position_tracker = MagicMock()
+    position_tracker.positions = {"order-1": position}
+    position_tracker.apply_partial_exit.return_value = SimpleNamespace(
+        realized_pnl=1.0, new_current_size=0.04, partial_exits_taken=1
+    )
+    partial_manager = MagicMock()
+    partial_manager.check_partial_exit.side_effect = [
+        SimpleNamespace(should_exit=should_exit, exit_fraction=0.5, target_index=0),
+        SimpleNamespace(should_exit=False, exit_fraction=None, target_index=None),
+    ]
+    partial_manager.check_scale_in.return_value = SimpleNamespace(
+        should_scale=should_scale, scale_fraction=0.05, target_index=0
+    )
+    handler = LiveExitHandler(
+        execution_engine=execution_engine,
+        position_tracker=position_tracker,
+        execution_model=MagicMock(),
+        risk_manager=None,
+        partial_manager=partial_manager,
+        max_position_size=0.5,
+    )
+    return handler, position_tracker
+
+
+def test_pause_suppresses_scale_in(entry_pause_on):
+    """Scale-ins increase exposure, so the pause flag blocks them."""
+    handler, tracker = _make_partial_ops_handler(should_scale=True)
+
+    handler.check_partial_operations(
+        df=MagicMock(),
+        current_index=0,
+        current_price=51000.0,
+        current_balance=1000.0,
+    )
+
+    tracker.apply_scale_in.assert_not_called()
+
+
+def test_pause_keeps_partial_exits_running(entry_pause_on):
+    """Partial exits reduce risk and must keep firing while paused."""
+    handler, tracker = _make_partial_ops_handler(should_exit=True, should_scale=True)
+
+    handler.check_partial_operations(
+        df=MagicMock(),
+        current_index=0,
+        current_price=51000.0,
+        current_balance=1000.0,
+    )
+
+    tracker.apply_partial_exit.assert_called_once()
+    tracker.apply_scale_in.assert_not_called()
+
+
+def test_flag_off_scale_in_proceeds(entry_pause_off):
+    handler, tracker = _make_partial_ops_handler(should_scale=True)
+
+    handler.check_partial_operations(
+        df=MagicMock(),
+        current_index=0,
+        current_price=51000.0,
+        current_balance=1000.0,
+    )
+
+    tracker.apply_scale_in.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

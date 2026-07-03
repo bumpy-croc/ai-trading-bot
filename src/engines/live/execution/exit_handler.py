@@ -20,6 +20,7 @@ from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
+from src.engines.live.execution.entry_pause import EntryPauseGate
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import (
     LivePosition,
@@ -133,6 +134,9 @@ class LiveExitHandler:
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
+        # FEATURE_ENTRY_PAUSE also suppresses scale-ins (exposure increases);
+        # own instance so warnings rate-limit independently of the entry path.
+        self._entry_pause = EntryPauseGate()
 
     def _build_snapshot(
         self,
@@ -833,6 +837,12 @@ class LiveExitHandler:
                 )
 
                 if scale_result.should_scale:
+                    # Scale-ins INCREASE exposure, so the entry-pause flag
+                    # suppresses them just like new entries. Partial exits and
+                    # full exits above keep running — they reduce risk.
+                    if self._entry_pause.paused(f"scale-in for {position.symbol}"):
+                        continue
+
                     # should_scale=True guarantees scale_fraction/target_index are set.
                     add_size_of_original = cast(float, scale_result.scale_fraction)
 

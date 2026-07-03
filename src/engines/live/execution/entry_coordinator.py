@@ -23,21 +23,16 @@ Locking & ordering (unchanged from the engine):
 from __future__ import annotations
 
 import logging
-import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import pandas as pd
 
-from src.config.constants import (
-    DEFAULT_STOP_LOSS_PCT,
-    DEFAULT_TAKE_PROFIT_PCT,
-    ENTRY_PAUSE_WARNING_INTERVAL_SECONDS,
-)
-from src.config.feature_flags import is_enabled
+from src.config.constants import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
 from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
+from src.engines.live.execution.entry_pause import EntryPauseGate
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
@@ -154,35 +149,13 @@ class LiveEntryCoordinator:
     def __init__(self, engine_state: LiveEntryEngineState) -> None:
         """Bind to the engine's live state (see protocol for the surface)."""
         self._state = engine_state
-        # Rate-limit marker for entry-pause warnings. Written only from the
-        # trading-loop thread; a benign race would at worst duplicate a log line.
-        self._entry_pause_last_warning: float | None = None
+        # FEATURE_ENTRY_PAUSE gate for new entries (scale-ins are gated by the
+        # exit handler's own instance — see EntryPauseGate).
+        self._entry_pause = EntryPauseGate()
 
     def _entry_paused(self, context: str) -> bool:
-        """True when FEATURE_ENTRY_PAUSE suppresses new entries.
-
-        The flag lets a human flatten risk ahead of macro events (FOMC/CPI)
-        with a single env var: new entries are skipped while exits, stop-loss
-        management, reconciliation and monitoring continue untouched. Warns at
-        most once per ENTRY_PAUSE_WARNING_INTERVAL_SECONDS to avoid log spam
-        from the trading loop.
-        """
-        if not is_enabled("entry_pause", default=False):
-            return False
-        now = time.monotonic()
-        if (
-            self._entry_pause_last_warning is None
-            or now - self._entry_pause_last_warning >= ENTRY_PAUSE_WARNING_INTERVAL_SECONDS
-        ):
-            self._entry_pause_last_warning = now
-            logger.warning(
-                "FEATURE_ENTRY_PAUSE active — skipping %s "
-                "(exits, stop-loss management and reconciliation continue)",
-                context,
-            )
-        else:
-            logger.debug("FEATURE_ENTRY_PAUSE active — skipping %s", context)
-        return True
+        """True when FEATURE_ENTRY_PAUSE suppresses new entries (rate-limit logged)."""
+        return self._entry_pause.paused(context)
 
     def check_entry_conditions(
         self,
