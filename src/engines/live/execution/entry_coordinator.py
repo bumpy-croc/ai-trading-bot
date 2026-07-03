@@ -23,12 +23,18 @@ Locking & ordering (unchanged from the engine):
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import pandas as pd
 
-from src.config.constants import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
+from src.config.constants import (
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
+    ENTRY_PAUSE_WARNING_INTERVAL_SECONDS,
+)
+from src.config.feature_flags import is_enabled
 from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
@@ -148,6 +154,35 @@ class LiveEntryCoordinator:
     def __init__(self, engine_state: LiveEntryEngineState) -> None:
         """Bind to the engine's live state (see protocol for the surface)."""
         self._state = engine_state
+        # Rate-limit marker for entry-pause warnings. Written only from the
+        # trading-loop thread; a benign race would at worst duplicate a log line.
+        self._entry_pause_last_warning: float | None = None
+
+    def _entry_paused(self, context: str) -> bool:
+        """True when FEATURE_ENTRY_PAUSE suppresses new entries.
+
+        The flag lets a human flatten risk ahead of macro events (FOMC/CPI)
+        with a single env var: new entries are skipped while exits, stop-loss
+        management, reconciliation and monitoring continue untouched. Warns at
+        most once per ENTRY_PAUSE_WARNING_INTERVAL_SECONDS to avoid log spam
+        from the trading loop.
+        """
+        if not is_enabled("entry_pause", default=False):
+            return False
+        now = time.monotonic()
+        if (
+            self._entry_pause_last_warning is None
+            or now - self._entry_pause_last_warning >= ENTRY_PAUSE_WARNING_INTERVAL_SECONDS
+        ):
+            self._entry_pause_last_warning = now
+            logger.warning(
+                "FEATURE_ENTRY_PAUSE active — skipping %s "
+                "(exits, stop-loss management and reconciliation continue)",
+                context,
+            )
+        else:
+            logger.debug("FEATURE_ENTRY_PAUSE active — skipping %s", context)
+        return True
 
     def check_entry_conditions(
         self,
@@ -164,6 +199,9 @@ class LiveEntryCoordinator:
         # Close-only mode: skip all entry signals, exits/stops still active
         if state._close_only_mode:
             logger.debug("Close-only mode active — skipping entry check")
+            return
+
+        if self._entry_paused(f"entry evaluation for {symbol}"):
             return
 
         use_runtime = state._is_runtime_strategy()
@@ -491,6 +529,9 @@ class LiveEntryCoordinator:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         state = self._state
+        # Defense-in-depth: refuse any entry routed around check_entry_conditions.
+        if self._entry_paused(f"entry execution for {symbol}"):
+            return
         try:
             # Prevent duplicate positions on the same symbol (guards against multi-slot
             # risk managers with max_concurrent_positions > 1).
@@ -919,6 +960,8 @@ class LiveEntryCoordinator:
     ) -> None:
         """Evaluate and execute a legacy duck-typed short entry (non-runtime strategies)."""
         state = self._state
+        if self._entry_paused(f"legacy short entry for {symbol}"):
+            return
         if (not state._is_runtime_strategy()) and callable(
             getattr(state.strategy, "check_short_entry_conditions", None)
         ):
