@@ -18,6 +18,16 @@ DEFAULT_ENABLE_MACRO_FEATURES = False  # Macro economic features disabled by def
 DEFAULT_ENABLE_ENHANCED_SENTIMENT = False  # Enhanced sentiment disabled by default
 DEFAULT_ONCHAIN_CACHE_TTL = 300  # 5 minutes cache for on-chain data
 DEFAULT_MACRO_CACHE_TTL = 3600  # 1 hour cache for macro data
+
+# US spot ETF net-flow signal + gate (#803). ETF flows are the marginal
+# buyer/seller this cycle; price legs have tracked multi-day flow streaks.
+DEFAULT_ENABLE_ETF_FLOW_FEATURES = False  # ETF-flow model features off by default (needs retrain)
+DEFAULT_ETF_FLOW_CACHE_TTL_HOURS = 12  # Daily data; refresh the current day twice a day
+DEFAULT_ETF_FLOW_ZSCORE_SHORT_WINDOW = 5  # Days for the short net-flow z-score
+DEFAULT_ETF_FLOW_ZSCORE_LONG_WINDOW = 20  # Days for the long net-flow z-score
+# Block NEW LONG entries while the 5-day net-flow z-score is below this (i.e. a
+# sustained-outflow regime that has led price down this cycle). Config, not code.
+DEFAULT_ETF_FLOW_LONG_BLOCK_ZSCORE = -1.0
 DEFAULT_FEATURE_CACHE_TTL = 3600  # 1 hour
 DEFAULT_MODEL_CACHE_TTL = 600  # seconds
 DEFAULT_CONFIDENCE_SCALE_FACTOR = 10.0  # Scale factor for confidence calculation

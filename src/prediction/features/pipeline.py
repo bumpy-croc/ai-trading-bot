@@ -92,6 +92,16 @@ class FeaturePipeline:
                 **self.config.get("price_only_features", {})
             )
 
+        # Add ETF net-flow feature extractor (#803). Off by default; changes the
+        # model feature schema, so it is inert until a compatible model is
+        # retrained. Registered only when explicitly enabled in config.
+        if self.config.get("etf_flows_features", {}).get("enabled", False):
+            from src.prediction.features.etf_flow import ETFFlowFeatureExtractor
+
+            etf_config = self.config.get("etf_flows_features", {}).copy()
+            etf_config.pop("enabled", None)
+            self.extractors["etf_flow"] = ETFFlowFeatureExtractor(enabled=True, **etf_config)
+
         # Add custom extractors
         if custom_extractors:
             for extractor in custom_extractors:

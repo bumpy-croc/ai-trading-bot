@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ETF net-flow signal + flow gate** (#803): US spot BTC/ETH ETF net flows are
+  the marginal buyer/seller this cycle, but the bot had no flow awareness. New
+  `ETFFlowProvider` (`src/data_providers/etf_flow_provider.py`) ingests daily net
+  flows, caches to parquet (atomic write), and degrades gracefully
+  (fetch → cache → bundled seed) so it never hard-fails a loop. Derived features:
+  5d/20d net-flow z-scores (regime-aware — a sustained outflow streak reads
+  strongly negative) and consecutive-outflow-day count. A rule-based **gate**
+  (`FlowGatedSignalGenerator`) vetoes NEW LONG entries while the 5-day flow
+  z-score is below a configurable threshold (default −1.0), implemented as a
+  signal-generator decorator so it applies in both engines via the strategy with
+  no per-engine wiring (SELL/HOLD pass through; unknown flow does not block).
+  Wired into `ml_basic`/`ml_adaptive` behind `enable_etf_flow_gate` (**default
+  OFF**). A separate `ETFFlowFeatureExtractor` exposes the same features as
+  optional model inputs but is **inert until a compatible model is retrained**
+  (it changes the feature schema) — registered only behind
+  `etf_flows_features.enabled`. See `docs/data_pipeline.md`.
 - **Regime-gated gross exposure caps** (#802): a new `ExposureGovernor`
   (`src/strategies/components/exposure_governor.py`) caps *total gross open
   exposure* (sum of |entry notional| / current equity) by market regime — in a
