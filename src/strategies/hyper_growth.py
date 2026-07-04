@@ -4,7 +4,7 @@ Hyper Growth Strategy - Aggressive Component-Based Implementation
 Targets high annual returns by combining three mechanisms from research:
 1. ML-driven signal generation using the basic (price-only) model for
    directional alpha
-2. High base position sizing (20% of balance per trade)
+2. High base position sizing (25% of balance per trade)
 3. Aggressive risk overrides: tight stops (10%), wide drawdown tolerance,
    partial exits, trailing stops
 
@@ -33,6 +33,7 @@ Reference: docs/research/500_percent_annual_returns.md
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from src.strategies.components import (
@@ -47,6 +48,8 @@ from src.strategies.components.leverage_manager import LeverageManager
 from src.strategies.components.position_sizer import LeveragedPositionSizer
 from src.strategies.components.regime_context import TrendLabel, VolLabel
 from src.strategies.components.risk_manager import RiskManager
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.strategies.components.regime_context import RegimeContext
@@ -168,8 +171,11 @@ _HYPER_LEVERAGE_MAP: dict[tuple[TrendLabel, VolLabel], float] = {
 def create_hyper_growth_strategy(
     name: str = "HyperGrowth",
     signal_source: str = "ml",
-    risk_fraction: float = 0.20,
-    base_fraction: float = 0.20,
+    # 0.25 keeps realized risk/trade at or below 2%: live confidence scaling
+    # lands realized notional at 0.46-0.80 of base_fraction (~11-20% of
+    # balance), and the 10% stop bounds the loss at ~1.1-2.0% per trade.
+    risk_fraction: float = 0.25,
+    base_fraction: float = 0.25,
     min_confidence: float = 0.05,
     max_leverage: float = 1.0,
     leverage_decay_rate: float = 0.20,
@@ -207,6 +213,15 @@ def create_hyper_growth_strategy(
     Returns:
         Configured Strategy instance.
     """
+    # #805: hyper_growth targets high returns via leverage/aggressive sizing and
+    # is NOT recommended in a bear/high-vol regime, where exposure is the primary
+    # risk. Prefer ml_adaptive with the exposure governor (#802) + vol-targeted
+    # sizing (#805) when trading a downtrend.
+    logger.warning(
+        "hyper_growth is NOT recommended for bear/high-vol regimes: its leveraged, "
+        "aggressive sizing amplifies drawdowns. Consider ml_adaptive with the "
+        "exposure governor + vol-target sizing instead."
+    )
     # Signal generator (declared up-front: branches assign different subtypes)
     signal_generator: SignalGenerator
     if signal_source == "momentum":

@@ -183,3 +183,125 @@ class TestSendAlert:
         engine = self._engine("http://hook.test")
         with patch("requests.post", autospec=True, side_effect=ConnectionError("network down")):
             assert engine._send_alert("hi") is False
+
+
+class TestWarnIfNoAlertChannel:
+    """Startup must make a missing alert channel LOUD, not silent: with no
+    webhook, _send_alert is a no-op so critical events page nobody. The guard
+    records that blind spot in system_events on every startup."""
+
+    @staticmethod
+    def _engine(webhook: str | None, live: bool) -> LiveTradingEngine:
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.alert_webhook_url = webhook
+        engine.enable_live_trading = live
+        engine._record_event = MagicMock()
+        return engine
+
+    def test_no_event_when_channel_configured(self):
+        engine = self._engine("http://hook.test", live=True)
+        engine._warn_if_no_alert_channel()
+        engine._record_event.assert_not_called()
+
+    def test_warning_event_when_unset_in_paper(self):
+        engine = self._engine(None, live=False)
+        engine._warn_if_no_alert_channel()
+        engine._record_event.assert_called_once()
+        args, kwargs = engine._record_event.call_args
+        assert args[0] == EventType.WARNING
+        assert kwargs["error_code"] == "NO_ALERT_CHANNEL"
+        assert kwargs["component"] == "engine"
+        assert kwargs["severity"] == "warning"
+
+    def test_critical_event_when_unset_in_live(self):
+        engine = self._engine(None, live=True)
+        engine._warn_if_no_alert_channel()
+        _, kwargs = engine._record_event.call_args
+        assert kwargs["severity"] == "critical"
+        assert kwargs["error_code"] == "NO_ALERT_CHANNEL"
+
+    def test_never_raises_if_record_event_fails(self):
+        """Observability must never break startup."""
+        engine = self._engine(None, live=True)
+        engine._record_event.side_effect = RuntimeError("db down")
+        engine._warn_if_no_alert_channel()  # must not raise
+
+
+class TestRunnerWebhookEnvFallback:
+    """--webhook-url falls back to $ALERT_WEBHOOK_URL so production (started via a
+    fixed command) can configure operator paging via env (RC-A delivery fix)."""
+
+    def test_falls_back_to_env(self, monkeypatch):
+        import sys
+
+        from src.engines.live.runner import parse_args
+
+        monkeypatch.setenv("ALERT_WEBHOOK_URL", "http://env-hook.test")
+        monkeypatch.setattr(sys, "argv", ["prog", "ml_basic"])
+        assert parse_args().webhook_url == "http://env-hook.test"
+
+    def test_flag_overrides_env(self, monkeypatch):
+        import sys
+
+        from src.engines.live.runner import parse_args
+
+        monkeypatch.setenv("ALERT_WEBHOOK_URL", "http://env-hook.test")
+        monkeypatch.setattr(sys, "argv", ["prog", "ml_basic", "--webhook-url", "http://flag.test"])
+        assert parse_args().webhook_url == "http://flag.test"
+
+    def test_none_when_unset(self, monkeypatch):
+        import sys
+
+        from src.engines.live.runner import parse_args
+
+        monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
+        monkeypatch.setattr(sys, "argv", ["prog", "ml_basic"])
+        assert parse_args().webhook_url is None
+
+
+class TestLoopCrashEvent:
+    """An abnormal loop death must page + emit a distinct system_event so it is
+    distinguishable from a clean ENGINE_STOP — the 2026-05-19 zombie-bot class
+    where the process stayed up but the trading loop was dead (#853)."""
+
+    def test_unhandled_loop_crash_pages_and_flags(self):
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine._loop_crashed = False
+        engine._record_event = MagicMock()
+        engine._trading_loop = MagicMock(side_effect=RuntimeError("boom"))
+
+        # Must not propagate — the wrapper exists precisely to catch it.
+        engine._run_trading_loop("BTCUSDT", "1h")
+
+        assert engine._loop_crashed is True
+        engine._record_event.assert_called_once()
+        args, kwargs = engine._record_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "LOOP_CRASH"
+        assert kwargs["severity"] == "critical"
+        assert kwargs["alert"] is True
+        assert isinstance(kwargs["exc"], RuntimeError)
+
+
+class TestOrderTrackerAlertAdapter:
+    """OrderTracker calls this adapter while holding its per-order lock, so the
+    (blocking, up-to-10s) alert webhook must be delivered OFF-thread — not inline
+    under the lock (#853; the webhook-under-lock class PR #857's review flagged)."""
+
+    def test_dispatches_record_event_off_thread(self):
+        import threading
+
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        delivered = threading.Event()
+        engine._record_event = MagicMock(side_effect=lambda *a, **k: delivered.set())
+
+        # Returns immediately (does not block on _record_event / the webhook).
+        engine._order_tracker_alert("position orphaned!", "ORDER_ORPHANED")
+
+        assert delivered.wait(timeout=2.0), "adapter did not deliver the event off-thread"
+        args, kwargs = engine._record_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "ORDER_ORPHANED"
+        assert kwargs["component"] == "order_tracker"
+        assert kwargs["severity"] == "critical"
+        assert kwargs["alert"] is True

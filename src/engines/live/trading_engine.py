@@ -37,7 +37,7 @@ from src.config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
-from src.config.feature_flags import is_enabled
+from src.config.feature_flags import get_flag, is_enabled
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
@@ -70,6 +70,8 @@ from src.engines.live.monitoring import (
     extract_ml_predictions,
     extract_sentiment_data,
 )
+from src.engines.live.monitoring.circuit_breaker_enforcer import CircuitBreakerEnforcer
+from src.engines.live.monitoring.drawdown_guard import MaxDrawdownEnforcer, MaxDrawdownGuard
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.startup import LiveStartupSequencer
 from src.engines.live.strategy_hot_swap import StrategyHotSwapCoordinator
@@ -94,6 +96,7 @@ from src.engines.shared.models import (
 )
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.risk_configuration import (
+    build_partial_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
@@ -103,14 +106,17 @@ from src.infrastructure.logging.events import (
 )
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.macro_events import MacroEventGuard
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
+from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
+from src.strategies.components.exposure_governor import ExposureGovernor
 
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
@@ -301,7 +307,18 @@ class LiveTradingEngine:
         # Performance tracker (unified with backtest engine)
         from src.performance.tracker import PerformanceTracker
 
-        self.performance_tracker = PerformanceTracker(initial_balance)
+        # Seed from self.initial_balance, which _resume_balance_from_snapshot
+        # may have just updated to the RECOVERED session balance. Seeding from
+        # the configured amount made peak_balance start at the optimistic book
+        # value ($100 vs true equity ~$84 in prod), poisoning
+        # account_history.drawdown and dynamic-risk drawdown with a phantom
+        # ~15% on every restart.
+        self.performance_tracker = PerformanceTracker(self.initial_balance)
+        # Closed-trade feedback: every trade recorded on the tracker (exit
+        # coordinator and crash-recovery paths) is forwarded to the active
+        # strategy so statistics-tracking position sizers (e.g. Kelly) learn
+        # from outcomes. Same seam as backtest (#840).
+        self.performance_tracker.add_trade_listener(self._notify_strategy_trade_closed)
 
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
@@ -515,30 +532,13 @@ class LiveTradingEngine:
         if partial_manager is not None:
             self.partial_manager: PartialExitPolicy | None = partial_manager
         elif enable_partial_operations:
-            # Check strategy overrides first, then fall back to risk parameters
-            strategy_overrides = (
-                self.strategy.get_risk_overrides()
-                if hasattr(self.strategy, "get_risk_overrides")
-                else None
+            # Strategy-declared partial_operations win; risk-parameter
+            # defaults apply only when the strategy specifies nothing
+            # (shared hydration, parity with backtest).
+            self.partial_manager = build_partial_exit_policy(
+                strategy=self.strategy,
+                risk_parameters=self.risk_manager.params if self.risk_manager else None,
             )
-            if isinstance(strategy_overrides, dict) and "partial_operations" in strategy_overrides:
-                partial_config = strategy_overrides["partial_operations"]
-                self.partial_manager = PartialExitPolicy(
-                    exit_targets=partial_config.get("exit_targets", []),
-                    exit_sizes=partial_config.get("exit_sizes", []),
-                    scale_in_thresholds=partial_config.get("scale_in_thresholds", []),
-                    scale_in_sizes=partial_config.get("scale_in_sizes", []),
-                    max_scale_ins=partial_config.get("max_scale_ins", 0),
-                )
-            else:
-                rp = self.risk_manager.params if self.risk_manager else RiskParameters()
-                self.partial_manager = PartialExitPolicy(
-                    exit_targets=rp.partial_exit_targets or [],
-                    exit_sizes=rp.partial_exit_sizes or [],
-                    scale_in_thresholds=rp.scale_in_thresholds or [],
-                    scale_in_sizes=rp.scale_in_sizes or [],
-                    max_scale_ins=rp.max_scale_ins,
-                )
         else:
             self.partial_manager = None
         self._partial_operations_opt_in = bool(
@@ -653,6 +653,7 @@ class LiveTradingEngine:
                         on_partial_fill=self._handle_partial_fill,
                         on_cancel=self._handle_order_cancel,
                         on_tracking_lost=self._handle_order_tracking_lost,
+                        on_critical=self._order_tracker_alert,
                     )
                     logger.info(
                         f"{provider_name} exchange interface and account synchronizer initialized"
@@ -891,6 +892,9 @@ class LiveTradingEngine:
             fee_rate=self.fee_rate,
             slippage_rate=self.slippage_rate,
         )
+        # Each banked partial-exit slice is a realized outcome for the
+        # strategy's position sizer, same as final closes (#840).
+        self.live_position_tracker.on_partial_exit = self._notify_strategy_trade_closed
 
         # Execution engine
         self.live_execution_engine = execution_engine or LiveExecutionEngine(
@@ -918,6 +922,32 @@ class LiveTradingEngine:
             default_take_profit_pct=self._resolve_take_profit_pct(),
         )
 
+        # Wire the #802 regime-gated exposure governor. Positions are read lazily
+        # so ordering with live_position_tracker construction does not matter.
+        # Inert unless the ``enable_exposure_governor`` feature flag is on.
+        # Resolve the flag ONCE here (not per entry) — reading feature_flags.json
+        # on every entry would add disk I/O to the hot path. A flag change
+        # requires a restart (which reconstructs the engine) anyway.
+        exposure_governor = ExposureGovernor(
+            enabled=is_enabled("enable_exposure_governor", default=False)
+        )
+        self.live_entry_handler.configure_exposure_gate(
+            exposure_governor,
+            lambda: list(self.live_position_tracker.positions.values()),
+        )
+        # #806: macro-event de-risking guard (flag resolved once at build).
+        self.live_entry_handler.configure_macro_guard(
+            MacroEventGuard(enabled=is_enabled("enable_macro_event_guard", default=False))
+        )
+        # #807: account-level circuit breaker. Mode (off/dry_run/active) resolved
+        # once here to keep feature_flags.json I/O off the entry hot path. Held on
+        # the engine so both the entry gate and the loop enforcer share one
+        # breaker (one daily-loss baseline, one latch).
+        self._circuit_breaker = AccountCircuitBreaker(
+            mode=get_flag("account_circuit_breakers", default="off")
+        )
+        self.live_entry_handler.configure_circuit_breaker(self._circuit_breaker)
+
         # Wrap PartialExitPolicy in unified PartialOperationsManager
         partial_ops_manager = (
             PartialOperationsManager(policy=self.partial_manager)
@@ -925,7 +955,8 @@ class LiveTradingEngine:
             else None
         )
 
-        # Exit handler
+        # Exit handler. max_position_size caps scale-in growth — without it
+        # the runner's --max-position never reaches the scale-in path.
         self.live_exit_handler = exit_handler or LiveExitHandler(
             execution_engine=self.live_execution_engine,
             position_tracker=self.live_position_tracker,
@@ -935,8 +966,15 @@ class LiveTradingEngine:
             partial_manager=partial_ops_manager,
             time_exit_policy=self.time_exit_policy,
             use_high_low_for_stops=self.use_high_low_for_stops,
+            max_position_size=self.max_position_size,
             max_filled_price_deviation=self.max_filled_price_deviation,
+            # Close-only mode must block ALL exposure increases, including
+            # scale-ins; read at call time so mid-session trips take effect.
+            close_only_provider=lambda: self._close_only_mode,
         )
+        # #802 follow-up P3: scale-ins respect the same gross exposure cap as
+        # entries (share the governor instance; inert unless the flag is on).
+        self.live_exit_handler.configure_exposure_gate(exposure_governor)
 
         # Stop-loss lifecycle handler — owns every exchange-facing stop-loss
         # call (place/cancel/query/re-protect) so the engine orchestrates
@@ -948,6 +986,20 @@ class LiveTradingEngine:
 
         # Account monitor — snapshots, status lines, performance summaries.
         self.account_monitor = LiveAccountMonitor(engine_state=self)
+
+        # Max-drawdown hard cap (risk-limits.json portfolio.max_drawdown_pct):
+        # trips close-only mode when drawdown from the session peak reaches
+        # params.max_drawdown. Checked every trading-loop iteration.
+        self._drawdown_enforcer = MaxDrawdownEnforcer(
+            engine_state=self,
+            guard=MaxDrawdownGuard(self.risk_manager.params.max_drawdown),
+        )
+        # #807 follow-up: run the account circuit breaker on the loop too —
+        # restart-safe daily baseline + close-only-on-trip (dry_run/active).
+        self._circuit_breaker_enforcer = CircuitBreakerEnforcer(
+            engine_state=self,
+            breaker=self._circuit_breaker,
+        )
 
         # Startup recovery — session balance, persisted positions, exchange
         # reconciliation. Reads/writes engine state at call time (#486).
@@ -1046,6 +1098,16 @@ class LiveTradingEngine:
     def _strategy_name(self) -> str:
         """Returns the configured strategy name for logging and reporting."""
         return self.strategy_coordinator.strategy_name()
+
+    def _notify_strategy_trade_closed(self, trade: Any) -> None:
+        """Forward a recorded closed trade to the active strategy (duck-typed).
+
+        Resolves ``self.strategy`` at call time so hot swaps keep feeding the
+        currently active strategy.
+        """
+        hook = getattr(self.strategy, "on_trade_closed", None)
+        if callable(hook):
+            hook(trade)
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Prepare dataframe for strategy processing."""
@@ -1303,6 +1365,18 @@ class LiveTradingEngine:
         except Exception as e:
             self._loop_crashed = True
             logger.critical("Trading loop terminated unexpectedly: %s", e, exc_info=True)
+            # Distinct paged event so an abnormal loop death is distinguishable
+            # from a clean ENGINE_STOP in system_events (the 2026-05-19 zombie-bot
+            # class, where the process stayed up but the loop was dead). #853
+            self._record_event(
+                EventType.ALERT,
+                f"Trading loop crashed unexpectedly: {e}",
+                severity="critical",
+                component="engine",
+                error_code="LOOP_CRASH",
+                exc=e,
+                alert=True,
+            )
 
     def _exit_if_loop_crashed(self, exit_on_crash: bool) -> None:
         """Exit the process non-zero if the trading loop died abnormally (#630).
@@ -1514,6 +1588,8 @@ class LiveTradingEngine:
                     )
                 # Update performance metrics
                 self._update_performance_metrics()
+                # Enforce the portfolio max-drawdown hard cap (close-only on breach)
+                self._check_max_drawdown()
                 self._log_periodic_account_state()
                 # Log status periodically
                 if (
@@ -1574,6 +1650,18 @@ class LiveTradingEngine:
                     logger.critical(
                         f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.",
                         exc_info=True,
+                    )
+                    # Paged event before the (generic) ENGINE_STOP so operators can
+                    # distinguish this abnormal shutdown from a clean stop. #853
+                    self._record_event(
+                        EventType.ALERT,
+                        f"Trading loop stopping — {self.consecutive_errors} consecutive errors "
+                        f"reached the limit (last: {e})",
+                        severity="critical",
+                        component="engine",
+                        error_code="LOOP_MAX_ERRORS",
+                        exc=e,
+                        alert=True,
                     )
                     # Abnormal stop: signal start() to exit non-zero for a restart (#630).
                     self._loop_crashed = True
@@ -1954,6 +2042,14 @@ class LiveTradingEngine:
         """Update performance tracking metrics"""
         self.account_monitor.update_performance_metrics()
 
+    def _check_max_drawdown(self) -> None:
+        """Enforce the max-drawdown hard cap + account circuit breakers.
+
+        Both run every trading-loop iteration and trip the same close-only mode.
+        """
+        self._drawdown_enforcer.check()
+        self._circuit_breaker_enforcer.check()
+
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
         return extract_indicators(df, index)
@@ -2090,6 +2186,61 @@ class LiveTradingEngine:
         except Exception as e:
             logger.error("Failed to send alert: %s", e, exc_info=True)
             return False
+
+    def _warn_if_no_alert_channel(self) -> None:
+        """Record a missing alert channel loudly so it is never a silent blind spot.
+
+        With no ``alert_webhook_url`` (unset / empty ``$ALERT_WEBHOOK_URL``),
+        ``_send_alert`` is a no-op, so no critical event — emergency close,
+        close-only, unprotected position — can page an operator. Emit a
+        ``system_events`` row on every startup (critical in live mode) so the gap
+        is visible in the event stream instead of silently un-alerted. Fault
+        isolated: observability must never break startup.
+        """
+        try:
+            if self.alert_webhook_url:
+                return
+            logger.warning(
+                "⚠️ No alert channel configured (alert_webhook_url unset / $ALERT_WEBHOOK_URL "
+                "empty) — operator alerts will NOT be delivered. Set ALERT_WEBHOOK_URL to enable "
+                "paging."
+            )
+            self._record_event(
+                EventType.WARNING,
+                "No alert channel configured — operator alerts will not be delivered",
+                severity="critical" if self.enable_live_trading else "warning",
+                component="engine",
+                error_code="NO_ALERT_CHANNEL",
+            )
+        except Exception as e:  # pragma: no cover - defensive; must never break startup
+            logger.warning("no-alert-channel guard failed: %s", e)
+
+    def _order_tracker_alert(self, message: str, error_code: str) -> None:
+        """Adapter so OrderTracker (kept free of EventType/DB coupling) can page an
+        operator for orphaned/unrecoverable orders via the engine's fault-isolated
+        ``_record_event`` — routing its "MANUAL RECONCILIATION REQUIRED" criticals
+        to system_events + an alert instead of only application logs.
+
+        OrderTracker invokes this while holding its per-order lock (which serializes
+        the poll thread and the UserDataProcessor worker to prevent double-fills),
+        so the up-to-10s alert webhook must NOT run inline. Deliver on a short-lived
+        daemon thread so this returns immediately and the lock is released promptly.
+        """
+
+        def _deliver() -> None:
+            self._record_event(
+                EventType.ALERT,
+                message,
+                severity="critical",
+                component="order_tracker",
+                error_code=error_code,
+                alert=True,
+            )
+
+        try:
+            threading.Thread(target=_deliver, name="order-tracker-alert", daemon=True).start()
+        except Exception as e:  # pragma: no cover - defensive; never break order handling
+            logger.warning("order-tracker alert dispatch failed: %s", e)
 
     def _sleep_with_interrupt(self, seconds: float) -> None:
         """Sleep in small increments to allow for interrupt (delegated to LiveLoopTimingCoordinator)."""

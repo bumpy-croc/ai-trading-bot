@@ -2290,6 +2290,45 @@ class DatabaseManager:
             logger.error(f"Failed to update balance: {e}")
             return False
 
+    def get_session_peak_balance(
+        self,
+        session_id: int | None = None,
+        fallback_session_id: int | None = None,
+    ) -> float | None:
+        """Get the highest account_history balance recorded for the session(s).
+
+        Re-seeds the live max-drawdown guard's peak after a restart so the
+        hard cap keeps measuring from the true session peak — a restart must
+        not reset the drawdown baseline. Mirrors ``get_first_snapshot_of_day``
+        fallback semantics: a clean restart creates a NEW session while the
+        earlier snapshots live under the recovered inactive session.
+
+        Args:
+            session_id: Trading session ID (defaults to the current session).
+            fallback_session_id: Prior session whose snapshots also count.
+
+        Returns:
+            The peak balance across the session(s), or None when no snapshot
+            exists yet.
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return None
+
+        session_ids = [session_id]
+        if fallback_session_id is not None and fallback_session_id != session_id:
+            session_ids.append(fallback_session_id)
+
+        # Use ANALYTICS timeout - one-shot boot-time read, not in the critical path
+        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
+            peak = (
+                session.query(sa.func.max(AccountHistory.balance))
+                .filter(AccountHistory.session_id.in_(session_ids))
+                .scalar()
+            )
+        # Numeric columns load as Decimal; coerce before mixing with floats
+        return float(peak) if peak is not None else None
+
     def get_first_snapshot_of_day(
         self,
         session_id: int | None = None,
@@ -3373,15 +3412,22 @@ class DatabaseManager:
     def apply_partial_exit_update(
         self,
         position_id: int,
-        executed_fraction_of_original: float,
+        executed_size_delta: float,
         price: float,
         target_level: int,
     ) -> None:
-        """Convenience method: append partial trade, decrement current size, increment counters."""
+        """Append partial trade, decrement current size, increment counters.
+
+        ``executed_size_delta`` is the exited slice in balance-fraction
+        units — the SAME units as ``Position.current_size`` — so the
+        persisted size mirrors the runtime tracker exactly. It is NOT a
+        fraction of the original position; callers convert policy sizes
+        with ``fraction_of_original * original_size`` first.
+        """
         # Validate financial inputs
-        if not math.isfinite(executed_fraction_of_original) or executed_fraction_of_original <= 0:
+        if not math.isfinite(executed_size_delta) or executed_size_delta <= 0:
             raise ValueError(
-                f"executed_fraction_of_original must be positive and finite, got {executed_fraction_of_original}"
+                f"executed_size_delta must be positive and finite, got {executed_size_delta}"
             )
         if not math.isfinite(price) or price <= 0:
             raise ValueError(f"price must be positive and finite, got {price}")
@@ -3395,7 +3441,7 @@ class DatabaseManager:
             pt = PartialTrade(
                 position_id=position_id,
                 operation_type=PartialOperationType.PARTIAL_EXIT,
-                size=Decimal(str(executed_fraction_of_original)),
+                size=Decimal(str(executed_size_delta)),
                 price=Decimal(str(price)),
                 target_level=target_level,
                 timestamp=datetime.now(UTC),
@@ -3403,7 +3449,7 @@ class DatabaseManager:
             session.add(pt)
             # Update position current size and counters
             cur = float(position.current_size or position.size or 0.0)
-            new_cur = max(0.0, cur - float(executed_fraction_of_original))
+            new_cur = max(0.0, cur - float(executed_size_delta))
             position.current_size = Decimal(str(new_cur))
             position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
             position.last_partial_exit_price = Decimal(str(price))
@@ -3421,15 +3467,22 @@ class DatabaseManager:
     def apply_scale_in_update(
         self,
         position_id: int,
-        added_fraction_of_original: float,
+        added_size_delta: float,
         price: float,
         threshold_level: int,
     ) -> None:
-        """Convenience method: append scale-in trade, increment current size and counters."""
+        """Append scale-in trade, increment current size and counters.
+
+        ``added_size_delta`` is the added slice in balance-fraction units —
+        the SAME units as ``Position.current_size`` — so the persisted size
+        mirrors the runtime tracker exactly (callers convert policy sizes
+        with ``fraction_of_original * original_size`` and apply any
+        daily-risk / max-position clamps before persisting).
+        """
         # Validate financial inputs
-        if not math.isfinite(added_fraction_of_original) or added_fraction_of_original <= 0:
+        if not math.isfinite(added_size_delta) or added_size_delta <= 0:
             raise ValueError(
-                f"added_fraction_of_original must be positive and finite, got {added_fraction_of_original}"
+                f"added_size_delta must be positive and finite, got {added_size_delta}"
             )
         if not math.isfinite(price) or price <= 0:
             raise ValueError(f"price must be positive and finite, got {price}")
@@ -3443,7 +3496,7 @@ class DatabaseManager:
             pt = PartialTrade(
                 position_id=position_id,
                 operation_type=PartialOperationType.SCALE_IN,
-                size=Decimal(str(added_fraction_of_original)),
+                size=Decimal(str(added_size_delta)),
                 price=Decimal(str(price)),
                 target_level=threshold_level,
                 timestamp=datetime.now(UTC),
@@ -3451,7 +3504,7 @@ class DatabaseManager:
             session.add(pt)
             # Update position current size and counters
             cur = float(position.current_size or position.size or 0.0)
-            new_cur = min(1.0, cur + float(added_fraction_of_original))
+            new_cur = min(1.0, cur + float(added_size_delta))
             position.current_size = Decimal(str(new_cur))
             position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
             position.last_scale_in_price = Decimal(str(price))

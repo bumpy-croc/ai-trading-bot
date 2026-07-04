@@ -37,7 +37,7 @@ This repo is set up to be operated by a persistent Claude Code daemon (e.g. Clau
 - Never change `.claude/state/charter.md` or `.claude/state/risk-limits.json` — those are human-owned.
 - Never rewrite history in `log.md` or closed incidents — append-only; corrections are new entries referencing the earlier one.
 - Never execute a `board_required: true` action without a human approving the proposal.
-- Never promote a model's `latest` symlink for a live-trading symbol without human sign-off.
+- Model promotion for a live-trading symbol does **not** require human sign-off (per `charter.md`'s autonomy envelope and stated high risk appetite) — but only once the model has cleared the standard promotion bar: held-out temporal eval, per-regime breakdown, calibration check, and >=48h paper-trading validation (see `ml-engineer` agent). Self-certifying against that bar without actually running it does not count as "verified." Log every promotion decision and its evidence in `log.md`.
 - If the charter is missing or invalid, refuse to make material decisions.
 
 Full schema and lifecycle: `.claude/state/README.md`.

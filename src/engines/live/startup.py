@@ -97,6 +97,8 @@ class LiveStartupEngineState(Protocol):
         alert: bool = ...,
     ) -> None: ...
 
+    def _warn_if_no_alert_channel(self) -> None: ...
+
 
 class LiveStartupSequencer:
     """Drives the engine's startup sequence against the engine backref (#486)."""
@@ -126,6 +128,10 @@ class LiveStartupSequencer:
 
         self.begin_session_runtime(symbol, timeframe)
         self.bootstrap_trading_session(symbol, timeframe)
+        # Now the session exists: record a missing alert channel loudly so the
+        # "operator alerts are not deliverable" blind spot lands in system_events
+        # on every startup instead of being silent (P0 observability hardening).
+        state._warn_if_no_alert_channel()
         self.carry_forward_open_positions()
         self.self_heal_terminal_positions()
         self.synchronize_account_on_start()
@@ -424,6 +430,7 @@ class LiveStartupSequencer:
                     db_manager=state.db_manager,
                     session_id=state.trading_session_id,
                     on_critical=state._enter_close_only_mode,
+                    on_event=state._record_event,
                     use_margin=use_margin,
                     symbols=[state._active_symbol] if state._active_symbol else [],
                     sweep_cooldown=state._orphan_sweep_cooldown,

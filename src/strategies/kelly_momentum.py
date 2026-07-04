@@ -15,10 +15,14 @@ Half-Kelly is used by default to balance growth against drawdown risk.
 
 from __future__ import annotations
 
+import logging
+
 from src.config.constants import (
+    DEFAULT_KELLY_FALLBACK_FRACTION,
     DEFAULT_KELLY_FRACTION,
     DEFAULT_KELLY_LOOKBACK_TRADES,
     DEFAULT_KELLY_MIN_TRADES,
+    DEFAULT_MAX_KELLY_FRACTION,
 )
 from src.strategies.components import (
     EnhancedRegimeDetector,
@@ -27,6 +31,8 @@ from src.strategies.components import (
     Strategy,
     VolatilityRiskManager,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_kelly_momentum_strategy(
@@ -37,7 +43,7 @@ def create_kelly_momentum_strategy(
     kelly_fraction: float = DEFAULT_KELLY_FRACTION,
     min_trades: int = DEFAULT_KELLY_MIN_TRADES,
     lookback_trades: int = DEFAULT_KELLY_LOOKBACK_TRADES,
-    fallback_fraction: float = 0.03,
+    fallback_fraction: float = DEFAULT_KELLY_FALLBACK_FRACTION,
     take_profit_pct: float = 0.20,
 ) -> Strategy:
     """
@@ -53,13 +59,26 @@ def create_kelly_momentum_strategy(
         base_risk: Base risk percentage for stop loss (default 8%)
         kelly_fraction: Fraction of full Kelly to use (default 0.5 = half-Kelly)
         min_trades: Minimum trades before Kelly activates
+            (default DEFAULT_KELLY_MIN_TRADES = 30)
         lookback_trades: Rolling window size for trade statistics
         fallback_fraction: Fixed fraction used during cold start
+            (default DEFAULT_KELLY_FALLBACK_FRACTION = 0.02)
         take_profit_pct: Target profit percentage for scaling out
 
     Returns:
         Configured Strategy instance
     """
+    # #805: hard-cap fractional Kelly for bear-market safety. Full/half Kelly
+    # over-sizes into drawdowns; clamp to DEFAULT_MAX_KELLY_FRACTION (0.5).
+    if kelly_fraction > DEFAULT_MAX_KELLY_FRACTION:
+        logger.warning(
+            "kelly_momentum: kelly_fraction %.3f exceeds the bear-safety cap "
+            "%.3f; clamping. Full/half Kelly over-sizes into drawdowns.",
+            kelly_fraction,
+            DEFAULT_MAX_KELLY_FRACTION,
+        )
+        kelly_fraction = DEFAULT_MAX_KELLY_FRACTION
+
     signal_generator = MomentumSignalGenerator(
         name=f"{name}_signals",
         momentum_entry_threshold=momentum_entry_threshold,

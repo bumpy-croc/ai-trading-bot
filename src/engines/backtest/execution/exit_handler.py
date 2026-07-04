@@ -17,6 +17,7 @@ import pandas as pd
 from src.config.constants import (
     DEFAULT_BASIS_BALANCE_FALLBACK,
     DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
+    DEFAULT_MAX_POSITION_SIZE,
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import ActiveTrade, Trade
@@ -27,6 +28,7 @@ from src.engines.shared.execution.snapshot_builder import (
     build_snapshot_from_candle,
     map_exit_order_side_from_trade,
 )
+from src.engines.shared.exposure import scale_in_gross_cap_headroom
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -34,10 +36,7 @@ from src.engines.shared.partial_operations_manager import (
 from src.engines.shared.side_utils import to_side_string
 from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
-from src.engines.shared.validation import (
-    convert_exit_fraction_to_current,
-    is_position_fully_closed,
-)
+from src.engines.shared.validation import is_position_fully_closed
 from src.performance.metrics import Side, pnl_percent
 
 if TYPE_CHECKING:
@@ -46,6 +45,7 @@ if TYPE_CHECKING:
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
+    from src.strategies.components.exposure_governor import ExposureGovernor
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,7 @@ class ExitHandler:
         enable_engine_risk_exits: bool = True,
         use_high_low_for_stops: bool = True,
         annual_margin_interest_rate: float = 0.0,
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
     ) -> None:
         """Initialize exit handler.
 
@@ -128,6 +129,8 @@ class ExitHandler:
             partial_manager: Unified partial operations manager.
             enable_engine_risk_exits: Enable SL/TP checks.
             use_high_low_for_stops: Use high/low for SL/TP detection.
+            max_position_size: Maximum position size (balance fraction) that
+                scale-ins may grow a position to (parity with live).
             annual_margin_interest_rate: Annual borrow/funding rate as a
                 decimal (e.g. ``0.05`` for 5% APR). Defaults to 0.0 (spot
                 trading, no carry cost). When > 0, interest is accrued on
@@ -152,9 +155,17 @@ class ExitHandler:
         self.enable_engine_risk_exits = enable_engine_risk_exits
         self.use_high_low_for_stops = use_high_low_for_stops
         self.annual_margin_interest_rate = float(annual_margin_interest_rate)
+        self.max_position_size = float(max_position_size)
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
+        # #802 follow-up P3: optional exposure governor to cap scale-in exposure
+        # (set by the engine; None => inert). Mirrors the live exit handler.
+        self._exposure_governor: ExposureGovernor | None = None
+
+    def configure_exposure_gate(self, exposure_governor: ExposureGovernor | None) -> None:
+        """Wire the #802 exposure governor so scale-ins respect the gross cap."""
+        self._exposure_governor = exposure_governor
 
     def _calculate_margin_interest(
         self,
@@ -344,14 +355,13 @@ class ExitHandler:
                 if not result.should_exit:
                     break
 
-                # Calculate exit size from fraction of original.
+                # Policy sizes are fractions of the ORIGINAL position.
                 # cast: exit_fraction is always set when should_exit is True
                 exit_size_of_original = cast(float, result.exit_fraction)
                 # cast: BasePosition.__post_init__ auto-initializes current/original
                 # size from size, so they are never None after construction.
                 current_size = cast(float, trade.current_size)
                 original_size = cast(float, trade.original_size)
-                # Convert from fraction-of-original to fraction-of-current
                 if is_position_fully_closed(
                     current_size,
                     original_size,
@@ -360,20 +370,21 @@ class ExitHandler:
                     logger.debug("Position fully closed, skipping further partial exits")
                     break
 
-                exit_size_of_current = convert_exit_fraction_to_current(
-                    exit_fraction_of_original=exit_size_of_original,
-                    current_size=current_size,
-                    original_size=original_size,
-                    epsilon=EPSILON,
+                # Convert to balance-fraction units (the PartialExitExecutor
+                # contract, identical to current_size units), capped at what
+                # remains of the position.
+                exit_size_of_balance = min(
+                    exit_size_of_original * original_size,
+                    current_size,
                 )
-                if exit_size_of_current is None:
+                if exit_size_of_balance <= EPSILON:
                     break
 
                 basis_balance = _resolve_basis_balance(trade, balance)
 
                 # Execute partial exit via position tracker
                 pnl = self.position_tracker.apply_partial_exit(
-                    exit_fraction=exit_size_of_current,
+                    exit_fraction=exit_size_of_balance,
                     current_price=current_price,
                     basis_balance=basis_balance,
                 )
@@ -381,16 +392,18 @@ class ExitHandler:
 
                 partial_exits.append(
                     {
-                        "size": exit_size_of_current,
+                        "size": exit_size_of_balance,
                         "price": current_price,
                         "pnl": pnl,
+                        "target_level": result.target_index,
                     }
                 )
 
-                # Update risk manager
+                # Update risk manager (exposure is tracked in balance-fraction
+                # units, same as the size decrement above)
                 try:
                     self.risk_manager.adjust_position_after_partial_exit(
-                        trade.symbol, exit_size_of_current
+                        trade.symbol, exit_size_of_balance
                     )
                 except Exception as exc:
                     logger.warning(
@@ -402,14 +415,25 @@ class ExitHandler:
                 # Increment after execution to match live engine behavior
                 iteration_count += 1
 
-            # Check scale-in opportunity
-            scale_result = self.partial_manager.check_scale_in(
-                position=trade,
-                current_price=current_price,
-                balance=0.0,  # Unused by manager but required
+            # A position fully consumed by partial exits must not be revived
+            # by a scale-in (zombie position). Re-read sizes: the partial loop
+            # above may have just consumed the remainder.
+            fully_closed = is_position_fully_closed(
+                cast(float, trade.current_size),
+                cast(float, trade.original_size),
+                epsilon=EPSILON,
             )
 
-            if scale_result.should_scale:
+            # Check scale-in opportunity
+            scale_result = None
+            if not fully_closed:
+                scale_result = self.partial_manager.check_scale_in(
+                    position=trade,
+                    current_price=current_price,
+                    balance=0.0,  # Unused by manager but required
+                )
+
+            if scale_result is not None and scale_result.should_scale:
                 # cast: scale_fraction is always set when should_scale is True
                 add_size_of_original = cast(float, scale_result.scale_fraction)
 
@@ -424,6 +448,40 @@ class ExitHandler:
                     )
                     add_effective = min(delta_add, remaining_daily)
 
+                    # Enforce the engine-wide max-position cap on scale-ins
+                    # (parity with live): the daily-risk budget alone would
+                    # let a scale-in grow an at-cap position past the cap.
+                    if add_effective > 0:
+                        current_exposure = cast(float, trade.current_size)
+                        headroom = max(0.0, self.max_position_size - current_exposure)
+                        if add_effective > headroom:
+                            logger.info(
+                                "Clamping %s scale-in to max-position headroom: "
+                                "requested=%.4f, headroom=%.4f (current=%.4f, cap=%.4f)",
+                                trade.symbol,
+                                add_effective,
+                                headroom,
+                                current_exposure,
+                                self.max_position_size,
+                            )
+                            add_effective = headroom
+
+                    # #802 follow-up P3: respect the regime gross exposure cap on
+                    # scale-ins too (parity with live; inert unless governor on).
+                    if add_effective > 0:
+                        gross_headroom = scale_in_gross_cap_headroom(
+                            self._exposure_governor, [trade], balance
+                        )
+                        if gross_headroom is not None and add_effective > gross_headroom:
+                            logger.info(
+                                "Clamping %s scale-in to gross-exposure cap headroom: "
+                                "requested=%.4f, headroom=%.4f",
+                                trade.symbol,
+                                add_effective,
+                                gross_headroom,
+                            )
+                            add_effective = gross_headroom
+
                     if add_effective > 0:
                         # Calculate scale-in fees (same as initial entry fees)
                         scale_basis = _resolve_basis_balance(trade, balance)
@@ -436,7 +494,10 @@ class ExitHandler:
                         )
                         total_scale_in_fees += scale_fee
 
-                        self.position_tracker.apply_scale_in(add_effective)
+                        self.position_tracker.apply_scale_in(
+                            add_effective,
+                            max_position_size=self.max_position_size,
+                        )
 
                         scale_ins.append(
                             {

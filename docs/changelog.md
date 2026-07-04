@@ -11,7 +11,259 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Exposure-governor pre-enablement fixes** (#802 follow-ups, from the PR merge
+  note): (P2) `src/engines/shared/exposure.py::position_notional` now uses a
+  position's `current_size` (the live fraction after partial exits / scale-ins)
+  instead of the original `size`, so gross exposure is no longer overstated after
+  a partial exit. (P3) scale-ins now respect the regime gross-exposure cap too:
+  the exposure governor is shared with both engines' exit handlers and clamps a
+  scale-in's added exposure to `scale_in_gross_cap_headroom` (conservative cap −
+  current gross). Both remain inert unless `enable_exposure_governor` is on. This
+  clears the two conditions the PM flagged before the governor can be enabled live.
+
+### Added
+- **Account circuit-breaker loop enforcement** (#807 follow-up): a new
+  `CircuitBreakerEnforcer` (`src/engines/live/monitoring/circuit_breaker_enforcer.py`)
+  runs the #807 `AccountCircuitBreaker` on every trading-loop iteration (mirroring
+  `MaxDrawdownEnforcer`), completing the follow-ups flagged as human-sign-off:
+  (1) **restart-safe daily baseline** — seeds the daily-loss baseline from the
+  day's first `account_history` snapshot (`get_first_snapshot_of_day`) on boot, so
+  an intraday restart no longer disarms the halt; (2) **halt on trip** — in
+  `active` mode a trip flips the engine's existing **close-only mode** (new entries
+  and scale-ins stop; exits/stop-losses keep running — nothing is liquidated,
+  matching the `MaxDrawdownGuard` precedent), and in `dry_run` it logs "would
+  halt"; (3) **surfacing** — emits a `risk_event` + a CRITICAL `system_events`
+  ALERT (`ACCOUNT_CIRCUIT_BREAKER_TRIP`) for the dashboard/alerting, with the log
+  signatures added to `.claude/LESSONS.md §5`. Fault-isolated (never crashes the
+  loop). Still gated by `account_circuit_breakers` (default `off`). Deliberate
+  non-goal: literal force-liquidation of open positions (the codebase does not
+  liquidate into a dip; close-only is the safe halt).
+- **Account-level circuit breakers** (#807): new `AccountCircuitBreaker`
+  (`src/risk/circuit_breaker.py`) enforces hard, account-level safety limits
+  independent of strategy logic — a **daily-loss halt** (default 2.5% below a
+  UTC-day-anchored baseline → halt new entries for the day, latched) and a
+  **drawdown halt** (default 15% peak-to-trough → halt until recovery within 5%
+  of peak). Graduated drawdown throttling stays with dynamic-risk (no
+  double-count). Wired into the shared `apply_pre_order_gates` seam so a halt
+  blocks new entries in both engines and the legacy short path. Controlled by the
+  **string** flag `account_circuit_breakers` ∈ `off` / `dry_run` (evaluate + log
+  "would halt", no action) / `active` (block entries), read via `get_flag` and
+  resolved once at build. Ships `off`. **Follow-ups requiring human sign-off**
+  (money-mover / live integration): force-flatten of open positions on trip (vs
+  the safe entry-block delivered here), DB-persisted daily baseline reload across
+  restarts (a `seed_daily_baseline` hook is provided), and dashboard surfacing.
+- **Event-aware de-risking windows** (#806): around high-impact macro events
+  (FOMC, CPI) the bot now blocks new entries and halves regime exposure caps.
+  New `MacroEventCalendar` / `MacroEventGuard`
+  (`src/position_management/macro_events.py`) load a maintained calendar from
+  `config/macro_events.json` (dates + per-event N-hours-before / M-hours-after
+  window — config, not hardcoded; stale/empty is fail-safe). The guard plugs
+  into the shared `apply_pre_order_gates` seam alongside the #802 exposure
+  governor, so it applies identically in the backtest and live engines (and the
+  legacy short path): inside a window `entry_allowed` is False (block) and
+  `exposure_factor` is 0.5 (halves the governor's cap via `extra_factor`).
+  Behind `enable_macro_event_guard` (**default OFF**).
+- **Sentiment-extreme mean-reversion overlay + short block** (#804): at Fear &
+  Greed extremes, fading beats following. New `SentimentExtremeOverlay`
+  (`src/strategies/components/sentiment_overlay.py`) wraps the `ml_sentiment`
+  signal generator and, when F&G < 15, **blocks new SHORT entries** (capitulation
+  shorts get squeezed) and permits new LONGs only within a configurable band of a
+  **structural support level** — a config *parameter* (`DEFAULT_SENTIMENT_SUPPORT_LEVEL`,
+  default None = no band restriction), since market levels go stale. When F&G > 70
+  in a downtrend it permits small fade shorts. Implemented as a `SignalGenerator`
+  decorator, so it composes with the ETF flow gate (#803) — most-restrictive-wins,
+  any veto → HOLD — and applies in both engines via the strategy. F&G comes from
+  `FearGreedProvider` (degrades to neutral offline → overlay inert). Behind
+  `enable_sentiment_extreme_overlay` (**default OFF**).
+- **Volatility-targeted position sizing** (#805): a new `VolatilityTargetSizer`
+  (`src/strategies/components/position_sizer.py`) wraps a base sizer and scales
+  its output by `target_atr_percentile / atr_percentile` (from the regime
+  detector) so per-position dollar-vol is roughly constant — smaller in high vol,
+  larger in calm, bounded to avoid blow-ups. Passes through unchanged when the
+  regime/ATR-percentile is unavailable (never guesses). Wired into
+  `ml_basic`/`ml_adaptive` behind `enable_vol_target_sizing` (**default OFF**,
+  requires regime detection). Also: `kelly_momentum` now clamps fractional Kelly
+  to `DEFAULT_MAX_KELLY_FRACTION` (0.5) for bear safety (full/half Kelly
+  over-sizes into drawdowns); and `momentum_leverage` / `hyper_growth` emit a
+  startup warning that they are not recommended for bear/high-vol regimes.
+- **ETF net-flow signal + flow gate** (#803): US spot BTC/ETH ETF net flows are
+  the marginal buyer/seller this cycle, but the bot had no flow awareness. New
+  `ETFFlowProvider` (`src/data_providers/etf_flow_provider.py`) ingests daily net
+  flows, caches to parquet (atomic write), and degrades gracefully
+  (fetch → cache → bundled seed) so it never hard-fails a loop. Derived features:
+  5d/20d net-flow z-scores (regime-aware — a sustained outflow streak reads
+  strongly negative) and consecutive-outflow-day count. A rule-based **gate**
+  (`FlowGatedSignalGenerator`) vetoes NEW LONG entries while the 5-day flow
+  z-score is below a configurable threshold (default −1.0), implemented as a
+  signal-generator decorator so it applies in both engines via the strategy with
+  no per-engine wiring (SELL/HOLD pass through; unknown flow does not block).
+  Wired into `ml_basic`/`ml_adaptive` behind `enable_etf_flow_gate` (**default
+  OFF**). A separate `ETFFlowFeatureExtractor` exposes the same features as
+  optional model inputs but is **inert until a compatible model is retrained**
+  (it changes the feature schema) — registered only behind
+  `etf_flows_features.enabled`. See `docs/data_pipeline.md`.
+- **Regime-gated gross exposure caps** (#802): a new `ExposureGovernor`
+  (`src/strategies/components/exposure_governor.py`) caps *total gross open
+  exposure* (sum of |entry notional| / current equity) by market regime — in a
+  bear, exposure itself is the primary risk lever. Defaults (config, overridable):
+  trend_down+high_vol 15%, trend_down+low_vol 20%, range 20–30%, trend_up 35–50%;
+  an unknown/None regime uses the most-conservative 15% cap. Applied after
+  position sizing / dynamic risk and before order placement, as an **absolute
+  cap** (min-wins, never double-counting dynamic risk's graduated throttle). The
+  gate lives once on `SharedEntryHandlerMixin.apply_pre_order_gates` and is
+  invoked identically by the backtest and live runtime entry handlers **and** the
+  legacy short path (no bypass); gross exposure is computed by the shared
+  `src/engines/shared/exposure.py` from both engines' `BasePosition` objects, so
+  the arithmetic can't drift (backtest-live parity). Behind the
+  `enable_exposure_governor` feature flag, **default OFF**. Requires regime
+  detection (`enable_regime_detection`) on for non-conservative caps.
+- **Bear-market model-validation gate** (#801): ML model promotion is now gated
+  on a fixed set of historical bear/crash/chop windows. A candidate model's
+  `latest` symlink is flipped only after it keeps max-drawdown at or below a
+  per-window threshold (`config/validation_windows.json`). New
+  `src/ml/validation/` package: `BearValidationHarness` scores a model per
+  window (Sharpe / max-drawdown / win-rate / trades) via the backtest engine
+  (reusing `ExperimentRunner`, so `mock`/`fixture` providers give deterministic
+  CI runs); `promote_version_if_valid` makes the promotion decision and writes
+  an auditable `validation_audit.json` next to the model version. Because the
+  prediction registry resolves models purely by the `latest` symlink, the gate
+  scores the *candidate* via flip → validate → roll-back-on-failure (a
+  canary-with-rollback: a failing model is reverted to the previously-live
+  version). Wired into `atb live-control deploy-model` (now validation-gated,
+  `--skip-validation` human override) and the training `--auto-deploy` path
+  (training promotes as before; on validation failure `latest` rolls back to the
+  pre-training model). New `atb live-control validate-model` scores a model
+  (flip/validate/always-roll-back) without changing what is live.
+  Un-runnable validation (e.g. missing data) is *inconclusive* → soft-pass with
+  a loud warning unless `VALIDATION_REQUIRED` is set. Thresholds are config, not
+  code. See `docs/prediction.md` → "Bear-market validation gate".
+- **Live enforcement of the portfolio max-drawdown hard cap** (risk-officer
+  2026-07-04 finding, corroborating the 2026-06-08 observability audit —
+  `RiskManager.check_drawdown()` had zero callers, so nothing halted the live
+  engine at `max_drawdown_pct`): new `MaxDrawdownGuard` + `MaxDrawdownEnforcer`
+  (`src/engines/live/monitoring/drawdown_guard.py`) measure drawdown from the
+  session peak balance on every trading-loop iteration and, at the cap (0.20),
+  trip the existing close-only mode — entries, legacy shorts, and scale-ins
+  stop (close-only now also gates the `execute_entry_locked` chokepoint and
+  the scale-in branch); exits/stop-losses keep running, nothing is
+  liquidated. Peak baseline = peak true equity since the last reconciled
+  reset (session-scoped; phantom-era ledger history deliberately excluded;
+  durable cross-session peak tracked in #847). Emits a CRITICAL `system_events` row
+  (`MAX_DRAWDOWN_BREACH`), a structured `risk_event`, and the alert webhook;
+  latched (no re-trigger spam) and restart-safe (peak recomputed from
+  `account_history` on boot via `DatabaseManager.get_session_peak_balance`).
+  Warning tiers per risk-limits.json escalation: WARNING at 50% of the cap,
+  CRITICAL at 80%, rate-limited. Operators clear a trip by restarting with
+  `FEATURE_MAX_DRAWDOWN_RESET_PEAK=true` (re-baselines the peak; remove the
+  flag afterwards). See `docs/live_trading.md` → "Max-drawdown hard cap".
+- `FEATURE_ENTRY_PAUSE` feature flag: when truthy the live engine blocks all
+  exposure INCREASES — new positions (long, short, and the legacy duck-typed
+  short path) AND scale-ins — while exits, partial exits, stop-loss
+  management, reconciliation, and monitoring continue untouched. Lets a human
+  flatten risk ahead of macro events (FOMC/CPI) with a single env var and no
+  code redeploy. Skips log one rate-limited WARNING per
+  `ENTRY_PAUSE_WARNING_INTERVAL_SECONDS` (300s) via the shared
+  `EntryPauseGate` (`src/engines/live/execution/entry_pause.py`), consulted by
+  `LiveEntryCoordinator` (entry evaluation, entry execution defense-in-depth,
+  legacy short path) and `LiveExitHandler` (scale-in decision). Discoverable
+  default (`"entry_pause": false`) lives in `feature_flags.json`; the
+  `FEATURE_ENTRY_PAUSE` env var remains the override path.
+
+### Fixed
+- **Max-drawdown guard mis-seeded its peak from the configured balance**
+  (prod 2026-07-04: guard armed at $100.00 vs true session equity $84.42 and
+  immediately warned at a phantom 15.60% drawdown): the seed took
+  `max(db_peak, tracker_peak, balance)` and the PerformanceTracker peak
+  initializes from `INITIAL_BALANCE` (the optimistic book value from the June
+  phantom-balance pathology). The `account_history` session max is now
+  authoritative — the tracker peak is no longer a seed candidate; fallback is
+  the current recovered balance. A failed DB read now defers seeding to the
+  next loop cycle (bounded by `MAX_SEED_ATTEMPTS`) instead of latching a
+  half-seeded baseline. Deeper fix included: the live engine now constructs
+  `PerformanceTracker` from the RESUMED session balance rather than the
+  configured amount, which also fixes the phantom ~15% in
+  `account_history.drawdown` and dynamic-risk drawdown after restarts.
+- **Kelly sizer never received trade outcomes — Kelly sizing was permanently
+  in cold-start fallback** (#840): `KellyCriterionSizer.record_trade` had zero
+  engine callers, so `has_sufficient_history` stayed `False` forever and any
+  Kelly-sized strategy silently traded its `fallback_fraction` in both
+  backtest and live. Realized outcomes now flow through shared seams: final
+  closes via `PerformanceTracker.add_trade_listener` (the same `record_trade`
+  choke point both engines already call on every close, including live
+  crash-recovery closes) and each banked partial-exit slice via an identical
+  `on_partial_exit` hook on both position trackers — all funneling into
+  `Strategy.on_trade_closed` → duck-typed `position_sizer.record_trade`, so
+  backtest/live parity is structural and a position that banks partials
+  before stopping out counts its wins, not just a final-slice loss. Outcomes
+  are UNSIZED R-multiples (directional price move), so past sizing decisions
+  cannot bias Kelly's reward:risk statistics; breakeven and near-zero-size
+  bookkeeping closes are skipped. `LeveragedPositionSizer` forwards
+  `record_trade` to its base sizer, the legacy `KellySizer` gains a
+  `record_trade` adapter onto the same seam, and `kelly_momentum`'s
+  `fallback_fraction` default now uses `DEFAULT_KELLY_FALLBACK_FRACTION`
+  (0.02) instead of a divergent local 0.03.
+- **Backtest partial-exit accounting booked fraction-of-position as
+  fraction-of-balance** — a units-collision family that fabricated returns in
+  every backtest with partial exits (a kelly_momentum ETHUSDT 30d run booked
+  +$14.19 of phantom credits on $0.07–0.29 of notional and reported +16.67%
+  where reality was ~0%):
+  - Both engines' exit handlers now convert the policy's fraction-of-original
+    to balance-fraction units (`fraction_of_original × original_size`) before
+    P&L computation AND the size decrement; the shared
+    `PartialExitExecutor` docstring now pins this units contract.
+  - Phantom position zeroing fixed: `current_size` decrements in consistent
+    units, and the backtest tracker clamps the exit to the remaining size
+    (mirroring live), so final closes no longer book `Trade.pnl = 0.0`
+    (0%-win-rate artifacts).
+  - Zombie scale-ins guarded in both engines: a position fully consumed by
+    partial exits can no longer be revived by a scale-in. When partials fully
+    consume a backtest position, the engine now closes it immediately
+    ("Partial exits complete @ level N", parity with live).
+  - Live scale-ins now convert policy units the same way (dev-flagged path,
+    #734 — no production behavior change; `live_partial_operations` is off).
+  - Live DB persistence now records the same balance-fraction delta the
+    runtime tracker applies (`apply_partial_exit_update` /
+    `apply_scale_in_update` previously subtracted/added the raw
+    fraction-of-original from the balance-fraction `Position.current_size`,
+    phantom-closing rows and corrupting crash-recovery `daily_risk_used`).
+    `PartialTrade.size` is likewise recorded in balance-fraction units.
+  - Backtest max drawdown now marks open positions to market: the equity
+    series fed to the performance tracker includes open-position unrealized
+    P&L, so adverse excursions appear in MaxDD (previously invisible —
+    a −9.4% excursion read as 0.026% MaxDD).
+  - Strategy-declared `partial_operations` overrides now hydrate in backtests
+    (previously `DEFAULT_PARTIAL_EXIT_TARGETS` always won); hydration moved to
+    a shared `build_partial_exit_policy` used by both engines.
+  - Backtest partial-exit fees/slippage now use the engine's configured rates
+    (previously always the defaults, ignoring `fee_rate`/`slippage_rate`).
+  - Backtest scale-ins now respect the max-position cap with live's
+    never-shrink semantics (#835 parity): growth clamps to headroom,
+    over-cap positions are never shrunk.
+  - NOTE: deterministic backtest fingerprints change — the old numbers were
+    fabricated. All historical backtest results with partial exits are suspect.
+
 ### Changed
+- HyperGrowth default sizing raised: `risk_fraction` / `base_fraction`
+  0.20 → 0.25 (`stop_loss_pct` stays 0.10). Board-approved 2026-07-03 with the
+  risk-officer condition of ≤2% realized risk per trade: live confidence
+  scaling lands realized notional at ~0.46–0.80 of base (≈11–20% of balance),
+  so the 10% stop bounds loss at ≈1.1–2.0% per trade.
+- Live max-position cap made explicit and enforced end-to-end:
+  `railway.json` `startCommand` (the value prod actually runs) and the
+  Dockerfile CMD now pass `--max-position 0.20` (prod previously ran an
+  implicit `0.5`). The engine now wires `max_position_size` into
+  `LiveExitHandler`, scale-ins are clamped to the remaining max-position
+  headroom (previously only the daily-risk budget bounded them, which resets
+  daily and allowed an at-cap position to keep growing), and
+  `LivePositionTracker.apply_scale_in` caps `current_size` growth at the cap
+  (was hardcoded 1.0) without shrinking already-over-cap adopted positions.
+  Consciously accepted gaps: (a) the backtest engine does not yet enforce the
+  scale-in max-position clamp — the parity clamp + test land in the sibling
+  backtest PR (`fix/backtest-partial-exit-units`); (b) HyperGrowth's
+  strategy-level `max_fraction` override is 0.25 while live is pinned to 0.20
+  via `railway.json` — default backtests of HyperGrowth should pass
+  `--max-position-size 0.20` to match prod.
 - `LiveTradingEngine.start()` bootstrap sequence extracted into a new
   `LiveStartupSequencer` (`engines/live/startup.py`, #486 follow-up): the public
   `start()` is now a thin delegator to `LiveStartupSequencer.run()`, and the
@@ -274,6 +526,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `execute_entry`, exit checks) is intentionally left engine-specific.
 
 ### Fixed
+- Periodic reconciler now persists a balance-neutral audit `trades` row when it
+  detects an externally-closed position (margin and spot branches of
+  `PeriodicReconciler._reconcile_cycle`), extending the startup external-close
+  audit row to the periodic cycle. Each branch delegates to the startup
+  reconciler's `_log_external_close_trade` (so it books identically: GROSS
+  `Trade.pnl` at a proxy mark-to-market price, dedup key
+  `reconcile_ext_<db_position_id>`, `balance_realized=False`), popping the
+  position only if still tracked and gating the row on the DB `close_position`
+  call actually returning `True` (it swallows DB errors to `False`) so a failed
+  close is re-reconciled rather than logged for a still-open position.
+  The periodic spot path also **self-heals** the session balance the same cycle
+  via a new `_reconcile_spot_balance`, which values a **fresh** position snapshot
+  — fixing a stale-snapshot over-correction where the periodic balance check
+  counted a just-closed position's notional and over-corrected the balance by it
+  for ~one cycle (~2 min) before self-healing. Margin balance stays owned by
+  `AccountSynchronizer._sync_margin_equity`.
 - Backtest risk tracking now covers next-bar (pending) entries (#757):
   the post-fill `RiskManager.update_position` call passed the `PositionSide`
   enum, whose string validation (`side in VALID_SIDES`) raised `ValueError`

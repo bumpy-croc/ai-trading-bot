@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from src.config.constants import (
     DEFAULT_FEE_RATE,
@@ -18,13 +19,11 @@ from src.config.constants import (
     DEFAULT_SLIPPAGE_RATE,
 )
 from src.engines.backtest.models import ActiveTrade, Trade
+from src.engines.shared.models import PartialExitOutcome, PositionSide
 from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.engines.shared.side_utils import to_side_string
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
-
-if TYPE_CHECKING:
-    from src.engines.shared.models import PositionSide
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +72,11 @@ class PositionTracker:
             fee_rate=fee_rate,
             slippage_rate=slippage_rate,
         )
+        # Optional strategy-feedback hook: called with a PartialExitOutcome
+        # after each successfully applied partial exit, so statistics-tracking
+        # position sizers count banked slices as outcomes (parity with the
+        # live tracker's identical hook). Wired by the engine.
+        self.on_partial_exit: Callable[[PartialExitOutcome], None] | None = None
 
     @property
     def has_position(self) -> bool:
@@ -146,7 +150,10 @@ class PositionTracker:
         with fees and slippage, matching the live engine behavior.
 
         Args:
-            exit_fraction: Fraction of current position to exit.
+            exit_fraction: Exited slice as a fraction of ``basis_balance`` —
+                the same balance-fraction units as ``current_size`` (the
+                PartialExitExecutor contract). Values exceeding the remaining
+                ``current_size`` are clamped to it.
             current_price: Current market price for PnL calculation.
             basis_balance: Balance basis for PnL calculation.
 
@@ -162,6 +169,20 @@ class PositionTracker:
             return 0.0
         if basis_balance <= 0 or not math.isfinite(basis_balance):
             raise ValueError(f"basis_balance must be positive and finite, got {basis_balance}")
+
+        # Clamp to the remaining position so P&L is never booked on more
+        # size than actually exists (mirrors the live tracker's clamp).
+        remaining_size = cast(float, self.current_trade.current_size)
+        if exit_fraction > remaining_size:
+            logger.error(
+                "Partial exit %.6f exceeds current size %.6f for %s, clamping to current size",
+                exit_fraction,
+                remaining_size,
+                self.current_trade.symbol,
+            )
+            exit_fraction = remaining_size
+            if exit_fraction <= 0:
+                return 0.0
 
         # Use shared executor for consistent financial calculations
         result = self._partial_exit_executor.execute_partial_exit(
@@ -202,22 +223,93 @@ class PositionTracker:
             result.realized_pnl,
         )
 
+        self._notify_partial_exit(exit_price=float(current_price))
+
         return result.realized_pnl
 
-    def apply_scale_in(self, additional_size: float) -> None:
+    def _notify_partial_exit(self, exit_price: float) -> None:
+        """Emit a PartialExitOutcome to the strategy-feedback hook (contained)."""
+        if self.on_partial_exit is None or self.current_trade is None:
+            return
+        try:
+            self.on_partial_exit(
+                PartialExitOutcome(
+                    symbol=self.current_trade.symbol,
+                    side=cast(PositionSide, self.current_trade.side),
+                    entry_price=float(self.current_trade.entry_price),
+                    exit_price=exit_price,
+                )
+            )
+        except Exception:
+            logger.warning("Partial-exit feedback hook failed", exc_info=True)
+
+    def unrealized_pnl_cash(self, current_price: float, fallback_basis: float) -> float:
+        """Mark the open position to market (gross, before exit costs).
+
+        Used by the engine to build a mark-to-market equity series so that
+        drawdown reflects open-position adverse excursions — parity with
+        live, whose exchange-synced balance already embeds holdings value.
+
+        Args:
+            current_price: Current market price.
+            fallback_basis: Balance basis when the trade has no entry_balance.
+
+        Returns:
+            Unrealized P&L in cash terms, or 0.0 when no position is open
+            or inputs are invalid.
+        """
+        trade = self.current_trade
+        if trade is None:
+            return 0.0
+        if trade.entry_price <= 0 or not math.isfinite(trade.entry_price):
+            return 0.0
+        if current_price <= 0 or not math.isfinite(current_price):
+            return 0.0
+
+        # cast: BasePosition.__post_init__ auto-initializes current_size.
+        fraction = cast(float, trade.current_size)
+        if fraction <= 0:
+            return 0.0
+
+        side_str = to_side_string(trade.side)
+        side_enum = Side.LONG if side_str == "long" else Side.SHORT
+        pct = pnl_percent(trade.entry_price, current_price, side_enum, fraction)
+
+        entry_balance = getattr(trade, "entry_balance", None)
+        basis = (
+            float(entry_balance)
+            if entry_balance is not None and entry_balance > 0
+            else float(fallback_basis)
+        )
+        if basis <= 0 or not math.isfinite(basis):
+            return 0.0
+        return cash_pnl(pct, basis)
+
+    def apply_scale_in(self, additional_size: float, max_position_size: float = 1.0) -> None:
         """Increase position size via scale-in.
 
         Args:
-            additional_size: Additional size fraction to add.
+            additional_size: Additional size to add, in balance-fraction
+                units (same units as ``current_size``).
+            max_position_size: Maximum allowed position size. Growth is
+                capped at this value without shrinking already-over-cap
+                state (never-shrink semantics, parity with the live tracker).
         """
         if self.current_trade is None:
             return
 
+        # Cap growth at max_position_size without shrinking already-over-cap
+        # state: a position that exceeds the cap keeps its tracked exposure —
+        # it just can't grow any further (parity with live's apply_scale_in).
         # cast: BasePosition.__post_init__ auto-initializes current_size from size,
         # so it is never None after construction.
-        new_current_size = cast(float, self.current_trade.current_size) + additional_size
-        self.current_trade.current_size = min(1.0, new_current_size)
-        self.current_trade.size = min(1.0, self.current_trade.size + additional_size)
+        current_size = cast(float, self.current_trade.current_size)
+        size = self.current_trade.size
+        delta = float(additional_size)
+        self.current_trade.current_size = min(
+            current_size + delta, max(max_position_size, current_size)
+        )
+        self.current_trade.size = min(size + delta, max(max_position_size, size))
         self.current_trade.scale_ins_taken += 1
 
         logger.debug(

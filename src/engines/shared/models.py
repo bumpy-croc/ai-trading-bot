@@ -262,6 +262,28 @@ class BasePosition:
         return self.side == PositionSide.SHORT
 
 
+@dataclass(frozen=True)
+class PartialExitOutcome:
+    """Realized outcome of a single partial-exit slice.
+
+    Fed to strategy trade feedback (``Strategy.on_trade_closed`` duck-types
+    on ``entry_price`` / ``exit_price`` / ``side``) so statistics-tracking
+    position sizers count each banked slice as one outcome, identically in
+    backtest and live.
+
+    Attributes:
+        symbol: Trading symbol.
+        side: Position side (LONG or SHORT).
+        entry_price: Entry price of the position at slice time.
+        exit_price: Price at which the slice was exited.
+    """
+
+    symbol: str
+    side: PositionSide
+    entry_price: float
+    exit_price: float
+
+
 @dataclass
 class BaseTrade:
     """Base class for completed trades.

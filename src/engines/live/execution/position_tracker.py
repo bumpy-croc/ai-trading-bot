@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -22,6 +23,7 @@ from src.config.constants import (
 )
 from src.engines.shared.models import (
     BasePosition,
+    PartialExitOutcome,
     PartialExitResult,
     PositionSide,
     ScaleInResult,
@@ -119,6 +121,11 @@ class LivePositionTracker:
             fee_rate=fee_rate,
             slippage_rate=slippage_rate,
         )
+        # Optional strategy-feedback hook: called with a PartialExitOutcome
+        # after each successfully applied partial exit, so statistics-tracking
+        # position sizers count banked slices as outcomes (parity with the
+        # backtest tracker's identical hook). Wired by the engine.
+        self.on_partial_exit: Callable[[PartialExitOutcome], None] | None = None
 
     @property
     def positions(self) -> dict[str, LivePosition]:
@@ -572,7 +579,6 @@ class LivePositionTracker:
         delta_fraction: float,
         price: float,
         target_level: int,
-        fraction_of_original: float,
         basis_balance: float,
         fee_rate: float = DEFAULT_FEE_RATE,
         slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
@@ -587,10 +593,14 @@ class LivePositionTracker:
 
         Args:
             order_id: Order ID of position.
-            delta_fraction: Fraction of current position to exit.
+            delta_fraction: Exited slice in balance-fraction units (same
+                units as ``current_size``; the PartialExitExecutor contract).
+                Values exceeding the remaining ``current_size`` are clamped.
+                The same (clamped) delta is persisted to the DB so
+                ``Position.current_size`` there mirrors the runtime tracker
+                (crash recovery re-registers ``daily_risk_used`` from it).
             price: Current market price for P&L calculation.
             target_level: Which profit target level triggered this exit.
-            fraction_of_original: Fraction of original position being exited.
             basis_balance: Fallback balance for P&L calculation.
             fee_rate: Fee rate for exit calculation (overrides executor default).
             slippage_rate: Slippage rate for exit cost (overrides executor default).
@@ -624,6 +634,7 @@ class LivePositionTracker:
             # Capture values needed for calculation while under lock
             entry_price = float(position.entry_price)
             position_side = position.side
+            position_symbol = position.symbol
             actual_basis = (
                 float(position.entry_balance)
                 if position.entry_balance is not None and position.entry_balance > 0
@@ -662,12 +673,14 @@ class LivePositionTracker:
             partial_exit_result.realized_pnl,
         )
 
-        # Persist to DB (db_id was captured under lock above)
+        # Persist to DB (db_id was captured under lock above). Persist the
+        # same clamped balance-fraction delta applied to runtime state so the
+        # DB's current_size stays identical to the tracker's.
         if self.db_manager is not None and db_id is not None:
             try:
                 self.db_manager.apply_partial_exit_update(
                     position_id=db_id,
-                    executed_fraction_of_original=float(fraction_of_original),
+                    executed_size_delta=float(delta_fraction),
                     price=float(price),
                     target_level=int(target_level),
                 )
@@ -678,6 +691,21 @@ class LivePositionTracker:
                     e,
                 )
                 raise RuntimeError(f"Partial-exit persistence failed for order {order_id}") from e
+
+        # Strategy feedback outside the lock: the hook may take its own locks
+        # and must never break partial-exit accounting.
+        if self.on_partial_exit is not None:
+            try:
+                self.on_partial_exit(
+                    PartialExitOutcome(
+                        symbol=position_symbol,
+                        side=cast(PositionSide, position_side),
+                        entry_price=entry_price,
+                        exit_price=float(price),
+                    )
+                )
+            except Exception:
+                logger.warning("Partial-exit feedback hook failed", exc_info=True)
 
         return PartialExitResult(
             realized_pnl=partial_exit_result.realized_pnl,
@@ -691,7 +719,6 @@ class LivePositionTracker:
         delta_fraction: float,
         price: float,
         threshold_level: int,
-        fraction_of_original: float,
         max_position_size: float = 1.0,
     ) -> ScaleInResult | None:
         """Increase position size via scale-in.
@@ -701,10 +728,12 @@ class LivePositionTracker:
 
         Args:
             order_id: Order ID of position.
-            delta_fraction: Additional size fraction to add.
+            delta_fraction: Additional size to add, in balance-fraction units
+                (same units as ``current_size``). The delta actually applied
+                after the max-position cap is what gets persisted to the DB,
+                so ``Position.current_size`` there mirrors the runtime tracker.
             price: Current market price.
             threshold_level: Which threshold level triggered this scale-in.
-            fraction_of_original: Fraction of original being added.
             max_position_size: Maximum allowed position size.
 
         Returns:
@@ -723,8 +752,15 @@ class LivePositionTracker:
             if position.current_size is None:
                 position.current_size = position.size
 
-            position.current_size = min(1.0, float(position.current_size) + float(delta_fraction))
-            position.size = min(max_position_size, float(position.size) + float(delta_fraction))
+            # Cap growth at max_position_size without shrinking already-over-cap
+            # state: an adopted position that exceeds the cap must keep its real
+            # tracked exposure (reducing it here would diverge from exchange
+            # holdings) — it just can't grow any further.
+            current_size = float(position.current_size)
+            size = float(position.size)
+            delta = float(delta_fraction)
+            position.current_size = min(current_size + delta, max(max_position_size, current_size))
+            position.size = min(size + delta, max(max_position_size, size))
             position.scale_ins_taken += 1
             position.last_scale_in_price = price
 
@@ -732,6 +768,9 @@ class LivePositionTracker:
             new_size = position.size
             new_current_size = position.current_size
             scale_ins_taken = position.scale_ins_taken
+            # Delta actually applied to current_size after the cap — persist
+            # exactly this so DB state matches runtime state.
+            applied_delta = new_current_size - current_size
 
         logger.debug(
             "Scale-in: +%.4f to position %s, new size=%.4f",
@@ -741,11 +780,11 @@ class LivePositionTracker:
         )
 
         # Persist to DB (db_id was captured under lock above)
-        if self.db_manager is not None and db_id is not None:
+        if self.db_manager is not None and db_id is not None and applied_delta > EPSILON:
             try:
                 self.db_manager.apply_scale_in_update(
                     position_id=db_id,
-                    added_fraction_of_original=float(fraction_of_original),
+                    added_size_delta=float(applied_delta),
                     price=float(price),
                     threshold_level=int(threshold_level),
                 )

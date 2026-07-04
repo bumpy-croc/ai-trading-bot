@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, call, create_autospec, patch
 import pytest
 
 from src.data_providers.exchange_interface import OrderLookupError
+from src.database.models import EventType
 from src.engines.live.reconciliation import (
     AuditEvent,
     PeriodicReconciler,
@@ -48,6 +49,7 @@ class MockPosition:
     last_partial_exit_price: float | None = None
     original_size: float | None = 0.1
     entry_balance: float | None = None
+    exchange_close_pending: bool = False
 
 
 @dataclass
@@ -1220,6 +1222,62 @@ class TestBalanceAccountsForPositionNotional:
         result = reconciler._reconcile_balance()
         assert result.severity != Severity.CRITICAL
         assert result.status == "verified"
+
+    def test_filled_sl_close_fail_flags_exchange_close_pending(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """_close_position_from_filled_sl retains the position when the DB close RETURNS False,
+        and flags it exchange_close_pending: the stop-loss already sold the asset, so balance
+        reconciliation must exclude its notional rather than add the realized value back."""
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=90, order_id="pos-90")
+        mock_db.close_position.return_value = False
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-90", commission=0.0, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        assert getattr(pos, "exchange_close_pending", False) is True
+        mock_position_tracker.remove_position.assert_not_called()
+
+    def test_estimate_notional_skips_exchange_close_pending(
+        self, reconciler, mock_position_tracker
+    ):
+        """_estimate_position_notional counts genuinely-held positions and skips flagged ones."""
+        held = MockPosition(
+            entry_price=50000.0, current_size=0.1, original_size=0.1, quantity=0.1, symbol="BTCUSDT"
+        )
+        flat = MockPosition(
+            entry_price=3000.0, current_size=1.0, original_size=1.0, quantity=1.0, symbol="ETHUSDT"
+        )
+        flat.exchange_close_pending = True
+        mock_position_tracker.positions = {"held": held, "flat": flat}
+
+        # Only the held position (0.1 * 50000 = 5000) contributes; the flat one is excluded.
+        assert reconciler._estimate_position_notional() == pytest.approx(5000.0)
+
+    def test_exchange_close_pending_position_not_overstated(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """A retained offline-SL-fill whose DB close failed (exchange_close_pending) must not
+        trigger a spurious CRITICAL balance correction that adds its already-sold value back.
+
+        Scenario: $10,000 DB capital, 0.1 BTC @ $50,000 ($5,000 notional) sold by the offline
+        SL ~break-even, so the exchange now holds $10,000 USDT. Excluding the flat position,
+        expected USDT = $10,000 and there is no discrepancy.
+        """
+        pos = MockPosition(entry_price=50000.0, current_size=0.1)
+        pos.exchange_close_pending = True
+        mock_position_tracker.positions = {"pos_1": pos}
+        mock_exchange.get_balance.return_value = MockBalance(total=10000.0)
+        mock_db.get_current_balance.return_value = 10000.0
+
+        result = reconciler._reconcile_balance()
+
+        assert result.severity != Severity.CRITICAL
+        mock_db.update_balance.assert_not_called()
 
     def test_genuine_discrepancy_still_triggers_critical(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -2770,6 +2828,90 @@ class TestEmergencySellVerification:
         # Result should be unresolved with CRITICAL severity
         assert any(r.status == "unresolved" and r.severity == Severity.CRITICAL for r in results)
 
+    def _drive_failed_emergency_sell(self, mock_exchange, mock_db, mock_position_tracker, on_event):
+        """Shared setup: recover a filled entry, SL placement returns None so the
+        engine emergency-closes, then the emergency sell fails/returns None."""
+        import threading
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+        )
+        mock_position_tracker._positions_lock = threading.Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 57
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 22,
+                "client_order_id": "atb_BTCUSDT_long_5555_eeee",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # SL placement returns None -> emergency close path
+        mock_exchange.place_stop_loss_order.return_value = None
+        return reconciler
+
+    def test_emergency_sell_failure_pages_operator(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """A FAILED emergency sell leaves a naked position — it must page an
+        operator (critical ALERT via on_event), not just log (#853)."""
+        on_event = MagicMock()
+        reconciler = self._drive_failed_emergency_sell(
+            mock_exchange, mock_db, mock_position_tracker, on_event
+        )
+        mock_exchange.place_order.side_effect = ConnectionError("Network error")
+
+        reconciler.resolve_pending_orders()
+
+        alerts = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "EMERGENCY_SELL_FAILED"
+        ]
+        assert alerts, f"expected EMERGENCY_SELL_FAILED alert, got {on_event.call_args_list}"
+        assert alerts[0].args[0] == EventType.ALERT
+        assert alerts[0].kwargs["severity"] == "critical"
+        assert alerts[0].kwargs["alert"] is True
+        # The exchange error is forwarded so the engine captures its traceback.
+        assert isinstance(alerts[0].kwargs.get("exc"), ConnectionError)
+
+    def test_emergency_sell_unconfirmed_pages_operator(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """An unconfirmed emergency sell (returns None; position stays tracked)
+        may be unprotected — it must page an operator (critical ALERT) (#853)."""
+        on_event = MagicMock()
+        reconciler = self._drive_failed_emergency_sell(
+            mock_exchange, mock_db, mock_position_tracker, on_event
+        )
+        mock_exchange.place_order.return_value = None  # emergency sell unconfirmed
+
+        reconciler.resolve_pending_orders()
+
+        alerts = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "EMERGENCY_SELL_UNCONFIRMED"
+        ]
+        assert alerts, f"expected EMERGENCY_SELL_UNCONFIRMED alert, got {on_event.call_args_list}"
+        assert alerts[0].kwargs["severity"] == "critical"
+        assert alerts[0].kwargs["alert"] is True
+
 
 # ---------- Fee Accounting Tests ----------
 
@@ -3245,6 +3387,44 @@ class TestPeriodicSLFillBooksPnl:
         assert len(pnl_calls) == 1
         assert pnl_calls[0].args[0] == pytest.approx(1000.0 + 200.0 - 0.05)
 
+    def test_sl_fill_persists_deduped_trade_row(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Driving the periodic cycle over a filled SL must persist a ``trades``
+        row (not just correct the balance) — keyed by the REAL SL exit order id,
+        GROSS pnl, positive USD commission, and the closed quantity. Guards the
+        periodic path against a refactor silently dropping the trade row, which
+        would leave the SL loss's commission/quantity/pnl unrecorded even though
+        the balance was corrected."""
+        pos = MockPosition(
+            order_id="entry_short",
+            side="short",
+            stop_loss_order_id="sl_short",
+            exchange_order_id="entry_short",
+            db_position_id=71,
+        )
+        mock_position_tracker.positions = {"entry_short": pos}
+        mock_position_tracker.get_position.side_effect = [pos, None, None]
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)
+        reconciler = self._make_filled_sl_cycle(mock_exchange, mock_position_tracker, mock_db, pos)
+        reconciler._use_margin = True
+        reconciler._position_reconciler._use_margin = False  # skip interest lookup
+        mock_db.close_position.return_value = True
+
+        reconciler._reconcile_cycle()
+
+        mock_db.log_trade.assert_called_once()
+        kwargs = mock_db.log_trade.call_args.kwargs
+        # Deduped by the real SL exit order id present on the fill (not the
+        # synthetic reconcile_sl_<id> fallback, which is only used when absent).
+        assert kwargs["exit_order_id"] == "sl_short"
+        assert kwargs["exit_reason"] == "stop_loss_filled_offline"
+        # GROSS short pnl: (50000 - 48000) * 0.1 = +200 (fees live in commission).
+        assert kwargs["pnl"] == pytest.approx(200.0)
+        assert kwargs["quantity"] == pytest.approx(0.1)
+        assert kwargs["commission"] is not None and kwargs["commission"] > 0.0
+        assert str(kwargs["side"]).lower() == "short"
+
     def test_margin_short_unconfirmed_sl_defers_classification(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
@@ -3451,3 +3631,403 @@ class TestRejectedStopLossReplaced:
 
         mock_exchange.place_stop_loss_order.assert_called_once()
         assert position.stop_loss_order_id == "new_sl_startup"
+
+
+class TestPeriodicSpotBalanceReconcile:
+    """The periodic cycle's spot balance reconcile values a FRESH tracker snapshot, so a
+    position closed earlier in the same cycle is excluded — fixing the stale-snapshot
+    over-correction. Also invoked directly after a spot external close (self-contained)."""
+
+    def test_corrects_on_discrepancy_using_fresh_snapshot(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        # Tracker is flat (the externally-closed position was already removed this cycle).
+        mock_position_tracker.positions = {}
+        mock_exchange.get_balance.return_value = MockBalance(total=900.0)  # USDT proceeds
+        mock_db.get_current_balance.return_value = 1000.0  # still counts the closed slice
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+        )
+        corrected = reconciler._reconcile_spot_balance()
+
+        assert corrected is True
+        mock_db.update_balance.assert_called_once()
+        # Corrected to exchange USDT + 0 notional (fresh tracker is empty) — NOT 900 + the
+        # closed position's notional (the stale-snapshot over-correction).
+        assert mock_db.update_balance.call_args.args[0] == pytest.approx(900.0)
+
+    def test_no_correction_within_threshold(self, mock_exchange, mock_position_tracker, mock_db):
+        mock_position_tracker.positions = {}
+        mock_exchange.get_balance.return_value = MockBalance(total=1000.0)
+        mock_db.get_current_balance.return_value = 1000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+        )
+        corrected = reconciler._reconcile_spot_balance()
+
+        assert corrected is False
+        mock_db.update_balance.assert_not_called()
+
+    def test_noop_in_margin_mode(self, mock_exchange, mock_position_tracker, mock_db):
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            use_margin=True,
+        )
+        corrected = reconciler._reconcile_spot_balance()
+
+        assert corrected is False
+        mock_db.update_balance.assert_not_called()
+        mock_exchange.get_balance.assert_not_called()
+
+
+class TestPeriodicExternalCloseTradeRow:
+    """The periodic external-close branches (margin + spot) persist a balance-neutral
+    ``reconcile_ext_`` audit Trade row by delegating to the startup reconciler, and the
+    spot path self-heals its balance the same cycle (fresh snapshot, no overshoot)."""
+
+    @staticmethod
+    def _seed(db, side="long"):
+        from src.engines.live.execution.position_tracker import LivePositionTracker
+
+        db.update_balance(10000.0, "seed", "test", 1)
+        db_id = db.log_position(
+            symbol="BTCUSDT",
+            side=side,
+            entry_price=50000.0,
+            size=0.1,
+            strategy_name="x",
+            quantity=0.1,
+            session_id=1,
+        )
+        tracker = LivePositionTracker()
+        pos = MockPosition(
+            symbol="BTCUSDT",
+            side=side,
+            entry_price=50000.0,
+            order_id="k1",
+            exchange_order_id="ex1",
+            db_position_id=db_id,
+            stop_loss_order_id="sl1",
+            quantity=0.1,
+            size=0.1,
+            current_size=0.1,
+            original_size=0.1,
+        )
+        tracker._positions[pos.order_id] = pos
+        return db_id, tracker, pos
+
+    @staticmethod
+    def _order_side_effect():
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        # Entry FILLED; SL resting (PENDING) so neither the SL-fill interception nor the
+        # step-2 re-placement fires — the external-close branch runs.
+        def _get_order(oid, sym):
+            if oid == "sl1":
+                return MockExchangeOrder(order_id="sl1", status=ExOS.PENDING)
+            return MockExchangeOrder(order_id=oid, status=ExOS.FILLED)
+
+        return _get_order
+
+    def test_spot_external_close_writes_trade_row_and_heals_balance(self, mock_exchange):
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        db_id, tracker, pos = self._seed(db, side="long")
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5200.0)
+            if asset == "USDT"
+            else MockBalance(asset="BTC", total=0.0, free=0.0, locked=0.0)
+        )
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 52000.0
+        on_critical = MagicMock()
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            on_critical=on_critical,
+            data_provider=data_provider,
+        )
+        reconciler._reconcile_cycle()
+
+        trades = list(db._trades.values())
+        assert len(trades) == 1
+        t = trades[0]
+        assert t["order_id"] == f"reconcile_ext_{db_id}"
+        assert t["pnl"] == pytest.approx(200.0)  # (52000-50000)*0.1 GROSS long
+        # Balance healed to exchange USDT (fresh snapshot excludes the closed position) —
+        # NOT 5200 + 5000 notional (the stale-snapshot over-correction).
+        assert db.get_current_balance(1) == pytest.approx(5200.0)
+        assert pos.order_id not in tracker.positions
+        on_critical.assert_called_once()
+
+    def test_spot_external_close_no_trade_row_when_db_close_fails(self, mock_exchange):
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        db_id, tracker, pos = self._seed(db, side="long")
+        db.close_position = MagicMock(return_value=False)  # swallowed DB error -> False
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5200.0)
+            if asset == "USDT"
+            else MockBalance(asset="BTC", total=0.0, free=0.0, locked=0.0)
+        )
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 52000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            data_provider=data_provider,
+        )
+        reconciler._reconcile_cycle()
+
+        assert len(db._trades) == 0  # close did not succeed -> no audit row
+
+    def test_margin_external_close_writes_trade_row_balance_untouched(self, mock_exchange):
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        db_id, tracker, pos = self._seed(db, side="short")
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)  # short closed
+        mock_exchange.get_balance.side_effect = lambda asset: MockBalance(asset=asset, total=0.0)
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 48000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            use_margin=True,
+            data_provider=data_provider,
+        )
+        reconciler._reconcile_cycle()
+
+        trades = list(db._trades.values())
+        assert len(trades) == 1
+        t = trades[0]
+        assert t["order_id"] == f"reconcile_ext_{db_id}"
+        assert t["pnl"] == pytest.approx(200.0)  # short GROSS (50000-48000)*0.1
+        # Margin: the audit row must not move the session balance — AccountSynchronizer.
+        # _sync_margin_equity owns margin capital, and balance reconcile is margin-skipped.
+        assert db.get_current_balance(1) == pytest.approx(10000.0)
+        assert pos.order_id not in tracker.positions
+
+    def test_margin_external_close_audits_and_surfaces_high_severity(self, mock_exchange):
+        """A margin external close / liquidation now writes a CLOSED_EXTERNALLY
+        audit row AND bumps cycle severity to HIGH, so it surfaces via the
+        cycle-severity event instead of being silent (#853)."""
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        _db_id, tracker, pos = self._seed(db, side="short")
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)  # short closed
+        mock_exchange.get_balance.side_effect = lambda asset: MockBalance(asset=asset, total=0.0)
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 48000.0
+        on_event = MagicMock()
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            use_margin=True,
+            data_provider=data_provider,
+            on_event=on_event,
+        )
+        reconciler._reconcile_cycle()
+
+        # CLOSED_EXTERNALLY audit row written for the liquidation.
+        audits = db.get_audit_events(session_id=1)
+        assert any(a["new_value"] == "CLOSED_EXTERNALLY" for a in audits), audits
+        # Severity bumped to HIGH -> the cycle-severity event records it in system_events.
+        high_events = [
+            c for c in on_event.call_args_list if c.kwargs.get("error_code") == "RECONCILE_HIGH"
+        ]
+        assert high_events, f"expected RECONCILE_HIGH, got {on_event.call_args_list}"
+
+
+def test_remove_phantom_position_writes_audit(reconciler, mock_db):
+    """Removing a phantom (externally-closed) position writes a CLOSED_EXTERNALLY
+    audit row + records it on the result — it previously set HIGH severity with no
+    audit row, unlike the spot external-close path (#853)."""
+    reconciler._log_external_close_trade = MagicMock()  # isolate from trade-row math
+    pos = MockPosition(symbol="BTCUSDT", order_id="k1", db_position_id=42, stop_loss_order_id="sl1")
+    result = ReconciliationResult(entity_type="position", entity_id=42, status="unresolved")
+
+    reconciler._remove_phantom_position(pos, result)
+
+    audits = [
+        c
+        for c in mock_db.log_audit_event.call_args_list
+        if c.kwargs.get("new_value") == "CLOSED_EXTERNALLY"
+    ]
+    assert audits, mock_db.log_audit_event.call_args_list
+    assert result.severity == Severity.HIGH
+    assert any(a.new_value == "CLOSED_EXTERNALLY" for a in result.corrections)
+
+
+class TestReconcilerEventSink:
+    """The reconciler gains a system_events/alert sink via an injected on_event
+    callback (the engine's _record_event), mirroring on_critical (#853)."""
+
+    def test_emit_event_forwards_to_on_event(self):
+        from src.engines.live.reconciliation import _emit_event
+
+        cb = MagicMock()
+        _emit_event(
+            cb,
+            EventType.ALERT,
+            "naked position",
+            severity="critical",
+            error_code="EMERGENCY_SELL_FAILED",
+            alert=True,
+        )
+        cb.assert_called_once()
+        args, kwargs = cb.call_args
+        assert args == (EventType.ALERT, "naked position")
+        assert kwargs["severity"] == "critical"
+        assert kwargs["component"] == "reconciler"
+        assert kwargs["error_code"] == "EMERGENCY_SELL_FAILED"
+        assert kwargs["alert"] is True
+
+    def test_emit_event_noop_when_sink_unwired(self):
+        from src.engines.live.reconciliation import _emit_event
+
+        # Standalone use / tests pass on_event=None -> silent no-op, never raises.
+        _emit_event(None, EventType.WARNING, "msg")
+
+    def test_emit_event_never_raises(self):
+        from src.engines.live.reconciliation import _emit_event
+
+        cb = MagicMock(side_effect=RuntimeError("sink down"))
+        # Observability must never break a reconciliation cycle.
+        _emit_event(cb, EventType.ALERT, "msg", alert=True)
+        cb.assert_called_once()
+
+    def test_periodic_reconciler_propagates_sink_to_child(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        cb = MagicMock()
+        pr = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=cb,
+        )
+        assert pr.on_event is cb
+        # The child PositionReconciler must receive the same sink so its
+        # emergency-close paths can page too.
+        assert pr._position_reconciler.on_event is cb
+
+
+class TestReconcileCycleSeverityEvent:
+    """The periodic cycle surfaces its peak severity in system_events — HIGH
+    drift was previously invisible (audit-row + log only). Edge-triggered so a
+    persistent condition doesn't page/log every ~60s cycle (#853)."""
+
+    @staticmethod
+    def _reconciler(mock_exchange, mock_position_tracker, mock_db, on_event):
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+        )
+
+    def test_critical_pages_operator(self, mock_exchange, mock_position_tracker, mock_db):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)
+        on_event.assert_called_once()
+        args, kwargs = on_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "RECONCILE_CRITICAL"
+        assert kwargs["alert"] is True
+
+    def test_high_emits_event_but_does_not_page(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.HIGH)
+        on_event.assert_called_once()
+        _, kwargs = on_event.call_args
+        assert kwargs["error_code"] == "RECONCILE_HIGH"
+        assert kwargs["alert"] is False
+
+    def test_low_and_medium_do_not_emit(self, mock_exchange, mock_position_tracker, mock_db):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.LOW)
+        pr._emit_cycle_severity(Severity.MEDIUM)
+        on_event.assert_not_called()
+
+    def test_persistent_critical_only_pages_on_rising_edge(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # rising edge -> emit
+        pr._emit_cycle_severity(Severity.CRITICAL)  # persistent -> no re-emit
+        assert on_event.call_count == 1
+        # Drops back then re-rises -> a new occurrence re-pages.
+        pr._emit_cycle_severity(Severity.LOW)
+        pr._emit_cycle_severity(Severity.CRITICAL)
+        assert on_event.call_count == 2
+
+    def test_escalation_high_to_critical_pages(self, mock_exchange, mock_position_tracker, mock_db):
+        """HIGH then CRITICAL must page on the escalation (prev=HIGH, not LOW)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.HIGH)  # WARNING (rising edge)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # escalation -> pages
+        assert on_event.call_count == 2
+        _, kwargs = on_event.call_args
+        assert kwargs["error_code"] == "RECONCILE_CRITICAL"
+        assert kwargs["alert"] is True
+
+    def test_de_escalation_critical_to_high_stays_silent(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """CRITICAL then HIGH must NOT re-emit (severity fell, not a rising edge)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # ALERT (rising edge)
+        pr._emit_cycle_severity(Severity.HIGH)  # de-escalation -> silent
+        assert on_event.call_count == 1

@@ -26,6 +26,7 @@ from src.data_providers.exchange_interface import (
     OrderType,
     SideEffectType,
 )
+from src.database.models import EventType
 from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
@@ -123,6 +124,33 @@ class LiveExecutionEngine:
             fee_rate=fee_rate,
             slippage_rate=slippage_rate,
         )
+
+    def _log_execution_event(
+        self,
+        event_type: EventType,
+        message: str,
+        error_code: str,
+        *,
+        severity: str = "error",
+    ) -> None:
+        """Record an execution-layer condition (order rejection / phantom-order
+        UNKNOWN) in ``system_events`` so the exchange reason isn't lost to
+        application logs + a reason-less FAILED order row. Guarded on an active
+        session and fault-isolated: observability must never break execution.
+        """
+        if not (self.db_manager and self.session_id):
+            return
+        try:
+            self.db_manager.log_event(
+                event_type=event_type,
+                message=message,
+                severity=severity,
+                component="execution",
+                session_id=self.session_id,
+                error_code=error_code,
+            )
+        except Exception as e:  # pragma: no cover - defensive; never break execution
+            logger.warning("Failed to log execution event %s: %s", error_code, e)
 
     @staticmethod
     def _position_side_to_str(side: PositionSide) -> str:
@@ -762,6 +790,14 @@ class LiveExecutionEngine:
                         self.db_manager.update_order_journal(client_order_id, "FAILED")
                     except Exception as journal_err:
                         logger.warning("Failed to mark order as FAILED: %s", journal_err)
+                # Capture the exchange rejection reason (e.g. -2010 insufficient
+                # balance, -1111/51077 precision) in system_events — it was
+                # previously only in application logs + a reason-less FAILED row.
+                self._log_execution_event(
+                    EventType.ERROR,
+                    f"Entry order rejected for {symbol}: {e}",
+                    "ORDER_REJECTED",
+                )
                 return None, None
 
             if order_result is None:
@@ -775,6 +811,15 @@ class LiveExecutionEngine:
                         self.db_manager.update_order_journal(client_order_id, "UNKNOWN")
                     except Exception as e:
                         logger.warning("Failed to mark order as UNKNOWN: %s", e)
+                # Phantom-order window: the order may be live on the exchange.
+                # Surface it in system_events (the reconciler resolves on restart).
+                self._log_execution_event(
+                    EventType.WARNING,
+                    f"Entry order state UNKNOWN for {symbol} (may be live on exchange) — "
+                    "reconciler will resolve; phantom position possible until then",
+                    "ORDER_UNKNOWN",
+                    severity="warning",
+                )
                 return client_order_id, client_order_id
 
             # Extract order_id and update journal with exchange data

@@ -37,6 +37,7 @@ from src.config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
+from src.config.feature_flags import get_flag, is_enabled
 from src.database.models import TradeSource
 from src.engines.backtest.execution import (
     EntryHandler,
@@ -44,6 +45,7 @@ from src.engines.backtest.execution import (
     ExitHandler,
     PositionTracker,
 )
+from src.engines.backtest.execution.exit_handler import ExitCheckResult
 from src.engines.backtest.logging import EventLogger
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.backtest.regime import RegimeHandler
@@ -56,17 +58,21 @@ from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_po
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
+    build_partial_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
 from src.engines.shared.side_utils import to_side_string
+from src.engines.shared.validation import is_position_fully_closed
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.macro_events import MacroEventGuard
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
+from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import (
@@ -74,6 +80,7 @@ from src.strategies.components import (
     StrategyRuntime,
 )
 from src.strategies.components import Strategy as ComponentStrategy
+from src.strategies.components.exposure_governor import ExposureGovernor
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -262,6 +269,11 @@ class Backtester:
         self._configure_strategy(strategy)
         self._initial_strategy = self.strategy  # Preserved for reset after regime switches
 
+        # Closed-trade feedback: every trade recorded on the tracker is
+        # forwarded to the active strategy so statistics-tracking position
+        # sizers (e.g. Kelly) learn from outcomes. Same seam as live (#840).
+        self.performance_tracker.add_trade_listener(self._notify_strategy_trade_closed)
+
         name_source = strategy if isinstance(strategy, StrategyRuntime) else self.strategy
         self.initial_strategy_name = getattr(name_source, "name", name_source.__class__.__name__)
 
@@ -306,16 +318,12 @@ class Backtester:
         if partial_manager is not None:
             self.partial_manager = partial_manager
         elif enable_partial_operations:
-            # Create default partial exit policy from risk parameters
-            from src.position_management.partial_manager import PartialExitPolicy
-
-            rp = self.risk_parameters if self.risk_parameters else RiskParameters()
-            self.partial_manager = PartialExitPolicy(
-                exit_targets=rp.partial_exit_targets or [],
-                exit_sizes=rp.partial_exit_sizes or [],
-                scale_in_thresholds=rp.scale_in_thresholds or [],
-                scale_in_sizes=rp.scale_in_sizes or [],
-                max_scale_ins=rp.max_scale_ins,
+            # Strategy-declared partial_operations win; risk-parameter
+            # defaults apply only when the strategy specifies nothing
+            # (shared hydration, parity with live).
+            self.partial_manager = build_partial_exit_policy(
+                strategy=self.strategy,
+                risk_parameters=self.risk_parameters,
             )
         else:
             self.partial_manager = None
@@ -345,9 +353,17 @@ class Backtester:
         self.execution_fill_policy = self._resolve_execution_fill_policy()
         self.execution_model = ExecutionModel(self.execution_fill_policy)
 
+        # Pass the engine's configured rates so partial-exit costs and
+        # cost-adjusted MFE/MAE match the run configuration (parity with
+        # live, which constructs its tracker with self.fee_rate/slippage_rate).
         self.position_tracker = PositionTracker(
-            mfe_mae_precision=DEFAULT_MFE_MAE_PRECISION_DECIMALS
+            mfe_mae_precision=DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
         )
+        # Each banked partial-exit slice is a realized outcome for the
+        # strategy's position sizer, same as final closes (#840).
+        self.position_tracker.on_partial_exit = self._notify_strategy_trade_closed
 
         # Correlation engine
         self.correlation_engine: CorrelationEngine | None = None
@@ -417,6 +433,30 @@ class Backtester:
             max_position_size=self.risk_manager.params.max_position_size,
         )
 
+        # Wire the #802 regime-gated exposure governor (shared with the live
+        # engine). The backtest is single-position, so at entry the book is flat
+        # and the cap bounds the new leg to the regime ceiling. Positions read
+        # lazily; the flag is resolved ONCE here (not per entry) to keep
+        # feature_flags.json disk I/O out of the hot path. Inert unless
+        # ``enable_exposure_governor`` is on.
+        exposure_governor = ExposureGovernor(
+            enabled=is_enabled("enable_exposure_governor", default=False)
+        )
+        self.entry_handler.configure_exposure_gate(
+            exposure_governor,
+            lambda: (
+                [self.position_tracker.current_trade] if self.position_tracker.has_position else []
+            ),
+        )
+        # #806: macro-event de-risking guard (flag resolved once at build).
+        self.entry_handler.configure_macro_guard(
+            MacroEventGuard(enabled=is_enabled("enable_macro_event_guard", default=False))
+        )
+        # #807: account-level circuit breaker (mode resolved once at build).
+        self.entry_handler.configure_circuit_breaker(
+            AccountCircuitBreaker(mode=get_flag("account_circuit_breakers", default="off"))
+        )
+
         # Wrap PartialExitPolicy in unified PartialOperationsManager.
         # Use self.partial_manager (not the constructor parameter) so that policies
         # created from enable_partial_operations=True are wired into the ExitHandler.
@@ -437,7 +477,13 @@ class Backtester:
             enable_engine_risk_exits=enable_engine_risk_exits,
             use_high_low_for_stops=use_high_low_for_stops,
             annual_margin_interest_rate=annual_margin_interest_rate,
+            # Same cap the EntryHandler enforces, so scale-ins cannot grow
+            # a position past what entries are allowed to open.
+            max_position_size=self.risk_manager.params.max_position_size,
         )
+        # #802 follow-up P3: scale-ins respect the same gross exposure cap as
+        # entries (share the governor instance; inert unless the flag is on).
+        self.exit_handler.configure_exposure_gate(exposure_governor)
 
         # For backward compatibility - expose current_trade through position_tracker
         # Tests may access backtester.current_trade directly
@@ -645,6 +691,16 @@ class Backtester:
     def _is_runtime_strategy(self) -> bool:
         """Check if using runtime-based strategy."""
         return self._runtime is not None
+
+    def _notify_strategy_trade_closed(self, trade: Any) -> None:
+        """Forward a recorded closed trade to the active strategy (duck-typed).
+
+        Resolves ``self.strategy`` at call time so regime switches and
+        strategy resets keep feeding the currently active strategy.
+        """
+        hook = getattr(self.strategy, "on_trade_closed", None)
+        if callable(hook):
+            hook(trade)
 
     def _merge_dynamic_risk_config(
         self, base_config: DynamicRiskConfig, strategy: Any
@@ -1110,15 +1166,22 @@ class Backtester:
             # Get runtime decision
             runtime_decision = self._get_runtime_decision(df, i, current_price, current_time)
 
-            # Track balance
-            balance_history.append((current_time, self.balance))
+            # Track mark-to-market equity (realized cash + open-position
+            # unrealized P&L). Live's exchange-synced balance already embeds
+            # holdings value, so drawdown must include open-position adverse
+            # excursions here too — realized cash alone hides them entirely.
+            equity = self.balance + self.position_tracker.unrealized_pnl_cash(
+                current_price, fallback_basis=self.balance
+            )
+            balance_history.append((current_time, equity))
 
             # Update performance tracker every candle for accurate intraday tracking
             # Note: This differs from live engine which updates less frequently (on metric update cycles)
             # This higher sampling rate provides more granular volatility metrics in backtests
-            self.performance_tracker.update_balance(self.balance, timestamp=current_time)
+            self.performance_tracker.update_balance(equity, timestamp=current_time)
 
-            # Track yearly balance
+            # Track yearly balance (realized cash; positions rarely straddle
+            # year boundaries and realized values keep yearly returns stable)
             yr = current_time.year
             if yr not in yearly_balance:
                 yearly_balance[yr] = {"start": self.balance, "end": self.balance}
@@ -1128,9 +1191,7 @@ class Backtester:
             # Sync peak_balance from tracker (single source of truth)
             self.peak_balance = self.performance_tracker.peak_balance
             current_drawdown = (
-                (self.peak_balance - self.balance) / self.peak_balance
-                if self.peak_balance > 0
-                else 0.0
+                (self.peak_balance - equity) / self.peak_balance if self.peak_balance > 0 else 0.0
             )
             max_drawdown_running = max(max_drawdown_running, current_drawdown)
 
@@ -1265,14 +1326,31 @@ class Backtester:
         # Update MFE/MAE
         self.position_tracker.update_metrics(current_price, current_time)
 
-        # Check exit conditions
-        exit_check = self.exit_handler.check_exit_conditions(
-            runtime_decision=runtime_decision,
-            candle=candle,
-            current_price=current_price,
-            symbol=symbol,
-            component_strategy=self._component_strategy,
-        )
+        # If partial exits fully consumed the position, close the remainder
+        # immediately — parity with live, which calls execute_exit with
+        # "Partial exits complete @ level N" when new_current_size <= EPSILON.
+        trade = self.position_tracker.current_trade
+        if trade is not None and is_position_fully_closed(
+            # cast: BasePosition.__post_init__ auto-initializes current/original size.
+            cast(float, trade.current_size),
+            cast(float, trade.original_size),
+        ):
+            exit_check = ExitCheckResult(
+                should_exit=True,
+                exit_reason=(
+                    f"Partial exits complete @ level {max(0, trade.partial_exits_taken - 1)}"
+                ),
+                exit_price=current_price,
+            )
+        else:
+            # Check exit conditions
+            exit_check = self.exit_handler.check_exit_conditions(
+                runtime_decision=runtime_decision,
+                candle=candle,
+                current_price=current_price,
+                symbol=symbol,
+                component_strategy=self._component_strategy,
+            )
 
         # Log exit decision
         if self.event_logger.enabled:
