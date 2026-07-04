@@ -113,6 +113,7 @@ from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
+from src.strategies.components.exposure_governor import ExposureGovernor
 
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
@@ -915,6 +916,17 @@ class LiveTradingEngine:
             correlation_handler=self.correlation_handler,
             max_position_size=self.max_position_size,
             default_take_profit_pct=self._resolve_take_profit_pct(),
+        )
+
+        # Wire the #802 regime-gated exposure governor. Positions are read lazily
+        # so ordering with live_position_tracker construction does not matter.
+        # Inert unless the ``enable_exposure_governor`` feature flag is on.
+        # Resolve the flag ONCE here (not per entry) — reading feature_flags.json
+        # on every entry would add disk I/O to the hot path. A flag change
+        # requires a restart (which reconstructs the engine) anyway.
+        self.live_entry_handler.configure_exposure_gate(
+            ExposureGovernor(enabled=is_enabled("enable_exposure_governor", default=False)),
+            lambda: list(self.live_position_tracker.positions.values()),
         )
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager

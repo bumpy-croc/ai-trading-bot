@@ -230,6 +230,18 @@ class LiveEntryHandler(SharedEntryHandlerMixin):
                 trading_session_id=trading_session_id,
             )
 
+        # Regime-gated gross exposure cap (#802). Shared with the backtest engine
+        # (identical arithmetic) so the cap holds in both. Inert unless wired.
+        if size_fraction > 0:
+            size_fraction, gate_reason = self.apply_pre_order_gates(
+                size_fraction,
+                regime=getattr(runtime_decision, "regime", None),
+                equity=balance,
+                now=current_time,
+            )
+            if gate_reason:
+                reasons.append(gate_reason)
+
         if size_fraction <= 0:
             reasons.append("size_reduced_to_zero")
             return LiveEntrySignal(

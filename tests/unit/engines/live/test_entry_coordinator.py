@@ -355,6 +355,10 @@ def _make_short_state(*, is_runtime: bool, short_signal, overrides):
     state._apply_dynamic_risk_adjustment.side_effect = lambda original_size, current_time: (
         original_size
     )
+    # #802 exposure gate is routed through the live entry handler; with the
+    # governor inert (default) it returns the size unchanged.
+    state.live_entry_handler = MagicMock()
+    state.live_entry_handler.apply_pre_order_gates.side_effect = lambda size, **kwargs: (size, None)
     return state
 
 
@@ -502,6 +506,10 @@ def _make_component_entry_state(*, max_position_size: float, notional: float) ->
     state._apply_dynamic_risk_adjustment.side_effect = lambda original_size, current_time: (
         original_size
     )
+    # #802 exposure gate is routed through the live entry handler; with the
+    # governor inert (default) it returns the size unchanged.
+    state.live_entry_handler = MagicMock()
+    state.live_entry_handler.apply_pre_order_gates.side_effect = lambda size, **kwargs: (size, None)
     return state
 
 

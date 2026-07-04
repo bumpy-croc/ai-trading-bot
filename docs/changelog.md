@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Regime-gated gross exposure caps** (#802): a new `ExposureGovernor`
+  (`src/strategies/components/exposure_governor.py`) caps *total gross open
+  exposure* (sum of |entry notional| / current equity) by market regime — in a
+  bear, exposure itself is the primary risk lever. Defaults (config, overridable):
+  trend_down+high_vol 15%, trend_down+low_vol 20%, range 20–30%, trend_up 35–50%;
+  an unknown/None regime uses the most-conservative 15% cap. Applied after
+  position sizing / dynamic risk and before order placement, as an **absolute
+  cap** (min-wins, never double-counting dynamic risk's graduated throttle). The
+  gate lives once on `SharedEntryHandlerMixin.apply_pre_order_gates` and is
+  invoked identically by the backtest and live runtime entry handlers **and** the
+  legacy short path (no bypass); gross exposure is computed by the shared
+  `src/engines/shared/exposure.py` from both engines' `BasePosition` objects, so
+  the arithmetic can't drift (backtest-live parity). Behind the
+  `enable_exposure_governor` feature flag, **default OFF**. Requires regime
+  detection (`enable_regime_detection`) on for non-conservative caps.
 - **Bear-market model-validation gate** (#801): ML model promotion is now gated
   on a fixed set of historical bear/crash/chop windows. A candidate model's
   `latest` symlink is flipped only after it keeps max-drawdown at or below a
