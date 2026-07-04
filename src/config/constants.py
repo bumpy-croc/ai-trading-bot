@@ -427,3 +427,16 @@ DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
 DEFAULT_TFT_HIDDEN_SIZE = 64  # Hidden dimension for GRN and attention layers
 DEFAULT_TFT_DROPOUT = 0.1  # Dropout rate for regularization
 DEFAULT_TFT_NUM_LSTM_LAYERS = 1  # Number of stacked LSTM encoder layers
+
+# Bear-market model-validation gate (#801). A candidate model's 'latest'
+# symlink is only flipped when it survives the fixed validation windows in
+# ``config/validation_windows.json``. Per-window thresholds live in that file;
+# these are the fallbacks when the file omits them.
+DEFAULT_VALIDATION_MAX_DRAWDOWN_PCT = 40.0  # Reject if window max-drawdown exceeds this (%).
+DEFAULT_VALIDATION_MIN_TRADES = 3  # Fewer trades than this in a window => inconclusive => reject.
+# When True, a validation run that cannot execute (e.g. missing data in a
+# data-limited environment) BLOCKS promotion. When False, it warns loudly and
+# allows the flip so training still works where the harness cannot run. Kept
+# False by default so data-less/CI environments are not wedged; operators
+# running real promotions set the env override to require validation.
+DEFAULT_VALIDATION_REQUIRED = False

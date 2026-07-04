@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bear-market model-validation gate** (#801): ML model promotion is now gated
+  on a fixed set of historical bear/crash/chop windows. A candidate model's
+  `latest` symlink is flipped only after it keeps max-drawdown at or below a
+  per-window threshold (`config/validation_windows.json`). New
+  `src/ml/validation/` package: `BearValidationHarness` scores a model per
+  window (Sharpe / max-drawdown / win-rate / trades) via the backtest engine
+  (reusing `ExperimentRunner`, so `mock`/`fixture` providers give deterministic
+  CI runs); `promote_version_if_valid` makes the promotion decision and writes
+  an auditable `validation_audit.json` next to the model version. Wired into
+  `atb live-control deploy-model` (now validation-gated, `--skip-validation`
+  human override) and the training `--auto-deploy` path (training now defers the
+  `latest` flip via `skip_promote`, gate flips only on pass). New
+  `atb live-control validate-model` scores a model without deploying.
+  Un-runnable validation (e.g. missing data) is *inconclusive* → soft-pass with
+  a loud warning unless `VALIDATION_REQUIRED` is set. Thresholds are config, not
+  code. See `docs/prediction.md` → "Bear-market validation gate".
 - **Live enforcement of the portfolio max-drawdown hard cap** (risk-officer
   2026-07-04 finding, corroborating the 2026-06-08 observability audit —
   `RiskManager.check_drawdown()` had zero callers, so nothing halted the live

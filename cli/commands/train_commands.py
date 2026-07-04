@@ -320,13 +320,26 @@ def train_price_model_main(args) -> int:
     with open(bundle_dir / "feature_schema.json", "w", encoding="utf-8") as f:
         json.dump(schema, f, indent=2)
 
-    latest_link = bundle_dir.parent / "latest"
-    if latest_link.exists() or latest_link.is_symlink():
-        try:
-            latest_link.unlink()
-        except OSError:
-            pass
-    latest_link.symlink_to(version_id)
+    # Record the freshly-written version so a gated caller (the #801 validation
+    # gate in ``live-control``) can promote it only after validation. Kept as an
+    # attribute on the passed namespace so the return type stays ``int``.
+    try:
+        args.result_version_dir = str(bundle_dir)
+    except (AttributeError, TypeError):
+        pass
+
+    # ``skip_promote`` lets the caller defer the ``latest`` flip to the
+    # validation gate. Default (unset/False) preserves legacy behaviour: flip
+    # immediately. This is the seam that lets #801 block a bad model before it
+    # goes live instead of after.
+    if not getattr(args, "skip_promote", False):
+        latest_link = bundle_dir.parent / "latest"
+        if latest_link.exists() or latest_link.is_symlink():
+            try:
+                latest_link.unlink()
+            except OSError:
+                pass
+        latest_link.symlink_to(version_id)
 
     print(f"✅ Saved bundle to {bundle_dir}")
     return 0

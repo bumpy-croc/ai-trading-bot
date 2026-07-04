@@ -131,3 +131,41 @@ macOS users can confirm that ONNX Runtime is activating the CoreML/MPS execution
    The focused tests validate that the provider utility feeds the ONNX runner and caching layers correctly.
 
 If any of the above steps omit the GPU providers, reinstall `onnxruntime-silicon`, ensure the Python environment is using that interpreter, and repeat the checks.
+
+## Bear-market validation gate (#801)
+
+Models trained predominantly on the long-biased 2023–2025 market can go long into
+bear-market dead-cat bounces. Before a candidate model takes the `latest` symlink
+it is now scored on a fixed set of historical windows and blocked if it fails.
+
+- **Windows & thresholds** live in `config/validation_windows.json` (bear 2022,
+  Oct 2025–Feb 2026 crash, Feb–Jun 2026 chop by default). Each window has a
+  `max_drawdown_pct` cap and a `min_trades` floor. These are config, not code —
+  update them as regimes evolve.
+- **Harness**: `src/ml/validation/bear_validation.py::BearValidationHarness`
+  backtests the model per window (reusing `ExperimentRunner`) and reports Sharpe,
+  max-drawdown, win-rate and trade count. `mock`/`fixture` providers give
+  deterministic, network-free runs for CI.
+- **Gate**: `src/ml/validation/gate.py::promote_version_if_valid` runs the harness,
+  writes an auditable `validation_audit.json` next to the version, and flips
+  `latest` only on pass. A run that cannot execute (missing data) is
+  *inconclusive* → soft-pass with a loud warning, unless `VALIDATION_REQUIRED` is
+  truthy (then it blocks).
+
+### CLI
+
+```bash
+# Score a model without deploying (exit non-zero only on outright failure)
+atb live-control validate-model --symbol BTCUSDT --model-type basic
+
+# Deploy is validation-gated; --skip-validation is an audited human override
+atb live-control deploy-model --model-path BTCUSDT/basic/<version>
+
+# Training defers the 'latest' flip; --auto-deploy promotes only if validation passes
+atb live-control train --symbol BTCUSDT --auto-deploy
+```
+
+> **Out of scope / human sign-off**: this gate does not retrain models and never
+> flips a live-trading symbol's `latest` without the promotion passing (or an
+> explicit `--skip-validation`). Actual retraining on bear-inclusive windows and
+> live promotion remain human/ml-engineer actions.
