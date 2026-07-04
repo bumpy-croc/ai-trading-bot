@@ -12,7 +12,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-<<<<<<< HEAD
 - **Exposure-governor pre-enablement fixes** (#802 follow-ups, from the PR merge
   note): (P2) `src/engines/shared/exposure.py::position_notional` now uses a
   position's `current_size` (the live fraction after partial exits / scale-ins)
@@ -22,7 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scale-in's added exposure to `scale_in_gross_cap_headroom` (conservative cap −
   current gross). Both remain inert unless `enable_exposure_governor` is on. This
   clears the two conditions the PM flagged before the governor can be enabled live.
-=======
 - **P0: trading symbol now reaches the ML signal generator; cross-symbol model
   substitution is guarded** (2026-07-04 ml-engineer audit finding): the live
   runner and the backtest CLI constructed strategies with zero arguments, so
@@ -59,7 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - If the bundle vanishes after startup (registry reload), predictions fail
     safe (HOLD) instead of falling back to another symbol's model.
   Direct constructions without a symbol keep the `BTCUSDT` default.
->>>>>>> fa307655 (fix(strategies): thread trading symbol to ML signal generator; guard cross-symbol model substitution)
 
 ### Added
 - **Account circuit-breaker loop enforcement** (#807 follow-up): a new
