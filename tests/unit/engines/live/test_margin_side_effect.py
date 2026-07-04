@@ -263,10 +263,9 @@ def test_reconciler_uses_margin_check_in_margin_mode():
     mock_exchange = MagicMock()
     mock_exchange.get_order.return_value = None
     mock_exchange.get_open_orders.return_value = []
-    # Long position still exists (positive netAsset)
-    mock_balance = MagicMock()
-    mock_balance.total = 0.001
-    mock_exchange.get_balance.return_value = mock_balance
+    # Long position still exists (positive netAsset) — margin long reads the raw
+    # margin-asset accessor (get_margin_account_asset), not spot get_balance.
+    mock_exchange.get_margin_account_asset.return_value = {"netAsset": "0.001", "borrowed": "0"}
     mock_tracker = MagicMock()
     mock_db = MagicMock()
 
@@ -294,8 +293,8 @@ def test_reconciler_uses_margin_check_in_margin_mode():
 
     reconciler._reconcile_cycle()
 
-    # get_balance IS called now (margin position check uses it)
-    mock_exchange.get_balance.assert_called()
+    # The raw margin-asset accessor IS used for the margin long check (not spot get_balance)
+    mock_exchange.get_margin_account_asset.assert_called()
     # Position still exists — should NOT be removed
     mock_tracker.remove_position.assert_not_called()
 
@@ -325,6 +324,11 @@ def test_reconciler_stop_loss_has_auto_repay():
     mock_position.current_size = 1.0
     mock_position.original_size = 1.0
     mock_position.db_position_id = 42
+    # The re-placement guard skips positions with no exchange holding. Model a live
+    # position: not flagged close-pending (a bare MagicMock attribute would read truthy)
+    # and the base asset still held on the exchange.
+    mock_position.exchange_close_pending = False
+    mock_exchange.get_balance.return_value = MagicMock(total=1.0)
 
     reconciler._place_missing_stop_loss(mock_position, "test_order_key")
 
@@ -377,11 +381,10 @@ def test_startup_reconciler_uses_margin_check_in_margin_mode():
     )
 
     exchange = MagicMock()
-    # Long position with asset holdings present — should not be removed
-    balance_obj = MagicMock()
-    balance_obj.asset = "BTC"
-    balance_obj.total = 1.0
-    exchange.get_balance.return_value = balance_obj
+    # Long position with asset holdings present — margin long reads netAsset via the raw
+    # margin-asset accessor (get_margin_account_asset), not spot get_balance (which returns
+    # None for both an absent asset and a transient error).
+    exchange.get_margin_account_asset.return_value = {"netAsset": "1.0", "borrowed": "0"}
 
     reconciler = PositionReconciler(
         exchange_interface=exchange,
@@ -406,8 +409,8 @@ def test_startup_reconciler_uses_margin_check_in_margin_mode():
     )
 
     reconciler._verify_asset_holdings(position, result)
-    # In margin mode, it calls get_balance for margin position check (not skipped)
-    exchange.get_balance.assert_called_once_with("BTC")
+    # In margin mode the long check reads netAsset via the raw margin-asset accessor
+    exchange.get_margin_account_asset.assert_called_once_with("BTC")
     # Position still exists — result should not be "corrected"
     assert result.status == "ok"
 

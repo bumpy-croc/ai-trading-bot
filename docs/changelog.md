@@ -171,6 +171,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FEATURE_ENTRY_PAUSE` env var remains the override path.
 
 ### Fixed
+- **Stop-loss re-placement could arm a naked margin position for an
+  externally-closed position** (Codex review of #852, finding 2 — pre-existing):
+  when a position is closed or liquidated externally while the bot is offline,
+  its DB row stays OPEN and is re-loaded on the next startup. Stop-loss
+  verification deliberately runs *before* the asset-holdings check (so an offline
+  SL *fill* can book its realized P&L first), so for an externally-closed
+  position the tracked stop looks missing/cancelled and was **re-placed with
+  `AUTO_REPAY`** before the holdings check could remove the phantom — on margin,
+  the naked-position (fund-loss) path. The periodic cycle had the same risk (it
+  iterates a stale snapshot copy while step 1b removes phantoms from the live
+  tracker). A new `_position_holding_is_gone(exchange, use_margin, position)`
+  guard now gates all five stop re-placement sites (startup `_verify_stop_loss`
+  not-found + cancelled/expired/rejected branches, startup `reconcile_position`
+  step-3 placement, periodic step-2 re-placement, and periodic
+  `_place_missing_stop_loss`): it positively confirms the asset is gone using the
+  same 50%-of-tracked thresholds as `_verify_asset_holdings` /
+  `_verify_margin_position_exists` (margin short → borrowed, long → netAsset;
+  short-circuits on `exchange_close_pending`), and **fails safe** (returns
+  `False`, keep protecting) on a transient API error. Ordering was **not**
+  changed, so offline SL-fill P&L booking is preserved. A follow-up (Codex review
+  of #881) extended the guard to two more paths — the crash-recovery stop in
+  `_reconcile_filled_entry` (a pending entry that filled then closed externally
+  while offline is now handled as an external close: no stop, no emergency-sell)
+  and the startup partial-exit `_resize_stop_loss_after_partial_exit` — and made
+  margin-**long** liveness robust: `get_balance` returns `None` for **both** an
+  absent asset and a transient error, so a fully-closed margin long could not be
+  distinguished from an API blip; a new `_margin_net_asset`
+  (`get_margin_account_asset`: zeros for an absent asset, `None` only on error)
+  now backs the guard and both margin-long phantom-removers. Spot is unaffected
+  (AUTO_REPAY is a no-op on spot and an oversell is exchange-rejected). Adds 22
+  unit tests.
 - **Max-drawdown guard mis-seeded its peak from the configured balance**
   (prod 2026-07-04: guard armed at $100.00 vs true session equity $84.42 and
   immediately warned at a phantom 15.60% drawdown): the seed took
