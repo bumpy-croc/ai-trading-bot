@@ -3880,6 +3880,26 @@ class TestPeriodicExternalCloseTradeRow:
         assert high_events, f"expected RECONCILE_HIGH, got {on_event.call_args_list}"
 
 
+def test_remove_phantom_position_writes_audit(reconciler, mock_db):
+    """Removing a phantom (externally-closed) position writes a CLOSED_EXTERNALLY
+    audit row + records it on the result — it previously set HIGH severity with no
+    audit row, unlike the spot external-close path (#853)."""
+    reconciler._log_external_close_trade = MagicMock()  # isolate from trade-row math
+    pos = MockPosition(symbol="BTCUSDT", order_id="k1", db_position_id=42, stop_loss_order_id="sl1")
+    result = ReconciliationResult(entity_type="position", entity_id=42, status="unresolved")
+
+    reconciler._remove_phantom_position(pos, result)
+
+    audits = [
+        c
+        for c in mock_db.log_audit_event.call_args_list
+        if c.kwargs.get("new_value") == "CLOSED_EXTERNALLY"
+    ]
+    assert audits, mock_db.log_audit_event.call_args_list
+    assert result.severity == Severity.HIGH
+    assert any(a.new_value == "CLOSED_EXTERNALLY" for a in result.corrections)
+
+
 class TestReconcilerEventSink:
     """The reconciler gains a system_events/alert sink via an injected on_event
     callback (the engine's _record_event), mirroring on_critical (#853)."""

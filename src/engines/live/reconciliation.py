@@ -2345,6 +2345,22 @@ class PositionReconciler:
                 getattr(position, "symbol", "?"),
                 db_pos_id,
             )
+        # Audit the phantom removal (it sets HIGH severity but previously wrote no
+        # reconciliation_audit_events row, unlike the spot external-close path). #853
+        audit = AuditEvent(
+            entity_type="position",
+            entity_id=db_pos_id,
+            field="status",
+            old_value="OPEN",
+            new_value="CLOSED_EXTERNALLY",
+            reason=(
+                f"Phantom {getattr(position, 'symbol', '?')} position removed — not present on the "
+                "exchange (external close / liquidation)"
+            ),
+            severity=Severity.HIGH,
+        )
+        self._persist_audit(audit)
+        result.corrections.append(audit)
         result.status = "corrected"
         result.severity = Severity.HIGH
 
