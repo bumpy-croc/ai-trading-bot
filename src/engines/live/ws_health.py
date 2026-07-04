@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from src.data_providers.binance_provider import WebSocketState
+from src.database.models import EventType
 
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
@@ -99,6 +100,18 @@ class WebSocketHealthEngineState(Protocol):
     def _handle_kline_disconnect(self) -> None: ...
 
     def _handle_user_stream_disconnect(self, *, hard: bool = ...) -> None: ...
+
+    def _record_event(
+        self,
+        event_type: EventType,
+        message: str,
+        *,
+        severity: str = ...,
+        component: str | None = ...,
+        error_code: str | None = ...,
+        exc: BaseException | None = ...,
+        alert: bool = ...,
+    ) -> None: ...
 
 
 class WebSocketHealthMonitor:
@@ -474,6 +487,21 @@ class WebSocketHealthMonitor:
             if hasattr(exchange, "mark_user_degraded"):
                 exchange.mark_user_degraded()
             state.order_tracker.enable_polling()
+            # The real-time order/balance push feed is now dead; the bot runs on
+            # slower REST polling until a real event returns it to primary. Page an
+            # operator — degraded fill/balance visibility on a live account was
+            # previously only a logger.warning (#717/#853). Fires once per
+            # circuit-open: while REST_DEGRADED the method returns early above, so
+            # this is edge-triggered by construction (no per-cycle spam).
+            state._record_event(
+                EventType.ALERT,
+                f"User data stream circuit-open after {state._user_reconnect_failures} "
+                "reconnects — REST-degraded; real-time fills/balance updates unavailable",
+                severity="critical",
+                component="connectivity",
+                error_code="USER_WS_DEGRADED",
+                alert=True,
+            )
             return
 
         state._user_reconnect_failures += 1
@@ -645,6 +673,15 @@ class WebSocketHealthMonitor:
         logger.info(
             "User data WebSocket recovered — real event confirmed, REST polling "
             "disabled, WS primary again (#717)"
+        )
+        # Paired recovery signal so an operator sees the degraded→recovered
+        # transition in system_events (no page — recovery is good news). #853
+        state._record_event(
+            EventType.WARNING,
+            "User data WebSocket recovered — WS primary again, REST polling disabled",
+            severity="info",
+            component="connectivity",
+            error_code="USER_WS_RECOVERED",
         )
 
     def handle_kline_disconnect(self) -> None:
