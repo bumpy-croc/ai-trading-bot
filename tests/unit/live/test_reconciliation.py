@@ -3235,6 +3235,44 @@ class TestPeriodicSLFillBooksPnl:
         assert len(pnl_calls) == 1
         assert pnl_calls[0].args[0] == pytest.approx(1000.0 + 200.0 - 0.05)
 
+    def test_sl_fill_persists_deduped_trade_row(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Driving the periodic cycle over a filled SL must persist a ``trades``
+        row (not just correct the balance) — keyed by the REAL SL exit order id,
+        GROSS pnl, positive USD commission, and the closed quantity. Guards the
+        periodic path against a refactor silently dropping the trade row, which
+        would leave the SL loss's commission/quantity/pnl unrecorded even though
+        the balance was corrected."""
+        pos = MockPosition(
+            order_id="entry_short",
+            side="short",
+            stop_loss_order_id="sl_short",
+            exchange_order_id="entry_short",
+            db_position_id=71,
+        )
+        mock_position_tracker.positions = {"entry_short": pos}
+        mock_position_tracker.get_position.side_effect = [pos, None, None]
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)
+        reconciler = self._make_filled_sl_cycle(mock_exchange, mock_position_tracker, mock_db, pos)
+        reconciler._use_margin = True
+        reconciler._position_reconciler._use_margin = False  # skip interest lookup
+        mock_db.close_position.return_value = True
+
+        reconciler._reconcile_cycle()
+
+        mock_db.log_trade.assert_called_once()
+        kwargs = mock_db.log_trade.call_args.kwargs
+        # Deduped by the real SL exit order id present on the fill (not the
+        # synthetic reconcile_sl_<id> fallback, which is only used when absent).
+        assert kwargs["exit_order_id"] == "sl_short"
+        assert kwargs["exit_reason"] == "stop_loss_filled_offline"
+        # GROSS short pnl: (50000 - 48000) * 0.1 = +200 (fees live in commission).
+        assert kwargs["pnl"] == pytest.approx(200.0)
+        assert kwargs["quantity"] == pytest.approx(0.1)
+        assert kwargs["commission"] is not None and kwargs["commission"] > 0.0
+        assert str(kwargs["side"]).lower() == "short"
+
     def test_margin_short_unconfirmed_sl_defers_classification(
         self, mock_exchange, mock_position_tracker, mock_db
     ):

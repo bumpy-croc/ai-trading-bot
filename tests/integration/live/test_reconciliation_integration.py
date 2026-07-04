@@ -726,6 +726,56 @@ class TestReconciliationIntegration:
         audits = self._query_audit_events(db_manager, session_id)
         assert any("stop-loss" in (a["reason"] or "").lower() for a in audits)
 
+    def test_periodic_sl_filled_persists_trade_row(
+        self,
+        periodic_reconciler,
+        mock_exchange,
+        db_manager,
+        session_id,
+        position_tracker,
+    ):
+        """FILLED SL detected in the periodic cycle persists a deduped ``trades``
+        row keyed by the real SL exit order id — not just a CLOSED_BY_SL audit.
+        Without it an offline SL loss the reconciler books leaves no trade record
+        (commission/quantity/pnl unrecorded)."""
+        from src.database.models import Trade
+
+        _db_id, _position = self._seed_position(
+            db_manager,
+            session_id,
+            position_tracker,
+            stop_loss_order_id="sl_active_777",
+        )
+        # Entry order FILLED, SL FILLED @ 48000 (a loss on the seeded long).
+        mock_exchange.get_order.side_effect = lambda oid, sym: MockExchangeOrder(
+            order_id=oid,
+            status=ExOrderStatus.FILLED,
+            average_price=48000.0,
+        )
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=10000.0)
+            if asset == "USDT"
+            else MockBalance(asset="BTC", total=0.0)
+        )
+
+        periodic_reconciler._reconcile_cycle()
+
+        assert len(position_tracker.positions) == 0
+        with db_manager.get_session() as s:
+            rows = (
+                s.query(Trade)
+                .filter(Trade.session_id == session_id, Trade.order_id == "sl_active_777")
+                .all()
+            )
+            assert len(rows) == 1
+            t = rows[0]
+            assert t.exit_reason == "stop_loss_filled_offline"
+            assert float(t.exit_price) == pytest.approx(48000.0)
+            assert t.commission is not None and float(t.commission) > 0.0
+            assert t.quantity is not None and float(t.quantity) == pytest.approx(0.001)
+            # GROSS long pnl: (48000 - 50000) * 0.001 = -2.0 (fees carried in commission).
+            assert float(t.pnl) == pytest.approx(-2.0)
+
     def test_periodic_orphaned_order_cancelled(
         self,
         periodic_reconciler,
