@@ -1325,6 +1325,18 @@ class LiveTradingEngine:
         except Exception as e:
             self._loop_crashed = True
             logger.critical("Trading loop terminated unexpectedly: %s", e, exc_info=True)
+            # Distinct paged event so an abnormal loop death is distinguishable
+            # from a clean ENGINE_STOP in system_events (the 2026-05-19 zombie-bot
+            # class, where the process stayed up but the loop was dead). #853
+            self._record_event(
+                EventType.ALERT,
+                f"Trading loop crashed unexpectedly: {e}",
+                severity="critical",
+                component="engine",
+                error_code="LOOP_CRASH",
+                exc=e,
+                alert=True,
+            )
 
     def _exit_if_loop_crashed(self, exit_on_crash: bool) -> None:
         """Exit the process non-zero if the trading loop died abnormally (#630).
@@ -1598,6 +1610,18 @@ class LiveTradingEngine:
                     logger.critical(
                         f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.",
                         exc_info=True,
+                    )
+                    # Paged event before the (generic) ENGINE_STOP so operators can
+                    # distinguish this abnormal shutdown from a clean stop. #853
+                    self._record_event(
+                        EventType.ALERT,
+                        f"Trading loop stopping — {self.consecutive_errors} consecutive errors "
+                        f"reached the limit (last: {e})",
+                        severity="critical",
+                        component="engine",
+                        error_code="LOOP_MAX_ERRORS",
+                        exc=e,
+                        alert=True,
                     )
                     # Abnormal stop: signal start() to exit non-zero for a restart (#630).
                     self._loop_crashed = True

@@ -257,3 +257,27 @@ class TestRunnerWebhookEnvFallback:
         monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
         monkeypatch.setattr(sys, "argv", ["prog", "ml_basic"])
         assert parse_args().webhook_url is None
+
+
+class TestLoopCrashEvent:
+    """An abnormal loop death must page + emit a distinct system_event so it is
+    distinguishable from a clean ENGINE_STOP — the 2026-05-19 zombie-bot class
+    where the process stayed up but the trading loop was dead (#853)."""
+
+    def test_unhandled_loop_crash_pages_and_flags(self):
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine._loop_crashed = False
+        engine._record_event = MagicMock()
+        engine._trading_loop = MagicMock(side_effect=RuntimeError("boom"))
+
+        # Must not propagate — the wrapper exists precisely to catch it.
+        engine._run_trading_loop("BTCUSDT", "1h")
+
+        assert engine._loop_crashed is True
+        engine._record_event.assert_called_once()
+        args, kwargs = engine._record_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "LOOP_CRASH"
+        assert kwargs["severity"] == "critical"
+        assert kwargs["alert"] is True
+        assert isinstance(kwargs["exc"], RuntimeError)
