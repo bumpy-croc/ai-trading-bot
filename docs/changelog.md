@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clears the two conditions the PM flagged before the governor can be enabled live.
 
 ### Added
+- **Account circuit-breaker loop enforcement** (#807 follow-up): a new
+  `CircuitBreakerEnforcer` (`src/engines/live/monitoring/circuit_breaker_enforcer.py`)
+  runs the #807 `AccountCircuitBreaker` on every trading-loop iteration (mirroring
+  `MaxDrawdownEnforcer`), completing the follow-ups flagged as human-sign-off:
+  (1) **restart-safe daily baseline** — seeds the daily-loss baseline from the
+  day's first `account_history` snapshot (`get_first_snapshot_of_day`) on boot, so
+  an intraday restart no longer disarms the halt; (2) **halt on trip** — in
+  `active` mode a trip flips the engine's existing **close-only mode** (new entries
+  and scale-ins stop; exits/stop-losses keep running — nothing is liquidated,
+  matching the `MaxDrawdownGuard` precedent), and in `dry_run` it logs "would
+  halt"; (3) **surfacing** — emits a `risk_event` + a CRITICAL `system_events`
+  ALERT (`ACCOUNT_CIRCUIT_BREAKER_TRIP`) for the dashboard/alerting, with the log
+  signatures added to `.claude/LESSONS.md §5`. Fault-isolated (never crashes the
+  loop). Still gated by `account_circuit_breakers` (default `off`). Deliberate
+  non-goal: literal force-liquidation of open positions (the codebase does not
+  liquidate into a dip; close-only is the safe halt).
 - **Account-level circuit breakers** (#807): new `AccountCircuitBreaker`
   (`src/risk/circuit_breaker.py`) enforces hard, account-level safety limits
   independent of strategy logic — a **daily-loss halt** (default 2.5% below a

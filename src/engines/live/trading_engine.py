@@ -70,6 +70,7 @@ from src.engines.live.monitoring import (
     extract_ml_predictions,
     extract_sentiment_data,
 )
+from src.engines.live.monitoring.circuit_breaker_enforcer import CircuitBreakerEnforcer
 from src.engines.live.monitoring.drawdown_guard import MaxDrawdownEnforcer, MaxDrawdownGuard
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.startup import LiveStartupSequencer
@@ -939,10 +940,13 @@ class LiveTradingEngine:
             MacroEventGuard(enabled=is_enabled("enable_macro_event_guard", default=False))
         )
         # #807: account-level circuit breaker. Mode (off/dry_run/active) resolved
-        # once here to keep feature_flags.json I/O off the entry hot path.
-        self.live_entry_handler.configure_circuit_breaker(
-            AccountCircuitBreaker(mode=get_flag("account_circuit_breakers", default="off"))
+        # once here to keep feature_flags.json I/O off the entry hot path. Held on
+        # the engine so both the entry gate and the loop enforcer share one
+        # breaker (one daily-loss baseline, one latch).
+        self._circuit_breaker = AccountCircuitBreaker(
+            mode=get_flag("account_circuit_breakers", default="off")
         )
+        self.live_entry_handler.configure_circuit_breaker(self._circuit_breaker)
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager
         partial_ops_manager = (
@@ -989,6 +993,12 @@ class LiveTradingEngine:
         self._drawdown_enforcer = MaxDrawdownEnforcer(
             engine_state=self,
             guard=MaxDrawdownGuard(self.risk_manager.params.max_drawdown),
+        )
+        # #807 follow-up: run the account circuit breaker on the loop too —
+        # restart-safe daily baseline + close-only-on-trip (dry_run/active).
+        self._circuit_breaker_enforcer = CircuitBreakerEnforcer(
+            engine_state=self,
+            breaker=self._circuit_breaker,
         )
 
         # Startup recovery — session balance, persisted positions, exchange
@@ -2033,8 +2043,12 @@ class LiveTradingEngine:
         self.account_monitor.update_performance_metrics()
 
     def _check_max_drawdown(self) -> None:
-        """Enforce the max-drawdown hard cap (delegated to MaxDrawdownEnforcer)."""
+        """Enforce the max-drawdown hard cap + account circuit breakers.
+
+        Both run every trading-loop iteration and trip the same close-only mode.
+        """
         self._drawdown_enforcer.check()
+        self._circuit_breaker_enforcer.check()
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
