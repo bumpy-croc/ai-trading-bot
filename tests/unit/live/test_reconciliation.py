@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, call, create_autospec, patch
 import pytest
 
 from src.data_providers.exchange_interface import OrderLookupError
+from src.database.models import EventType
 from src.engines.live.reconciliation import (
     AuditEvent,
     PeriodicReconciler,
@@ -2827,6 +2828,90 @@ class TestEmergencySellVerification:
         # Result should be unresolved with CRITICAL severity
         assert any(r.status == "unresolved" and r.severity == Severity.CRITICAL for r in results)
 
+    def _drive_failed_emergency_sell(self, mock_exchange, mock_db, mock_position_tracker, on_event):
+        """Shared setup: recover a filled entry, SL placement returns None so the
+        engine emergency-closes, then the emergency sell fails/returns None."""
+        import threading
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+        )
+        mock_position_tracker._positions_lock = threading.Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 57
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 22,
+                "client_order_id": "atb_BTCUSDT_long_5555_eeee",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # SL placement returns None -> emergency close path
+        mock_exchange.place_stop_loss_order.return_value = None
+        return reconciler
+
+    def test_emergency_sell_failure_pages_operator(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """A FAILED emergency sell leaves a naked position — it must page an
+        operator (critical ALERT via on_event), not just log (#853)."""
+        on_event = MagicMock()
+        reconciler = self._drive_failed_emergency_sell(
+            mock_exchange, mock_db, mock_position_tracker, on_event
+        )
+        mock_exchange.place_order.side_effect = ConnectionError("Network error")
+
+        reconciler.resolve_pending_orders()
+
+        alerts = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "EMERGENCY_SELL_FAILED"
+        ]
+        assert alerts, f"expected EMERGENCY_SELL_FAILED alert, got {on_event.call_args_list}"
+        assert alerts[0].args[0] == EventType.ALERT
+        assert alerts[0].kwargs["severity"] == "critical"
+        assert alerts[0].kwargs["alert"] is True
+        # The exchange error is forwarded so the engine captures its traceback.
+        assert isinstance(alerts[0].kwargs.get("exc"), ConnectionError)
+
+    def test_emergency_sell_unconfirmed_pages_operator(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """An unconfirmed emergency sell (returns None; position stays tracked)
+        may be unprotected — it must page an operator (critical ALERT) (#853)."""
+        on_event = MagicMock()
+        reconciler = self._drive_failed_emergency_sell(
+            mock_exchange, mock_db, mock_position_tracker, on_event
+        )
+        mock_exchange.place_order.return_value = None  # emergency sell unconfirmed
+
+        reconciler.resolve_pending_orders()
+
+        alerts = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "EMERGENCY_SELL_UNCONFIRMED"
+        ]
+        assert alerts, f"expected EMERGENCY_SELL_UNCONFIRMED alert, got {on_event.call_args_list}"
+        assert alerts[0].kwargs["severity"] == "critical"
+        assert alerts[0].kwargs["alert"] is True
+
 
 # ---------- Fee Accounting Tests ----------
 
@@ -3718,3 +3803,58 @@ class TestPeriodicExternalCloseTradeRow:
         # _sync_margin_equity owns margin capital, and balance reconcile is margin-skipped.
         assert db.get_current_balance(1) == pytest.approx(10000.0)
         assert pos.order_id not in tracker.positions
+
+
+class TestReconcilerEventSink:
+    """The reconciler gains a system_events/alert sink via an injected on_event
+    callback (the engine's _record_event), mirroring on_critical (#853)."""
+
+    def test_emit_event_forwards_to_on_event(self):
+        from src.engines.live.reconciliation import _emit_event
+
+        cb = MagicMock()
+        _emit_event(
+            cb,
+            EventType.ALERT,
+            "naked position",
+            severity="critical",
+            error_code="EMERGENCY_SELL_FAILED",
+            alert=True,
+        )
+        cb.assert_called_once()
+        args, kwargs = cb.call_args
+        assert args == (EventType.ALERT, "naked position")
+        assert kwargs["severity"] == "critical"
+        assert kwargs["component"] == "reconciler"
+        assert kwargs["error_code"] == "EMERGENCY_SELL_FAILED"
+        assert kwargs["alert"] is True
+
+    def test_emit_event_noop_when_sink_unwired(self):
+        from src.engines.live.reconciliation import _emit_event
+
+        # Standalone use / tests pass on_event=None -> silent no-op, never raises.
+        _emit_event(None, EventType.WARNING, "msg")
+
+    def test_emit_event_never_raises(self):
+        from src.engines.live.reconciliation import _emit_event
+
+        cb = MagicMock(side_effect=RuntimeError("sink down"))
+        # Observability must never break a reconciliation cycle.
+        _emit_event(cb, EventType.ALERT, "msg", alert=True)
+        cb.assert_called_once()
+
+    def test_periodic_reconciler_propagates_sink_to_child(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        cb = MagicMock()
+        pr = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=cb,
+        )
+        assert pr.on_event is cb
+        # The child PositionReconciler must receive the same sink so its
+        # emergency-close paths can page too.
+        assert pr._position_reconciler.on_event is cb

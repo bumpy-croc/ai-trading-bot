@@ -473,6 +473,7 @@ class LiveSessionRecoverer:
                     use_margin=use_margin,
                     fee_rate=state.live_execution_engine.fee_rate,
                     data_provider=state.data_provider,
+                    on_event=state._record_event,
                 )
 
                 if not positions_snapshot:
