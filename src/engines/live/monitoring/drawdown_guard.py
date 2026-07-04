@@ -12,12 +12,16 @@ the legacy duck-typed short path and any direct caller), and scale-ins. Exits,
 partial exits, stop-loss management, and reconciliation keep running. It never
 liquidates anything — it only stops new risk.
 
-Peak-equity source: the same numbers ``account_history.drawdown`` is derived
-from (session balance vs the session peak balance). On boot the peak is
-recomputed from ``account_history`` (active session plus the recovered
-inactive session on clean restarts), so a restart cannot reset the drawdown
-baseline — a bot restarted mid-breach re-trips naturally on its first loop
-iteration.
+Peak-equity source: the AUTHORITATIVE baseline is the ``account_history``
+session max (active session plus the recovered inactive session on clean
+restarts), recomputed on boot so a restart cannot reset the drawdown baseline
+— a bot restarted mid-breach re-trips naturally on its first loop iteration.
+Fallback order is DB session max → current recovered balance; the in-memory
+PerformanceTracker peak is NEVER a seed candidate (it can initialize from the
+CONFIGURED balance — the optimistic book value that mis-seeded prod at $100
+vs true equity ~$84 on 2026-07-04). A failed DB read defers seeding to the
+next cycle (bounded by ``MAX_SEED_ATTEMPTS``) instead of latching a
+half-seeded baseline.
 
 Baseline policy (PM decision, 2026-07-04): the peak baseline is the peak TRUE
 equity since the last reconciled reset — i.e. session-scoped history, NOT
@@ -66,7 +70,6 @@ from src.infrastructure.logging.events import log_risk_event
 
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
-    from src.trading.performance import PerformanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,12 @@ logger = logging.getLogger(__name__)
 _TIER_EPSILON = 1e-12
 
 RESET_PEAK_FLAG = "max_drawdown_reset_peak"
+
+# Bounded seeding deferrals: a failed/unavailable account_history read defers
+# seeding to the next loop cycle rather than latching a half-seeded baseline;
+# after this many attempts the guard arms from the current balance so the cap
+# is never left unarmed indefinitely.
+MAX_SEED_ATTEMPTS = 10
 
 
 class DrawdownTier(IntEnum):
@@ -265,7 +274,6 @@ class DrawdownEngineState(Protocol):
     trading_session_id: int | None
     _recovered_inactive_session_id: int | None
     db_manager: DatabaseManager
-    performance_tracker: PerformanceTracker
     _close_only_mode: bool
 
     def _enter_close_only_mode(self) -> None: ...
@@ -296,6 +304,7 @@ class MaxDrawdownEnforcer:
         self._state = engine_state
         self._guard = guard
         self._breach_notified = False
+        self._seed_attempts = 0
 
     @property
     def guard(self) -> MaxDrawdownGuard:
@@ -307,8 +316,8 @@ class MaxDrawdownEnforcer:
         state = self._state
         try:
             balance = float(state.current_balance)
-            if not self._guard.seeded:
-                self._seed_guard(balance)
+            if not self._guard.seeded and not self._try_seed(balance):
+                return  # seeding deferred (DB/session not ready); retry next cycle
             assessment = self._guard.observe(balance)
         except Exception as e:
             # Monitoring must never take down the trading loop.
@@ -357,32 +366,76 @@ class MaxDrawdownEnforcer:
                 exc_info=True,
             )
 
-    def _seed_guard(self, balance: float) -> None:
-        """Establish the peak baseline: persisted session peak > in-memory."""
+    def _try_seed(self, balance: float) -> bool:
+        """Seed the peak baseline; the DB session max is AUTHORITATIVE.
+
+        Returns False when seeding must be deferred to the next loop cycle
+        (session id not resolved yet, or the account_history read failed).
+        After ``MAX_SEED_ATTEMPTS`` deferrals the guard falls back to the
+        current balance with a WARNING so the cap is never left unarmed
+        indefinitely.
+
+        The in-memory PerformanceTracker peak is deliberately NOT a seed
+        candidate: it can initialize from the CONFIGURED initial balance,
+        which mis-seeded the prod guard at the optimistic $100 book value vs
+        true session equity ~$84 (2026-07-04) and produced a phantom 15.6%
+        drawdown warning on boot.
+        """
         state = self._state
-        db_peak: float | None = None
+        if is_enabled(RESET_PEAK_FLAG, default=False):
+            # Operator override: re-baseline to current balance; history
+            # (including the DB peak) is intentionally ignored.
+            self._guard.seed_peak(balance)
+            return True
+
+        self._seed_attempts += 1
         session_id = state.trading_session_id
-        if state.db_manager is not None and session_id is not None:
+        db_read_ok = False
+        db_peak: float | None = None
+        if state.db_manager is None or session_id is None:
+            logger.info(
+                "Max-drawdown guard seeding deferred: trading session not resolved yet "
+                "(attempt %d/%d)",
+                self._seed_attempts,
+                MAX_SEED_ATTEMPTS,
+            )
+        else:
             try:
                 db_peak = state.db_manager.get_session_peak_balance(
                     session_id,
                     fallback_session_id=state._recovered_inactive_session_id,
                 )
+                # None here means the read SUCCEEDED but the session has no
+                # snapshots yet — a fresh session legitimately baselines at
+                # the current balance.
+                db_read_ok = True
             except Exception as e:
                 logger.warning(
-                    "Could not recompute session peak from account_history: %s — "
-                    "seeding max-drawdown guard from in-memory state only",
+                    "Could not recompute session peak from account_history "
+                    "(attempt %d/%d): %s — will retry next cycle",
+                    self._seed_attempts,
+                    MAX_SEED_ATTEMPTS,
                     e,
                 )
-        tracker_peak: float | None = None
-        try:
-            tracker_peak = state.performance_tracker.get_metrics().peak_balance
-        except Exception as e:
-            logger.warning("Could not read performance-tracker peak balance: %s", e)
-        self._guard.seed_peak(balance, db_peak, tracker_peak)
+
+        if not db_read_ok:
+            if self._seed_attempts < MAX_SEED_ATTEMPTS:
+                return False
+            logger.warning(
+                "Max-drawdown guard: no successful account_history read after %d "
+                "attempts — falling back to current balance $%.2f as the peak "
+                "baseline (drawdown measured from here on)",
+                self._seed_attempts,
+                balance,
+            )
+
+        self._guard.seed_peak(balance, db_peak)
         logger.info(
-            "Max-drawdown guard armed: peak=$%.2f, hard cap=%.1f%% (session %s)",
+            "Max-drawdown guard armed: peak=$%.2f, hard cap=%.1f%% (session %s, "
+            "account_history peak %s)",
             self._guard.peak_balance,
             self._guard.max_drawdown_pct * 100,
             session_id,
+            f"${db_peak:,.2f}" if db_peak is not None else "unavailable",
         )
+        return True
