@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+<<<<<<< HEAD
 - **Exposure-governor pre-enablement fixes** (#802 follow-ups, from the PR merge
   note): (P2) `src/engines/shared/exposure.py::position_notional` now uses a
   position's `current_size` (the live fraction after partial exits / scale-ins)
@@ -21,6 +22,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scale-in's added exposure to `scale_in_gross_cap_headroom` (conservative cap −
   current gross). Both remain inert unless `enable_exposure_governor` is on. This
   clears the two conditions the PM flagged before the governor can be enabled live.
+=======
+- **P0: trading symbol now reaches the ML signal generator; cross-symbol model
+  substitution is guarded** (2026-07-04 ml-engineer audit finding): the live
+  runner and the backtest CLI constructed strategies with zero arguments, so
+  `--symbol ETHUSDT` never reached `MLBasicSignalGenerator`, which defaulted to
+  `BTCUSDT` for model registry selection — HyperGrowth live on ETHUSDT silently
+  scored every bar with the BTCUSDT basic model. Both runners now thread the
+  symbol through `call_strategy_factory()` (`src/strategies/__init__.py`) into
+  every factory that composes `MLBasicSignalGenerator` (`hyper_growth`,
+  `ml_basic`, `leveraged_regime`, `ensemble_weighted`, `StrategyFactory`
+  presets); the generator normalizes it to the registry's Binance-style form.
+  Guards at the generator/registry seam (identical in backtest and live):
+  - **Fail fast at startup** when no model bundle exists for
+    `(symbol, model_type, timeframe)` — the error lists available bundles
+    instead of silently substituting the default model.
+  - **`FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true`** explicitly opts into the
+    substitution: startup logs CRITICAL and pins a deterministic fallback
+    bundle (same type/timeframe, `BTCUSDT` preferred), and every resolution
+    logs a rate-limited WARNING. **Prod transition path**: production ETHUSDT
+    has no `basic` model yet, so promoting this fix requires setting the flag
+    temporarily — behavior is then *unchanged but loud* — until an ETHUSDT
+    basic model ships, at which point the flag must be unset.
+  - **Rate-limited ERROR on mismatch** whenever the resolved bundle's symbol
+    differs from the trading symbol, and `Signal.metadata` is stamped with
+    `trading_symbol` + `model_symbol` for auditability.
+  - If the bundle vanishes after startup (registry reload), predictions fail
+    safe (HOLD) instead of falling back to another symbol's model.
+  Direct constructions without a symbol keep the `BTCUSDT` default.
+>>>>>>> fa307655 (fix(strategies): thread trading symbol to ML signal generator; guard cross-symbol model substitution)
 
 ### Added
 - **Account circuit-breaker loop enforcement** (#807 follow-up): a new
