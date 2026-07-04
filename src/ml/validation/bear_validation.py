@@ -24,7 +24,7 @@ from src.config.constants import (
     DEFAULT_VALIDATION_MAX_DRAWDOWN_PCT,
     DEFAULT_VALIDATION_MIN_TRADES,
 )
-from src.experiments.schemas import ExperimentConfig, ExperimentResult, ParameterSet
+from src.experiments.schemas import ExperimentConfig, ExperimentResult
 from src.infrastructure.runtime.paths import get_project_root
 
 logger = logging.getLogger(__name__)
@@ -206,7 +206,6 @@ class BearValidationHarness:
         provider: str = "binance",
         initial_balance: float = 1000.0,
         strategy_name: str | None = None,
-        model_path: str | Path | None = None,
         runner_factory: Callable[[], object] | None = None,
     ) -> None:
         self.symbol = symbol.upper()
@@ -216,11 +215,11 @@ class BearValidationHarness:
         self.strategy_name = strategy_name or (
             "ml_sentiment" if model_type == "sentiment" else "ml_basic"
         )
-        # When set, validate this specific candidate version rather than the
-        # strategy's ``latest`` symlink. Threaded to the signal generator via a
-        # ``model_path`` override so the gate scores the model that is about to
-        # be promoted, not the one already live.
-        self.model_path = str(model_path) if model_path is not None else None
+        # The harness always scores whatever the model registry currently
+        # resolves as ``latest`` for (symbol, model_type). Candidate-specific
+        # scoring is orchestrated by :mod:`src.ml.validation.gate`, which flips
+        # ``latest`` to the candidate around the run (the registry has no
+        # per-version override), so no model-path plumbing is needed here.
         self._runner_factory = runner_factory
 
     def _make_runner(self) -> object:
@@ -234,12 +233,6 @@ class BearValidationHarness:
         return ExperimentRunner()
 
     def _score_window(self, runner: object, window: BearWindow) -> WindowScore:
-        parameters = None
-        if self.model_path is not None:
-            parameters = ParameterSet(
-                name="candidate",
-                values={f"{self.strategy_name}.model_path": self.model_path},
-            )
         config = ExperimentConfig(
             strategy_name=self.strategy_name,
             symbol=window.symbol or self.symbol,
@@ -249,7 +242,6 @@ class BearValidationHarness:
             initial_balance=self.initial_balance,
             provider=self.provider,
             use_cache=True,
-            parameters=parameters,
         )
         try:
             result = runner.run(config)  # type: ignore[attr-defined]

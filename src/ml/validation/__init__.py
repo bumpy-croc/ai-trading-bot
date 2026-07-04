@@ -13,7 +13,13 @@ from src.ml.validation.bear_validation import (
     WindowScore,
     load_validation_windows,
 )
-from src.ml.validation.gate import GateDecision, promote_version_if_valid, write_audit_record
+from src.ml.validation.gate import (
+    GateDecision,
+    default_resolve_latest,
+    promote_version_if_valid,
+    validate_candidate,
+    write_audit_record,
+)
 
 __all__ = [
     "BearValidationHarness",
@@ -21,7 +27,9 @@ __all__ = [
     "GateDecision",
     "ValidationReport",
     "WindowScore",
+    "default_resolve_latest",
     "load_validation_windows",
     "promote_version_if_valid",
+    "validate_candidate",
     "write_audit_record",
 ]

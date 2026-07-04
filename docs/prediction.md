@@ -146,11 +146,13 @@ it is now scored on a fixed set of historical windows and blocked if it fails.
   backtests the model per window (reusing `ExperimentRunner`) and reports Sharpe,
   max-drawdown, win-rate and trade count. `mock`/`fixture` providers give
   deterministic, network-free runs for CI.
-- **Gate**: `src/ml/validation/gate.py::promote_version_if_valid` runs the harness,
-  writes an auditable `validation_audit.json` next to the version, and flips
-  `latest` only on pass. A run that cannot execute (missing data) is
-  *inconclusive* → soft-pass with a loud warning, unless `VALIDATION_REQUIRED` is
-  truthy (then it blocks).
+- **Gate**: `src/ml/validation/gate.py::promote_version_if_valid`. The registry
+  resolves a model only by the `latest` symlink, so the gate scores the
+  *candidate* by flipping `latest` to it, validating, and rolling back to the
+  previously-live version on failure (canary-with-rollback — fail-safe). It
+  writes an auditable `validation_audit.json` next to the version. A run that
+  cannot execute (missing data) is *inconclusive* → soft-pass with a loud
+  warning, unless `VALIDATION_REQUIRED` is truthy (then it blocks/rolls back).
 
 ### CLI
 
@@ -161,7 +163,8 @@ atb live-control validate-model --symbol BTCUSDT --model-type basic
 # Deploy is validation-gated; --skip-validation is an audited human override
 atb live-control deploy-model --model-path BTCUSDT/basic/<version>
 
-# Training defers the 'latest' flip; --auto-deploy promotes only if validation passes
+# --auto-deploy keeps the freshly trained model only if validation passes;
+# on failure 'latest' rolls back to the pre-training model
 atb live-control train --symbol BTCUSDT --auto-deploy
 ```
 

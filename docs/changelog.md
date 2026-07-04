@@ -20,11 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window (Sharpe / max-drawdown / win-rate / trades) via the backtest engine
   (reusing `ExperimentRunner`, so `mock`/`fixture` providers give deterministic
   CI runs); `promote_version_if_valid` makes the promotion decision and writes
-  an auditable `validation_audit.json` next to the model version. Wired into
-  `atb live-control deploy-model` (now validation-gated, `--skip-validation`
-  human override) and the training `--auto-deploy` path (training now defers the
-  `latest` flip via `skip_promote`, gate flips only on pass). New
-  `atb live-control validate-model` scores a model without deploying.
+  an auditable `validation_audit.json` next to the model version. Because the
+  prediction registry resolves models purely by the `latest` symlink, the gate
+  scores the *candidate* via flip → validate → roll-back-on-failure (a
+  canary-with-rollback: a failing model is reverted to the previously-live
+  version). Wired into `atb live-control deploy-model` (now validation-gated,
+  `--skip-validation` human override) and the training `--auto-deploy` path
+  (training promotes as before; on validation failure `latest` rolls back to the
+  pre-training model). New `atb live-control validate-model` scores a model
+  (flip/validate/always-roll-back) without changing what is live.
   Un-runnable validation (e.g. missing data) is *inconclusive* → soft-pass with
   a loud warning unless `VALIDATION_REQUIRED` is set. Thresholds are config, not
   code. See `docs/prediction.md` → "Bear-market validation gate".

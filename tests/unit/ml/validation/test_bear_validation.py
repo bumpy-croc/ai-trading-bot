@@ -13,7 +13,12 @@ from src.ml.validation.bear_validation import (
     BearWindow,
     load_validation_windows,
 )
-from src.ml.validation.gate import promote_version_if_valid, write_audit_record
+from src.ml.validation.gate import (
+    default_resolve_latest,
+    promote_version_if_valid,
+    validate_candidate,
+    write_audit_record,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -243,90 +248,133 @@ class _InconclusiveHarness:
         )
 
 
-def _version_dir(tmp_path):
-    d = tmp_path / "BTCUSDT" / "basic" / "2026-01-01_00h_v1"
+class _FakeRegistry:
+    """Tracks the ``latest`` pointer so tests assert final state, not raw calls."""
+
+    def __init__(self, initial=None):
+        self.latest = initial
+        self.repoints: list = []
+
+    def repoint(self, version_dir):
+        self.latest = version_dir
+        self.repoints.append(version_dir)
+
+    def resolve(self, _registry_dir):
+        return self.latest
+
+
+def _version_dir(tmp_path, name="2026-01-01_00h_v1"):
+    d = tmp_path / "BTCUSDT" / "basic" / name
     d.mkdir(parents=True)
     return d
 
 
-def test_gate_promotes_on_pass(tmp_path):
-    version = _version_dir(tmp_path)
-    flipped = []
-    decision = promote_version_if_valid(
+def _gate(version, harness, reg, **kw):
+    return promote_version_if_valid(
         version,
         symbol="BTCUSDT",
         model_type="basic",
-        repoint_fn=flipped.append,
-        harness=_PassingHarness(),
-        require_validation=True,
+        repoint_fn=reg.repoint,
+        resolve_latest_fn=reg.resolve,
+        harness=harness,
+        **kw,
     )
+
+
+def test_gate_promotes_on_pass(tmp_path):
+    version = _version_dir(tmp_path)
+    old = _version_dir(tmp_path, "old_v0")
+    reg = _FakeRegistry(initial=old)
+    decision = _gate(version, _PassingHarness(), reg, require_validation=True)
     assert decision.promoted is True
-    assert flipped == [version]
-    assert decision.audit_path.exists()
+    assert reg.latest == version  # candidate kept as latest
     audit = json.loads(decision.audit_path.read_text())
     assert audit["decision"]["promoted"] is True
 
 
-def test_gate_blocks_on_fail(tmp_path):
+def test_gate_blocks_and_rolls_back_on_fail(tmp_path):
     version = _version_dir(tmp_path)
-    flipped = []
-    decision = promote_version_if_valid(
-        version,
-        symbol="BTCUSDT",
-        model_type="basic",
-        repoint_fn=flipped.append,
-        harness=_FailingHarness(),
-        require_validation=True,
-    )
+    old = _version_dir(tmp_path, "old_v0")
+    reg = _FakeRegistry(initial=old)
+    decision = _gate(version, _FailingHarness(), reg, require_validation=True)
     assert decision.promoted is False
-    assert flipped == []
+    assert reg.latest == old  # rolled back to the previously-live model
     assert decision.audit_path.exists()
 
 
 def test_gate_soft_passes_inconclusive_when_not_required(tmp_path):
     version = _version_dir(tmp_path)
-    flipped = []
-    decision = promote_version_if_valid(
-        version,
-        symbol="BTCUSDT",
-        model_type="basic",
-        repoint_fn=flipped.append,
-        harness=_InconclusiveHarness(),
-        require_validation=False,
-    )
+    reg = _FakeRegistry(initial=_version_dir(tmp_path, "old_v0"))
+    decision = _gate(version, _InconclusiveHarness(), reg, require_validation=False)
     assert decision.promoted is True
-    assert flipped == [version]
+    assert reg.latest == version
 
 
 def test_gate_blocks_inconclusive_when_required(tmp_path):
     version = _version_dir(tmp_path)
-    flipped = []
-    decision = promote_version_if_valid(
-        version,
-        symbol="BTCUSDT",
-        model_type="basic",
-        repoint_fn=flipped.append,
-        harness=_InconclusiveHarness(),
-        require_validation=True,
+    old = _version_dir(tmp_path, "old_v0")
+    reg = _FakeRegistry(initial=old)
+    decision = _gate(version, _InconclusiveHarness(), reg, require_validation=True)
+    assert decision.promoted is False
+    assert reg.latest == old
+
+
+def test_gate_uses_known_prev_target_for_rollback(tmp_path):
+    # Simulates the training path: training already flipped latest to the
+    # candidate, so resolve() would return the candidate. known_prev_target
+    # must drive the rollback instead.
+    version = _version_dir(tmp_path)
+    old = _version_dir(tmp_path, "old_v0")
+    reg = _FakeRegistry(initial=version)  # training already promoted candidate
+    decision = _gate(
+        version, _FailingHarness(), reg, require_validation=True, known_prev_target=old
     )
     assert decision.promoted is False
-    assert flipped == []
+    assert reg.latest == old  # rolled back to pre-training model, not candidate
 
 
 def test_gate_force_promotes_without_validation(tmp_path):
     version = _version_dir(tmp_path)
-    flipped = []
+    reg = _FakeRegistry()
     decision = promote_version_if_valid(
         version,
         symbol="BTCUSDT",
         model_type="basic",
-        repoint_fn=flipped.append,
+        repoint_fn=reg.repoint,
+        resolve_latest_fn=reg.resolve,
         force=True,
     )
     assert decision.promoted is True
-    assert flipped == [version]
+    assert reg.latest == version
     audit = json.loads(decision.audit_path.read_text())
     assert audit["decision"]["forced"] is True
+
+
+def test_validate_candidate_always_rolls_back(tmp_path):
+    version = _version_dir(tmp_path)
+    old = _version_dir(tmp_path, "old_v0")
+    reg = _FakeRegistry(initial=old)
+    report = validate_candidate(
+        version,
+        symbol="BTCUSDT",
+        model_type="basic",
+        repoint_fn=reg.repoint,
+        resolve_latest_fn=reg.resolve,
+        harness=_PassingHarness(),
+    )
+    assert report.passed is True
+    assert reg.latest == old  # validate never leaves the candidate live
+
+
+def test_default_resolve_latest_reads_symlink(tmp_path):
+    type_dir = tmp_path / "BTCUSDT" / "basic"
+    version = type_dir / "v1"
+    version.mkdir(parents=True)
+    (type_dir / "latest").symlink_to("v1")
+    resolved = default_resolve_latest(type_dir)
+    assert resolved is not None
+    assert resolved.name == "v1"
+    assert default_resolve_latest(tmp_path / "nonexistent") is None
 
 
 def test_write_audit_record_atomic(tmp_path):

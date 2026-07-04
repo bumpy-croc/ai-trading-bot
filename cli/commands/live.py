@@ -174,11 +174,15 @@ def _gate_and_promote(
     model_type: str,
     provider: str = "binance",
     force: bool = False,
+    known_prev_target: Path | None = None,
 ):
-    """Run the bear-market validation gate, flipping ``latest`` only if allowed.
+    """Run the bear-market validation gate, keeping ``latest`` on the candidate
+    only if it passes (else rolling back).
 
-    Delegates the actual symlink flip to :func:`_repoint_latest`. Returns the
-    :class:`GateDecision` so callers can report the reason / audit path.
+    The gate flips ``latest`` to ``version_dir`` to score the *candidate* (the
+    registry resolves models by symlink), then rolls back on failure. When the
+    caller already promoted the candidate (training path), pass the pre-training
+    target as ``known_prev_target`` so a rollback restores the right model.
     """
     from src.ml.validation.gate import promote_version_if_valid
 
@@ -189,14 +193,23 @@ def _gate_and_promote(
         repoint_fn=_repoint_latest,
         provider=provider,
         force=force,
+        known_prev_target=known_prev_target,
     )
 
 
-def _validate_model(ns: argparse.Namespace) -> int:
-    """Score a model version against the fixed bear-market windows (no deploy)."""
-    from src.ml.validation.bear_validation import BearValidationHarness
+def _type_dir(symbol: str, model_type: str) -> Path:
+    return MODEL_REGISTRY / symbol.upper() / model_type
 
-    model_path: str | None = None
+
+def _validate_model(ns: argparse.Namespace) -> int:
+    """Score a model version against the fixed bear-market windows (no deploy).
+
+    Uses the gate's flip-validate-rollback so a specific candidate can be scored
+    without leaving it live; with no ``--model-path`` it scores the current
+    ``latest``.
+    """
+    from src.ml.validation.gate import default_resolve_latest, validate_candidate
+
     if getattr(ns, "model_path", None):
         try:
             version_dir = _resolve_version_path(ns.model_path)
@@ -205,18 +218,22 @@ def _validate_model(ns: argparse.Namespace) -> int:
             return 1
         symbol = version_dir.parent.parent.name
         model_type = version_dir.parent.name
-        model_path = str(version_dir)
     else:
         symbol = ns.symbol.upper()
         model_type = ns.model_type
+        current = default_resolve_latest(_type_dir(symbol, model_type))
+        if current is None:
+            print(f"❌ No 'latest' model found for {symbol}/{model_type}")
+            return 1
+        version_dir = current
 
-    harness = BearValidationHarness(
+    report = validate_candidate(
+        version_dir,
         symbol=symbol,
         model_type=model_type,
+        repoint_fn=_repoint_latest,
         provider=getattr(ns, "provider", "binance"),
-        model_path=model_path,
     )
-    report = harness.run()
     print(report.summary())
     print(json.dumps(report.to_dict(), indent=2))
     # Exit non-zero when the model fails outright; inconclusive is a soft signal
@@ -235,7 +252,15 @@ def _control(ns: argparse.Namespace) -> int:
             )
             print("Use a local development environment for model training.")
             return 1
+        from src.ml.validation.gate import default_resolve_latest
+
         start_date, end_date = _date_range(ns.days)
+        model_type = "sentiment" if ns.sentiment else "basic"
+        # Capture the currently-live version BEFORE training. Training promotes
+        # the freshly trained version to ``latest``; if it later fails the #801
+        # gate we roll ``latest`` back to this pre-training target.
+        prev_target = default_resolve_latest(_type_dir(ns.symbol, model_type))
+
         if ns.sentiment:
             args = SimpleNamespace(
                 symbol=ns.symbol,
@@ -251,11 +276,8 @@ def _control(ns: argparse.Namespace) -> int:
                 skip_robustness=False,
                 skip_onnx=False,
                 disable_mixed_precision=False,
-                # Defer the 'latest' flip to the #801 validation gate below.
-                skip_promote=True,
             )
             code = train_model_main(args)
-            model_type = "sentiment"
         else:
             args = SimpleNamespace(
                 symbol=ns.symbol,
@@ -265,48 +287,43 @@ def _control(ns: argparse.Namespace) -> int:
                 epochs=ns.epochs,
                 batch_size=256,
                 sequence_length=120,
-                # Defer the 'latest' flip to the #801 validation gate below.
-                skip_promote=True,
             )
             code = train_price_model_main(args)
-            model_type = "basic"
 
         if code != 0:
             print("❌ Model training failed")
             return code
 
-        version_dir_str = getattr(args, "result_version_dir", None)
         print("✅ Model training complete")
+        # Training just flipped ``latest`` to the new version; resolve it.
+        candidate = default_resolve_latest(_type_dir(ns.symbol, model_type))
 
         if ns.auto_deploy:
-            # #801: gate the promotion. Training deferred the ``latest`` flip
-            # (skip_promote); we flip only if the model survives validation.
-            if not version_dir_str:
-                print(
-                    "⚠️ Auto-deploy requested but training did not report a version dir; "
-                    "skipping promotion. Deploy manually with 'deploy-model' once validated."
-                )
-                return 0
+            # #801: gate the just-promoted model. If it fails, roll ``latest``
+            # back to the pre-training target so a bad model does not stay live.
+            if candidate is None:
+                print("⚠️ Auto-deploy requested but no 'latest' model resolved after training.")
+                return 1
             decision = _gate_and_promote(
-                Path(version_dir_str),
+                candidate,
                 symbol=ns.symbol.upper(),
                 model_type=model_type,
                 provider=getattr(ns, "provider", "binance"),
+                known_prev_target=prev_target,
             )
             if not decision.promoted:
                 print(f"❌ Auto-deploy blocked by validation gate: {decision.reason}")
                 if decision.audit_path is not None:
                     print(f"   Audit: {decision.audit_path}")
                 return 1
-            print(f"✅ Auto-deploy: promoted after validation ({decision.reason})")
+            print(f"✅ Auto-deploy: kept as latest after validation ({decision.reason})")
         else:
-            # No auto-deploy: leave the freshly trained version un-promoted and
-            # tell the operator how to validate + deploy it.
-            if version_dir_str:
-                print(f"   Staged (not promoted): {version_dir_str}")
+            # No auto-deploy: training already set ``latest``. Warn the operator
+            # it is UNVALIDATED and show how to validate it.
+            if candidate is not None:
+                print(f"   ⚠️ '{candidate.name}' is now 'latest' but UNVALIDATED.")
                 print(
-                    "   Validate with: atb live-control validate-model "
-                    f"--model-path {version_dir_str}"
+                    "   Validate with: atb live-control validate-model " f"--model-path {candidate}"
                 )
         return 0
 
