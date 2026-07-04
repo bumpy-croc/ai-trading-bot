@@ -120,7 +120,6 @@ class TestLivePartialExitUnits:
             delta_fraction=0.025,
             price=105.0,
             target_level=0,
-            fraction_of_original=0.25,
             basis_balance=1000.0,
             fee_rate=0.0,
             slippage_rate=0.0,

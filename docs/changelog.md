@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ("Partial exits complete @ level N", parity with live).
   - Live scale-ins now convert policy units the same way (dev-flagged path,
     #734 — no production behavior change; `live_partial_operations` is off).
+  - Live DB persistence now records the same balance-fraction delta the
+    runtime tracker applies (`apply_partial_exit_update` /
+    `apply_scale_in_update` previously subtracted/added the raw
+    fraction-of-original from the balance-fraction `Position.current_size`,
+    phantom-closing rows and corrupting crash-recovery `daily_risk_used`).
+    `PartialTrade.size` is likewise recorded in balance-fraction units.
   - Backtest max drawdown now marks open positions to market: the equity
     series fed to the performance tracker includes open-position unrealized
     P&L, so adverse excursions appear in MaxDD (previously invisible —

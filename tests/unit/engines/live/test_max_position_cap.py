@@ -111,7 +111,6 @@ def test_apply_scale_in_caps_current_size_at_max_position():
         delta_fraction=0.06,
         price=51000.0,
         threshold_level=0,
-        fraction_of_original=0.06,
         max_position_size=0.10,
     )
 
@@ -129,7 +128,6 @@ def test_apply_scale_in_allows_growth_within_cap():
         delta_fraction=0.05,
         price=51000.0,
         threshold_level=0,
-        fraction_of_original=0.05,
         max_position_size=0.20,
     )
 
@@ -153,7 +151,6 @@ def test_apply_scale_in_never_shrinks_over_cap_position():
         delta_fraction=0.05,
         price=51000.0,
         threshold_level=0,
-        fraction_of_original=0.05,
         max_position_size=0.10,
     )
 

@@ -265,13 +265,15 @@ class CoreRiskAdapter(RiskManager):
         if self._hooks and self._hooks.on_close:
             self._hooks.on_close(symbol)
 
-    def on_partial_exit(self, symbol: str, executed_fraction_of_original: float) -> None:
+    def on_partial_exit(self, symbol: str, executed_size_delta: float) -> None:
+        """Forward a partial exit; delta is in balance-fraction units."""
         manager = self._require_core_manager()
-        manager.adjust_position_after_partial_exit(symbol, executed_fraction_of_original)
+        manager.adjust_position_after_partial_exit(symbol, executed_size_delta)
 
-    def on_scale_in(self, symbol: str, added_fraction_of_original: float) -> None:
+    def on_scale_in(self, symbol: str, added_size_delta: float) -> None:
+        """Forward a scale-in; delta is in balance-fraction units."""
         manager = self._require_core_manager()
-        manager.adjust_position_after_scale_in(symbol, added_fraction_of_original)
+        manager.adjust_position_after_scale_in(symbol, added_size_delta)
 
     # ------------------------------------------------------------------
     # Internal helpers

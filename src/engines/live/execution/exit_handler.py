@@ -823,7 +823,6 @@ class LiveExitHandler:
                         delta_fraction=exit_size_of_balance,
                         price=current_price,
                         target_level=exit_target_level,
-                        fraction_of_original=exit_size_of_original,
                         current_balance=current_balance,
                     )
 
@@ -932,13 +931,6 @@ class LiveExitHandler:
                             price=current_price,
                             # should_scale=True guarantees target_index is set.
                             threshold_level=cast(int, scale_result.target_index),
-                            # Persist policy units (fraction of ORIGINAL),
-                            # reflecting any daily-risk clamp applied above.
-                            fraction_of_original=(
-                                add_effective / original_size
-                                if original_size > EPSILON
-                                else add_size_of_original
-                            ),
                         )
 
             except (AttributeError, ValueError, KeyError, ZeroDivisionError) as e:
@@ -953,7 +945,6 @@ class LiveExitHandler:
         delta_fraction: float,
         price: float,
         target_level: int,
-        fraction_of_original: float,
         current_balance: float,
     ) -> None:
         """Execute a partial exit.
@@ -963,11 +954,9 @@ class LiveExitHandler:
             position: Position to partially exit.
             delta_fraction: Exited slice in balance-fraction units (same
                 units as ``position.current_size``; the PartialExitExecutor
-                contract).
+                contract, also persisted as-is to the DB).
             price: Current market price.
             target_level: Profit target level.
-            fraction_of_original: Fraction of original position (policy units,
-                used for DB persistence).
             current_balance: Current account balance.
         """
         result = self.position_tracker.apply_partial_exit(
@@ -975,7 +964,6 @@ class LiveExitHandler:
             delta_fraction=delta_fraction,
             price=price,
             target_level=target_level,
-            fraction_of_original=fraction_of_original,
             basis_balance=current_balance,
             fee_rate=self.execution_engine.fee_rate,
             slippage_rate=self.execution_engine.slippage_rate,
@@ -1016,24 +1004,22 @@ class LiveExitHandler:
         delta_fraction: float,
         price: float,
         threshold_level: int,
-        fraction_of_original: float,
     ) -> None:
         """Execute a scale-in.
 
         Args:
             order_id: Order ID of position.
             position: Position to scale into.
-            delta_fraction: Fraction to add.
+            delta_fraction: Size to add, in balance-fraction units (same
+                units as ``position.current_size``).
             price: Current market price.
             threshold_level: Threshold level.
-            fraction_of_original: Fraction of original position.
         """
         result = self.position_tracker.apply_scale_in(
             order_id=order_id,
             delta_fraction=delta_fraction,
             price=price,
             threshold_level=threshold_level,
-            fraction_of_original=fraction_of_original,
             max_position_size=self.max_position_size,
         )
 

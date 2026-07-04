@@ -119,8 +119,6 @@ class TestLiveDailyRiskClampParity:
         kwargs = handler._execute_scale_in.call_args.kwargs
         # Requested 0.20 x 0.10 = 0.02 of balance, remaining 0.01 → clamp.
         assert kwargs["delta_fraction"] == pytest.approx(0.01)
-        # Persisted policy units reflect the clamp: 0.01 / 0.10 of original.
-        assert kwargs["fraction_of_original"] == pytest.approx(0.10)
 
     def test_skips_scale_in_when_budget_exhausted(self) -> None:
         """Daily-risk budget already at the cap — scale-in must NOT execute."""
@@ -157,7 +155,6 @@ class TestLiveDailyRiskClampParity:
         kwargs = handler._execute_scale_in.call_args.kwargs
         # Full request: 0.20 of original x 0.10 position = 0.02 of balance.
         assert kwargs["delta_fraction"] == pytest.approx(0.02)
-        assert kwargs["fraction_of_original"] == pytest.approx(0.20)
 
     def test_no_risk_manager_does_not_crash(self) -> None:
         """Defensive: if risk_manager is missing, scale-in still runs at
