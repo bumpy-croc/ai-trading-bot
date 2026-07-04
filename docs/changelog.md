@@ -45,6 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FEATURE_ENTRY_PAUSE` env var remains the override path.
 
 ### Fixed
+- **Max-drawdown guard mis-seeded its peak from the configured balance**
+  (prod 2026-07-04: guard armed at $100.00 vs true session equity $84.42 and
+  immediately warned at a phantom 15.60% drawdown): the seed took
+  `max(db_peak, tracker_peak, balance)` and the PerformanceTracker peak
+  initializes from `INITIAL_BALANCE` (the optimistic book value from the June
+  phantom-balance pathology). The `account_history` session max is now
+  authoritative — the tracker peak is no longer a seed candidate; fallback is
+  the current recovered balance. A failed DB read now defers seeding to the
+  next loop cycle (bounded by `MAX_SEED_ATTEMPTS`) instead of latching a
+  half-seeded baseline. Deeper fix included: the live engine now constructs
+  `PerformanceTracker` from the RESUMED session balance rather than the
+  configured amount, which also fixes the phantom ~15% in
+  `account_history.drawdown` and dynamic-risk drawdown after restarts.
 - **Kelly sizer never received trade outcomes — Kelly sizing was permanently
   in cold-start fallback** (#840): `KellyCriterionSizer.record_trade` had zero
   engine callers, so `has_sufficient_history` stayed `False` forever and any
