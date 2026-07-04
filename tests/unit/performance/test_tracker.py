@@ -888,3 +888,75 @@ class TestTradeProtocolConformance:
         trades = tracker.get_trade_history()
         assert trades, "Expected at least one recorded trade"
         assert "long" in str(trades[0]["side"]).lower()
+
+
+class TestTradeListeners:
+    """Tests for the trade-listener observer seam (closed-trade feedback, #840)."""
+
+    @staticmethod
+    def _make_trade(pnl: float = 100.0) -> Mock:
+        trade = Mock()
+        trade.pnl = pnl
+        trade.entry_time = datetime(2024, 1, 1, 10, tzinfo=UTC)
+        trade.exit_time = datetime(2024, 1, 1, 12, tzinfo=UTC)
+        trade.symbol = "BTCUSDT"
+        trade.side = "long"
+        return trade
+
+    def test_listener_receives_recorded_trade(self):
+        """Registered listeners are called with the recorded trade object."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        received = []
+        tracker.add_trade_listener(received.append)
+
+        trade = self._make_trade(pnl=50.0)
+        tracker.record_trade(trade)
+
+        assert received == [trade]
+
+    def test_multiple_listeners_all_notified(self):
+        """Every registered listener fires once per recorded trade."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        first, second = [], []
+        tracker.add_trade_listener(first.append)
+        tracker.add_trade_listener(second.append)
+
+        tracker.record_trade(self._make_trade())
+
+        assert len(first) == 1
+        assert len(second) == 1
+
+    def test_listener_exception_does_not_break_recording(self, caplog):
+        """A raising listener is contained: the trade is still recorded."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        def bad_listener(trade):
+            raise RuntimeError("listener boom")
+
+        received = []
+        tracker.add_trade_listener(bad_listener)
+        tracker.add_trade_listener(received.append)
+
+        tracker.record_trade(self._make_trade())
+
+        assert tracker.get_metrics().total_trades == 1
+        assert len(received) == 1
+
+    def test_listener_not_called_when_record_trade_rejects(self):
+        """Listeners must not fire for trades the tracker rejects."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        received = []
+        tracker.add_trade_listener(received.append)
+
+        trade = self._make_trade()
+        trade.pnl = None
+        with pytest.raises(ValueError):
+            tracker.record_trade(trade)
+
+        assert received == []
+
+    def test_non_callable_listener_rejected(self):
+        """add_trade_listener validates at registration, not at fire time."""
+        tracker = PerformanceTracker(initial_balance=10000)
+        with pytest.raises(TypeError):
+            tracker.add_trade_listener("not-callable")

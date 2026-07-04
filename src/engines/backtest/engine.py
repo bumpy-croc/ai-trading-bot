@@ -265,6 +265,11 @@ class Backtester:
         self._configure_strategy(strategy)
         self._initial_strategy = self.strategy  # Preserved for reset after regime switches
 
+        # Closed-trade feedback: every trade recorded on the tracker is
+        # forwarded to the active strategy so statistics-tracking position
+        # sizers (e.g. Kelly) learn from outcomes. Same seam as live (#840).
+        self.performance_tracker.add_trade_listener(self._notify_strategy_trade_closed)
+
         name_source = strategy if isinstance(strategy, StrategyRuntime) else self.strategy
         self.initial_strategy_name = getattr(name_source, "name", name_source.__class__.__name__)
 
@@ -652,6 +657,16 @@ class Backtester:
     def _is_runtime_strategy(self) -> bool:
         """Check if using runtime-based strategy."""
         return self._runtime is not None
+
+    def _notify_strategy_trade_closed(self, trade: Any) -> None:
+        """Forward a recorded closed trade to the active strategy (duck-typed).
+
+        Resolves ``self.strategy`` at call time so regime switches and
+        strategy resets keep feeding the currently active strategy.
+        """
+        hook = getattr(self.strategy, "on_trade_closed", None)
+        if callable(hook):
+            hook(trade)
 
     def _merge_dynamic_risk_config(
         self, base_config: DynamicRiskConfig, strategy: Any

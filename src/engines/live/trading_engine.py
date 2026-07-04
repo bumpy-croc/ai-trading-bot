@@ -303,6 +303,11 @@ class LiveTradingEngine:
         from src.performance.tracker import PerformanceTracker
 
         self.performance_tracker = PerformanceTracker(initial_balance)
+        # Closed-trade feedback: every trade recorded on the tracker (exit
+        # coordinator and crash-recovery paths) is forwarded to the active
+        # strategy so statistics-tracking position sizers (e.g. Kelly) learn
+        # from outcomes. Same seam as backtest (#840).
+        self.performance_tracker.add_trade_listener(self._notify_strategy_trade_closed)
 
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
@@ -1032,6 +1037,16 @@ class LiveTradingEngine:
     def _strategy_name(self) -> str:
         """Returns the configured strategy name for logging and reporting."""
         return self.strategy_coordinator.strategy_name()
+
+    def _notify_strategy_trade_closed(self, trade: Any) -> None:
+        """Forward a recorded closed trade to the active strategy (duck-typed).
+
+        Resolves ``self.strategy`` at call time so hot swaps keep feeding the
+        currently active strategy.
+        """
+        hook = getattr(self.strategy, "on_trade_closed", None)
+        if callable(hook):
+            hook(trade)
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Prepare dataframe for strategy processing."""

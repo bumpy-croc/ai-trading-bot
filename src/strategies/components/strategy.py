@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -453,6 +454,46 @@ class Strategy:
         except (ValueError, KeyError, AttributeError):
             self.logger.exception("Error in exit decision")
             return False  # Conservative default
+
+    def on_trade_closed(self, trade: Any) -> None:
+        """Forward a closed trade's outcome to the position sizer.
+
+        Both engines invoke this through the shared PerformanceTracker
+        trade-listener seam whenever a trade completes, so statistics-tracking
+        sizers (e.g. ``KellyCriterionSizer``) accumulate live win/loss history
+        identically in backtest and live. Duck-types on the sizer's
+        ``record_trade``; stateless sizers are unaffected.
+
+        Units: ``trade.pnl_percent`` is the sized return as a decimal fraction
+        of balance (0.02 = +2%), matching the sizer's fraction conventions.
+        The realized magnitude is passed as both ``profit_pct`` and
+        ``loss_risk_pct`` (the planned per-trade risk is not carried on
+        completed trades); the sizer's ``loss_risk_pct > 0`` gate naturally
+        drops breakeven trades, mirroring PerformanceTracker's handling.
+
+        Args:
+            trade: Completed trade exposing ``pnl`` (gross, account currency)
+                and ``pnl_percent`` (sized decimal fraction).
+        """
+        record = getattr(self.position_sizer, "record_trade", None)
+        if not callable(record):
+            return
+
+        pnl = getattr(trade, "pnl", None)
+        pnl_percent = getattr(trade, "pnl_percent", None)
+        if pnl is None or pnl_percent is None:
+            return
+        try:
+            pnl = float(pnl)
+            pnl_percent = float(pnl_percent)
+        except (TypeError, ValueError):
+            self.logger.warning("Ignoring closed trade with non-numeric PnL fields: %r", trade)
+            return
+        if not (math.isfinite(pnl) and math.isfinite(pnl_percent)):
+            return
+
+        magnitude = abs(pnl_percent)
+        record(win=pnl > 0, profit_pct=magnitude, loss_risk_pct=magnitude)
 
     def get_stop_loss_price(
         self,

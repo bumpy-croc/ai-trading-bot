@@ -1152,6 +1152,17 @@ class LeveragedPositionSizer(PositionSizer):
         """Delegate feature generators to base sizer."""
         return self.base_sizer.get_feature_generators()
 
+    def record_trade(self, win: bool, profit_pct: float, loss_risk_pct: float) -> None:
+        """Delegate trade-outcome recording to the base sizer when supported.
+
+        Keeps the wrapper transparent for statistics-tracking sizers (e.g.
+        ``KellyCriterionSizer``) so closed-trade feedback reaches them even
+        when leverage wrapping is applied.
+        """
+        record = getattr(self.base_sizer, "record_trade", None)
+        if callable(record):
+            record(win=win, profit_pct=profit_pct, loss_risk_pct=loss_risk_pct)
+
 
 # Utility functions for position sizing
 def calculate_position_from_risk(
