@@ -3,5 +3,6 @@
   "enable_regime_detection": false,
   "optimizer_canary_fraction": "0.1",
   "optimizer_auto_apply": false,
-  "entry_pause": false
+  "entry_pause": false,
+  "max_drawdown_reset_peak": false
 }

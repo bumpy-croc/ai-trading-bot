@@ -70,6 +70,7 @@ from src.engines.live.monitoring import (
     extract_ml_predictions,
     extract_sentiment_data,
 )
+from src.engines.live.monitoring.drawdown_guard import MaxDrawdownEnforcer, MaxDrawdownGuard
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.startup import LiveStartupSequencer
 from src.engines.live.strategy_hot_swap import StrategyHotSwapCoordinator
@@ -943,6 +944,14 @@ class LiveTradingEngine:
         # Account monitor — snapshots, status lines, performance summaries.
         self.account_monitor = LiveAccountMonitor(engine_state=self)
 
+        # Max-drawdown hard cap (risk-limits.json portfolio.max_drawdown_pct):
+        # trips close-only mode when drawdown from the session peak reaches
+        # params.max_drawdown. Checked every trading-loop iteration.
+        self._drawdown_enforcer = MaxDrawdownEnforcer(
+            engine_state=self,
+            guard=MaxDrawdownGuard(self.risk_manager.params.max_drawdown),
+        )
+
         # Startup recovery — session balance, persisted positions, exchange
         # reconciliation. Reads/writes engine state at call time (#486).
         self.session_recoverer = LiveSessionRecoverer(engine_state=self)
@@ -1518,6 +1527,8 @@ class LiveTradingEngine:
                     )
                 # Update performance metrics
                 self._update_performance_metrics()
+                # Enforce the portfolio max-drawdown hard cap (close-only on breach)
+                self._check_max_drawdown()
                 self._log_periodic_account_state()
                 # Log status periodically
                 if (
@@ -1957,6 +1968,10 @@ class LiveTradingEngine:
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
         self.account_monitor.update_performance_metrics()
+
+    def _check_max_drawdown(self) -> None:
+        """Enforce the max-drawdown hard cap (delegated to MaxDrawdownEnforcer)."""
+        self._drawdown_enforcer.check()
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
