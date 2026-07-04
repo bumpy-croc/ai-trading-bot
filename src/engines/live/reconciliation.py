@@ -38,6 +38,7 @@ from src.config.constants import (
 )
 from src.config.feature_flags import get_flag
 from src.data_providers.exchange_interface import OrderLookupError, SideEffectType
+from src.database.models import EventType
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.shared.commission import order_commission_usd, split_base_quote
 from src.engines.shared.cost_calculator import CostCalculator
@@ -50,6 +51,41 @@ if TYPE_CHECKING:
     from src.engines.live.margin_interest_tracker import _ExchangeWithInterestHistory
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_event(
+    on_event: Any,
+    event_type: EventType,
+    message: str,
+    *,
+    severity: str = "warning",
+    component: str = "reconciler",
+    error_code: str | None = None,
+    alert: bool = False,
+) -> None:
+    """Emit a ``system_events`` row (and optionally page an operator) via the
+    engine sink, when one is wired.
+
+    The reconciler holds ``db_manager`` (so it can already write
+    ``reconciliation_audit_events`` rows) but NOT the engine's webhook alerting.
+    ``on_event`` is the engine's fault-isolated ``_record_event``, passed in at
+    construction the same way ``on_critical`` already is. When unset
+    (standalone use / tests) this is a no-op. Never raises — observability must
+    never break a reconciliation cycle.
+    """
+    if on_event is None:
+        return
+    try:
+        on_event(
+            event_type,
+            message,
+            severity=severity,
+            component=component,
+            error_code=error_code,
+            alert=alert,
+        )
+    except Exception as exc:  # pragma: no cover - defensive; must never break reconcile
+        logger.warning("reconciler observability emit failed: %s", exc)
 
 
 class _OrderLookup(Protocol):
@@ -189,11 +225,13 @@ class PositionReconciler:
         use_margin: bool = False,
         fee_rate: float = DEFAULT_FEE_RATE,
         data_provider: Any | None = None,
+        on_event: Any = None,
     ) -> None:
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
         self.db_manager = db_manager
         self.session_id = session_id
+        self.on_event = on_event
         self.max_position_size = max_position_size
         self._use_margin = use_margin
         # Optional market-data source (has get_current_price). Used only to mark-to-market the
@@ -751,6 +789,15 @@ class PositionReconciler:
                                 symbol,
                                 fill_qty,
                             )
+                            _emit_event(
+                                self.on_event,
+                                EventType.ALERT,
+                                f"Emergency sell unconfirmed for {symbol} — position may be "
+                                f"UNPROTECTED, manual verification required",
+                                severity="critical",
+                                error_code="EMERGENCY_SELL_UNCONFIRMED",
+                                alert=True,
+                            )
                     except Exception as sell_err:
                         logger.critical(
                             "CRITICAL: Emergency sell FAILED for %s "
@@ -759,6 +806,15 @@ class PositionReconciler:
                             symbol,
                             fill_qty,
                             sell_err,
+                        )
+                        _emit_event(
+                            self.on_event,
+                            EventType.ALERT,
+                            f"Emergency sell FAILED for {symbol} — position UNPROTECTED on "
+                            f"exchange, manual intervention required",
+                            severity="critical",
+                            error_code="EMERGENCY_SELL_FAILED",
+                            alert=True,
                         )
 
                     if sell_result is not None:
@@ -2792,6 +2848,7 @@ class PeriodicReconciler:
         session_id: int,
         interval: float = DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
         on_critical: Any = None,
+        on_event: Any = None,
         use_margin: bool = False,
         symbols: list[str] | None = None,
         sweep_cooldown: dict[str, float] | None = None,
@@ -2820,6 +2877,7 @@ class PeriodicReconciler:
         self._use_margin = use_margin
         self.interval = interval
         self.on_critical = on_critical
+        self.on_event = on_event
         self._symbols = symbols or []
 
         self._running = False
@@ -2848,6 +2906,7 @@ class PeriodicReconciler:
             session_id=session_id,
             use_margin=use_margin,
             data_provider=data_provider,
+            on_event=on_event,
         )
 
     def start(self) -> None:

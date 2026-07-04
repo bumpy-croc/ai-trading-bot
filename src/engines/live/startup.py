@@ -430,6 +430,7 @@ class LiveStartupSequencer:
                     db_manager=state.db_manager,
                     session_id=state.trading_session_id,
                     on_critical=state._enter_close_only_mode,
+                    on_event=state._record_event,
                     use_margin=use_margin,
                     symbols=[state._active_symbol] if state._active_symbol else [],
                     sweep_cooldown=state._orphan_sweep_cooldown,
