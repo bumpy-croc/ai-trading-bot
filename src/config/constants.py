@@ -19,6 +19,12 @@ DEFAULT_ENABLE_ENHANCED_SENTIMENT = False  # Enhanced sentiment disabled by defa
 DEFAULT_ONCHAIN_CACHE_TTL = 300  # 5 minutes cache for on-chain data
 DEFAULT_MACRO_CACHE_TTL = 3600  # 1 hour cache for macro data
 
+# Event-aware de-risking windows (#806). Around FOMC/CPI (from a maintained
+# calendar), block new entries and halve regime exposure caps.
+DEFAULT_MACRO_EVENT_HOURS_BEFORE = 12  # De-risk window opens this many hours before an event
+DEFAULT_MACRO_EVENT_HOURS_AFTER = 6  # ...and closes this many hours after
+DEFAULT_MACRO_EVENT_EXPOSURE_FACTOR = 0.5  # Halve exposure caps inside the window
+
 # US spot ETF net-flow signal + gate (#803). ETF flows are the marginal
 # buyer/seller this cycle; price legs have tracked multi-day flow streaks.
 DEFAULT_ENABLE_ETF_FLOW_FEATURES = False  # ETF-flow model features off by default (needs retrain)

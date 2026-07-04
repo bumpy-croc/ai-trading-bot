@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Event-aware de-risking windows** (#806): around high-impact macro events
+  (FOMC, CPI) the bot now blocks new entries and halves regime exposure caps.
+  New `MacroEventCalendar` / `MacroEventGuard`
+  (`src/position_management/macro_events.py`) load a maintained calendar from
+  `config/macro_events.json` (dates + per-event N-hours-before / M-hours-after
+  window — config, not hardcoded; stale/empty is fail-safe). The guard plugs
+  into the shared `apply_pre_order_gates` seam alongside the #802 exposure
+  governor, so it applies identically in the backtest and live engines (and the
+  legacy short path): inside a window `entry_allowed` is False (block) and
+  `exposure_factor` is 0.5 (halves the governor's cap via `extra_factor`).
+  Behind `enable_macro_event_guard` (**default OFF**).
 - **ETF net-flow signal + flow gate** (#803): US spot BTC/ETH ETF net flows are
   the marginal buyer/seller this cycle, but the bot had no flow awareness. New
   `ETFFlowProvider` (`src/data_providers/etf_flow_provider.py`) ingests daily net

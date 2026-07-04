@@ -6,5 +6,6 @@
   "entry_pause": false,
   "max_drawdown_reset_peak": false,
   "enable_exposure_governor": false,
-  "enable_etf_flow_gate": false
+  "enable_etf_flow_gate": false,
+  "enable_macro_event_guard": false
 }

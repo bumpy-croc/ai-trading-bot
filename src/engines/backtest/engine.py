@@ -68,6 +68,7 @@ from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.macro_events import MacroEventGuard
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
@@ -442,6 +443,10 @@ class Backtester:
             lambda: (
                 [self.position_tracker.current_trade] if self.position_tracker.has_position else []
             ),
+        )
+        # #806: macro-event de-risking guard (flag resolved once at build).
+        self.entry_handler.configure_macro_guard(
+            MacroEventGuard(enabled=is_enabled("enable_macro_event_guard", default=False))
         )
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager.
