@@ -48,6 +48,7 @@ class MockPosition:
     last_partial_exit_price: float | None = None
     original_size: float | None = 0.1
     entry_balance: float | None = None
+    exchange_close_pending: bool = False
 
 
 @dataclass
@@ -1220,6 +1221,62 @@ class TestBalanceAccountsForPositionNotional:
         result = reconciler._reconcile_balance()
         assert result.severity != Severity.CRITICAL
         assert result.status == "verified"
+
+    def test_filled_sl_close_fail_flags_exchange_close_pending(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """_close_position_from_filled_sl retains the position when the DB close RETURNS False,
+        and flags it exchange_close_pending: the stop-loss already sold the asset, so balance
+        reconciliation must exclude its notional rather than add the realized value back."""
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=90, order_id="pos-90")
+        mock_db.close_position.return_value = False
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-90", commission=0.0, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        assert getattr(pos, "exchange_close_pending", False) is True
+        mock_position_tracker.remove_position.assert_not_called()
+
+    def test_estimate_notional_skips_exchange_close_pending(
+        self, reconciler, mock_position_tracker
+    ):
+        """_estimate_position_notional counts genuinely-held positions and skips flagged ones."""
+        held = MockPosition(
+            entry_price=50000.0, current_size=0.1, original_size=0.1, quantity=0.1, symbol="BTCUSDT"
+        )
+        flat = MockPosition(
+            entry_price=3000.0, current_size=1.0, original_size=1.0, quantity=1.0, symbol="ETHUSDT"
+        )
+        flat.exchange_close_pending = True
+        mock_position_tracker.positions = {"held": held, "flat": flat}
+
+        # Only the held position (0.1 * 50000 = 5000) contributes; the flat one is excluded.
+        assert reconciler._estimate_position_notional() == pytest.approx(5000.0)
+
+    def test_exchange_close_pending_position_not_overstated(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """A retained offline-SL-fill whose DB close failed (exchange_close_pending) must not
+        trigger a spurious CRITICAL balance correction that adds its already-sold value back.
+
+        Scenario: $10,000 DB capital, 0.1 BTC @ $50,000 ($5,000 notional) sold by the offline
+        SL ~break-even, so the exchange now holds $10,000 USDT. Excluding the flat position,
+        expected USDT = $10,000 and there is no discrepancy.
+        """
+        pos = MockPosition(entry_price=50000.0, current_size=0.1)
+        pos.exchange_close_pending = True
+        mock_position_tracker.positions = {"pos_1": pos}
+        mock_exchange.get_balance.return_value = MockBalance(total=10000.0)
+        mock_db.get_current_balance.return_value = 10000.0
+
+        result = reconciler._reconcile_balance()
+
+        assert result.severity != Severity.CRITICAL
+        mock_db.update_balance.assert_not_called()
 
     def test_genuine_discrepancy_still_triggers_critical(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
