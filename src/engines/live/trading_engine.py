@@ -303,7 +303,13 @@ class LiveTradingEngine:
         # Performance tracker (unified with backtest engine)
         from src.performance.tracker import PerformanceTracker
 
-        self.performance_tracker = PerformanceTracker(initial_balance)
+        # Seed from self.initial_balance, which _resume_balance_from_snapshot
+        # may have just updated to the RECOVERED session balance. Seeding from
+        # the configured amount made peak_balance start at the optimistic book
+        # value ($100 vs true equity ~$84 in prod), poisoning
+        # account_history.drawdown and dynamic-risk drawdown with a phantom
+        # ~15% on every restart.
+        self.performance_tracker = PerformanceTracker(self.initial_balance)
         # Closed-trade feedback: every trade recorded on the tracker (exit
         # coordinator and crash-recovery paths) is forwarded to the active
         # strategy so statistics-tracking position sizers (e.g. Kelly) learn
