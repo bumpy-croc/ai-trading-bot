@@ -366,3 +366,23 @@ class TestAlertRateLimiting:
         for _ in range(3):
             engine._record_event(EventType.ALERT, "x", error_code="X", component="c", alert=True)
         assert engine._send_alert.call_count == 3
+
+    def test_failed_delivery_does_not_open_cooldown(self):
+        """The cooldown opens only on a SUCCESSFUL page: if the first delivery
+        fails, later occurrences must retry, not be silently suppressed — else a
+        transient webhook failure would blind the operator for the whole window."""
+        engine = self._engine()
+        engine._send_alert = MagicMock(return_value=False)  # delivery keeps failing
+        for _ in range(3):
+            engine._record_event(
+                EventType.ALERT,
+                "orphan!",
+                severity="critical",
+                component="order_tracker",
+                error_code="ORDER_ORPHANED",
+                alert=True,
+            )
+        # Every occurrence retried the webhook; none was suppressed.
+        assert engine._send_alert.call_count == 3
+        calls = engine.db_manager.log_event.call_args_list
+        assert all(c.kwargs["alert_method"] != "suppressed" for c in calls)

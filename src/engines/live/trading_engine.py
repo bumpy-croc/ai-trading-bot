@@ -2117,13 +2117,16 @@ class LiveTradingEngine:
             logger.error("Failed to log trade: %s", e, exc_info=True)
 
     def _alert_rate_limited(self, error_code: str | None, component: str | None) -> bool:
-        """True if an alert with this ``(component, error_code)`` key was already
-        paged within ``ALERT_DEDUP_COOLDOWN_SECONDS`` — so a recurring/flapping
-        critical pages once per window instead of flooding the single webhook.
+        """True if a successfully-delivered alert with this ``(component,
+        error_code)`` key is still within ``ALERT_DEDUP_COOLDOWN_SECONDS`` — so a
+        recurring/flapping critical pages once per window instead of flooding the
+        single webhook.
 
-        Alerts with no ``error_code`` (no stable dedup key) are never rate-limited.
-        Thread-safe; tolerates a bare engine (``__new__`` in tests) with no dedup
-        state by never rate-limiting.
+        Read-only: the cooldown window opens only on SUCCESSFUL delivery (via
+        :meth:`_mark_alert_sent`), so a failed first page never suppresses the
+        retry that finally reaches an operator. Alerts with no ``error_code`` (no
+        stable dedup key) are never rate-limited. Thread-safe; tolerates a bare
+        engine (``__new__`` in tests) with no dedup state by never rate-limiting.
         """
         if not error_code:
             return False
@@ -2131,13 +2134,21 @@ class LiveTradingEngine:
         if dedup is None:
             return False
         key = f"{component or '?'}:{error_code}"
-        now = time.time()
         with self._alert_dedup_lock:
             last = dedup.get(key)
-            if last is not None and (now - last) < ALERT_DEDUP_COOLDOWN_SECONDS:
-                return True
-            dedup[key] = now
-            return False
+            return last is not None and (time.time() - last) < ALERT_DEDUP_COOLDOWN_SECONDS
+
+    def _mark_alert_sent(self, error_code: str | None, component: str | None) -> None:
+        """Open the dedup cooldown window for this key. Called only after a webhook
+        was actually delivered, so a failed page never suppresses later retries."""
+        if not error_code:
+            return
+        dedup = getattr(self, "_alert_dedup", None)
+        if dedup is None:
+            return
+        key = f"{component or '?'}:{error_code}"
+        with self._alert_dedup_lock:
+            dedup[key] = time.time()
 
     def _record_event(
         self,
@@ -2183,6 +2194,10 @@ class LiveTradingEngine:
                     # alert_sent reflects whether an operator was actually paged.
                     alert_sent = bool(self._send_alert(message))
                     alert_method = "webhook" if alert_sent else None
+                    if alert_sent:
+                        # Open the cooldown only on a real page, so a failed first
+                        # delivery doesn't blind the operator to later retries.
+                        self._mark_alert_sent(error_code, component)
 
             self.db_manager.log_event(
                 event_type=event_type,
