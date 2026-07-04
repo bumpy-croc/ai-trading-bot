@@ -35,6 +35,7 @@ from src.engines.shared.execution.snapshot_builder import (
     build_snapshot_from_ohlc,
     map_exit_order_side_from_position,
 )
+from src.engines.shared.exposure import scale_in_gross_cap_headroom
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
+    from src.strategies.components.exposure_governor import ExposureGovernor
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,13 @@ class LiveExitHandler:
         # FEATURE_ENTRY_PAUSE also suppresses scale-ins (exposure increases);
         # own instance so warnings rate-limit independently of the entry path.
         self._entry_pause = EntryPauseGate()
+        # #802 follow-up P3: optional exposure governor to cap scale-in exposure
+        # (set by the engine; None => inert). Mirrors the entry handler's gate.
+        self._exposure_governor: ExposureGovernor | None = None
+
+    def configure_exposure_gate(self, exposure_governor: ExposureGovernor | None) -> None:
+        """Wire the #802 exposure governor so scale-ins respect the gross cap."""
+        self._exposure_governor = exposure_governor
 
     def _build_snapshot(
         self,
@@ -928,6 +937,24 @@ class LiveExitHandler:
                                 self.max_position_size,
                             )
                             add_effective = headroom
+
+                    # #802 follow-up P3: respect the regime gross exposure cap on
+                    # scale-ins too (inert unless the exposure governor is on).
+                    if add_effective > 0:
+                        gross_headroom = scale_in_gross_cap_headroom(
+                            self._exposure_governor,
+                            list(self.position_tracker.positions.values()),
+                            current_balance,
+                        )
+                        if gross_headroom is not None and add_effective > gross_headroom:
+                            logger.info(
+                                "Clamping %s scale-in to gross-exposure cap headroom: "
+                                "requested=%.4f, headroom=%.4f",
+                                position.symbol,
+                                add_effective,
+                                gross_headroom,
+                            )
+                            add_effective = gross_headroom
 
                     if add_effective <= 0:
                         logger.info(
