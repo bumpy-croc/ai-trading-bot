@@ -131,6 +131,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Cooldown (seconds) for deduplicating operator ALERTS: a recurring/flapping
+# critical with the same (component, error_code) pages once per window; the
+# system_events row is still written but the repeat webhook is suppressed, so one
+# looping condition can't flood the single alert channel (the audit's
+# 714-critical-storm class, now that alerts are wired across every subsystem). #853
+ALERT_DEDUP_COOLDOWN_SECONDS = 300.0
+
 # Type aliases for backward compatibility - use shared models
 # Position uses LivePosition which has stop_loss_order_id for server-side stop tracking
 Position = LivePosition
@@ -339,6 +346,11 @@ class LiveTradingEngine:
         # exhaustion) so start() can exit non-zero for an orchestrator restart (#630).
         self._loop_crashed = False
         self.stop_event = threading.Event()
+        # Per-(component, error_code) last-alert timestamps for alert dedup; guarded
+        # by its lock because _record_event fires from the loop, the reconciler
+        # daemon, the WS-health thread and the order-tracker-alert thread.
+        self._alert_dedup: dict[str, float] = {}
+        self._alert_dedup_lock = threading.Lock()
 
         # Optional regime detector (feature-gated)
         self.regime_detector = None
@@ -2104,6 +2116,40 @@ class LiveTradingEngine:
         except Exception as e:
             logger.error("Failed to log trade: %s", e, exc_info=True)
 
+    def _alert_rate_limited(self, error_code: str | None, component: str | None) -> bool:
+        """True if a successfully-delivered alert with this ``(component,
+        error_code)`` key is still within ``ALERT_DEDUP_COOLDOWN_SECONDS`` — so a
+        recurring/flapping critical pages once per window instead of flooding the
+        single webhook.
+
+        Read-only: the cooldown window opens only on SUCCESSFUL delivery (via
+        :meth:`_mark_alert_sent`), so a failed first page never suppresses the
+        retry that finally reaches an operator. Alerts with no ``error_code`` (no
+        stable dedup key) are never rate-limited. Thread-safe; tolerates a bare
+        engine (``__new__`` in tests) with no dedup state by never rate-limiting.
+        """
+        if not error_code:
+            return False
+        dedup = getattr(self, "_alert_dedup", None)
+        if dedup is None:
+            return False
+        key = f"{component or '?'}:{error_code}"
+        with self._alert_dedup_lock:
+            last = dedup.get(key)
+            return last is not None and (time.time() - last) < ALERT_DEDUP_COOLDOWN_SECONDS
+
+    def _mark_alert_sent(self, error_code: str | None, component: str | None) -> None:
+        """Open the dedup cooldown window for this key. Called only after a webhook
+        was actually delivered, so a failed page never suppresses later retries."""
+        if not error_code:
+            return
+        dedup = getattr(self, "_alert_dedup", None)
+        if dedup is None:
+            return
+        key = f"{component or '?'}:{error_code}"
+        with self._alert_dedup_lock:
+            dedup[key] = time.time()
+
     def _record_event(
         self,
         event_type: EventType,
@@ -2137,11 +2183,21 @@ class LiveTradingEngine:
             alert_sent = False
             alert_method: str | None = None
             if alert:
-                # Record the real OUTCOME, not just intent: _send_alert returns
-                # False when no webhook is configured or the POST fails, so
-                # alert_sent reflects whether an operator was actually paged.
-                alert_sent = bool(self._send_alert(message))
-                alert_method = "webhook" if alert_sent else None
+                if self._alert_rate_limited(error_code, component):
+                    # Repeated identical condition within the cooldown: still write
+                    # the row (queryable) but suppress the repeat page, so one
+                    # flapping/looping critical can't flood the operator.
+                    alert_method = "suppressed"
+                else:
+                    # Record the real OUTCOME, not just intent: _send_alert returns
+                    # False when no webhook is configured or the POST fails, so
+                    # alert_sent reflects whether an operator was actually paged.
+                    alert_sent = bool(self._send_alert(message))
+                    alert_method = "webhook" if alert_sent else None
+                    if alert_sent:
+                        # Open the cooldown only on a real page, so a failed first
+                        # delivery doesn't blind the operator to later retries.
+                        self._mark_alert_sent(error_code, component)
 
             self.db_manager.log_event(
                 event_type=event_type,
