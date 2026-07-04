@@ -2117,6 +2117,34 @@ class LiveTradingEngine:
             logger.error("Failed to send alert: %s", e, exc_info=True)
             return False
 
+    def _warn_if_no_alert_channel(self) -> None:
+        """Record a missing alert channel loudly so it is never a silent blind spot.
+
+        With no ``alert_webhook_url`` (unset / empty ``$ALERT_WEBHOOK_URL``),
+        ``_send_alert`` is a no-op, so no critical event — emergency close,
+        close-only, unprotected position — can page an operator. Emit a
+        ``system_events`` row on every startup (critical in live mode) so the gap
+        is visible in the event stream instead of silently un-alerted. Fault
+        isolated: observability must never break startup.
+        """
+        try:
+            if self.alert_webhook_url:
+                return
+            logger.warning(
+                "⚠️ No alert channel configured (alert_webhook_url unset / $ALERT_WEBHOOK_URL "
+                "empty) — operator alerts will NOT be delivered. Set ALERT_WEBHOOK_URL to enable "
+                "paging."
+            )
+            self._record_event(
+                EventType.WARNING,
+                "No alert channel configured — operator alerts will not be delivered",
+                severity="critical" if self.enable_live_trading else "warning",
+                component="engine",
+                error_code="NO_ALERT_CHANNEL",
+            )
+        except Exception as e:  # pragma: no cover - defensive; must never break startup
+            logger.warning("no-alert-channel guard failed: %s", e)
+
     def _sleep_with_interrupt(self, seconds: float) -> None:
         """Sleep in small increments to allow for interrupt (delegated to LiveLoopTimingCoordinator)."""
         return self.loop_timing_coordinator.sleep_with_interrupt(seconds)
