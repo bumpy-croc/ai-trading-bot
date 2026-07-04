@@ -131,6 +131,13 @@ DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
 DRAWDOWN_WARNING_AT_PCT_OF_LIMIT = 0.50  # WARNING at 50% of the cap (10% drawdown at 0.20)
 DRAWDOWN_CRITICAL_AT_PCT_OF_LIMIT = 0.80  # CRITICAL at 80% of the cap (16% drawdown at 0.20)
 DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS = 900  # Min seconds between repeated drawdown-tier logs
+
+# Account-level circuit breakers (#807). Hard halts enforced independent of
+# strategy logic. Graduated drawdown throttling stays with dynamic-risk; these
+# are the deeper HARD stops that block new entries for the day / until recovery.
+DEFAULT_DAILY_LOSS_LIMIT = 0.025  # 2.5% of the daily UTC-anchored baseline -> halt for the day
+DEFAULT_CIRCUIT_DRAWDOWN_HALT = 0.15  # 15% peak-to-trough -> halt new entries until recovery
+DEFAULT_CIRCUIT_DRAWDOWN_RECOVERY = 0.05  # Resume once back within 5% of peak
 DEFAULT_FEE_RATE = 0.001  # 0.1% trading fee
 DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
 

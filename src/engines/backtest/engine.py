@@ -37,7 +37,7 @@ from src.config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
-from src.config.feature_flags import is_enabled
+from src.config.feature_flags import get_flag, is_enabled
 from src.database.models import TradeSource
 from src.engines.backtest.execution import (
     EntryHandler,
@@ -72,6 +72,7 @@ from src.position_management.macro_events import MacroEventGuard
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
+from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import (
@@ -447,6 +448,10 @@ class Backtester:
         # #806: macro-event de-risking guard (flag resolved once at build).
         self.entry_handler.configure_macro_guard(
             MacroEventGuard(enabled=is_enabled("enable_macro_event_guard", default=False))
+        )
+        # #807: account-level circuit breaker (mode resolved once at build).
+        self.entry_handler.configure_circuit_breaker(
+            AccountCircuitBreaker(mode=get_flag("account_circuit_breakers", default="off"))
         )
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager.

@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Account-level circuit breakers** (#807): new `AccountCircuitBreaker`
+  (`src/risk/circuit_breaker.py`) enforces hard, account-level safety limits
+  independent of strategy logic — a **daily-loss halt** (default 2.5% below a
+  UTC-day-anchored baseline → halt new entries for the day, latched) and a
+  **drawdown halt** (default 15% peak-to-trough → halt until recovery within 5%
+  of peak). Graduated drawdown throttling stays with dynamic-risk (no
+  double-count). Wired into the shared `apply_pre_order_gates` seam so a halt
+  blocks new entries in both engines and the legacy short path. Controlled by the
+  **string** flag `account_circuit_breakers` ∈ `off` / `dry_run` (evaluate + log
+  "would halt", no action) / `active` (block entries), read via `get_flag` and
+  resolved once at build. Ships `off`. **Follow-ups requiring human sign-off**
+  (money-mover / live integration): force-flatten of open positions on trip (vs
+  the safe entry-block delivered here), DB-persisted daily baseline reload across
+  restarts (a `seed_daily_baseline` hook is provided), and dashboard surfacing.
 - **Event-aware de-risking windows** (#806): around high-impact macro events
   (FOMC, CPI) the bot now blocks new entries and halves regime exposure caps.
   New `MacroEventCalendar` / `MacroEventGuard`
