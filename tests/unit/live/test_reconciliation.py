@@ -4095,6 +4095,34 @@ class TestStopLossReplacementHoldingGuard:
         mock_exchange.get_margin_borrowed = MagicMock(return_value=None)
         assert _position_holding_is_gone(mock_exchange, True, pos) is False
 
+    def test_helper_margin_long_absent_asset_is_gone(self, mock_exchange):
+        """Finding 3: a margin long whose base asset is ABSENT from the wallet (netAsset 0) is
+        detected as gone via the raw margin-asset accessor. get_balance returns None for an
+        absent asset — indistinguishable from a transient error — and would miss it, leaving the
+        naked AUTO_REPAY stop armed."""
+        from src.engines.live.reconciliation import _position_holding_is_gone
+
+        pos = MockPosition(symbol="ETHUSDT", side="long", quantity=1.0)
+        mock_exchange.get_margin_account_asset.return_value = {"netAsset": "0", "borrowed": "0"}
+        mock_exchange.get_balance.return_value = None  # get_balance can't tell absent from error
+        assert _position_holding_is_gone(mock_exchange, True, pos) is True
+
+    def test_helper_margin_long_present_not_gone(self, mock_exchange):
+        from src.engines.live.reconciliation import _position_holding_is_gone
+
+        pos = MockPosition(symbol="ETHUSDT", side="long", quantity=1.0)
+        mock_exchange.get_margin_account_asset.return_value = {"netAsset": "1.0", "borrowed": "0"}
+        assert _position_holding_is_gone(mock_exchange, True, pos) is False
+
+    def test_helper_margin_long_transient_none_not_gone(self, mock_exchange):
+        """Finding 3: a transient margin-asset lookup failure (None) must NOT read as gone —
+        the guard fails safe and keeps protecting the position."""
+        from src.engines.live.reconciliation import _position_holding_is_gone
+
+        pos = MockPosition(symbol="ETHUSDT", side="long", quantity=1.0)
+        mock_exchange.get_margin_account_asset.return_value = None
+        assert _position_holding_is_gone(mock_exchange, True, pos) is False
+
     def test_helper_exchange_close_pending_short_circuits(self, mock_exchange):
         """The exchange_close_pending flag (offline SL fill, DB close pending) already means
         the asset is gone — return True without an exchange round-trip."""
@@ -4301,7 +4329,9 @@ class TestStopLossReplacementHoldingGuard:
         self, mock_exchange, mock_position_tracker, mock_db
     ):
         """Margin long closed externally while offline (netAsset=0): the guard must dispatch to
-        the balance (netAsset) check — not the borrowed check — and skip re-placement."""
+        the netAsset check via the raw margin-asset accessor — not the borrowed check, and not
+        spot get_balance (which can't tell an absent asset from a transient error) — and skip
+        re-placement."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
         pos = MockPosition(
@@ -4326,10 +4356,12 @@ class TestStopLossReplacementHoldingGuard:
         mock_exchange.get_order.side_effect = lambda oid, sym: (
             sl_order if oid == "sl_gone_ml" else entry_order
         )
-        # Margin long → the base asset's netAsset (get_balance total) is the source of truth.
-        # borrowed>0 would be misleading here; assert the guard does NOT rely on it.
+        # Margin long → netAsset (via the raw margin-asset accessor) is the source of truth;
+        # netAsset 0 = externally closed. borrowed>0 and a spot balance would be misleading —
+        # assert the guard/remover rely on neither.
         mock_exchange.get_margin_borrowed = MagicMock(return_value=5.0)
-        mock_exchange.get_balance.side_effect = self._balance_by_asset("ETH", 0.0)
+        mock_exchange.get_margin_account_asset.return_value = {"netAsset": "0", "borrowed": "5.0"}
+        mock_exchange.get_balance.side_effect = self._balance_by_asset("ETH", 999.0)
         mock_db.close_position.return_value = True
 
         self._periodic(
@@ -4337,3 +4369,119 @@ class TestStopLossReplacementHoldingGuard:
         )._reconcile_cycle()
 
         mock_exchange.place_stop_loss_order.assert_not_called()
+
+    # --- startup pending-partial-exit reconciliation: _resize_stop_loss_after_partial_exit ---
+
+    def test_startup_partial_exit_resize_skips_when_residual_gone(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Startup reconciliation of a filled partial-exit must not cancel-and-re-arm an
+        AUTO_REPAY stop for a residual that was closed/liquidated externally (Codex #852
+        finding 2). The stale stop is left for the phantom-removal path."""
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            use_margin=True,
+        )
+        pos = MockPosition(
+            symbol="ETHUSDT",
+            side="short",
+            stop_loss_order_id="sl_old",
+            stop_loss=2200.0,
+            quantity=1.0,
+            current_size=0.5,
+            original_size=1.0,
+            db_position_id=80,
+        )
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)  # residual gone
+
+        reconciler._resize_stop_loss_after_partial_exit(pos)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        mock_exchange.cancel_order.assert_not_called()  # left for the phantom-removal path
+
+    def test_startup_partial_exit_resize_still_runs_when_residual_present(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Control: a live residual (borrowed > 0) still gets its stop-loss resized."""
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            use_margin=True,
+        )
+        pos = MockPosition(
+            symbol="ETHUSDT",
+            side="short",
+            stop_loss_order_id="sl_old",
+            stop_loss=2200.0,
+            quantity=1.0,
+            current_size=0.5,
+            original_size=1.0,
+            db_position_id=81,
+        )
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=1.0)  # residual present
+        mock_exchange.place_stop_loss_order.return_value = "new_sl"
+
+        reconciler._resize_stop_loss_after_partial_exit(pos)
+
+        mock_exchange.cancel_order.assert_called_once()
+        mock_exchange.place_stop_loss_order.assert_called_once()
+
+    # --- startup pending-entry recovery: _reconcile_filled_entry ---
+
+    def test_recovered_entry_skips_stop_and_sell_when_holding_gone(
+        self, reconciler, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A pending entry that filled while offline, then was closed/liquidated externally
+        before startup, must NOT get an AUTO_REPAY recovery stop OR an emergency-sell (both open
+        a naked position). It is handled as an external close: dropped from the tracker and DB
+        (Codex #852 finding 1). reconcile_startup Step B never holdings-checks it — it is not in
+        the pre-recovery snapshot."""
+        order_data = {
+            "client_order_id": "atb_BTCUSDT_long_1",
+            "exchange_order_id": "ex_recover_1",
+            "entry_balance": 1000.0,
+        }
+        exchange_order = MockExchangeOrder(
+            order_id="ex_recover_1", average_price=50000.0, filled_quantity=0.001
+        )
+        # Asset gone on the exchange (spot: base-asset balance 0).
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.0)
+        mock_db.log_position.return_value = 99
+        mock_db.close_position.return_value = True
+
+        reconciler._reconcile_filled_entry(
+            order_data, exchange_order, "BTCUSDT", "long", 50000.0, 0.001
+        )
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        mock_exchange.place_order.assert_not_called()  # no emergency-sell for a gone asset
+        mock_position_tracker.remove_position.assert_called_once()
+        mock_db.close_position.assert_called_once_with(99)
+
+    def test_recovered_entry_places_stop_when_holding_present(
+        self, reconciler, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Control: a genuinely-open recovered entry (asset held) still gets its recovery stop."""
+        order_data = {
+            "client_order_id": "atb_BTCUSDT_long_2",
+            "exchange_order_id": "ex_recover_2",
+            "entry_balance": 1000.0,
+        }
+        exchange_order = MockExchangeOrder(
+            order_id="ex_recover_2", average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.001)
+        mock_db.log_position.return_value = 100
+        mock_exchange.place_stop_loss_order.return_value = "recovery_sl"
+
+        reconciler._reconcile_filled_entry(
+            order_data, exchange_order, "BTCUSDT", "long", 50000.0, 0.001
+        )
+
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()

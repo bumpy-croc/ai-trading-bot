@@ -223,6 +223,26 @@ def _is_exchange_close_pending(position: Any) -> bool:
     return bool(getattr(position, "exchange_close_pending", False))
 
 
+def _margin_net_asset(exchange: Any, asset: str) -> float | None:
+    """Cross-margin ``netAsset`` for ``asset`` as a float, or None if the lookup is unconfirmed.
+
+    Uses the raw margin-asset accessor (``get_margin_account_asset``), which returns zeros for an
+    asset absent from the wallet and None only on a transient API error — so an externally-closed
+    long (netAsset 0) is distinguishable from an API blip. ``get_balance`` conflates the two (it
+    returns None for both an absent asset and an error), which would leave the naked-position
+    stop armed for a fully-closed margin long (#852 finding 3)."""
+    getter = getattr(exchange, "get_margin_account_asset", None)
+    if not callable(getter):
+        return None
+    raw = getter(asset)
+    if not raw:
+        return None
+    try:
+        return float(raw.get("netAsset", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _position_holding_is_gone(exchange: Any, use_margin: bool, position: Any) -> bool:
     """True only when the position no longer backs an exchange holding — i.e. it was closed or
     liquidated externally while the bot was offline.
@@ -277,8 +297,18 @@ def _position_holding_is_gone(exchange: Any, use_margin: bool, position: Any) ->
             if borrowed is None:
                 return False  # transient / unsupported — cannot prove gone
             held = float(borrowed)
+        elif use_margin:
+            # Margin long — read netAsset via the raw margin-asset accessor (absent asset -> 0,
+            # transient error -> None). get_balance() returns None for BOTH, so it cannot tell a
+            # fully-closed long from an API blip and would leave the naked stop armed (#852 f3).
+            net_asset = _margin_net_asset(exchange, base_asset)
+            if net_asset is None:
+                return False  # transient / unsupported — cannot prove gone
+            held = net_asset
         else:
-            # Spot long and margin long: the held base-asset balance (netAsset in margin).
+            # Spot long. get_balance()'s None is ambiguous (absent vs transient), but on spot
+            # AUTO_REPAY is a no-op and an oversell is exchange-rejected, so a misclassified "not
+            # gone" cannot arm a naked position — the fail-safe is acceptable here.
             balance = exchange.get_balance(base_asset)
             if balance is None:
                 return False  # transient — cannot prove gone
@@ -788,6 +818,31 @@ class PositionReconciler:
                         e,
                     )
 
+            # If the entry filled earlier but the position was closed/liquidated externally
+            # before this recovery ran, its asset is gone. Placing an AUTO_REPAY stop — or the
+            # emergency-sell below that fires when a stop is not placed — would open a naked
+            # position. Treat it as an external close: drop it from the tracker and close the DB
+            # row, and do NOT place a stop or sell. The recovered position is not in the startup
+            # Step-B snapshot, so nothing else holdings-checks it this run (#852 finding 1).
+            if _position_holding_is_gone(self.exchange, self._use_margin, position):
+                logger.warning(
+                    "Recovered entry %s filled earlier but the position no longer backs an "
+                    "exchange holding — treating as external close (no stop-loss, no "
+                    "emergency-sell); removing from tracker and closing DB.",
+                    order_id,
+                )
+                self.position_tracker.remove_position(order_id)
+                if db_id is not None:
+                    try:
+                        self.db_manager.close_position(db_id)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to close DB for externally-closed recovered entry %s: %s",
+                            order_id,
+                            e,
+                        )
+                return
+
             # Place server-side stop-loss on exchange for protection.
             # If SL placement fails, emergency-close the position to match
             # the normal entry path behavior (never leave unprotected).
@@ -1133,6 +1188,19 @@ class PositionReconciler:
 
         symbol = getattr(position, "symbol", "")
         db_pos_id = getattr(position, "db_position_id", None)
+
+        # This runs during startup reconciliation of a filled partial-exit order. If the residual
+        # was closed/liquidated externally while offline (asset gone), do NOT cancel-and-re-place:
+        # re-arming an AUTO_REPAY stop for a position that no longer exists is the naked-position
+        # path. Leave the stale stop for the phantom-removal path, which cancels it when it removes
+        # the position (#852 finding 2).
+        if _position_holding_is_gone(self.exchange, self._use_margin, position):
+            logger.warning(
+                "Skipping stop-loss resize for %s — position no longer backs an exchange holding "
+                "(residual closed/liquidated externally); leaving cleanup to the holdings check.",
+                symbol,
+            )
+            return
 
         # Cancel the old stop-loss order
         try:
@@ -2324,9 +2392,6 @@ class PositionReconciler:
         is_short = side == PositionSide.SHORT or str(side).lower() == "short"
 
         try:
-            # get_balance returns AccountBalance with total=netAsset in margin mode
-            balance = self.exchange.get_balance(base_asset)
-
             # Scale tracked quantity by partial exit ratio. Coerce to float —
             # DB-loaded positions carry Decimal (Numeric) fields, and the
             # "position_qty * 0.5" comparisons below raise "Decimal * float"
@@ -2371,16 +2436,19 @@ class PositionReconciler:
                     )
                     self._remove_phantom_position(position, result)
             else:
-                # Long positions hold the asset — check netAsset.
-                # None = API error — skip to avoid deleting real positions.
-                if balance is None:
+                # Long positions hold the asset — check netAsset via the raw margin-asset
+                # accessor (absent asset -> 0, transient error -> None). get_balance() returns
+                # None for both, so it cannot tell an externally-closed long from an API blip
+                # and would leave the phantom tracked (#852 finding 3).
+                net_asset = _margin_net_asset(self.exchange, base_asset)
+                if net_asset is None:
                     logger.warning(
                         "Could not verify holdings for %s — skipping "
                         "margin long check (transient API error)",
                         symbol,
                     )
                 else:
-                    held = balance.total
+                    held = net_asset
 
                     if held <= 0:
                         logger.warning(
@@ -3342,7 +3410,6 @@ class PeriodicReconciler:
                     side = getattr(position, "side", None)
                     is_short = side == PositionSide.SHORT or str(side).lower() == "short"
 
-                    balance = self.exchange.get_balance(base_asset)
                     position_gone = False
 
                     # Scale tracked quantity by partial exit ratio. Coerce to
@@ -3370,13 +3437,15 @@ class PeriodicReconciler:
                         elif pos_qty > 0 and borrowed < pos_qty * 0.5:
                             position_gone = True
                     else:
-                        # Long detection: check held quantity.
-                        # None = API error — skip to avoid deleting real positions.
-                        if balance is None:
+                        # Long detection: check netAsset via the raw margin-asset accessor
+                        # (absent asset -> 0, transient error -> None). get_balance() returns
+                        # None for both, so it cannot tell a closed long from an API blip (#852 f3).
+                        net_asset = _margin_net_asset(self.exchange, base_asset)
+                        if net_asset is None:
                             pass  # Unknown — retain position
-                        elif balance.total <= 0:
+                        elif net_asset <= 0:
                             position_gone = True
-                        elif pos_qty > 0 and balance.total < pos_qty * 0.5:
+                        elif pos_qty > 0 and net_asset < pos_qty * 0.5:
                             position_gone = True
 
                     if position_gone:
