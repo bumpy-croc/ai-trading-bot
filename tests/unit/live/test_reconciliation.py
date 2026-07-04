@@ -3804,6 +3804,43 @@ class TestPeriodicExternalCloseTradeRow:
         assert db.get_current_balance(1) == pytest.approx(10000.0)
         assert pos.order_id not in tracker.positions
 
+    def test_margin_external_close_audits_and_surfaces_high_severity(self, mock_exchange):
+        """A margin external close / liquidation now writes a CLOSED_EXTERNALLY
+        audit row AND bumps cycle severity to HIGH, so it surfaces via the
+        cycle-severity event instead of being silent (#853)."""
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        _db_id, tracker, pos = self._seed(db, side="short")
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)  # short closed
+        mock_exchange.get_balance.side_effect = lambda asset: MockBalance(asset=asset, total=0.0)
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 48000.0
+        on_event = MagicMock()
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            use_margin=True,
+            data_provider=data_provider,
+            on_event=on_event,
+        )
+        reconciler._reconcile_cycle()
+
+        # CLOSED_EXTERNALLY audit row written for the liquidation.
+        audits = db.get_audit_events(session_id=1)
+        assert any(a["new_value"] == "CLOSED_EXTERNALLY" for a in audits), audits
+        # Severity bumped to HIGH -> the cycle-severity event records it in system_events.
+        high_events = [
+            c for c in on_event.call_args_list if c.kwargs.get("error_code") == "RECONCILE_HIGH"
+        ]
+        assert high_events, f"expected RECONCILE_HIGH, got {on_event.call_args_list}"
+
 
 class TestReconcilerEventSink:
     """The reconciler gains a system_events/alert sink via an injected on_event
@@ -3916,9 +3953,7 @@ class TestReconcileCycleSeverityEvent:
         pr._emit_cycle_severity(Severity.CRITICAL)
         assert on_event.call_count == 2
 
-    def test_escalation_high_to_critical_pages(
-        self, mock_exchange, mock_position_tracker, mock_db
-    ):
+    def test_escalation_high_to_critical_pages(self, mock_exchange, mock_position_tracker, mock_db):
         """HIGH then CRITICAL must page on the escalation (prev=HIGH, not LOW)."""
         on_event = MagicMock()
         pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
