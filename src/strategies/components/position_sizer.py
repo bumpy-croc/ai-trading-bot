@@ -473,6 +473,22 @@ class KellySizer(PositionSizer):
         # Ensure Kelly percentage is reasonable
         return max(0.0, min(0.5, kelly_f))  # Cap at 50%
 
+    def record_trade(self, win: bool, profit_pct: float, loss_risk_pct: float) -> None:
+        """Adapter to the shared statistics-sizer feedback interface.
+
+        ``Strategy.on_trade_closed`` duck-types on ``record_trade``, so this
+        adapter lets KellySizer warm up through the same engine seam as
+        KellyCriterionSizer. ``profit_pct`` carries the unsized move
+        magnitude for wins and losses alike — exactly what
+        ``update_trade_result`` tracks; ``loss_risk_pct`` serves as the
+        validity gate (mirroring KellyCriterionSizer.record_trade).
+        """
+        if loss_risk_pct <= 0:
+            return
+        if not (np.isfinite(profit_pct) and np.isfinite(loss_risk_pct)):
+            return
+        self.update_trade_result(win=win, pnl_pct=profit_pct)
+
     def update_trade_result(self, win: bool, pnl_pct: float) -> None:
         """
         Update trade history with new result

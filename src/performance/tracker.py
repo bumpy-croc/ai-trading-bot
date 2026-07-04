@@ -263,11 +263,19 @@ class PerformanceTracker:
         """
         if not callable(listener):
             raise TypeError(f"listener must be callable, got {type(listener).__name__}")
-        self._trade_listeners.append(listener)
+        with self._lock:
+            self._trade_listeners.append(listener)
 
     def _notify_trade_listeners(self, trade: TradeProtocol) -> None:
-        """Invoke registered trade listeners, containing their exceptions."""
-        for listener in self._trade_listeners:
+        """Invoke registered trade listeners, containing their exceptions.
+
+        Iterates a snapshot taken under the lock so concurrent registration
+        can never mutate the list mid-iteration; the callbacks themselves
+        run outside the lock.
+        """
+        with self._lock:
+            listeners = tuple(self._trade_listeners)
+        for listener in listeners:
             try:
                 listener(trade)
             except Exception:

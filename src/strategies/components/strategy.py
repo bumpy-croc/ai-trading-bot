@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -22,6 +21,10 @@ import pandas as pd
 if TYPE_CHECKING:
     from .leverage_manager import LeverageManager
     from .runtime import FeatureGeneratorSpec, StrategyDataset
+
+from src.config.constants import DEFAULT_EPSILON as ZERO_SIZE_EPSILON
+from src.performance.metrics import Side
+from src.performance.metrics import pnl_percent as unsized_pnl_percent
 
 from .policies import PolicyBundle
 from .position_sizer import PositionSizer
@@ -458,42 +461,63 @@ class Strategy:
     def on_trade_closed(self, trade: Any) -> None:
         """Forward a closed trade's outcome to the position sizer.
 
-        Both engines invoke this through the shared PerformanceTracker
-        trade-listener seam whenever a trade completes, so statistics-tracking
-        sizers (e.g. ``KellyCriterionSizer``) accumulate live win/loss history
-        identically in backtest and live. Duck-types on the sizer's
-        ``record_trade``; stateless sizers are unaffected.
+        Both engines invoke this whenever an outcome is realized: final
+        closes arrive through the shared PerformanceTracker trade-listener
+        seam, and each banked partial-exit slice arrives through the position
+        trackers' ``on_partial_exit`` hook. "One Kelly trade" is therefore
+        one realized slice — a position that banks two partials and then
+        stops out contributes two wins and one loss, not a single loss.
+        Statistics-tracking sizers (e.g. ``KellyCriterionSizer``) thus
+        accumulate identical history in backtest and live. Duck-types on the
+        sizer's ``record_trade``; stateless sizers are unaffected.
 
-        Units: ``trade.pnl_percent`` is the sized return as a decimal fraction
-        of balance (0.02 = +2%), matching the sizer's fraction conventions.
-        The realized magnitude is passed as both ``profit_pct`` and
-        ``loss_risk_pct`` (the planned per-trade risk is not carried on
-        completed trades); the sizer's ``loss_risk_pct > 0`` gate naturally
-        drops breakeven trades, mirroring PerformanceTracker's handling.
+        Units: the sizer's contract is UNSIZED R-multiples — the directional
+        price move ``(exit - entry) / entry`` (sign-flipped for shorts) as a
+        decimal fraction, independent of position size. Feeding the sized
+        ``trade.pnl_percent`` would let past sizing decisions bias the
+        reward:risk estimate (a feedback loop) and put live statistics on a
+        different scale than ``expected_reward_risk``. The move magnitude is
+        passed as both ``profit_pct`` and ``loss_risk_pct`` (the planned
+        per-trade risk is not carried on completed trades).
+
+        Deliberately skipped, in both engines alike:
+        - zero-move outcomes: no directional information, and they would
+          drag the loss-magnitude mean toward zero, inflating Kelly's b;
+        - closes with (near-)zero remaining size: the bookkeeping close
+          emitted after partial exits fully consume a position would double
+          count the final slice already fed via ``on_partial_exit``.
 
         Args:
-            trade: Completed trade exposing ``pnl`` (gross, account currency)
-                and ``pnl_percent`` (sized decimal fraction).
+            trade: Realized outcome exposing ``entry_price``, ``exit_price``
+                and ``side`` (PositionSide enum or 'long'/'short' string);
+                ``size`` (fraction of balance) is honored when present.
         """
         record = getattr(self.position_sizer, "record_trade", None)
         if not callable(record):
             return
 
-        pnl = getattr(trade, "pnl", None)
-        pnl_percent = getattr(trade, "pnl_percent", None)
-        if pnl is None or pnl_percent is None:
-            return
-        try:
-            pnl = float(pnl)
-            pnl_percent = float(pnl_percent)
-        except (TypeError, ValueError):
-            self.logger.warning("Ignoring closed trade with non-numeric PnL fields: %r", trade)
-            return
-        if not (math.isfinite(pnl) and math.isfinite(pnl_percent)):
+        entry_price = getattr(trade, "entry_price", None)
+        exit_price = getattr(trade, "exit_price", None)
+        raw_side = getattr(trade, "side", None)
+        if entry_price is None or exit_price is None or raw_side is None:
             return
 
-        magnitude = abs(pnl_percent)
-        record(win=pnl > 0, profit_pct=magnitude, loss_risk_pct=magnitude)
+        size = getattr(trade, "size", None)
+        try:
+            if size is not None and abs(float(size)) <= ZERO_SIZE_EPSILON:
+                return  # Bookkeeping close of a fully-consumed position
+            side = Side(str(getattr(raw_side, "value", raw_side)).lower())
+            move = unsized_pnl_percent(float(entry_price), float(exit_price), side, fraction=1.0)
+        except (TypeError, ValueError):
+            self.logger.warning(
+                "Ignoring closed trade with invalid price/side/size fields: %r", trade
+            )
+            return
+
+        magnitude = abs(move)
+        if magnitude <= 0.0:
+            return  # Breakeven: no directional information (see docstring)
+        record(win=move > 0, profit_pct=magnitude, loss_risk_pct=magnitude)
 
     def get_stop_loss_price(
         self,

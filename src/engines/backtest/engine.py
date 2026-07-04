@@ -357,6 +357,9 @@ class Backtester:
             fee_rate=fee_rate,
             slippage_rate=slippage_rate,
         )
+        # Each banked partial-exit slice is a realized outcome for the
+        # strategy's position sizer, same as final closes (#840).
+        self.position_tracker.on_partial_exit = self._notify_strategy_trade_closed
 
         # Correlation engine
         self.correlation_engine: CorrelationEngine | None = None

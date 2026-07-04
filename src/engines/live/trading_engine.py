@@ -880,6 +880,9 @@ class LiveTradingEngine:
             fee_rate=self.fee_rate,
             slippage_rate=self.slippage_rate,
         )
+        # Each banked partial-exit slice is a realized outcome for the
+        # strategy's position sizer, same as final closes (#840).
+        self.live_position_tracker.on_partial_exit = self._notify_strategy_trade_closed
 
         # Execution engine
         self.live_execution_engine = execution_engine or LiveExecutionEngine(
