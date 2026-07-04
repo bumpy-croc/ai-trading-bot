@@ -13,6 +13,17 @@ DEFAULT_MAX_PREDICTION_LATENCY = 0.1  # seconds
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"
 DEFAULT_ENABLE_SENTIMENT = False  # Disabled by default
 DEFAULT_ENABLE_MARKET_MICROSTRUCTURE = False  # MVP: disabled
+
+# Sentiment-extreme mean-reversion overlay (#804). At Fear & Greed extremes,
+# fading beats following and shorting into capitulation gets squeezed. Values
+# are on the F&G→[0,1] scale (sentiment_primary = F&G index / 100).
+DEFAULT_SENTIMENT_EXTREME_FEAR = 0.15  # F&G < 15 -> block new shorts; support-band longs only
+DEFAULT_SENTIMENT_EXTREME_GREED = 0.70  # F&G > 70 + trend_down -> permit small fade shorts
+# Structural support level for the extreme-fear mean-reversion long band. A
+# market level (≈ realized price) that goes STALE — a config PARAMETER, not a
+# constant. None = no band restriction (the overlay then only blocks shorts).
+DEFAULT_SENTIMENT_SUPPORT_LEVEL: float | None = None
+DEFAULT_SENTIMENT_SUPPORT_BAND_PCT = 0.05  # Longs allowed within ±5% of the support level
 DEFAULT_ENABLE_ONCHAIN_FEATURES = False  # On-chain features disabled by default
 DEFAULT_ENABLE_MACRO_FEATURES = False  # Macro economic features disabled by default
 DEFAULT_ENABLE_ENHANCED_SENTIMENT = False  # Enhanced sentiment disabled by default
