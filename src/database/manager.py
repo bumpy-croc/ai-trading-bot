@@ -2290,6 +2290,45 @@ class DatabaseManager:
             logger.error(f"Failed to update balance: {e}")
             return False
 
+    def get_session_peak_balance(
+        self,
+        session_id: int | None = None,
+        fallback_session_id: int | None = None,
+    ) -> float | None:
+        """Get the highest account_history balance recorded for the session(s).
+
+        Re-seeds the live max-drawdown guard's peak after a restart so the
+        hard cap keeps measuring from the true session peak — a restart must
+        not reset the drawdown baseline. Mirrors ``get_first_snapshot_of_day``
+        fallback semantics: a clean restart creates a NEW session while the
+        earlier snapshots live under the recovered inactive session.
+
+        Args:
+            session_id: Trading session ID (defaults to the current session).
+            fallback_session_id: Prior session whose snapshots also count.
+
+        Returns:
+            The peak balance across the session(s), or None when no snapshot
+            exists yet.
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return None
+
+        session_ids = [session_id]
+        if fallback_session_id is not None and fallback_session_id != session_id:
+            session_ids.append(fallback_session_id)
+
+        # Use ANALYTICS timeout - one-shot boot-time read, not in the critical path
+        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
+            peak = (
+                session.query(sa.func.max(AccountHistory.balance))
+                .filter(AccountHistory.session_id.in_(session_ids))
+                .scalar()
+            )
+        # Numeric columns load as Decimal; coerce before mixing with floats
+        return float(peak) if peak is not None else None
+
     def get_first_snapshot_of_day(
         self,
         session_id: int | None = None,

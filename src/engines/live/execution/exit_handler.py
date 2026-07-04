@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -105,6 +106,7 @@ class LiveExitHandler:
         use_high_low_for_stops: bool = True,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
+        close_only_provider: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize exit handler.
 
@@ -119,6 +121,9 @@ class LiveExitHandler:
             use_high_low_for_stops: Use candle high/low for SL/TP detection.
             max_position_size: Maximum position size for scale-ins.
             max_filled_price_deviation: Threshold for logging suspicious fill prices.
+            close_only_provider: Reads the engine's close-only flag at call
+                time; scale-ins (exposure increases) are suppressed while it
+                returns True. Exits and partial exits are never gated.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -130,6 +135,7 @@ class LiveExitHandler:
         self.use_high_low_for_stops = use_high_low_for_stops
         self.max_position_size = max_position_size
         self.max_filled_price_deviation = max_filled_price_deviation
+        self._close_only_provider = close_only_provider
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
@@ -847,9 +853,16 @@ class LiveExitHandler:
                 )
 
                 if scale_result.should_scale:
-                    # Scale-ins INCREASE exposure, so the entry-pause flag
-                    # suppresses them just like new entries. Partial exits and
-                    # full exits above keep running — they reduce risk.
+                    # Scale-ins INCREASE exposure, so close-only mode and the
+                    # entry-pause flag suppress them just like new entries.
+                    # Partial exits and full exits above keep running — they
+                    # reduce risk.
+                    if self._close_only_provider is not None and self._close_only_provider():
+                        logger.debug(
+                            "Close-only mode active — skipping scale-in for %s",
+                            position.symbol,
+                        )
+                        continue
                     if self._entry_pause.paused(f"scale-in for {position.symbol}"):
                         continue
 
