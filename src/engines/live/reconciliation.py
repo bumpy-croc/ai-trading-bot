@@ -821,26 +821,41 @@ class PositionReconciler:
             # If the entry filled earlier but the position was closed/liquidated externally
             # before this recovery ran, its asset is gone. Placing an AUTO_REPAY stop — or the
             # emergency-sell below that fires when a stop is not placed — would open a naked
-            # position. Treat it as an external close: drop it from the tracker and close the DB
-            # row, and do NOT place a stop or sell. The recovered position is not in the startup
-            # Step-B snapshot, so nothing else holdings-checks it this run (#852 finding 1).
+            # position. Treat it as an external close: close the DB row and drop it from the
+            # tracker, and do NOT place a stop or sell. The recovered position is not in the
+            # startup Step-B snapshot, so nothing else holdings-checks it this run (#852 f1).
             if _position_holding_is_gone(self.exchange, self._use_margin, position):
                 logger.warning(
                     "Recovered entry %s filled earlier but the position no longer backs an "
                     "exchange holding — treating as external close (no stop-loss, no "
-                    "emergency-sell); removing from tracker and closing DB.",
+                    "emergency-sell).",
                     order_id,
                 )
-                self.position_tracker.remove_position(order_id)
+                # Gate tracker removal on the DB close actually succeeding — close_position
+                # returns False without raising on a failed commit. Removing while the row stays
+                # OPEN would diverge memory from the DB (CODE.md: no silent divergence); mirror
+                # the external-close paths and escalate instead. No db_id means log_position never
+                # persisted a row, so there is nothing to diverge from — safe to drop.
+                db_closed = False
                 if db_id is not None:
                     try:
-                        self.db_manager.close_position(db_id)
+                        db_closed = bool(self.db_manager.close_position(db_id))
                     except Exception as e:
                         logger.warning(
                             "Failed to close DB for externally-closed recovered entry %s: %s",
                             order_id,
                             e,
                         )
+                if db_closed or db_id is None:
+                    self.position_tracker.remove_position(order_id)
+                else:
+                    logger.critical(
+                        "Externally-closed recovered entry %s: DB position %s close FAILED "
+                        "(still OPEN) — left tracked to avoid memory/DB divergence; it is "
+                        "re-reconciled on the next pass.",
+                        order_id,
+                        db_id,
+                    )
                 return
 
             # Place server-side stop-loss on exchange for protection.

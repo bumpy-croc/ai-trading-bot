@@ -4485,3 +4485,29 @@ class TestStopLossReplacementHoldingGuard:
 
         mock_exchange.place_stop_loss_order.assert_called_once()
         mock_position_tracker.remove_position.assert_not_called()
+
+    def test_recovered_entry_gone_but_db_close_fails_retains_position(
+        self, reconciler, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """If the DB close fails (returns False) for a gone recovered entry, the position must
+        NOT be removed from the tracker — removing while the row stays OPEN diverges memory from
+        the DB (CODE.md). Still no stop and no emergency-sell."""
+        order_data = {
+            "client_order_id": "atb_BTCUSDT_long_3",
+            "exchange_order_id": "ex_recover_3",
+            "entry_balance": 1000.0,
+        }
+        exchange_order = MockExchangeOrder(
+            order_id="ex_recover_3", average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.0)
+        mock_db.log_position.return_value = 101
+        mock_db.close_position.return_value = False  # close failed / rolled back
+
+        reconciler._reconcile_filled_entry(
+            order_data, exchange_order, "BTCUSDT", "long", 50000.0, 0.001
+        )
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        mock_exchange.place_order.assert_not_called()
+        mock_position_tracker.remove_position.assert_not_called()  # retained — no divergence
