@@ -2915,6 +2915,10 @@ class PeriodicReconciler:
         self.interval = interval
         self.on_critical = on_critical
         self.on_event = on_event
+        # Peak severity of the previous cycle — used to edge-trigger the
+        # cycle-severity event so a persistent HIGH/CRITICAL condition pages/logs
+        # once on the rising edge, not every cycle.
+        self._last_cycle_severity = Severity.LOW
         self._symbols = symbols or []
 
         self._running = False
@@ -3291,6 +3295,27 @@ class PeriodicReconciler:
                             "Margin position %s appears externally closed — "
                             "cancelling SL and removing from tracker",
                             symbol,
+                        )
+                        # Audit the external close / liquidation and raise the cycle
+                        # severity so it surfaces in system_events (the cycle-severity
+                        # event) — the spot branch already does this; the margin branch
+                        # previously left a liquidation with no audit row and no severity
+                        # bump (#853). Margin capital is reconciled by AccountSynchronizer,
+                        # so this is observability-only (no balance move here).
+                        if Severity.HIGH > max_severity:
+                            max_severity = Severity.HIGH
+                        self.db_manager.log_audit_event(
+                            session_id=self.session_id,
+                            entity_type="position",
+                            entity_id=getattr(position, "db_position_id", None),
+                            field="status",
+                            old_value="OPEN",
+                            new_value="CLOSED_EXTERNALLY",
+                            reason=(
+                                f"Margin position {symbol} externally closed / liquidated "
+                                f"(borrowed/netAsset for base asset ~ 0)"
+                            ),
+                            severity=Severity.HIGH.value,
                         )
                         # Cancel exchange SL to prevent orphaned order
                         if sl_id:
@@ -3741,6 +3766,47 @@ class PeriodicReconciler:
                 self.on_critical()
             except Exception as e:
                 logger.error("on_critical callback failed: %s", e)
+
+        # 6. Surface the cycle's peak severity in system_events (+ page on
+        # CRITICAL). Lock-free: positions were snapshotted at the top of the
+        # cycle and per-item locks are released, so the alert webhook cannot
+        # block a position mutation.
+        self._emit_cycle_severity(max_severity)
+
+    def _emit_cycle_severity(self, max_severity: Severity) -> None:
+        """Emit a system_events row for a HIGH/CRITICAL reconciliation cycle.
+
+        HIGH-severity drift (entry-price/qty mismatch, orphaned SL, external
+        close) otherwise writes only ``reconciliation_audit_events`` + logs and
+        never reaches ``system_events`` or an operator. Edge-triggered against
+        the previous cycle's peak severity so a persistent condition surfaces
+        once on the rising edge rather than every ~60s cycle (proper
+        rate-limiting/escalation is tracked separately).
+        """
+        prev = self._last_cycle_severity
+        self._last_cycle_severity = max_severity
+        if max_severity < Severity.HIGH or max_severity <= prev:
+            return
+        if max_severity == Severity.CRITICAL:
+            _emit_event(
+                self.on_event,
+                EventType.ALERT,
+                "Reconciliation cycle detected a CRITICAL discrepancy — see "
+                "reconciliation_audit_events for the specific correction",
+                severity="critical",
+                error_code="RECONCILE_CRITICAL",
+                alert=True,
+            )
+        else:  # HIGH
+            _emit_event(
+                self.on_event,
+                EventType.WARNING,
+                "Reconciliation cycle detected a HIGH-severity discrepancy — see "
+                "reconciliation_audit_events for details",
+                severity="warning",
+                error_code="RECONCILE_HIGH",
+                alert=False,
+            )
 
     def _place_missing_stop_loss(self, position: Any, order_key: str) -> None:
         """Place a stop-loss for a position that has none (e.g. phantom from timeout).

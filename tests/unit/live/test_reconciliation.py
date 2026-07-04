@@ -3387,6 +3387,44 @@ class TestPeriodicSLFillBooksPnl:
         assert len(pnl_calls) == 1
         assert pnl_calls[0].args[0] == pytest.approx(1000.0 + 200.0 - 0.05)
 
+    def test_sl_fill_persists_deduped_trade_row(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Driving the periodic cycle over a filled SL must persist a ``trades``
+        row (not just correct the balance) — keyed by the REAL SL exit order id,
+        GROSS pnl, positive USD commission, and the closed quantity. Guards the
+        periodic path against a refactor silently dropping the trade row, which
+        would leave the SL loss's commission/quantity/pnl unrecorded even though
+        the balance was corrected."""
+        pos = MockPosition(
+            order_id="entry_short",
+            side="short",
+            stop_loss_order_id="sl_short",
+            exchange_order_id="entry_short",
+            db_position_id=71,
+        )
+        mock_position_tracker.positions = {"entry_short": pos}
+        mock_position_tracker.get_position.side_effect = [pos, None, None]
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)
+        reconciler = self._make_filled_sl_cycle(mock_exchange, mock_position_tracker, mock_db, pos)
+        reconciler._use_margin = True
+        reconciler._position_reconciler._use_margin = False  # skip interest lookup
+        mock_db.close_position.return_value = True
+
+        reconciler._reconcile_cycle()
+
+        mock_db.log_trade.assert_called_once()
+        kwargs = mock_db.log_trade.call_args.kwargs
+        # Deduped by the real SL exit order id present on the fill (not the
+        # synthetic reconcile_sl_<id> fallback, which is only used when absent).
+        assert kwargs["exit_order_id"] == "sl_short"
+        assert kwargs["exit_reason"] == "stop_loss_filled_offline"
+        # GROSS short pnl: (50000 - 48000) * 0.1 = +200 (fees live in commission).
+        assert kwargs["pnl"] == pytest.approx(200.0)
+        assert kwargs["quantity"] == pytest.approx(0.1)
+        assert kwargs["commission"] is not None and kwargs["commission"] > 0.0
+        assert str(kwargs["side"]).lower() == "short"
+
     def test_margin_short_unconfirmed_sl_defers_classification(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
@@ -3804,6 +3842,43 @@ class TestPeriodicExternalCloseTradeRow:
         assert db.get_current_balance(1) == pytest.approx(10000.0)
         assert pos.order_id not in tracker.positions
 
+    def test_margin_external_close_audits_and_surfaces_high_severity(self, mock_exchange):
+        """A margin external close / liquidation now writes a CLOSED_EXTERNALLY
+        audit row AND bumps cycle severity to HIGH, so it surfaces via the
+        cycle-severity event instead of being silent (#853)."""
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        _db_id, tracker, pos = self._seed(db, side="short")
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)  # short closed
+        mock_exchange.get_balance.side_effect = lambda asset: MockBalance(asset=asset, total=0.0)
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 48000.0
+        on_event = MagicMock()
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            use_margin=True,
+            data_provider=data_provider,
+            on_event=on_event,
+        )
+        reconciler._reconcile_cycle()
+
+        # CLOSED_EXTERNALLY audit row written for the liquidation.
+        audits = db.get_audit_events(session_id=1)
+        assert any(a["new_value"] == "CLOSED_EXTERNALLY" for a in audits), audits
+        # Severity bumped to HIGH -> the cycle-severity event records it in system_events.
+        high_events = [
+            c for c in on_event.call_args_list if c.kwargs.get("error_code") == "RECONCILE_HIGH"
+        ]
+        assert high_events, f"expected RECONCILE_HIGH, got {on_event.call_args_list}"
+
 
 class TestReconcilerEventSink:
     """The reconciler gains a system_events/alert sink via an injected on_event
@@ -3858,3 +3933,81 @@ class TestReconcilerEventSink:
         # The child PositionReconciler must receive the same sink so its
         # emergency-close paths can page too.
         assert pr._position_reconciler.on_event is cb
+
+
+class TestReconcileCycleSeverityEvent:
+    """The periodic cycle surfaces its peak severity in system_events — HIGH
+    drift was previously invisible (audit-row + log only). Edge-triggered so a
+    persistent condition doesn't page/log every ~60s cycle (#853)."""
+
+    @staticmethod
+    def _reconciler(mock_exchange, mock_position_tracker, mock_db, on_event):
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+        )
+
+    def test_critical_pages_operator(self, mock_exchange, mock_position_tracker, mock_db):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)
+        on_event.assert_called_once()
+        args, kwargs = on_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "RECONCILE_CRITICAL"
+        assert kwargs["alert"] is True
+
+    def test_high_emits_event_but_does_not_page(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.HIGH)
+        on_event.assert_called_once()
+        _, kwargs = on_event.call_args
+        assert kwargs["error_code"] == "RECONCILE_HIGH"
+        assert kwargs["alert"] is False
+
+    def test_low_and_medium_do_not_emit(self, mock_exchange, mock_position_tracker, mock_db):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.LOW)
+        pr._emit_cycle_severity(Severity.MEDIUM)
+        on_event.assert_not_called()
+
+    def test_persistent_critical_only_pages_on_rising_edge(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # rising edge -> emit
+        pr._emit_cycle_severity(Severity.CRITICAL)  # persistent -> no re-emit
+        assert on_event.call_count == 1
+        # Drops back then re-rises -> a new occurrence re-pages.
+        pr._emit_cycle_severity(Severity.LOW)
+        pr._emit_cycle_severity(Severity.CRITICAL)
+        assert on_event.call_count == 2
+
+    def test_escalation_high_to_critical_pages(self, mock_exchange, mock_position_tracker, mock_db):
+        """HIGH then CRITICAL must page on the escalation (prev=HIGH, not LOW)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.HIGH)  # WARNING (rising edge)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # escalation -> pages
+        assert on_event.call_count == 2
+        _, kwargs = on_event.call_args
+        assert kwargs["error_code"] == "RECONCILE_CRITICAL"
+        assert kwargs["alert"] is True
+
+    def test_de_escalation_critical_to_high_stays_silent(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """CRITICAL then HIGH must NOT re-emit (severity fell, not a rising edge)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # ALERT (rising edge)
+        pr._emit_cycle_severity(Severity.HIGH)  # de-escalation -> silent
+        assert on_event.call_count == 1

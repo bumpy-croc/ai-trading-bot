@@ -113,6 +113,7 @@ from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
+from src.strategies.components.exposure_governor import ExposureGovernor
 
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
@@ -917,6 +918,17 @@ class LiveTradingEngine:
             default_take_profit_pct=self._resolve_take_profit_pct(),
         )
 
+        # Wire the #802 regime-gated exposure governor. Positions are read lazily
+        # so ordering with live_position_tracker construction does not matter.
+        # Inert unless the ``enable_exposure_governor`` feature flag is on.
+        # Resolve the flag ONCE here (not per entry) — reading feature_flags.json
+        # on every entry would add disk I/O to the hot path. A flag change
+        # requires a restart (which reconstructs the engine) anyway.
+        self.live_entry_handler.configure_exposure_gate(
+            ExposureGovernor(enabled=is_enabled("enable_exposure_governor", default=False)),
+            lambda: list(self.live_position_tracker.positions.values()),
+        )
+
         # Wrap PartialExitPolicy in unified PartialOperationsManager
         partial_ops_manager = (
             PartialOperationsManager(policy=self.partial_manager)
@@ -1325,6 +1337,18 @@ class LiveTradingEngine:
         except Exception as e:
             self._loop_crashed = True
             logger.critical("Trading loop terminated unexpectedly: %s", e, exc_info=True)
+            # Distinct paged event so an abnormal loop death is distinguishable
+            # from a clean ENGINE_STOP in system_events (the 2026-05-19 zombie-bot
+            # class, where the process stayed up but the loop was dead). #853
+            self._record_event(
+                EventType.ALERT,
+                f"Trading loop crashed unexpectedly: {e}",
+                severity="critical",
+                component="engine",
+                error_code="LOOP_CRASH",
+                exc=e,
+                alert=True,
+            )
 
     def _exit_if_loop_crashed(self, exit_on_crash: bool) -> None:
         """Exit the process non-zero if the trading loop died abnormally (#630).
@@ -1598,6 +1622,18 @@ class LiveTradingEngine:
                     logger.critical(
                         f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.",
                         exc_info=True,
+                    )
+                    # Paged event before the (generic) ENGINE_STOP so operators can
+                    # distinguish this abnormal shutdown from a clean stop. #853
+                    self._record_event(
+                        EventType.ALERT,
+                        f"Trading loop stopping — {self.consecutive_errors} consecutive errors "
+                        f"reached the limit (last: {e})",
+                        severity="critical",
+                        component="engine",
+                        error_code="LOOP_MAX_ERRORS",
+                        exc=e,
+                        alert=True,
                     )
                     # Abnormal stop: signal start() to exit non-zero for a restart (#630).
                     self._loop_crashed = True

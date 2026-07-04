@@ -1000,6 +1000,25 @@ class LiveEntryCoordinator:
                     short_position_size,
                     current_time,
                 )
+
+                # Regime-gated gross exposure cap (#802). This legacy path has no
+                # regime context, so the governor uses its most-conservative
+                # (unknown-regime) cap by design — tightly bounding legacy shorts.
+                # Routed through the same live entry handler as the runtime path
+                # so the cap arithmetic is shared (no bypass).
+                if short_position_size > 0:
+                    short_position_size, short_gate_reason = (
+                        state.live_entry_handler.apply_pre_order_gates(
+                            short_position_size,
+                            regime=None,
+                            equity=state.current_balance,
+                            now=current_time,
+                        )
+                    )
+                    if short_gate_reason:
+                        logger.info(
+                            "Legacy short exposure-capped for %s: %s", symbol, short_gate_reason
+                        )
                 if short_position_size > 0:
                     if overrides and (
                         ("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)
