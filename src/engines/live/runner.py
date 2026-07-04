@@ -145,7 +145,12 @@ def parse_args():
 
     # Logging and monitoring
     parser.add_argument("--log-trades", action="store_true", help="Log individual trades to file")
-    parser.add_argument("--webhook-url", help="Webhook URL for trade notifications")
+    parser.add_argument(
+        "--webhook-url",
+        default=os.getenv("ALERT_WEBHOOK_URL"),
+        help="Webhook URL for operator alerts. Falls back to $ALERT_WEBHOOK_URL so "
+        "production (started via a fixed command) can configure paging via env.",
+    )
     parser.add_argument(
         "--snapshot-interval",
         type=int,
