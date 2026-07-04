@@ -200,7 +200,7 @@ def _make_state(
     *,
     balance: float = 80.0,
     db_peak: float | None = 100.0,
-    tracker_peak: float = 80.0,
+    tracker_peak: float = 100.0,
     session_id: int | None = 7,
 ) -> MagicMock:
     from src.engines.live.monitoring.drawdown_guard import DrawdownEngineState
@@ -212,6 +212,9 @@ def _make_state(
     state._close_only_mode = False
     state.db_manager = MagicMock()
     state.db_manager.get_session_peak_balance.return_value = db_peak
+    # The engine carries a PerformanceTracker whose peak initializes from the
+    # CONFIGURED balance (the 2026-07-04 prod mis-seed poison, $100 vs true
+    # $84). It sits on the state to prove the enforcer never reads it.
     state.performance_tracker = MagicMock()
     metrics = MagicMock()
     metrics.peak_balance = tracker_peak
@@ -301,6 +304,8 @@ def test_restart_with_reset_peak_override_stays_trading(monkeypatch):
 
     state._enter_close_only_mode.assert_not_called()
     assert enforcer.guard.peak_balance == pytest.approx(78.0)
+    # The override ignores history entirely — no DB read is needed.
+    state.db_manager.get_session_peak_balance.assert_not_called()
 
 
 def test_breach_already_in_close_only_still_records_cause():
@@ -316,33 +321,101 @@ def test_breach_already_in_close_only_still_records_cause():
     state._record_event.assert_called_once()
 
 
-def test_db_seed_failure_fails_soft_to_in_memory_peak():
-    state = _make_state(balance=90.0, db_peak=None, tracker_peak=90.0)
-    state.db_manager.get_session_peak_balance.side_effect = RuntimeError("db down")
-
+def test_prod_regression_config_balance_cannot_poison_peak(caplog):
+    """2026-07-04 prod mis-seed: guard armed at the CONFIGURED $100 while true
+    session equity was $84 and immediately warned at a phantom 15.6% drawdown.
+    The DB session max is authoritative; the tracker's config-initialized peak
+    must never reach the seed."""
+    state = _make_state(balance=84.40, db_peak=84.4159, tracker_peak=100.0)
     enforcer = _make_enforcer(state)
-    enforcer.check()  # must not raise; seeds from tracker/balance → 0% drawdown
 
+    with caplog.at_level(logging.WARNING):
+        enforcer.check()
+
+    assert enforcer.guard.peak_balance == pytest.approx(84.4159)
+    state._enter_close_only_mode.assert_not_called()
+    # Real drawdown is ~0.02% — no phantom warning tier may fire.
+    assert not [r for r in caplog.records if "rawdown" in r.message]
+    state.performance_tracker.get_metrics.assert_not_called()
+
+
+def test_db_error_defers_seeding_then_seeds_on_retry():
+    """A failed DB read must not latch a half-seeded baseline — the enforcer
+    retries next cycle and arms from the authoritative session max."""
+    state = _make_state(balance=78.0, db_peak=100.0)
+    state.db_manager.get_session_peak_balance.side_effect = [
+        RuntimeError("db down"),
+        100.0,
+    ]
+    enforcer = _make_enforcer(state)
+
+    enforcer.check()  # DB read fails → seeding deferred, no observation
+    assert enforcer.guard.seeded is False
+    state._enter_close_only_mode.assert_not_called()
+
+    enforcer.check()  # DB back → seeds peak=100 → 22% drawdown trips
+    assert enforcer.guard.peak_balance == pytest.approx(100.0)
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_seed_retry_exhaustion_falls_back_to_current_balance(caplog):
+    """The cap must never stay unarmed indefinitely: after MAX_SEED_ATTEMPTS
+    failed DB reads the guard arms from the current balance with a WARNING."""
+    from src.engines.live.monitoring.drawdown_guard import MAX_SEED_ATTEMPTS
+
+    state = _make_state(balance=90.0)
+    state.db_manager.get_session_peak_balance.side_effect = RuntimeError("db down")
+    enforcer = _make_enforcer(state)
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(MAX_SEED_ATTEMPTS):
+            enforcer.check()
+
+    assert enforcer.guard.seeded is True
+    assert enforcer.guard.peak_balance == pytest.approx(90.0)
+    assert [r for r in caplog.records if "falling back" in r.message]
+    # Still armed from the fallback baseline: a further 20% drawdown trips.
+    state.current_balance = 72.0
+    enforcer.check()
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_db_read_none_seeds_from_current_balance():
+    """A successful read with no snapshot rows (fresh session) is a legitimate
+    baseline: the session starts at the current balance — no retry loop."""
+    state = _make_state(balance=90.0, db_peak=None)
+    enforcer = _make_enforcer(state)
+
+    enforcer.check()
+
+    assert enforcer.guard.seeded is True
+    assert enforcer.guard.peak_balance == pytest.approx(90.0)
+    state.db_manager.get_session_peak_balance.assert_called_once()
     state._enter_close_only_mode.assert_not_called()
 
 
 def test_check_never_raises_into_the_trading_loop():
     state = _make_state()
-    state.performance_tracker.get_metrics.side_effect = RuntimeError("boom")
     state.current_balance = "not-a-number"  # type: ignore[assignment]
 
     enforcer = _make_enforcer(state)
     enforcer.check()  # swallowed + logged
 
 
-def test_no_db_session_seeds_from_in_memory_only():
-    state = _make_state(balance=100.0, session_id=None, tracker_peak=100.0)
+def test_missing_session_defers_seeding_until_available():
+    """No session id yet → no DB read is possible; seeding waits (bounded)
+    rather than latching a baseline that ignores persisted history."""
+    state = _make_state(balance=78.0, db_peak=100.0, session_id=None)
     enforcer = _make_enforcer(state)
 
     enforcer.check()
-
+    assert enforcer.guard.seeded is False
     state.db_manager.get_session_peak_balance.assert_not_called()
-    state._enter_close_only_mode.assert_not_called()
+
+    state.trading_session_id = 7  # session resolved on a later cycle
+    enforcer.check()
+    assert enforcer.guard.peak_balance == pytest.approx(100.0)
+    state._enter_close_only_mode.assert_called_once()  # 22% DD re-trips
 
 
 # ---------------------------------------------------------------------------
@@ -567,3 +640,42 @@ def test_exits_still_execute_while_tripped():
 
     assert result.success is True
     execution_engine.execute_exit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# PerformanceTracker seeding: resumed balance, not configured balance
+# ---------------------------------------------------------------------------
+
+
+def test_performance_tracker_seeds_from_resumed_balance():
+    """The tracker peak must start from the RECOVERED session balance, not the
+    configured INITIAL_BALANCE. The config value ($100 vs true equity $84)
+    poisoned prod's account_history.drawdown with a phantom 15.6% and was the
+    poison candidate in the guard's 2026-07-04 mis-seed."""
+    from unittest.mock import patch
+
+    from src.engines.live.trading_engine import LiveTradingEngine
+
+    db = MagicMock()
+    db.get_active_session_id.return_value = 20
+    db.get_current_balance.return_value = 84.40
+
+    with (
+        patch("src.engines.live.trading_engine.DatabaseManager", return_value=db),
+        patch("src.engines.live.trading_engine.get_config", return_value={}),
+        patch(
+            "src.engines.live.trading_engine._create_exchange_provider",
+            return_value=(MagicMock(), "mock"),
+        ),
+    ):
+        engine = LiveTradingEngine(
+            strategy=MagicMock(),
+            data_provider=MagicMock(),
+            initial_balance=100.0,
+            enable_live_trading=True,
+            resume_from_last_balance=True,
+        )
+
+    assert engine.initial_balance == pytest.approx(84.40)
+    assert engine.performance_tracker.initial_balance == pytest.approx(84.40)
+    assert engine.performance_tracker.peak_balance == pytest.approx(84.40)
