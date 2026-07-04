@@ -162,6 +162,25 @@ DEFAULT_REGIME_MULTIPLIER_BEAR_HIGH_VOL = 0.5  # Much reduced in volatile bear
 DEFAULT_REGIME_MULTIPLIER_RANGE_LOW_VOL = 0.6  # Reduced in range market
 DEFAULT_REGIME_MULTIPLIER_RANGE_HIGH_VOL = 0.3  # Very reduced in volatile range
 
+# Regime-gated gross exposure caps (#802). Ceiling on TOTAL gross open exposure
+# (sum of |entry notional| / current equity) allowed per regime, applied after
+# position sizing / dynamic risk and before order placement in both engines.
+# In a bear, exposure itself is the primary risk lever. Keys are
+# "{trend}_{vol}"; the governor falls back to DEFAULT_EXPOSURE_CAP_UNKNOWN when
+# the regime (or its volatility) is unavailable. Overridable per strategy.
+DEFAULT_EXPOSURE_CAPS: dict[str, float] = {
+    "trend_up_low_vol": 0.50,
+    "trend_up_high_vol": 0.35,
+    "trend_down_low_vol": 0.20,
+    "trend_down_high_vol": 0.15,
+    "range_low_vol": 0.30,
+    "range_high_vol": 0.20,
+}
+# Most-conservative cap used when the regime is None / unknown (e.g. regime
+# detection disabled, or the legacy short path with no regime context). Chosen
+# to match the tightest bear cap so an unknown regime never over-exposes.
+DEFAULT_EXPOSURE_CAP_UNKNOWN = 0.15
+
 # Regime Strategy Switching Defaults
 DEFAULT_REGIME_SWITCH_COOLDOWN_MINUTES = 60  # Cooldown between switches
 DEFAULT_REGIME_MIN_DURATION_BARS = 15  # Minimum bars before switching

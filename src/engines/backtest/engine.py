@@ -77,6 +77,7 @@ from src.strategies.components import (
     StrategyRuntime,
 )
 from src.strategies.components import Strategy as ComponentStrategy
+from src.strategies.components.exposure_governor import ExposureGovernor
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -427,6 +428,17 @@ class Backtester:
             correlation_handler=self.correlation_handler,
             default_take_profit_pct=default_take_profit_pct,
             max_position_size=self.risk_manager.params.max_position_size,
+        )
+
+        # Wire the #802 regime-gated exposure governor (shared with the live
+        # engine). The backtest is single-position, so at entry the book is flat
+        # and the cap bounds the new leg to the regime ceiling. Read lazily;
+        # inert unless the ``enable_exposure_governor`` feature flag is on.
+        self.entry_handler.configure_exposure_gate(
+            ExposureGovernor(),
+            lambda: (
+                [self.position_tracker.current_trade] if self.position_tracker.has_position else []
+            ),
         )
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager.

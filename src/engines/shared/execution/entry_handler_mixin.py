@@ -8,26 +8,37 @@ by code review (#486, CODE.md Backtest-Live Parity).
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from src.engines.shared.entry_utils import extract_entry_plan
+from src.engines.shared.exposure import gross_exposure_fraction
 from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
     from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
     from src.position_management.dynamic_risk import DynamicRiskManager
+    from src.strategies.components.exposure_governor import ExposureGovernor
+
+logger = logging.getLogger(__name__)
 
 
 class SharedEntryHandlerMixin:
     """Entry-plan extraction and dynamic-risk sizing common to both engines.
 
     The inheriting handler must set ``dynamic_risk_manager`` and
-    ``_dynamic_risk_handler`` in its ``__init__``.
+    ``_dynamic_risk_handler`` in its ``__init__``. It may optionally set
+    ``_exposure_governor`` and ``_positions_source`` to enable the shared
+    pre-order exposure gate (#802).
     """
 
     dynamic_risk_manager: DynamicRiskManager | None
     _dynamic_risk_handler: DynamicRiskHandler
+    # Optional pre-order gate wiring (#802). Absent/None => gate is inert.
+    _exposure_governor: ExposureGovernor | None = None
+    _positions_source: Callable[[], Iterable[Any]] | None = None
 
     def _extract_entry_plan(
         self,
@@ -88,3 +99,63 @@ class SharedEntryHandlerMixin:
             List of dynamic risk adjustment records.
         """
         return self._dynamic_risk_handler.get_adjustments(clear=True)
+
+    def configure_exposure_gate(
+        self,
+        exposure_governor: ExposureGovernor | None,
+        positions_source: Callable[[], Iterable[Any]] | None,
+    ) -> None:
+        """Wire the #802 pre-order exposure gate (governor + open-position source).
+
+        Called by each engine after constructing the handler. With either arg
+        ``None`` the gate stays inert, so parity and default behaviour are
+        unchanged until an engine opts in.
+        """
+        self._exposure_governor = exposure_governor
+        self._positions_source = positions_source
+
+    def current_gross_exposure_fraction(self, equity: float) -> float:
+        """Current gross open exposure as a fraction of ``equity`` (0.0 if unknown).
+
+        Reads open positions from the injected ``_positions_source`` and delegates
+        the arithmetic to the shared :func:`gross_exposure_fraction`, so backtest
+        and live compute exposure identically. Never raises — an exposure-calc
+        failure must not break entries; it degrades to 0.0 (uncapped) and logs.
+        """
+        source = self._positions_source
+        if source is None:
+            return 0.0
+        try:
+            positions = source()
+            return gross_exposure_fraction(positions, equity)
+        except Exception:  # noqa: BLE001 - exposure calc must never break entries
+            logger.warning("current_gross_exposure_fraction failed; treating as 0", exc_info=True)
+            return 0.0
+
+    def apply_pre_order_gates(
+        self,
+        size_fraction: float,
+        *,
+        regime: Any,
+        equity: float,
+        now: datetime | None = None,
+        extra_factor: float = 1.0,
+    ) -> tuple[float, str | None]:
+        """Apply the shared pre-order risk gates to a sized position fraction.
+
+        Currently the regime-gated exposure governor (#802); #806/#807 extend
+        this with event-window and circuit-breaker caps. Returns
+        ``(allowed_fraction, reason_or_None)`` where ``reason`` is set only when
+        the size was reduced (for entry-decision logging). Inert (returns the
+        input unchanged) when no governor is wired or it is disabled.
+        """
+        governor = self._exposure_governor
+        if governor is None or size_fraction <= 0 or not governor.enabled:
+            return size_fraction, None
+        gross = self.current_gross_exposure_fraction(equity)
+        return governor.cap_fraction(
+            size_fraction,
+            regime=regime,
+            gross_exposure_fraction=gross,
+            extra_factor=extra_factor,
+        )
