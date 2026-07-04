@@ -281,3 +281,27 @@ class TestLoopCrashEvent:
         assert kwargs["severity"] == "critical"
         assert kwargs["alert"] is True
         assert isinstance(kwargs["exc"], RuntimeError)
+
+
+class TestOrderTrackerAlertAdapter:
+    """OrderTracker calls this adapter while holding its per-order lock, so the
+    (blocking, up-to-10s) alert webhook must be delivered OFF-thread — not inline
+    under the lock (#853; the webhook-under-lock class PR #857's review flagged)."""
+
+    def test_dispatches_record_event_off_thread(self):
+        import threading
+
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        delivered = threading.Event()
+        engine._record_event = MagicMock(side_effect=lambda *a, **k: delivered.set())
+
+        # Returns immediately (does not block on _record_event / the webhook).
+        engine._order_tracker_alert("position orphaned!", "ORDER_ORPHANED")
+
+        assert delivered.wait(timeout=2.0), "adapter did not deliver the event off-thread"
+        args, kwargs = engine._record_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "ORDER_ORPHANED"
+        assert kwargs["component"] == "order_tracker"
+        assert kwargs["severity"] == "critical"
+        assert kwargs["alert"] is True

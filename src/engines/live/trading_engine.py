@@ -652,6 +652,7 @@ class LiveTradingEngine:
                         on_partial_fill=self._handle_partial_fill,
                         on_cancel=self._handle_order_cancel,
                         on_tracking_lost=self._handle_order_tracking_lost,
+                        on_critical=self._order_tracker_alert,
                     )
                     logger.info(
                         f"{provider_name} exchange interface and account synchronizer initialized"
@@ -2193,6 +2194,33 @@ class LiveTradingEngine:
             )
         except Exception as e:  # pragma: no cover - defensive; must never break startup
             logger.warning("no-alert-channel guard failed: %s", e)
+
+    def _order_tracker_alert(self, message: str, error_code: str) -> None:
+        """Adapter so OrderTracker (kept free of EventType/DB coupling) can page an
+        operator for orphaned/unrecoverable orders via the engine's fault-isolated
+        ``_record_event`` — routing its "MANUAL RECONCILIATION REQUIRED" criticals
+        to system_events + an alert instead of only application logs.
+
+        OrderTracker invokes this while holding its per-order lock (which serializes
+        the poll thread and the UserDataProcessor worker to prevent double-fills),
+        so the up-to-10s alert webhook must NOT run inline. Deliver on a short-lived
+        daemon thread so this returns immediately and the lock is released promptly.
+        """
+
+        def _deliver() -> None:
+            self._record_event(
+                EventType.ALERT,
+                message,
+                severity="critical",
+                component="order_tracker",
+                error_code=error_code,
+                alert=True,
+            )
+
+        try:
+            threading.Thread(target=_deliver, name="order-tracker-alert", daemon=True).start()
+        except Exception as e:  # pragma: no cover - defensive; never break order handling
+            logger.warning("order-tracker alert dispatch failed: %s", e)
 
     def _sleep_with_interrupt(self, seconds: float) -> None:
         """Sleep in small increments to allow for interrupt (delegated to LiveLoopTimingCoordinator)."""

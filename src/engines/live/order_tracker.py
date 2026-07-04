@@ -83,6 +83,7 @@ class OrderTracker:
         on_partial_fill: Callable[[str, str, float, float], None] | None = None,
         on_cancel: Callable[[str, str, float], None] | None = None,
         on_tracking_lost: Callable[[str, str, int], None] | None = None,
+        on_critical: Callable[[str, str], None] | None = None,
         event_deduplicator: EventDeduplicator | None = None,
     ):
         """
@@ -112,6 +113,11 @@ class OrderTracker:
         self.on_partial_fill = on_partial_fill
         self.on_cancel = on_cancel
         self.on_tracking_lost = on_tracking_lost
+        # Optional sink for operator-critical conditions (orphaned/unrecoverable
+        # orders). Signature: (message, error_code). The engine adapts it to
+        # _record_event so these reach system_events + an alert instead of only
+        # application logs. None in standalone use / tests.
+        self.on_critical = on_critical
         self._dedup = event_deduplicator or EventDeduplicator()
         self._polling_enabled = True  # Controls whether _poll_loop runs checks
 
@@ -124,6 +130,20 @@ class OrderTracker:
         # Circuit breaker to handle exchange API failures gracefully
         # Prevents resource exhaustion from repeated failing API calls
         self._circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+
+    def _emit_critical(self, message: str, error_code: str) -> None:
+        """Route an operator-critical order condition (an orphaned/unrecoverable
+        order that the docstrings say "MANUAL RECONCILIATION REQUIRED") to the
+        engine's alert sink, if wired, so it reaches system_events + an operator
+        instead of only application logs. Fault-isolated: observability must never
+        break the poll loop or the fill/cancel handling around it.
+        """
+        if self.on_critical is None:
+            return
+        try:
+            self.on_critical(message, error_code)
+        except Exception as e:
+            logger.warning("order-tracker critical emit failed: %s", e)
 
     def _get_order_lock(self, order_id: str) -> threading.Lock:
         """Return the per-order lock, creating one if needed.
@@ -427,6 +447,15 @@ class OrderTracker:
                             tracked.symbol,
                             e,
                             exc_info=True,
+                        )
+                        # This runs UNDER the per-order lock; the engine adapter
+                        # delivers the alert off-thread so the (up to 10s) webhook
+                        # never blocks the poll / fill-processing path. #853
+                        self._emit_critical(
+                            f"Fill callback failed {tracked.callback_failure_count}x for order "
+                            f"{order_id} on {tracked.symbol} — order force-removed; position is "
+                            "ORPHANED on exchange, manual reconciliation required",
+                            "ORDER_ORPHANED",
                         )
                         self.stop_tracking(order_id)
                         return
