@@ -4,5 +4,6 @@
   "optimizer_canary_fraction": "0.1",
   "optimizer_auto_apply": false,
   "entry_pause": false,
-  "max_drawdown_reset_peak": false
+  "max_drawdown_reset_peak": false,
+  "enable_etf_flow_gate": false
 }

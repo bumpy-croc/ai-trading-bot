@@ -66,3 +66,33 @@ The `atb data` command family in `cli/commands/data.py` covers the most common w
   data even before the first real session runs.
 
 All subcommands honour the `--cache-dir` flag so CI and containerised deployments can isolate cache storage.
+
+## ETF net-flow signal (#803)
+
+US spot BTC/ETH ETF net flows have been the marginal price-setter this cycle — multi-day
+outflow streaks have led/tracked price legs. `ETFFlowProvider`
+(`src/data_providers/etf_flow_provider.py`) makes flows available to the bot:
+
+- **Ingest & cache**: daily net flows are fetched via a pluggable `fetch_fn` (default targets
+  Farside Investors) and cached to `cache/etf_flows/etf_flows.parquet` with an atomic
+  temp+`os.replace` write. Resolution order is **fresh cache → upstream fetch → stale cache →
+  bundled seed** (`src/data/etf_flows_seed.csv`), so a trading loop never hard-fails on a
+  source outage — it degrades to last-known/neutral flows and logs.
+- **Features**: `compute_flow_features(...)` returns the 5d/20d net-flow **z-scores** (the
+  z-score of the W-day rolling-mean flow standardized against its recent history, so a
+  sustained outflow regime prints strongly negative) and the **consecutive-outflow-day** count.
+- **Gate** (rule-based, active today): `FlowGatedSignalGenerator`
+  (`src/strategies/components/flow_gate.py`) wraps a strategy's signal generator and turns a
+  BUY into HOLD while the 5-day z-score is below the block threshold (default -1.0). It is a
+  signal-generator decorator, so it applies in **both** the backtest and live engines through
+  the strategy with no per-engine wiring. SELL/HOLD pass through; unknown flow does **not**
+  block. Enabled via `FEATURE_ENABLE_ETF_FLOW_GATE` (default OFF).
+- **Model feature** (inert until retrain): `ETFFlowFeatureExtractor`
+  (`src/prediction/features/etf_flow.py`) exposes the same features as optional model inputs.
+  Because it changes the model's feature schema, existing ONNX models cannot consume it until
+  retrained (#801, human sign-off) — registered only behind `etf_flows_features.enabled`,
+  default off.
+
+> The bundled seed and the default Farside `fetch_fn` are best-effort; operators with API
+> access should override `fetch_fn` with an authoritative client. The seed is illustrative
+> data for offline/CI runs, not an authoritative flow record.
