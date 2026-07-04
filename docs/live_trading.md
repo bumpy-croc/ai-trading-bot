@@ -75,12 +75,19 @@ numbers `account_history.drawdown` is derived from.
 - **Peak baseline**: seeded on boot from the max of `account_history` balances for the active
   session (plus the recovered inactive session on clean restarts), the performance tracker's
   peak, and the current balance. A restart therefore never resets the drawdown baseline.
+  By policy the baseline is the peak **true equity since the last reconciled reset** —
+  pre-reset ledger history is excluded because the Mar–Jun 2026 rows carry a phantom-era
+  book peak (see the capital-erosion postmortem; measuring from it would falsely report an
+  immediate breach on deploy). Known limitation: a clean restart that creates a NEW session
+  re-baselines the peak ("20% per session", not rolling); dormant while prod reuses the
+  active session across restarts — a durable cross-session peak is tracked in #847.
 - **Escalation tiers** (risk-limits.json `escalation`): WARNING log at 50% of the cap
   (10% drawdown), CRITICAL log at 80% (16% drawdown). Tier logs are rate-limited
   (`DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS`) but escalations log immediately.
-- **Breach (drawdown >= cap)**: the engine enters the existing **close-only mode** — the same
-  gate `FEATURE_ENTRY_PAUSE` uses at the entry seams. New entries and scale-ins stop; exits,
-  partial exits, stop-loss management, and reconciliation keep running. Nothing is liquidated.
+- **Breach (drawdown >= cap)**: the engine enters the existing **close-only mode**. The flag
+  gates every exposure increase: entry evaluation, the `execute_entry_locked` chokepoint
+  (covers the legacy short path and any direct caller), and scale-ins. Exits, partial exits,
+  stop-loss management, and reconciliation keep running. Nothing is liquidated.
   A CRITICAL `system_events` row (`error_code=MAX_DRAWDOWN_BREACH`), a structured
   `risk_event`, and the alert webhook (if configured) fire once. The trip is **latched**: it
   survives balance recovery below the cap, does not re-spam, and re-trips on restart via the

@@ -931,6 +931,9 @@ class LiveTradingEngine:
             use_high_low_for_stops=self.use_high_low_for_stops,
             max_position_size=self.max_position_size,
             max_filled_price_deviation=self.max_filled_price_deviation,
+            # Close-only mode must block ALL exposure increases, including
+            # scale-ins; read at call time so mid-session trips take effect.
+            close_only_provider=lambda: self._close_only_mode,
         )
 
         # Stop-loss lifecycle handler — owns every exchange-facing stop-loss

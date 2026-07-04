@@ -106,6 +106,7 @@ def test_pause_skips_entry_check_before_strategy_evaluation(entry_pause_on):
 def test_pause_blocks_execute_entry_locked_defense_in_depth(entry_pause_on):
     """Even a direct entry-execution call is refused while paused."""
     state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = False
     state.live_entry_handler = MagicMock()
     state.live_position_tracker = MagicMock()
     state.live_position_tracker.has_position_for_symbol.return_value = False
@@ -131,6 +132,7 @@ def test_pause_blocks_execute_entry_locked_defense_in_depth(entry_pause_on):
 
 def test_pause_blocks_legacy_short_entry(entry_pause_on):
     state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = False
     state._is_runtime_strategy.return_value = False
     strategy = MagicMock()
     strategy.check_short_entry_conditions.return_value = True

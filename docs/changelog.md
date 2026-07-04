@@ -18,8 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine at `max_drawdown_pct`): new `MaxDrawdownGuard` + `MaxDrawdownEnforcer`
   (`src/engines/live/monitoring/drawdown_guard.py`) measure drawdown from the
   session peak balance on every trading-loop iteration and, at the cap (0.20),
-  trip the existing close-only mode — entries stop, exits/stop-losses keep
-  running, nothing is liquidated. Emits a CRITICAL `system_events` row
+  trip the existing close-only mode — entries, legacy shorts, and scale-ins
+  stop (close-only now also gates the `execute_entry_locked` chokepoint and
+  the scale-in branch); exits/stop-losses keep running, nothing is
+  liquidated. Peak baseline = peak true equity since the last reconciled
+  reset (session-scoped; phantom-era ledger history deliberately excluded;
+  durable cross-session peak tracked in #847). Emits a CRITICAL `system_events` row
   (`MAX_DRAWDOWN_BREACH`), a structured `risk_event`, and the alert webhook;
   latched (no re-trigger spam) and restart-safe (peak recomputed from
   `account_history` on boot via `DatabaseManager.get_session_peak_balance`).

@@ -6,7 +6,9 @@ WARNING at 50% of the cap, CRITICAL at 80%, and a latched BREACH at the cap
 itself (``portfolio.max_drawdown_pct``).
 
 ``MaxDrawdownEnforcer`` runs the guard on every trading-loop iteration and, on
-breach, trips the EXISTING close-only mode: no new entries, while exits,
+breach, trips the EXISTING close-only mode, which gates every exposure
+increase: entry evaluation, the ``execute_entry_locked`` chokepoint (covers
+the legacy duck-typed short path and any direct caller), and scale-ins. Exits,
 partial exits, stop-loss management, and reconciliation keep running. It never
 liquidates anything — it only stops new risk.
 
@@ -16,6 +18,22 @@ recomputed from ``account_history`` (active session plus the recovered
 inactive session on clean restarts), so a restart cannot reset the drawdown
 baseline — a bot restarted mid-breach re-trips naturally on its first loop
 iteration.
+
+Baseline policy (PM decision, 2026-07-04): the peak baseline is the peak TRUE
+equity since the last reconciled reset — i.e. session-scoped history, NOT
+all-time book value. Pre-reset ledger history is deliberately excluded: the
+Mar–Jun 2026 rows carry a phantom-era book peak (a software-held $100.00
+while true equity was ~$84; ``margin_equity_sync`` wrote the books down to
+true equity on 2026-06-03/05 — see the capital-erosion postmortem). Measuring
+drawdown from that phantom peak would falsely report an immediate >20% breach
+on deploy.
+
+Known limitation (accepted, follow-up #847): because the peak is
+session-scoped, a future CLEAN restart that creates a NEW session
+re-baselines the peak — the cap degrades to "20% per session" rather than a
+rolling 20%. Dormant today: prod reuses the active session across restarts.
+The follow-up proposal is a durable cross-session peak anchored to the last
+human-verified reconciliation marker.
 
 Clearing a trip is an operator decision: restart with
 ``FEATURE_MAX_DRAWDOWN_RESET_PEAK=true`` to re-baseline the peak to the

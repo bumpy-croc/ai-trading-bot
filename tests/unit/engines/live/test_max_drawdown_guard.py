@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, create_autospec
 
 import pytest
@@ -377,6 +378,144 @@ def test_close_only_mode_blocks_entry_evaluation():
 
     coordinator.execute_entry.assert_not_called()
     strategy.process_candle.assert_not_called()
+
+
+def test_close_only_mode_blocks_entry_execution_chokepoint():
+    """execute_entry_locked refuses while close-only — covers legacy shorts
+    and any caller that routes around check_entry_conditions."""
+    from src.engines.live.execution.entry_coordinator import (
+        LiveEntryCoordinator,
+        LiveEntryEngineState,
+    )
+    from src.engines.shared.models import PositionSide
+
+    state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = True
+    state.live_entry_handler = MagicMock()
+
+    coordinator = LiveEntryCoordinator(engine_state=state)
+    coordinator.execute_entry_locked(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        price=50000.0,
+        stop_loss=49000.0,
+        take_profit=51000.0,
+        signal_strength=0.8,
+        signal_confidence=0.7,
+    )
+
+    state.live_entry_handler.execute_entry.assert_not_called()
+
+
+def test_close_only_mode_blocks_legacy_short_entry():
+    from src.engines.live.execution.entry_coordinator import (
+        LiveEntryCoordinator,
+        LiveEntryEngineState,
+    )
+
+    state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = True
+    strategy = MagicMock()
+    strategy.check_short_entry_conditions.return_value = True
+    state.strategy = strategy
+
+    coordinator = LiveEntryCoordinator(engine_state=state)
+    coordinator.execute_entry = MagicMock()  # type: ignore[method-assign]
+    coordinator.process_legacy_short_entry(
+        df=MagicMock(),
+        current_index=0,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+
+    coordinator.execute_entry.assert_not_called()
+    strategy.check_short_entry_conditions.assert_not_called()
+
+
+def _make_partial_ops_handler(*, close_only: bool, should_exit: bool = False):
+    """LiveExitHandler wired for check_partial_operations with one position."""
+    from types import SimpleNamespace
+
+    from src.engines.live.execution.exit_handler import LiveExitHandler
+
+    position = MagicMock()
+    position.symbol = "BTCUSDT"
+    position.order_id = "order-1"
+    position.entry_time = datetime(2024, 1, 1, tzinfo=UTC)
+    position.current_size = 0.08
+    position.original_size = 0.08
+    position.size = 0.08
+
+    execution_engine = MagicMock()
+    execution_engine.fee_rate = 0.0
+    execution_engine.slippage_rate = 0.0
+    position_tracker = MagicMock()
+    position_tracker.positions = {"order-1": position}
+    position_tracker.apply_partial_exit.return_value = SimpleNamespace(
+        realized_pnl=1.0, new_current_size=0.04, partial_exits_taken=1
+    )
+    partial_manager = MagicMock()
+    partial_manager.check_partial_exit.side_effect = [
+        SimpleNamespace(should_exit=should_exit, exit_fraction=0.5, target_index=0),
+        SimpleNamespace(should_exit=False, exit_fraction=None, target_index=None),
+    ]
+    partial_manager.check_scale_in.return_value = SimpleNamespace(
+        should_scale=True, scale_fraction=0.05, target_index=0
+    )
+    handler = LiveExitHandler(
+        execution_engine=execution_engine,
+        position_tracker=position_tracker,
+        execution_model=MagicMock(),
+        risk_manager=None,
+        partial_manager=partial_manager,
+        max_position_size=0.5,
+        close_only_provider=lambda: close_only,
+    )
+    return handler, position_tracker
+
+
+def test_close_only_mode_suppresses_scale_in():
+    """Scale-ins increase exposure, so a drawdown trip blocks them too."""
+    handler, tracker = _make_partial_ops_handler(close_only=True)
+
+    handler.check_partial_operations(
+        df=MagicMock(),
+        current_index=0,
+        current_price=51000.0,
+        current_balance=800.0,
+    )
+
+    tracker.apply_scale_in.assert_not_called()
+
+
+def test_close_only_mode_keeps_partial_exits_running():
+    """Partial exits reduce risk and must keep firing while tripped."""
+    handler, tracker = _make_partial_ops_handler(close_only=True, should_exit=True)
+
+    handler.check_partial_operations(
+        df=MagicMock(),
+        current_index=0,
+        current_price=51000.0,
+        current_balance=800.0,
+    )
+
+    tracker.apply_partial_exit.assert_called_once()
+    tracker.apply_scale_in.assert_not_called()
+
+
+def test_scale_in_proceeds_when_not_close_only():
+    handler, tracker = _make_partial_ops_handler(close_only=False)
+
+    handler.check_partial_operations(
+        df=MagicMock(),
+        current_index=0,
+        current_price=51000.0,
+        current_balance=800.0,
+    )
+
+    tracker.apply_scale_in.assert_called_once()
 
 
 def test_exits_still_execute_while_tripped():
