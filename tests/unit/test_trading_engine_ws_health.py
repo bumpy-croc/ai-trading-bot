@@ -186,6 +186,53 @@ class TestCheckUserStreamHealth:
             assert ordered == ["stop_user_stream", "mark_user_degraded"]
 
     @pytest.mark.fast
+    def test_circuit_open_pages_operator_exactly_once(self, mock_engine):
+        """Circuit-open pages a critical USER_WS_DEGRADED alert — but exactly ONCE,
+        not every subsequent REST_DEGRADED cycle. Drives the REAL transition
+        (mark_user_degraded flips state to REST_DEGRADED so later cycles take the
+        early-returning degraded branch) so the anti-spam edge-trigger the audit
+        warned about is actually pinned, not just asserted in a comment (#717/#853)."""
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+
+        ex, _tracker = self._dead_socket_engine(mock_engine)
+        # Real breaker semantics: degrading flips the state so the PRIMARY path
+        # (and thus the circuit-open block) is not re-entered on later cycles.
+        ex.mark_user_degraded.side_effect = lambda: setattr(
+            ex, "_user_ws_state", WebSocketState.REST_DEGRADED
+        )
+        with (
+            patch.object(mock_engine, "_handle_user_stream_disconnect"),
+            patch.object(mock_engine, "_record_event") as rec,
+        ):
+            for _ in range(LIMIT):
+                mock_engine._check_user_stream_health()
+            rec.assert_not_called()  # silent during the fast-reconnect phase
+            mock_engine._check_user_stream_health()  # circuit opens -> alert #1
+            for _ in range(5):
+                mock_engine._check_user_stream_health()  # REST_DEGRADED -> no re-page
+
+        alerts = [c for c in rec.call_args_list if c.kwargs.get("error_code") == "USER_WS_DEGRADED"]
+        assert len(alerts) == 1, f"expected exactly one USER_WS_DEGRADED, got {rec.call_args_list}"
+        assert alerts[0].kwargs["severity"] == "critical"
+        assert alerts[0].kwargs["alert"] is True
+
+    @pytest.mark.fast
+    def test_recovery_records_event(self, mock_engine):
+        """Returning to WS-primary records a USER_WS_RECOVERED event (no page)."""
+        tracker = MagicMock()
+        tracker.is_polling_enabled.return_value = True
+        mock_engine.order_tracker = tracker
+
+        with patch.object(mock_engine, "_record_event") as rec:
+            mock_engine.ws_health_monitor.restore_user_ws_primary()
+
+        events = [
+            c for c in rec.call_args_list if c.kwargs.get("error_code") == "USER_WS_RECOVERED"
+        ]
+        assert events, f"expected USER_WS_RECOVERED, got {rec.call_args_list}"
+        assert events[0].kwargs.get("alert", False) is False
+
+    @pytest.mark.fast
     def test_breaker_resets_on_real_event(self, mock_engine):
         """A genuinely healthy stream (real event) clears the failure counter."""
         mock_engine.enable_live_trading = True
