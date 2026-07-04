@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Exposure-governor pre-enablement fixes** (#802 follow-ups, from the PR merge
+  note): (P2) `src/engines/shared/exposure.py::position_notional` now uses a
+  position's `current_size` (the live fraction after partial exits / scale-ins)
+  instead of the original `size`, so gross exposure is no longer overstated after
+  a partial exit. (P3) scale-ins now respect the regime gross-exposure cap too:
+  the exposure governor is shared with both engines' exit handlers and clamps a
+  scale-in's added exposure to `scale_in_gross_cap_headroom` (conservative cap −
+  current gross). Both remain inert unless `enable_exposure_governor` is on. This
+  clears the two conditions the PM flagged before the governor can be enabled live.
+
 ### Added
 - **Account-level circuit breakers** (#807): new `AccountCircuitBreaker`
   (`src/risk/circuit_breaker.py`) enforces hard, account-level safety limits

@@ -439,8 +439,11 @@ class Backtester:
         # lazily; the flag is resolved ONCE here (not per entry) to keep
         # feature_flags.json disk I/O out of the hot path. Inert unless
         # ``enable_exposure_governor`` is on.
+        exposure_governor = ExposureGovernor(
+            enabled=is_enabled("enable_exposure_governor", default=False)
+        )
         self.entry_handler.configure_exposure_gate(
-            ExposureGovernor(enabled=is_enabled("enable_exposure_governor", default=False)),
+            exposure_governor,
             lambda: (
                 [self.position_tracker.current_trade] if self.position_tracker.has_position else []
             ),
@@ -478,6 +481,9 @@ class Backtester:
             # a position past what entries are allowed to open.
             max_position_size=self.risk_manager.params.max_position_size,
         )
+        # #802 follow-up P3: scale-ins respect the same gross exposure cap as
+        # entries (share the governor instance; inert unless the flag is on).
+        self.exit_handler.configure_exposure_gate(exposure_governor)
 
         # For backward compatibility - expose current_trade through position_tracker
         # Tests may access backtester.current_trade directly
