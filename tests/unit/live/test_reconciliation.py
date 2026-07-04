@@ -3915,3 +3915,26 @@ class TestReconcileCycleSeverityEvent:
         pr._emit_cycle_severity(Severity.LOW)
         pr._emit_cycle_severity(Severity.CRITICAL)
         assert on_event.call_count == 2
+
+    def test_escalation_high_to_critical_pages(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """HIGH then CRITICAL must page on the escalation (prev=HIGH, not LOW)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.HIGH)  # WARNING (rising edge)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # escalation -> pages
+        assert on_event.call_count == 2
+        _, kwargs = on_event.call_args
+        assert kwargs["error_code"] == "RECONCILE_CRITICAL"
+        assert kwargs["alert"] is True
+
+    def test_de_escalation_critical_to_high_stays_silent(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """CRITICAL then HIGH must NOT re-emit (severity fell, not a rising edge)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # ALERT (rising edge)
+        pr._emit_cycle_severity(Severity.HIGH)  # de-escalation -> silent
+        assert on_event.call_count == 1
