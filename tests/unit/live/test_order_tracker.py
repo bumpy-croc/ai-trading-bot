@@ -525,3 +525,42 @@ class TestApiErrorHandling:
 
         # Assert - order still force-removed despite callback failure
         assert order_tracker.get_tracked_count() == 0
+
+
+def test_fill_callback_failure_orphan_pages_operator(mock_exchange):
+    """When the fill callback fails MAX times, the order is force-removed with a
+    position ORPHANED on the exchange — previously logger.critical-only. It must
+    now page an operator via on_critical (#853)."""
+    from src.engines.live.order_tracker import MAX_CALLBACK_RETRIES
+
+    on_critical = Mock()
+    tracker = OrderTracker(
+        exchange=mock_exchange,
+        poll_interval=0.1,
+        on_fill=Mock(side_effect=RuntimeError("boom")),
+        on_critical=on_critical,
+    )
+    mock_order = MagicMock()
+    mock_order.status = OrderStatus.FILLED
+    mock_order.filled_quantity = 1.5
+    mock_order.average_price = 50000.0
+    mock_exchange.get_order.return_value = mock_order
+
+    tracker.track_order("order123", "BTCUSDT")
+    for _ in range(MAX_CALLBACK_RETRIES):
+        tracker._check_orders()
+
+    orphan = [c for c in on_critical.call_args_list if c.args[1] == "ORDER_ORPHANED"]
+    assert len(orphan) == 1, on_critical.call_args_list
+    assert "ORPHANED" in orphan[0].args[0]
+    assert tracker.get_tracked_count() == 0  # force-removed after the final failure
+
+
+def test_emit_critical_noop_and_fault_isolated(mock_exchange):
+    """_emit_critical is a no-op with no sink and never raises if the sink does."""
+    OrderTracker(exchange=mock_exchange)._emit_critical("msg", "CODE")  # no sink -> no-op
+
+    boom = Mock(side_effect=RuntimeError("sink down"))
+    tracker = OrderTracker(exchange=mock_exchange, on_critical=boom)
+    tracker._emit_critical("msg", "CODE")  # must not raise
+    boom.assert_called_once_with("msg", "CODE")
