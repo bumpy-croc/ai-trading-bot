@@ -3858,3 +3858,60 @@ class TestReconcilerEventSink:
         # The child PositionReconciler must receive the same sink so its
         # emergency-close paths can page too.
         assert pr._position_reconciler.on_event is cb
+
+
+class TestReconcileCycleSeverityEvent:
+    """The periodic cycle surfaces its peak severity in system_events — HIGH
+    drift was previously invisible (audit-row + log only). Edge-triggered so a
+    persistent condition doesn't page/log every ~60s cycle (#853)."""
+
+    @staticmethod
+    def _reconciler(mock_exchange, mock_position_tracker, mock_db, on_event):
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+        )
+
+    def test_critical_pages_operator(self, mock_exchange, mock_position_tracker, mock_db):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)
+        on_event.assert_called_once()
+        args, kwargs = on_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "RECONCILE_CRITICAL"
+        assert kwargs["alert"] is True
+
+    def test_high_emits_event_but_does_not_page(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.HIGH)
+        on_event.assert_called_once()
+        _, kwargs = on_event.call_args
+        assert kwargs["error_code"] == "RECONCILE_HIGH"
+        assert kwargs["alert"] is False
+
+    def test_low_and_medium_do_not_emit(self, mock_exchange, mock_position_tracker, mock_db):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.LOW)
+        pr._emit_cycle_severity(Severity.MEDIUM)
+        on_event.assert_not_called()
+
+    def test_persistent_critical_only_pages_on_rising_edge(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # rising edge -> emit
+        pr._emit_cycle_severity(Severity.CRITICAL)  # persistent -> no re-emit
+        assert on_event.call_count == 1
+        # Drops back then re-rises -> a new occurrence re-pages.
+        pr._emit_cycle_severity(Severity.LOW)
+        pr._emit_cycle_severity(Severity.CRITICAL)
+        assert on_event.call_count == 2
