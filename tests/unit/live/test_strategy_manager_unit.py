@@ -196,3 +196,98 @@ class TestStrategyVersioning:
 
         assert result is False
         assert "doesn't match other_strategy" in caplog.text
+
+
+class TestStrategyManagerSymbolThreading:
+    """Hot-swap/load must thread the engine's trading symbol (#867)."""
+
+    ENGINE_PATH = "src.strategies.components.ml_signal_generator.PredictionEngine"
+    CONFIG_PATH = "src.strategies.components.ml_signal_generator.PredictionConfig"
+
+    def _mock_engine(self):
+        from unittest.mock import MagicMock
+
+        engine = MagicMock()
+        engine.health_check.return_value = {"status": "healthy"}
+        return engine
+
+    def test_load_strategy_threads_symbol(self, temp_directory):
+        from unittest.mock import patch
+
+        with patch(self.ENGINE_PATH) as engine_cls, patch(self.CONFIG_PATH):
+            engine_cls.return_value = self._mock_engine()
+            manager = StrategyManager(staging_dir=str(temp_directory), symbol="ETHUSDT")
+
+            strategy = manager.load_strategy("ml_basic")
+
+        assert strategy.signal_generator.symbol == "ETHUSDT"
+
+    def test_hot_swap_threads_symbol(self, temp_directory):
+        from unittest.mock import MagicMock, patch
+
+        with patch(self.ENGINE_PATH) as engine_cls, patch(self.CONFIG_PATH):
+            engine_cls.return_value = self._mock_engine()
+            manager = StrategyManager(staging_dir=str(temp_directory), symbol="ETHUSDT")
+            manager.current_strategy = MagicMock()
+
+            assert manager.hot_swap_strategy("ml_basic", new_config={"name": "SwapTest"}) is True
+
+        swapped = manager.pending_update["data"]["new_strategy"]
+        assert swapped.signal_generator.symbol == "ETHUSDT"
+
+    def test_explicit_config_symbol_wins_over_manager_symbol(self, temp_directory):
+        from unittest.mock import patch
+
+        with patch(self.ENGINE_PATH) as engine_cls, patch(self.CONFIG_PATH):
+            engine_cls.return_value = self._mock_engine()
+            manager = StrategyManager(staging_dir=str(temp_directory), symbol="ETHUSDT")
+
+            strategy = manager.load_strategy("ml_basic", config={"symbol": "BTCUSDT"})
+
+        assert strategy.signal_generator.symbol == "BTCUSDT"
+
+    def test_no_symbol_keeps_legacy_default(self, temp_directory):
+        from unittest.mock import patch
+
+        with patch(self.ENGINE_PATH) as engine_cls, patch(self.CONFIG_PATH):
+            engine_cls.return_value = self._mock_engine()
+            manager = StrategyManager(staging_dir=str(temp_directory))
+
+            strategy = manager.load_strategy("ml_basic")
+
+        assert strategy.signal_generator.symbol == "BTCUSDT"
+
+    def test_swap_time_model_unavailable_rejects_swap_and_keeps_current(
+        self, temp_directory, caplog, monkeypatch
+    ):
+        """A missing-model failure during hot-swap must not kill the loop.
+
+        The swap is rejected, the current strategy stays active, and the
+        failure is logged at ERROR.
+        """
+        import logging
+        from unittest.mock import MagicMock, patch
+
+        from src.prediction.models.exceptions import ModelNotAvailableError
+
+        monkeypatch.delenv("FEATURE_ALLOW_CROSS_SYMBOL_MODEL", raising=False)
+
+        registry = MagicMock()
+        registry.select_bundle.side_effect = ModelNotAvailableError("no ETHUSDT basic model")
+        registry.list_bundles.return_value = []
+        engine = self._mock_engine()
+        engine.model_registry = registry
+
+        with patch(self.ENGINE_PATH) as engine_cls, patch(self.CONFIG_PATH):
+            engine_cls.return_value = engine
+            manager = StrategyManager(staging_dir=str(temp_directory), symbol="ETHUSDT")
+            current = MagicMock()
+            manager.current_strategy = current
+
+            with caplog.at_level(logging.ERROR):
+                result = manager.hot_swap_strategy("ml_basic")
+
+        assert result is False
+        assert manager.current_strategy is current
+        assert manager.pending_update is None
+        assert "Hot-swap failed" in caplog.text

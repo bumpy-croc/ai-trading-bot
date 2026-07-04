@@ -31,6 +31,7 @@ def _make_state() -> object:
     state.strategy = MagicMock()
     # Annotation-only Protocol attributes aren't auto-created by autospec.
     state.db_manager = MagicMock()
+    state.strategy_manager = None
     return state
 
 
@@ -40,6 +41,22 @@ def test_begin_session_runtime_sets_flags():
     assert state.is_running is True
     assert state._active_symbol == "BTCUSDT"
     assert state.timeframe == "1h"
+
+
+def test_begin_session_runtime_threads_symbol_to_strategy_manager():
+    """Hot-swapped strategies must select models for the traded pair (#867)."""
+    state = _make_state()
+    state.strategy_manager = MagicMock()
+    LiveStartupSequencer(engine_state=state).begin_session_runtime("ETHUSDT", "1h")
+    assert state.strategy_manager.symbol == "ETHUSDT"
+
+
+def test_begin_session_runtime_tolerates_missing_strategy_manager():
+    """Engines constructed without hot-swapping keep working."""
+    state = _make_state()
+    state.strategy_manager = None
+    LiveStartupSequencer(engine_state=state).begin_session_runtime("ETHUSDT", "1h")
+    assert state._active_symbol == "ETHUSDT"
 
 
 def test_run_returns_early_when_already_running():

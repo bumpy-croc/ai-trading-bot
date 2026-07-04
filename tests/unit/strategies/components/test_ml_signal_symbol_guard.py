@@ -153,6 +153,14 @@ class TestDirectConstructionBackwardCompat:
 
         assert generator.prediction_engine is None
 
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_invalid_symbol_raises_clear_error(self, _cfg, engine_cls):
+        engine_cls.return_value = _make_engine()
+
+        with pytest.raises(ValueError, match="[Ii]nvalid trading symbol.*ETH-USD-X"):
+            MLBasicSignalGenerator(symbol="ETH-USD-X")
+
 
 class TestMissingModelFailFast:
     """No model for (symbol, type, timeframe) must fail fast at startup."""
@@ -292,7 +300,9 @@ class TestMismatchGuardAtResolution:
         assert signal.metadata["trading_symbol"] == "BTCUSDT"
         assert signal.metadata["model_symbol"] == "BTCUSDT"
         guard_records = [
-            r for r in caplog.records if r.levelno >= logging.WARNING and "symbol" in r.getMessage().lower()
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and "symbol" in r.getMessage().lower()
         ]
         assert guard_records == []
 
@@ -314,5 +324,74 @@ class TestMismatchGuardAtResolution:
 
         # Prediction must fail (HOLD) rather than scoring another symbol's model
         assert signal.metadata["reason"] == "prediction_failed"
+        # HOLD path still carries the guard stamps for auditability
+        assert signal.metadata["trading_symbol"] == "ETHUSDT"
+        assert signal.metadata["model_symbol"] is None
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert any("ETHUSDT" in r.getMessage() for r in errors)
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_distinct_guard_conditions_use_separate_rate_limit_clocks(
+        self, _cfg, engine_cls, caplog
+    ):
+        """A mismatch log must not swallow the first bundle-vanished log."""
+        registry = MagicMock()
+        registry.select_bundle.return_value = _make_bundle(symbol="BTCUSDT")
+        registry.list_bundles.return_value = [_make_bundle(symbol="BTCUSDT")]
+        engine_cls.return_value = _make_engine(registry=registry)
+        generator = MLBasicSignalGenerator(symbol="ETHUSDT")
+        df = _make_df(150)
+
+        with caplog.at_level(logging.ERROR):
+            generator.generate_signal(df, 130)  # mismatch ERROR
+            registry.select_bundle.side_effect = ModelNotAvailableError("bundle gone")
+            generator.generate_signal(df, 131)  # vanished ERROR — separate clock
+
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("MISMATCH" in message for message in errors)
+        assert any("refusing cross-symbol fallback" in message for message in errors)
+
+
+class TestHoldPathMetadataStamps:
+    """All HOLD branches stamp trading_symbol/model_symbol for auditability."""
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_insufficient_history_stamps_symbols(self, _cfg, engine_cls):
+        engine_cls.return_value = _make_engine()
+        generator = MLBasicSignalGenerator(symbol="ETHUSDT")
+        df = _make_df(50)
+
+        signal = generator.generate_signal(df, 30)
+
+        assert signal.metadata["reason"] == "insufficient_history"
+        assert signal.metadata["trading_symbol"] == "ETHUSDT"
+        assert signal.metadata["model_symbol"] is None
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_prediction_failed_stamps_symbols(self, _cfg, engine_cls):
+        engine = _make_engine()
+        engine.predict.side_effect = RuntimeError("inference exploded")
+        engine_cls.return_value = engine
+        generator = MLBasicSignalGenerator(symbol="ETHUSDT")
+        df = _make_df(150)
+
+        signal = generator.generate_signal(df, 130)
+
+        assert signal.metadata["reason"] == "prediction_failed"
+        assert signal.metadata["trading_symbol"] == "ETHUSDT"
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_invalid_prediction_stamps_symbols(self, _cfg, engine_cls):
+        engine = _make_engine(predicted_price=float("nan"))
+        engine_cls.return_value = engine
+        generator = MLBasicSignalGenerator(symbol="ETHUSDT")
+        df = _make_df(150)
+
+        signal = generator.generate_signal(df, 130)
+
+        assert signal.metadata["reason"] == "invalid_prediction_or_price"
+        assert signal.metadata["trading_symbol"] == "ETHUSDT"
