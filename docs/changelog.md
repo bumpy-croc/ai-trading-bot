@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sentiment-extreme mean-reversion overlay + short block** (#804): at Fear &
+  Greed extremes, fading beats following. New `SentimentExtremeOverlay`
+  (`src/strategies/components/sentiment_overlay.py`) wraps the `ml_sentiment`
+  signal generator and, when F&G < 15, **blocks new SHORT entries** (capitulation
+  shorts get squeezed) and permits new LONGs only within a configurable band of a
+  **structural support level** — a config *parameter* (`DEFAULT_SENTIMENT_SUPPORT_LEVEL`,
+  default None = no band restriction), since market levels go stale. When F&G > 70
+  in a downtrend it permits small fade shorts. Implemented as a `SignalGenerator`
+  decorator, so it composes with the ETF flow gate (#803) — most-restrictive-wins,
+  any veto → HOLD — and applies in both engines via the strategy. F&G comes from
+  `FearGreedProvider` (degrades to neutral offline → overlay inert). Behind
+  `enable_sentiment_extreme_overlay` (**default OFF**).
 - **ETF net-flow signal + flow gate** (#803): US spot BTC/ETH ETF net flows are
   the marginal buyer/seller this cycle, but the bot had no flow awareness. New
   `ETFFlowProvider` (`src/data_providers/etf_flow_provider.py`) ingests daily net
