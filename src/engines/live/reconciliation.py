@@ -223,6 +223,110 @@ def _is_exchange_close_pending(position: Any) -> bool:
     return bool(getattr(position, "exchange_close_pending", False))
 
 
+def _margin_net_asset(exchange: Any, asset: str) -> float | None:
+    """Cross-margin ``netAsset`` for ``asset`` as a float, or None if the lookup is unconfirmed.
+
+    Uses the raw margin-asset accessor (``get_margin_account_asset``), which returns zeros for an
+    asset absent from the wallet and None only on a transient API error — so an externally-closed
+    long (netAsset 0) is distinguishable from an API blip. ``get_balance`` conflates the two (it
+    returns None for both an absent asset and an error), which would leave the naked-position
+    stop armed for a fully-closed margin long (#852 finding 3)."""
+    getter = getattr(exchange, "get_margin_account_asset", None)
+    if not callable(getter):
+        return None
+    raw = getter(asset)
+    if not raw:
+        return None
+    try:
+        return float(raw.get("netAsset", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _position_holding_is_gone(exchange: Any, use_margin: bool, position: Any) -> bool:
+    """True only when the position no longer backs an exchange holding — i.e. it was closed or
+    liquidated externally while the bot was offline.
+
+    Gates stop-loss RE-PLACEMENT. When a position is externally closed its DB row stays OPEN and
+    is re-loaded on the next startup; stop-loss verification (which deliberately runs before the
+    asset-holdings check, so an offline SL *fill* can book its realized P&L first) then sees the
+    tracked stop as missing/cancelled. Re-arming it re-places a margin ``AUTO_REPAY`` stop for a
+    position whose asset is gone — the naked-position path. Callers skip re-placement when this
+    returns True and let the holdings check remove the phantom.
+
+    Mirrors the thresholds of ``_verify_asset_holdings`` / ``_verify_margin_position_exists`` so
+    that for a position with tracked quantity > 0 — the only case that carries naked-position
+    risk — the guard and the phantom-remover never disagree. (A flat, zero-quantity position has
+    no stop to place either way, so the spot holdings check's ``qty <= 0`` early-return is
+    immaterial.) Fails SAFE: on a transient API error (balance/borrowed unknown, or an exception)
+    it returns False so the caller keeps its existing protective behavior and the periodic
+    reconciler re-checks next cycle.
+    """
+    # Exchange side already known closed (offline SL fill, DB close still pending).
+    if _is_exchange_close_pending(position):
+        return True
+
+    side = getattr(position, "side", None)
+    is_short = side == PositionSide.SHORT or str(side).lower() == "short"
+
+    # A spot short holds no base asset, so a spot balance check cannot confirm a close —
+    # do not skip re-placement on that basis (mirrors _verify_asset_holdings skipping shorts).
+    if is_short and not use_margin:
+        return False
+
+    base_asset = PositionReconciler._extract_base_asset(position.symbol)
+
+    # Tracked held quantity after partial exits. Coerce to float — DB-loaded positions carry
+    # Decimal (Numeric) fields, and "Decimal * float" below raises otherwise (#653 class).
+    qty = float(getattr(position, "quantity", 0) or 0.0)
+    current_size = getattr(position, "current_size", None)
+    original_size = getattr(position, "original_size", None)
+    if current_size is not None and original_size is not None and float(original_size) > 0:
+        position_qty = qty * (float(current_size) / float(original_size))
+    else:
+        position_qty = qty
+
+    try:
+        if use_margin and is_short:
+            # Shorts create debt — the base asset's borrowed amount is the source of truth.
+            borrowed = (
+                exchange.get_margin_borrowed(base_asset)
+                if hasattr(exchange, "get_margin_borrowed")
+                else None
+            )
+            if borrowed is None:
+                return False  # transient / unsupported — cannot prove gone
+            held = float(borrowed)
+        elif use_margin:
+            # Margin long — read netAsset via the raw margin-asset accessor (absent asset -> 0,
+            # transient error -> None). get_balance() returns None for BOTH, so it cannot tell a
+            # fully-closed long from an API blip and would leave the naked stop armed (#852 f3).
+            net_asset = _margin_net_asset(exchange, base_asset)
+            if net_asset is None:
+                return False  # transient / unsupported — cannot prove gone
+            held = net_asset
+        else:
+            # Spot long. get_balance()'s None is ambiguous (absent vs transient), but on spot
+            # AUTO_REPAY is a no-op and an oversell is exchange-rejected, so a misclassified "not
+            # gone" cannot arm a naked position — the fail-safe is acceptable here.
+            balance = exchange.get_balance(base_asset)
+            if balance is None:
+                return False  # transient — cannot prove gone
+            held = float(balance.total)
+    except Exception as e:  # noqa: BLE001 — never let a lookup error skip protection
+        logger.warning(
+            "SL re-placement holding check failed for %s: %s — treating asset as present",
+            getattr(position, "symbol", "?"),
+            e,
+        )
+        return False
+
+    # Same 50%-of-tracked threshold the holdings checks use to declare an external close.
+    if position_qty > 0:
+        return held < position_qty * 0.5
+    return held <= 0
+
+
 class PositionReconciler:
     """Verifies recovered positions and resolves pending orders on startup.
 
@@ -714,6 +818,46 @@ class PositionReconciler:
                         e,
                     )
 
+            # If the entry filled earlier but the position was closed/liquidated externally
+            # before this recovery ran, its asset is gone. Placing an AUTO_REPAY stop — or the
+            # emergency-sell below that fires when a stop is not placed — would open a naked
+            # position. Treat it as an external close: close the DB row and drop it from the
+            # tracker, and do NOT place a stop or sell. The recovered position is not in the
+            # startup Step-B snapshot, so nothing else holdings-checks it this run (#852 f1).
+            if _position_holding_is_gone(self.exchange, self._use_margin, position):
+                logger.warning(
+                    "Recovered entry %s filled earlier but the position no longer backs an "
+                    "exchange holding — treating as external close (no stop-loss, no "
+                    "emergency-sell).",
+                    order_id,
+                )
+                # Gate tracker removal on the DB close actually succeeding — close_position
+                # returns False without raising on a failed commit. Removing while the row stays
+                # OPEN would diverge memory from the DB (CODE.md: no silent divergence); mirror
+                # the external-close paths and escalate instead. No db_id means log_position never
+                # persisted a row, so there is nothing to diverge from — safe to drop.
+                db_closed = False
+                if db_id is not None:
+                    try:
+                        db_closed = bool(self.db_manager.close_position(db_id))
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to close DB for externally-closed recovered entry %s: %s",
+                            order_id,
+                            e,
+                        )
+                if db_closed or db_id is None:
+                    self.position_tracker.remove_position(order_id)
+                else:
+                    logger.critical(
+                        "Externally-closed recovered entry %s: DB position %s close FAILED "
+                        "(still OPEN) — left tracked to avoid memory/DB divergence; it is "
+                        "re-reconciled on the next pass.",
+                        order_id,
+                        db_id,
+                    )
+                return
+
             # Place server-side stop-loss on exchange for protection.
             # If SL placement fails, emergency-close the position to match
             # the normal entry path behavior (never leave unprotected).
@@ -1060,6 +1204,19 @@ class PositionReconciler:
         symbol = getattr(position, "symbol", "")
         db_pos_id = getattr(position, "db_position_id", None)
 
+        # This runs during startup reconciliation of a filled partial-exit order. If the residual
+        # was closed/liquidated externally while offline (asset gone), do NOT cancel-and-re-place:
+        # re-arming an AUTO_REPAY stop for a position that no longer exists is the naked-position
+        # path. Leave the stale stop for the phantom-removal path, which cancels it when it removes
+        # the position (#852 finding 2).
+        if _position_holding_is_gone(self.exchange, self._use_margin, position):
+            logger.warning(
+                "Skipping stop-loss resize for %s — position no longer backs an exchange holding "
+                "(residual closed/liquidated externally); leaving cleanup to the holdings check.",
+                symbol,
+            )
+            return
+
         # Cancel the old stop-loss order
         try:
             self.exchange.cancel_order(sl_order_id, symbol)
@@ -1354,7 +1511,16 @@ class PositionReconciler:
                         side,
                     )
 
-            if sl_price and hasattr(self.exchange, "place_stop_loss_order"):
+            # Do not place a stop for a position that was closed/liquidated externally (asset
+            # gone): a margin AUTO_REPAY stop would open a naked position. Fall through to the
+            # asset-holdings check (step 4), which removes the phantom.
+            if _position_holding_is_gone(self.exchange, self._use_margin, position):
+                logger.warning(
+                    "Position %s has no exchange stop-loss but no longer backs an exchange "
+                    "holding — skipping placement (asset-holdings check will remove the phantom).",
+                    position.symbol,
+                )
+            elif sl_price and hasattr(self.exchange, "place_stop_loss_order"):
                 try:
                     from src.data_providers.exchange_interface import OrderSide
 
@@ -1633,7 +1799,18 @@ class PositionReconciler:
                     result.severity = Severity.MEDIUM
                 position.stop_loss_order_id = None
 
-                # Attempt to re-place the stop-loss so the position is protected
+                # Attempt to re-place the stop-loss so the position is protected — unless the
+                # position was closed/liquidated externally (its asset is gone). Re-arming an
+                # AUTO_REPAY stop for a phantom opens a naked position; skip and let the
+                # asset-holdings check (step 4) remove it.
+                if _position_holding_is_gone(self.exchange, self._use_margin, position):
+                    logger.warning(
+                        "Stop-loss for %s not found but the position no longer backs an exchange "
+                        "holding — skipping re-placement (asset-holdings check will remove the "
+                        "phantom).",
+                        position.symbol,
+                    )
+                    return
                 if position.stop_loss and hasattr(self.exchange, "place_stop_loss_order"):
                     try:
                         from src.data_providers.exchange_interface import OrderSide
@@ -1783,7 +1960,18 @@ class PositionReconciler:
                     sl_order.status.value,
                 )
 
-                # Attempt to re-place the stop-loss so the position is protected
+                # Attempt to re-place the stop-loss so the position is protected — unless the
+                # position was closed/liquidated externally (its asset is gone). Re-arming an
+                # AUTO_REPAY stop for a phantom opens a naked position; skip and let the
+                # asset-holdings check (step 4) remove it.
+                if _position_holding_is_gone(self.exchange, self._use_margin, position):
+                    logger.warning(
+                        "Stop-loss for %s was cancelled/expired but the position no longer backs "
+                        "an exchange holding — skipping re-placement (asset-holdings check will "
+                        "remove the phantom).",
+                        position.symbol,
+                    )
+                    return
                 if position.stop_loss and hasattr(self.exchange, "place_stop_loss_order"):
                     try:
                         from src.data_providers.exchange_interface import OrderSide
@@ -2219,9 +2407,6 @@ class PositionReconciler:
         is_short = side == PositionSide.SHORT or str(side).lower() == "short"
 
         try:
-            # get_balance returns AccountBalance with total=netAsset in margin mode
-            balance = self.exchange.get_balance(base_asset)
-
             # Scale tracked quantity by partial exit ratio. Coerce to float —
             # DB-loaded positions carry Decimal (Numeric) fields, and the
             # "position_qty * 0.5" comparisons below raise "Decimal * float"
@@ -2266,16 +2451,19 @@ class PositionReconciler:
                     )
                     self._remove_phantom_position(position, result)
             else:
-                # Long positions hold the asset — check netAsset.
-                # None = API error — skip to avoid deleting real positions.
-                if balance is None:
+                # Long positions hold the asset — check netAsset via the raw margin-asset
+                # accessor (absent asset -> 0, transient error -> None). get_balance() returns
+                # None for both, so it cannot tell an externally-closed long from an API blip
+                # and would leave the phantom tracked (#852 finding 3).
+                net_asset = _margin_net_asset(self.exchange, base_asset)
+                if net_asset is None:
                     logger.warning(
                         "Could not verify holdings for %s — skipping "
                         "margin long check (transient API error)",
                         symbol,
                     )
                 else:
-                    held = balance.total
+                    held = net_asset
 
                     if held <= 0:
                         logger.warning(
@@ -3129,6 +3317,23 @@ class PeriodicReconciler:
                 # DB balance represents total capital (USDT + position notional), not just
                 # free USDT on exchange.
                 corrected_balance = usdt_balance.total + position_notional
+                # Audit the correction — the startup twin (_reconcile_balance) audits
+                # its identical correction, but this periodic path previously wrote
+                # only a log line (no reconciliation_audit_events row). #853
+                self.db_manager.log_audit_event(
+                    session_id=self.session_id,
+                    entity_type="balance",
+                    entity_id=None,
+                    field="total_balance",
+                    old_value=f"{db_balance:.2f}",
+                    new_value=f"{corrected_balance:.2f}",
+                    reason=(
+                        f"Periodic balance correction: discrepancy {diff_pct:.2%} exceeds threshold "
+                        f"(exchange_usdt={usdt_balance.total:.2f}, "
+                        f"position_notional={position_notional:.2f})"
+                    ),
+                    severity=Severity.CRITICAL.value,
+                )
                 self.db_manager.update_balance(
                     corrected_balance,
                     "reconciliation_balance_correction",
@@ -3237,7 +3442,6 @@ class PeriodicReconciler:
                     side = getattr(position, "side", None)
                     is_short = side == PositionSide.SHORT or str(side).lower() == "short"
 
-                    balance = self.exchange.get_balance(base_asset)
                     position_gone = False
 
                     # Scale tracked quantity by partial exit ratio. Coerce to
@@ -3265,13 +3469,15 @@ class PeriodicReconciler:
                         elif pos_qty > 0 and borrowed < pos_qty * 0.5:
                             position_gone = True
                     else:
-                        # Long detection: check held quantity.
-                        # None = API error — skip to avoid deleting real positions.
-                        if balance is None:
+                        # Long detection: check netAsset via the raw margin-asset accessor
+                        # (absent asset -> 0, transient error -> None). get_balance() returns
+                        # None for both, so it cannot tell a closed long from an API blip (#852 f3).
+                        net_asset = _margin_net_asset(self.exchange, base_asset)
+                        if net_asset is None:
                             pass  # Unknown — retain position
-                        elif balance.total <= 0:
+                        elif net_asset <= 0:
                             position_gone = True
-                        elif pos_qty > 0 and balance.total < pos_qty * 0.5:
+                        elif pos_qty > 0 and net_asset < pos_qty * 0.5:
                             position_gone = True
 
                     if position_gone:
@@ -3632,6 +3838,20 @@ class PeriodicReconciler:
                                 position.symbol,
                             )
 
+                    # Do not re-place a stop for a position closed/liquidated externally (asset
+                    # gone): a margin AUTO_REPAY stop would open a naked position. Step 1b above
+                    # removes such phantoms, but it works off the live tracker while this loop
+                    # iterates a stale snapshot — so guard here too.
+                    if _position_holding_is_gone(self.exchange, self._use_margin, position):
+                        logger.warning(
+                            "Stop-loss for %s is %s but the position no longer backs an exchange "
+                            "holding — skipping re-placement (external close/liquidation; the "
+                            "asset-holdings check removes the phantom).",
+                            position.symbol,
+                            status_desc,
+                        )
+                        continue
+
                     stop_price = getattr(position, "stop_loss", None)
                     if stop_price and hasattr(self.exchange, "place_stop_loss_order"):
                         try:
@@ -3830,6 +4050,17 @@ class PeriodicReconciler:
         Computes a default stop price from the position's stop_loss attribute
         or falls back to DEFAULT_STOP_LOSS_PCT from entry_price.
         """
+        # A position closed/liquidated externally no longer backs an exchange holding; placing an
+        # AUTO_REPAY stop for it opens a naked position. Skip — the asset-holdings check removes
+        # the phantom (this loop iterates a stale snapshot, so the phantom may still appear here).
+        if _position_holding_is_gone(self.exchange, self._use_margin, position):
+            logger.warning(
+                "Skipping missing-stop-loss placement for %s — position no longer backs an "
+                "exchange holding (external close/liquidation).",
+                order_key,
+            )
+            return
+
         stop_price = getattr(position, "stop_loss", None)
         entry_price = getattr(position, "entry_price", None)
         side = getattr(position, "side", "long")

@@ -8,20 +8,24 @@ regime-aware threshold adjustments and confidence calculations.
 
 import logging
 import math
+import time
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 if TYPE_CHECKING:
-    from src.prediction.models.registry import PredictionModelRegistry
+    from src.prediction.models.registry import PredictionModelRegistry, StrategyModel
 
 from src.config.config_manager import get_config
+from src.config.feature_flags import is_enabled
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
+from src.prediction.models.exceptions import ModelNotAvailableError
 from src.regime.detector import TrendLabel, VolLabel
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.trading.symbols.factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 
@@ -541,6 +545,14 @@ class MLBasicSignalGenerator(SignalGenerator):
     # Default symbol used for registry selection when none specified
     DEFAULT_SYMBOL = "BTCUSDT"
 
+    # Feature flag that explicitly opts into scoring one symbol with another
+    # symbol's model when no model exists for the trading symbol.
+    CROSS_SYMBOL_FLAG = "allow_cross_symbol_model"
+
+    # Guard logs (mismatch/substitution) are emitted at most once per interval
+    # per generator instance so a 1m loop cannot flood the logs.
+    SYMBOL_GUARD_LOG_INTERVAL_SECONDS = 300.0
+
     def __init__(
         self,
         name: str = "ml_basic_signal_generator",
@@ -588,10 +600,16 @@ class MLBasicSignalGenerator(SignalGenerator):
             self.CONFIDENCE_MULTIPLIER if confidence_multiplier is None else confidence_multiplier,
         )
 
-        # Registry model selection preferences
+        # Registry model selection preferences. Normalize to the registry's
+        # Binance-style directory convention so provider-specific formats
+        # (e.g. Coinbase "ETH-USD") select the same model bundle.
         self.model_type = model_type or "basic"
         self.model_timeframe = timeframe or "1h"
-        self.symbol = symbol or self.DEFAULT_SYMBOL
+        raw_symbol = symbol or self.DEFAULT_SYMBOL
+        try:
+            self.symbol = SymbolFactory.to_exchange_symbol(raw_symbol, "binance")
+        except ValueError as exc:
+            raise ValueError(f"Invalid trading symbol {raw_symbol!r}: {exc}") from exc
 
         # Model name configuration
         cfg = get_config()
@@ -604,11 +622,22 @@ class MLBasicSignalGenerator(SignalGenerator):
         self._engine_warning_emitted = False
         self.use_engine_batch = get_config().get_bool("ENGINE_BATCH_INFERENCE", default=False)
 
+        # Cross-symbol guard state: which model symbol actually scored the
+        # last prediction, the pinned substitute bundle (flag opt-in only),
+        # and per-condition rate-limit clocks for guard logs (keyed by kind
+        # so one condition's log cannot swallow another's).
+        self._model_symbol: str | None = None
+        self._cross_symbol_bundle_key: str | None = None
+        self._symbol_guard_log_ts: dict[str, float] = {}
+
         # Initialize feature pipeline
         self._setup_feature_pipeline()
 
         # Initialize prediction engine (always enabled)
         self._initialize_prediction_engine()
+
+        # Fail fast if the registry has no model for the trading symbol
+        self._validate_model_availability()
 
     def _setup_feature_pipeline(self):
         """Setup feature pipeline for data preprocessing"""
@@ -670,6 +699,124 @@ class MLBasicSignalGenerator(SignalGenerator):
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
+    def _validate_model_availability(self) -> None:
+        """Fail fast when the registry has no model for the trading symbol.
+
+        Without this check the prediction engine silently falls back to the
+        default bundle — typically another symbol's model — and every signal
+        is scored by a model trained on a different market.
+        FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true explicitly opts into that
+        substitution as a transition path while the symbol's own model has
+        not shipped yet.
+        """
+        if self._registry is None:
+            # Engine degraded/unavailable — prediction path already fails
+            # safe (returns None → HOLD), so nothing to validate against.
+            return
+        try:
+            self._registry.select_bundle(
+                symbol=self.symbol,
+                model_type=self.model_type,
+                timeframe=self.model_timeframe,
+            )
+            return
+        except ModelNotAvailableError:
+            pass
+        except Exception:
+            # Registry probing failure (not a missing model) — leave it to
+            # the prediction path, which degrades to HOLD.
+            return
+
+        available = self._available_bundle_keys()
+        if not is_enabled(self.CROSS_SYMBOL_FLAG, default=False):
+            raise ModelNotAvailableError(
+                f"No {self.model_type}/{self.model_timeframe} model exists for trading "
+                f"symbol {self.symbol}. Available models: {', '.join(available) or 'none'}. "
+                f"Train and deploy a {self.symbol} model, or set "
+                f"FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true to explicitly accept scoring "
+                f"{self.symbol} with another symbol's model."
+            )
+
+        fallback = self._select_cross_symbol_fallback()
+        if fallback is None:
+            raise ModelNotAvailableError(
+                f"FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true but no "
+                f"{self.model_type}/{self.model_timeframe} model exists for any symbol "
+                f"to substitute for {self.symbol}. "
+                f"Available models: {', '.join(available) or 'none'}."
+            )
+        self._cross_symbol_bundle_key = fallback.key
+        self._model_symbol = fallback.symbol
+        logger.critical(
+            "CROSS-SYMBOL MODEL SUBSTITUTION ACTIVE: trading %s but scoring with %s "
+            "model %s (FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true). Predictions are not "
+            "trained on %s — deploy a %s model and unset the flag as soon as possible.",
+            self.symbol,
+            fallback.symbol,
+            fallback.key,
+            self.symbol,
+            self.symbol,
+        )
+
+    def _available_bundle_keys(self) -> list[str]:
+        """List loaded bundle keys for error messages; empty on failure."""
+        if self._registry is None:
+            return []
+        try:
+            return sorted(str(bundle.key) for bundle in self._registry.list_bundles())
+        except Exception:
+            return []
+
+    def _select_cross_symbol_fallback(self) -> "StrategyModel | None":
+        """Pick a deterministic same-type/timeframe bundle from another symbol.
+
+        Prefers DEFAULT_SYMBOL, then lexicographic order, so restarts always
+        substitute the same model.
+        """
+        if self._registry is None:
+            return None
+        try:
+            candidates = [
+                bundle
+                for bundle in self._registry.list_bundles()
+                if bundle.model_type == self.model_type and bundle.timeframe == self.model_timeframe
+            ]
+        except Exception:
+            return None
+        if not candidates:
+            return None
+        candidates.sort(key=lambda bundle: (bundle.symbol != self.DEFAULT_SYMBOL, bundle.symbol))
+        return candidates[0]
+
+    def _log_symbol_guard(self, kind: str, level: int, msg: str, *args: Any) -> None:
+        """Emit a guard log, rate-limited per instance and per condition kind.
+
+        Separate clocks per ``kind`` so distinct conditions (substitution
+        warning, mismatch, bundle vanished) each announce at least once per
+        window instead of suppressing one another.
+        """
+        now = time.monotonic()
+        last = self._symbol_guard_log_ts.get(kind)
+        if last is not None and now - last < self.SYMBOL_GUARD_LOG_INTERVAL_SECONDS:
+            return
+        self._symbol_guard_log_ts[kind] = now
+        logger.log(level, msg, *args)
+
+    @staticmethod
+    def _parse_model_symbol(model_name: Any) -> str | None:
+        """Extract the symbol from a bundle key like ``BTCUSDT:1h:basic:v1``."""
+        if isinstance(model_name, str) and ":" in model_name:
+            return model_name.split(":", 1)[0]
+        return None
+
+    def _symbol_guard_stamps(self) -> dict[str, str | None]:
+        """Cross-symbol guard stamps included in every Signal's metadata.
+
+        ``model_symbol`` is the symbol whose model scored the most recent
+        prediction (None when no prediction has resolved, e.g. HOLD paths).
+        """
+        return {"trading_symbol": self.symbol, "model_symbol": self._model_symbol}
+
     def generate_signal(
         self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
@@ -697,6 +844,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                     "reason": "insufficient_history",
                     "index": index,
                     "required_length": self.sequence_length,
+                    **self._symbol_guard_stamps(),
                 },
             )
 
@@ -707,7 +855,12 @@ class MLBasicSignalGenerator(SignalGenerator):
                 direction=SignalDirection.HOLD,
                 strength=0.0,
                 confidence=0.0,
-                metadata={"generator": self.name, "reason": "prediction_failed", "index": index},
+                metadata={
+                    "generator": self.name,
+                    "reason": "prediction_failed",
+                    "index": index,
+                    **self._symbol_guard_stamps(),
+                },
             )
 
         current_price = df["close"].iloc[index]
@@ -725,6 +878,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                     "current_price": current_price,
                     "predicted_return": 0,  # Set to 0 when price is invalid
                     "index": index,
+                    **self._symbol_guard_stamps(),
                 },
             )
 
@@ -758,6 +912,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             "engine_batch": self.use_engine_batch,
             "model_type": self.model_type,
             "model_timeframe": self.model_timeframe,
+            **self._symbol_guard_stamps(),
         }
 
         # Enable short entries for SELL signals
@@ -823,7 +978,23 @@ class MLBasicSignalGenerator(SignalGenerator):
 
             # Try to select bundle using registry
             selected_bundle_key = None
-            if self._registry is not None:
+            resolved_model_symbol: str | None = None
+            if self._cross_symbol_bundle_key is not None:
+                # Startup explicitly opted into substitution via
+                # FEATURE_ALLOW_CROSS_SYMBOL_MODEL — score with the pinned
+                # bundle and keep reminding the operator.
+                selected_bundle_key = self._cross_symbol_bundle_key
+                resolved_model_symbol = self._model_symbol
+                self._log_symbol_guard(
+                    "cross_symbol_substitution",
+                    logging.WARNING,
+                    "Cross-symbol model substitution: scoring %s with %s model %s "
+                    "(FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true)",
+                    self.symbol,
+                    resolved_model_symbol,
+                    selected_bundle_key,
+                )
+            elif self._registry is not None:
                 try:
                     bundle = self._registry.select_bundle(
                         symbol=self.symbol,
@@ -831,6 +1002,24 @@ class MLBasicSignalGenerator(SignalGenerator):
                         timeframe=self.model_timeframe,
                     )
                     selected_bundle_key = bundle.key
+                    bundle_symbol = getattr(bundle, "symbol", None)
+                    if isinstance(bundle_symbol, str):
+                        resolved_model_symbol = bundle_symbol
+                except ModelNotAvailableError:
+                    # Bundle vanished after startup validation (e.g. registry
+                    # reload). Refuse to silently score another symbol's
+                    # model — fail the prediction (caller emits HOLD).
+                    self._log_symbol_guard(
+                        "model_unavailable",
+                        logging.ERROR,
+                        "No %s/%s model available for %s at prediction time — holding "
+                        "(refusing cross-symbol fallback)",
+                        self.model_type,
+                        self.model_timeframe,
+                        self.symbol,
+                    )
+                    self._model_symbol = None
+                    return None
                 except (KeyError, ValueError, AttributeError):
                     # Bundle not found or invalid - fall back to default
                     selected_bundle_key = None
@@ -846,12 +1035,38 @@ class MLBasicSignalGenerator(SignalGenerator):
                 # Fall back to default registry resolution if explicit lookup fails
                 result = self.prediction_engine.predict(window_df)
 
+            # Detect which symbol's model actually scored this prediction so
+            # signals can be stamped and mismatches surfaced loudly.
+            if resolved_model_symbol is None:
+                resolved_model_symbol = self._parse_model_symbol(
+                    getattr(result, "model_name", None)
+                )
+            self._model_symbol = resolved_model_symbol
+            if (
+                self._cross_symbol_bundle_key is None
+                and resolved_model_symbol is not None
+                and resolved_model_symbol != self.symbol
+            ):
+                self._log_symbol_guard(
+                    "symbol_mismatch",
+                    logging.ERROR,
+                    "MODEL/SYMBOL MISMATCH: trading %s but the resolved model bundle is "
+                    "for %s (model=%s). Signals are scored by a model trained on a "
+                    "different symbol.",
+                    self.symbol,
+                    resolved_model_symbol,
+                    engine_model_name,
+                )
+
             pred = float(result.price)
 
             # Prediction engine returns real prices
             return pred
 
         except Exception:
+            # No model scored this bar — clear the stamp so the HOLD signal
+            # doesn't carry the previous bar's model_symbol.
+            self._model_symbol = None
             logger.exception("MLBasicSignalGenerator: Prediction error at index %d", index)
             return None
 

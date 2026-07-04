@@ -305,3 +305,84 @@ class TestOrderTrackerAlertAdapter:
         assert kwargs["component"] == "order_tracker"
         assert kwargs["severity"] == "critical"
         assert kwargs["alert"] is True
+
+
+class TestAlertRateLimiting:
+    """A recurring critical (same component+error_code) pages once per cooldown
+    window; the system_events row is still written but the repeat webhook is
+    suppressed, so one looping condition can't flood the operator (#853)."""
+
+    @staticmethod
+    def _engine() -> LiveTradingEngine:
+        import threading
+
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.db_manager = MagicMock()
+        engine.trading_session_id = 1
+        engine._send_alert = MagicMock(return_value=True)
+        engine._alert_dedup = {}
+        engine._alert_dedup_lock = threading.Lock()
+        return engine
+
+    def test_repeat_alert_suppressed_within_cooldown(self):
+        engine = self._engine()
+        for _ in range(3):
+            engine._record_event(
+                EventType.ALERT,
+                "orphan!",
+                severity="critical",
+                component="order_tracker",
+                error_code="ORDER_ORPHANED",
+                alert=True,
+            )
+        # Paged exactly once; the two repeats within the window are suppressed.
+        assert engine._send_alert.call_count == 1
+        calls = engine.db_manager.log_event.call_args_list
+        assert len(calls) == 3  # every row is still written (queryable)
+        assert calls[0].kwargs["alert_sent"] is True
+        assert calls[0].kwargs["alert_method"] == "webhook"
+        assert calls[1].kwargs["alert_sent"] is False
+        assert calls[1].kwargs["alert_method"] == "suppressed"
+
+    def test_distinct_error_codes_not_cross_deduped(self):
+        engine = self._engine()
+        engine._record_event(EventType.ALERT, "a", error_code="A", component="x", alert=True)
+        engine._record_event(EventType.ALERT, "b", error_code="B", component="x", alert=True)
+        assert engine._send_alert.call_count == 2
+
+    def test_no_error_code_never_rate_limited(self):
+        engine = self._engine()
+        for _ in range(3):
+            engine._record_event(EventType.ALERT, "no-code", component="x", alert=True)
+        assert engine._send_alert.call_count == 3
+
+    def test_bare_engine_without_dedup_state_not_rate_limited(self):
+        """Backward-compat: a bare engine (__new__, no dedup state) never rate-limits
+        and never raises AttributeError — the many existing bare-engine tests rely on it."""
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.db_manager = MagicMock()
+        engine.trading_session_id = 1
+        engine._send_alert = MagicMock(return_value=True)
+        for _ in range(3):
+            engine._record_event(EventType.ALERT, "x", error_code="X", component="c", alert=True)
+        assert engine._send_alert.call_count == 3
+
+    def test_failed_delivery_does_not_open_cooldown(self):
+        """The cooldown opens only on a SUCCESSFUL page: if the first delivery
+        fails, later occurrences must retry, not be silently suppressed — else a
+        transient webhook failure would blind the operator for the whole window."""
+        engine = self._engine()
+        engine._send_alert = MagicMock(return_value=False)  # delivery keeps failing
+        for _ in range(3):
+            engine._record_event(
+                EventType.ALERT,
+                "orphan!",
+                severity="critical",
+                component="order_tracker",
+                error_code="ORDER_ORPHANED",
+                alert=True,
+            )
+        # Every occurrence retried the webhook; none was suppressed.
+        assert engine._send_alert.call_count == 3
+        calls = engine.db_manager.log_event.call_args_list
+        assert all(c.kwargs["alert_method"] != "suppressed" for c in calls)

@@ -21,6 +21,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scale-in's added exposure to `scale_in_gross_cap_headroom` (conservative cap −
   current gross). Both remain inert unless `enable_exposure_governor` is on. This
   clears the two conditions the PM flagged before the governor can be enabled live.
+- **P0: trading symbol now reaches the ML signal generator; cross-symbol model
+  substitution is guarded** (2026-07-04 ml-engineer audit finding): the live
+  runner and the backtest CLI constructed strategies with zero arguments, so
+  `--symbol ETHUSDT` never reached `MLBasicSignalGenerator`, which defaulted to
+  `BTCUSDT` for model registry selection — HyperGrowth live on ETHUSDT silently
+  scored every bar with the BTCUSDT basic model. Both runners now thread the
+  symbol through `call_strategy_factory()` (`src/strategies/__init__.py`) into
+  every factory that composes `MLBasicSignalGenerator` (`hyper_growth`,
+  `ml_basic`, `leveraged_regime`, `ensemble_weighted`, `StrategyFactory`
+  presets); the generator normalizes it to the registry's Binance-style form
+  (invalid symbols raise a clear `Invalid trading symbol` error at init). The
+  hot-swap path is covered too: `StrategyManager` accepts the trading symbol
+  (assigned by the startup sequencer at session start) and threads it through
+  `_instantiate_strategy`, so regime-switcher hot-swaps select models for the
+  traded pair — and a swap-time missing-model failure rejects the swap and
+  keeps the current strategy instead of killing the trading loop.
+  Guards at the generator/registry seam (identical in backtest and live):
+  - **Fail fast at startup** when no model bundle exists for
+    `(symbol, model_type, timeframe)` — the error lists available bundles
+    instead of silently substituting the default model.
+  - **`FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true`** explicitly opts into the
+    substitution: startup logs CRITICAL and pins a deterministic fallback
+    bundle (same type/timeframe, `BTCUSDT` preferred), and every resolution
+    logs a rate-limited WARNING. **Prod transition path**: production ETHUSDT
+    has no `basic` model yet, so promoting this fix requires setting the flag
+    temporarily — behavior is then *unchanged but loud* — until an ETHUSDT
+    basic model ships, at which point the flag must be unset.
+  - **Rate-limited ERROR on mismatch** (separate rate-limit clock per guard
+    condition) whenever the resolved bundle's symbol differs from the trading
+    symbol, and `Signal.metadata` is stamped with `trading_symbol` +
+    `model_symbol` on every branch — including HOLD paths
+    (`insufficient_history`, `prediction_failed`,
+    `invalid_prediction_or_price`) — for auditability.
+  - If the bundle vanishes after startup (registry reload), predictions fail
+    safe (HOLD) instead of falling back to another symbol's model.
+  Direct constructions without a symbol keep the `BTCUSDT` default.
 
 ### Added
 - **Account circuit-breaker loop enforcement** (#807 follow-up): a new
@@ -171,6 +207,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FEATURE_ENTRY_PAUSE` env var remains the override path.
 
 ### Fixed
+- **Stop-loss re-placement could arm a naked margin position for an
+  externally-closed position** (Codex review of #852, finding 2 — pre-existing):
+  when a position is closed or liquidated externally while the bot is offline,
+  its DB row stays OPEN and is re-loaded on the next startup. Stop-loss
+  verification deliberately runs *before* the asset-holdings check (so an offline
+  SL *fill* can book its realized P&L first), so for an externally-closed
+  position the tracked stop looks missing/cancelled and was **re-placed with
+  `AUTO_REPAY`** before the holdings check could remove the phantom — on margin,
+  the naked-position (fund-loss) path. The periodic cycle had the same risk (it
+  iterates a stale snapshot copy while step 1b removes phantoms from the live
+  tracker). A new `_position_holding_is_gone(exchange, use_margin, position)`
+  guard now gates all five stop re-placement sites (startup `_verify_stop_loss`
+  not-found + cancelled/expired/rejected branches, startup `reconcile_position`
+  step-3 placement, periodic step-2 re-placement, and periodic
+  `_place_missing_stop_loss`): it positively confirms the asset is gone using the
+  same 50%-of-tracked thresholds as `_verify_asset_holdings` /
+  `_verify_margin_position_exists` (margin short → borrowed, long → netAsset;
+  short-circuits on `exchange_close_pending`), and **fails safe** (returns
+  `False`, keep protecting) on a transient API error. Ordering was **not**
+  changed, so offline SL-fill P&L booking is preserved. A follow-up (Codex review
+  of #881) extended the guard to two more paths — the crash-recovery stop in
+  `_reconcile_filled_entry` (a pending entry that filled then closed externally
+  while offline is now handled as an external close: no stop, no emergency-sell)
+  and the startup partial-exit `_resize_stop_loss_after_partial_exit` — and made
+  margin-**long** liveness robust: `get_balance` returns `None` for **both** an
+  absent asset and a transient error, so a fully-closed margin long could not be
+  distinguished from an API blip; a new `_margin_net_asset`
+  (`get_margin_account_asset`: zeros for an absent asset, `None` only on error)
+  now backs the guard and both margin-long phantom-removers. Spot is unaffected
+  (AUTO_REPAY is a no-op on spot and an oversell is exchange-rejected). Adds 22
+  unit tests.
 - **Max-drawdown guard mis-seeded its peak from the configured balance**
   (prod 2026-07-04: guard armed at $100.00 vs true session equity $84.42 and
   immediately warned at a phantom 15.60% drawdown): the seed took

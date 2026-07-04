@@ -4,6 +4,7 @@
   "optimizer_canary_fraction": "0.1",
   "optimizer_auto_apply": false,
   "entry_pause": false,
+  "allow_cross_symbol_model": false,
   "max_drawdown_reset_peak": false,
   "enable_exposure_governor": false,
   "enable_etf_flow_gate": false,

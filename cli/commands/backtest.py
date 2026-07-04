@@ -20,6 +20,7 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 
 from src.infrastructure.logging.config import configure_logging
 from src.strategies import (
+    call_strategy_factory,
     create_adaptive_trend_strategy,
     create_ensemble_weighted_strategy,
     create_hyper_growth_strategy,
@@ -36,7 +37,12 @@ from src.trading.symbols.factory import SymbolFactory
 logger = logging.getLogger("atb.backtest")
 
 
-def _load_strategy(strategy_name: str):
+def _load_strategy(strategy_name: str, symbol: str | None = None):
+    """Load a strategy by name, threading the trading symbol when supported.
+
+    Mirrors the live runner (backtest-live parity): the symbol must reach ML
+    signal generators so model registry selection matches the traded pair.
+    """
     # Define available strategies with their import paths and classes
     available_strategies: dict[str, Callable[..., Strategy]] = {
         "ml_basic": create_ml_basic_strategy,
@@ -53,7 +59,7 @@ def _load_strategy(strategy_name: str):
     try:
         builder = available_strategies.get(strategy_name)
         if builder is not None:
-            return builder()
+            return call_strategy_factory(builder, symbol=symbol)
 
         print(f"Unknown strategy: {strategy_name}")
         print(f"Available strategies: {', '.join(available_strategies.keys())}")
@@ -89,7 +95,7 @@ def _handle(ns: argparse.Namespace) -> int:
 
         start_date, end_date = _get_date_range(ns)
 
-        strategy = _load_strategy(ns.strategy)
+        strategy = _load_strategy(ns.strategy, symbol=ns.symbol)
         logger.info(f"Loaded strategy: {strategy.name}")
 
         # Provider - use factory for automatic failover support
