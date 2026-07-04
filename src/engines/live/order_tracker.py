@@ -281,6 +281,12 @@ class OrderTracker:
                                 tracked.symbol,
                                 tracked.callback_failure_count,
                             )
+                            self._emit_critical(
+                                f"Order {order_id} on {tracked.symbol} vanished from the exchange "
+                                f"after {tracked.callback_failure_count} failed callbacks — "
+                                "force-removed; position may be untracked, reconcile manually",
+                                "ORDER_UNTRACKED",
+                            )
                             self.stop_tracking(order_id)
                         else:
                             logger.warning(
@@ -377,6 +383,12 @@ class OrderTracker:
                         avg_price,
                         tracked.invalid_data_count,
                     )
+                    self._emit_critical(
+                        f"Filled order {order_id} on {tracked.symbol} returned invalid avg_price "
+                        f"({avg_price}) for {tracked.invalid_data_count} polls — force-removed; "
+                        "the fill is unbooked, reconcile manually",
+                        "ORDER_INVALID_DATA",
+                    )
                     self.stop_tracking(order_id)
                     return
                 logger.error(
@@ -406,6 +418,12 @@ class OrderTracker:
                         tracked.symbol,
                         filled_qty,
                         tracked.invalid_data_count,
+                    )
+                    self._emit_critical(
+                        f"Filled order {order_id} on {tracked.symbol} returned invalid filled_qty "
+                        f"({filled_qty}) for {tracked.invalid_data_count} polls — force-removed; "
+                        "the fill is unbooked, reconcile manually",
+                        "ORDER_INVALID_DATA",
                     )
                     self.stop_tracking(order_id)
                     return
@@ -495,6 +513,12 @@ class OrderTracker:
                         avg_price,
                         tracked.invalid_data_count,
                     )
+                    self._emit_critical(
+                        f"Partial fill {order_id} on {tracked.symbol} returned invalid avg_price "
+                        f"({avg_price}) for {tracked.invalid_data_count} polls — force-removed; "
+                        "the partial fill is unbooked, reconcile manually",
+                        "ORDER_INVALID_DATA",
+                    )
                     self.stop_tracking(order_id)
                     return
                 logger.error(
@@ -524,6 +548,12 @@ class OrderTracker:
                         tracked.symbol,
                         filled_qty,
                         tracked.invalid_data_count,
+                    )
+                    self._emit_critical(
+                        f"Partial fill {order_id} on {tracked.symbol} returned invalid filled_qty "
+                        f"({filled_qty}) for {tracked.invalid_data_count} polls — force-removed; "
+                        "the partial fill is unbooked, reconcile manually",
+                        "ORDER_INVALID_DATA",
                     )
                     self.stop_tracking(order_id)
                     return
@@ -633,6 +663,11 @@ class OrderTracker:
                         order_id,
                         tracked.symbol,
                         e,
+                    )
+                    self._emit_critical(
+                        f"Cancel callback failed for order {order_id} on {tracked.symbol} — "
+                        "order untracked; a phantom position may remain, reconcile manually",
+                        "ORDER_ORPHANED",
                     )
             # Stop tracking even if callback fails - cancelled orders won't
             # re-appear on exchange so keeping them tracked is a memory leak.
