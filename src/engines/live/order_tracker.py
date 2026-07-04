@@ -448,8 +448,9 @@ class OrderTracker:
                             e,
                             exc_info=True,
                         )
-                        # Runs outside any lock (see the callback comment above), so
-                        # the alert webhook cannot block order handling. #853
+                        # This runs UNDER the per-order lock; the engine adapter
+                        # delivers the alert off-thread so the (up to 10s) webhook
+                        # never blocks the poll / fill-processing path. #853
                         self._emit_critical(
                             f"Fill callback failed {tracked.callback_failure_count}x for order "
                             f"{order_id} on {tracked.symbol} — order force-removed; position is "
