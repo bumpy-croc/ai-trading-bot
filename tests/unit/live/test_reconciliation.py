@@ -3660,6 +3660,13 @@ class TestPeriodicSpotBalanceReconcile:
         # Corrected to exchange USDT + 0 notional (fresh tracker is empty) — NOT 900 + the
         # closed position's notional (the stale-snapshot over-correction).
         assert mock_db.update_balance.call_args.args[0] == pytest.approx(900.0)
+        # The correction is now audited (this periodic path previously wrote no
+        # reconciliation_audit_events row, unlike its startup twin). #853
+        mock_db.log_audit_event.assert_called_once()
+        audit = mock_db.log_audit_event.call_args.kwargs
+        assert audit["entity_type"] == "balance"
+        assert audit["field"] == "total_balance"
+        assert audit["severity"] == Severity.CRITICAL.value
 
     def test_no_correction_within_threshold(self, mock_exchange, mock_position_tracker, mock_db):
         mock_position_tracker.positions = {}

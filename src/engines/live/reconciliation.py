@@ -3129,6 +3129,23 @@ class PeriodicReconciler:
                 # DB balance represents total capital (USDT + position notional), not just
                 # free USDT on exchange.
                 corrected_balance = usdt_balance.total + position_notional
+                # Audit the correction — the startup twin (_reconcile_balance) audits
+                # its identical correction, but this periodic path previously wrote
+                # only a log line (no reconciliation_audit_events row). #853
+                self.db_manager.log_audit_event(
+                    session_id=self.session_id,
+                    entity_type="balance",
+                    entity_id=None,
+                    field="total_balance",
+                    old_value=f"{db_balance:.2f}",
+                    new_value=f"{corrected_balance:.2f}",
+                    reason=(
+                        f"Periodic balance correction: discrepancy {diff_pct:.2%} exceeds threshold "
+                        f"(exchange_usdt={usdt_balance.total:.2f}, "
+                        f"position_notional={position_notional:.2f})"
+                    ),
+                    severity=Severity.CRITICAL.value,
+                )
                 self.db_manager.update_balance(
                     corrected_balance,
                     "reconciliation_balance_correction",
