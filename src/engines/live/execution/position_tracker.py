@@ -572,7 +572,6 @@ class LivePositionTracker:
         delta_fraction: float,
         price: float,
         target_level: int,
-        fraction_of_original: float,
         basis_balance: float,
         fee_rate: float = DEFAULT_FEE_RATE,
         slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
@@ -587,10 +586,14 @@ class LivePositionTracker:
 
         Args:
             order_id: Order ID of position.
-            delta_fraction: Fraction of current position to exit.
+            delta_fraction: Exited slice in balance-fraction units (same
+                units as ``current_size``; the PartialExitExecutor contract).
+                Values exceeding the remaining ``current_size`` are clamped.
+                The same (clamped) delta is persisted to the DB so
+                ``Position.current_size`` there mirrors the runtime tracker
+                (crash recovery re-registers ``daily_risk_used`` from it).
             price: Current market price for P&L calculation.
             target_level: Which profit target level triggered this exit.
-            fraction_of_original: Fraction of original position being exited.
             basis_balance: Fallback balance for P&L calculation.
             fee_rate: Fee rate for exit calculation (overrides executor default).
             slippage_rate: Slippage rate for exit cost (overrides executor default).
@@ -662,12 +665,14 @@ class LivePositionTracker:
             partial_exit_result.realized_pnl,
         )
 
-        # Persist to DB (db_id was captured under lock above)
+        # Persist to DB (db_id was captured under lock above). Persist the
+        # same clamped balance-fraction delta applied to runtime state so the
+        # DB's current_size stays identical to the tracker's.
         if self.db_manager is not None and db_id is not None:
             try:
                 self.db_manager.apply_partial_exit_update(
                     position_id=db_id,
-                    executed_fraction_of_original=float(fraction_of_original),
+                    executed_size_delta=float(delta_fraction),
                     price=float(price),
                     target_level=int(target_level),
                 )
@@ -691,7 +696,6 @@ class LivePositionTracker:
         delta_fraction: float,
         price: float,
         threshold_level: int,
-        fraction_of_original: float,
         max_position_size: float = 1.0,
     ) -> ScaleInResult | None:
         """Increase position size via scale-in.
@@ -701,10 +705,12 @@ class LivePositionTracker:
 
         Args:
             order_id: Order ID of position.
-            delta_fraction: Additional size fraction to add.
+            delta_fraction: Additional size to add, in balance-fraction units
+                (same units as ``current_size``). The delta actually applied
+                after the max-position cap is what gets persisted to the DB,
+                so ``Position.current_size`` there mirrors the runtime tracker.
             price: Current market price.
             threshold_level: Which threshold level triggered this scale-in.
-            fraction_of_original: Fraction of original being added.
             max_position_size: Maximum allowed position size.
 
         Returns:
@@ -739,6 +745,9 @@ class LivePositionTracker:
             new_size = position.size
             new_current_size = position.current_size
             scale_ins_taken = position.scale_ins_taken
+            # Delta actually applied to current_size after the cap — persist
+            # exactly this so DB state matches runtime state.
+            applied_delta = new_current_size - current_size
 
         logger.debug(
             "Scale-in: +%.4f to position %s, new size=%.4f",
@@ -748,11 +757,11 @@ class LivePositionTracker:
         )
 
         # Persist to DB (db_id was captured under lock above)
-        if self.db_manager is not None and db_id is not None:
+        if self.db_manager is not None and db_id is not None and applied_delta > EPSILON:
             try:
                 self.db_manager.apply_scale_in_update(
                     position_id=db_id,
-                    added_fraction_of_original=float(fraction_of_original),
+                    added_size_delta=float(applied_delta),
                     price=float(price),
                     threshold_level=int(threshold_level),
                 )

@@ -21,6 +21,7 @@ from src.config.constants import (
 
 if TYPE_CHECKING:
     from src.position_management.dynamic_risk import DynamicRiskConfig
+    from src.position_management.partial_manager import PartialExitPolicy
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
@@ -257,6 +258,49 @@ def build_time_exit_policy(
         return None
 
 
+def build_partial_exit_policy(
+    strategy: Any,
+    risk_parameters: Any | None = None,
+) -> PartialExitPolicy:
+    """Build the partial exit/scale-in policy for an engine.
+
+    Strategy-declared ``partial_operations`` overrides win; risk-parameter
+    defaults (which hydrate ``DEFAULT_PARTIAL_EXIT_TARGETS``) apply only when
+    the strategy specifies nothing. Used by both engines so partial-config
+    hydration stays in parity.
+
+    Args:
+        strategy: Strategy with optional get_risk_overrides() method.
+        risk_parameters: RiskParameters fallback; a default instance is
+            created when None.
+
+    Returns:
+        PartialExitPolicy built from strategy overrides or risk parameters.
+    """
+    from src.position_management.partial_manager import PartialExitPolicy
+    from src.risk.risk_manager import RiskParameters
+
+    overrides = extract_risk_overrides(strategy)
+    partial_config = overrides.get("partial_operations")
+    if isinstance(partial_config, dict):
+        return PartialExitPolicy(
+            exit_targets=partial_config.get("exit_targets", []),
+            exit_sizes=partial_config.get("exit_sizes", []),
+            scale_in_thresholds=partial_config.get("scale_in_thresholds", []),
+            scale_in_sizes=partial_config.get("scale_in_sizes", []),
+            max_scale_ins=partial_config.get("max_scale_ins", 0),
+        )
+
+    rp = risk_parameters if risk_parameters is not None else RiskParameters()
+    return PartialExitPolicy(
+        exit_targets=rp.partial_exit_targets or [],
+        exit_sizes=rp.partial_exit_sizes or [],
+        scale_in_thresholds=rp.scale_in_thresholds or [],
+        scale_in_sizes=rp.scale_in_sizes or [],
+        max_scale_ins=rp.max_scale_ins,
+    )
+
+
 def extract_risk_overrides(strategy: Any) -> dict[str, Any]:
     """Extract risk overrides from a strategy.
 
@@ -297,6 +341,7 @@ __all__ = [
     "merge_dynamic_risk_config",
     "build_trailing_stop_policy",
     "build_time_exit_policy",
+    "build_partial_exit_policy",
     "extract_risk_overrides",
     "get_risk_parameters",
 ]

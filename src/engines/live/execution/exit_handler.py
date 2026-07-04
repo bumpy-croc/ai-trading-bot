@@ -41,7 +41,6 @@ from src.engines.shared.partial_operations_manager import (
 from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 from src.engines.shared.validation import (
-    convert_exit_fraction_to_current,
     is_position_fully_closed,
     is_same_bar_entry,
 )
@@ -789,7 +788,7 @@ class LiveExitHandler:
                     if not exit_result.should_exit:
                         break
 
-                    # Convert from fraction of original to fraction of current.
+                    # Policy sizes are fractions of the ORIGINAL position.
                     # should_exit=True guarantees exit_fraction/target_index are set.
                     exit_size_of_original = cast(float, exit_result.exit_fraction)
                     exit_target_level = cast(int, exit_result.target_index)
@@ -808,26 +807,37 @@ class LiveExitHandler:
                         )
                         break
 
-                    exit_size_of_current = convert_exit_fraction_to_current(
-                        exit_fraction_of_original=exit_size_of_original,
-                        current_size=current_size,
-                        original_size=original_size,
-                        epsilon=EPSILON,
+                    # Convert to balance-fraction units (the PartialExitExecutor
+                    # contract, identical to current_size units), capped at what
+                    # remains of the position.
+                    exit_size_of_balance = min(
+                        exit_size_of_original * original_size,
+                        current_size,
                     )
-                    if exit_size_of_current is None:
+                    if exit_size_of_balance <= EPSILON:
                         break
 
                     self._execute_partial_exit(
                         order_id=order_id,
                         position=position,
-                        delta_fraction=exit_size_of_current,
+                        delta_fraction=exit_size_of_balance,
                         price=current_price,
                         target_level=exit_target_level,
-                        fraction_of_original=exit_size_of_original,
                         current_balance=current_balance,
                     )
 
                     iteration_count += 1
+
+                # A position fully consumed by partial exits must not be
+                # revived by a scale-in (zombie position). Re-read sizes:
+                # the partial loop above may have just consumed the remainder
+                # (and execute_exit may have already removed it from the tracker).
+                if is_position_fully_closed(
+                    cast(float, position.current_size),
+                    cast(float, position.original_size),
+                    epsilon=EPSILON,
+                ):
+                    continue
 
                 # Check for scale-ins
                 scale_result = self.partial_manager.check_scale_in(
@@ -843,29 +853,24 @@ class LiveExitHandler:
                     if self._entry_pause.paused(f"scale-in for {position.symbol}"):
                         continue
 
+                    # Policy sizes are fractions of the ORIGINAL position;
+                    # convert to balance-fraction units — the same units as
+                    # ``position.size``, ``daily_risk_used`` and
+                    # ``max_daily_risk`` — matching backtest's scale-in path
+                    # (src/engines/backtest/execution/exit_handler.py) and
+                    # ``PartialExitPolicy.apply_scale_in``.
                     # should_scale=True guarantees scale_fraction/target_index are set.
                     add_size_of_original = cast(float, scale_result.scale_fraction)
+                    original_size = cast(float, position.original_size)
 
                     # Clamp scale-in size by remaining daily-risk budget so
                     # the live engine never exceeds the per-day exposure
                     # cap that backtest already enforces in its scale-in
-                    # path (src/engines/backtest/execution/exit_handler.py:357-361).
-                    # Without this clamp, a strategy with two scale-in
+                    # path. Without this clamp, a strategy with two scale-in
                     # targets could push total exposure above
                     # ``risk_manager.params.max_daily_risk`` while
                     # backtest results would have it capped.
-                    #
-                    # NOTE on units: in the live engine, ``scale_fraction`` is
-                    # applied as a fraction-of-balance delta — ``apply_scale_in``
-                    # adds it straight onto ``position.size`` and
-                    # ``risk_manager.adjust_position_after_scale_in`` adds it
-                    # straight onto ``daily_risk_used`` (same unit as
-                    # ``max_daily_risk``). So we compare against ``remaining_daily``
-                    # directly and must NOT multiply by ``original_size`` here.
-                    # Backtest multiplies by ``original_size`` only because its
-                    # tracker stores size in a different unit; replicating that
-                    # multiplication in live would under-size the scale-in.
-                    add_effective = add_size_of_original
+                    add_effective = add_size_of_original * original_size
                     if self.risk_manager is not None and add_effective > 0:
                         try:
                             params = getattr(self.risk_manager, "params", None)
@@ -926,7 +931,6 @@ class LiveExitHandler:
                             price=current_price,
                             # should_scale=True guarantees target_index is set.
                             threshold_level=cast(int, scale_result.target_index),
-                            fraction_of_original=add_effective,
                         )
 
             except (AttributeError, ValueError, KeyError, ZeroDivisionError) as e:
@@ -941,7 +945,6 @@ class LiveExitHandler:
         delta_fraction: float,
         price: float,
         target_level: int,
-        fraction_of_original: float,
         current_balance: float,
     ) -> None:
         """Execute a partial exit.
@@ -949,10 +952,11 @@ class LiveExitHandler:
         Args:
             order_id: Order ID of position.
             position: Position to partially exit.
-            delta_fraction: Fraction of current position to exit.
+            delta_fraction: Exited slice in balance-fraction units (same
+                units as ``position.current_size``; the PartialExitExecutor
+                contract, also persisted as-is to the DB).
             price: Current market price.
             target_level: Profit target level.
-            fraction_of_original: Fraction of original position.
             current_balance: Current account balance.
         """
         result = self.position_tracker.apply_partial_exit(
@@ -960,7 +964,6 @@ class LiveExitHandler:
             delta_fraction=delta_fraction,
             price=price,
             target_level=target_level,
-            fraction_of_original=fraction_of_original,
             basis_balance=current_balance,
             fee_rate=self.execution_engine.fee_rate,
             slippage_rate=self.execution_engine.slippage_rate,
@@ -1001,24 +1004,22 @@ class LiveExitHandler:
         delta_fraction: float,
         price: float,
         threshold_level: int,
-        fraction_of_original: float,
     ) -> None:
         """Execute a scale-in.
 
         Args:
             order_id: Order ID of position.
             position: Position to scale into.
-            delta_fraction: Fraction to add.
+            delta_fraction: Size to add, in balance-fraction units (same
+                units as ``position.current_size``).
             price: Current market price.
             threshold_level: Threshold level.
-            fraction_of_original: Fraction of original position.
         """
         result = self.position_tracker.apply_scale_in(
             order_id=order_id,
             delta_fraction=delta_fraction,
             price=price,
             threshold_level=threshold_level,
-            fraction_of_original=fraction_of_original,
             max_position_size=self.max_position_size,
         )
 
