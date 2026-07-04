@@ -144,6 +144,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FEATURE_ENTRY_PAUSE` env var remains the override path.
 
 ### Fixed
+- **Stop-loss re-placement could arm a naked margin position for an
+  externally-closed position** (Codex review of #852, finding 2 — pre-existing):
+  when a position is closed or liquidated externally while the bot is offline,
+  its DB row stays OPEN and is re-loaded on the next startup. Stop-loss
+  verification deliberately runs *before* the asset-holdings check (so an offline
+  SL *fill* can book its realized P&L first), so for an externally-closed
+  position the tracked stop looks missing/cancelled and was **re-placed with
+  `AUTO_REPAY`** before the holdings check could remove the phantom — on margin,
+  the naked-position (fund-loss) path. The periodic cycle had the same risk (it
+  iterates a stale snapshot copy while step 1b removes phantoms from the live
+  tracker). A new `_position_holding_is_gone(exchange, use_margin, position)`
+  guard now gates all five stop re-placement sites (startup `_verify_stop_loss`
+  not-found + cancelled/expired/rejected branches, startup `reconcile_position`
+  step-3 placement, periodic step-2 re-placement, and periodic
+  `_place_missing_stop_loss`): it positively confirms the asset is gone using the
+  same 50%-of-tracked thresholds as `_verify_asset_holdings` /
+  `_verify_margin_position_exists` (margin short → borrowed, long → netAsset;
+  short-circuits on `exchange_close_pending`), and **fails safe** (returns
+  `False`, keep protecting) on a transient API error. Ordering was **not**
+  changed, so offline SL-fill P&L booking is preserved. Adds 15 unit tests.
 - **Max-drawdown guard mis-seeded its peak from the configured balance**
   (prod 2026-07-04: guard armed at $100.00 vs true session equity $84.42 and
   immediately warned at a phantom 15.60% drawdown): the seed took
