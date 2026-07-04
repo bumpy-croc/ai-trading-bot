@@ -33,6 +33,7 @@ LABELS=(
   "type:chore|6E40C9|Maintenance, refactor, cleanup, deps, tech-debt."
   "type:docs|9D6FE0|Documentation only."
   "source:automation|AEAEAE|Filed by an automated job / bot."
+  "epic:bear-market-2026|FF6B35|Bear-market hardening plan (Jun 2026)."
 )
 
 upsert_label() {
@@ -66,7 +67,35 @@ echo "== Assigning type:docs =="
 for n in 793; do add_label "$n" "type:docs"; done
 
 echo "== Assigning source:automation =="
-for n in 707 622 618 615 614 607 605; do add_label "$n" "source:automation"; done
+for n in 707 622 618 615 614 607 605 619 808 833 834; do add_label "$n" "source:automation"; done
+
+# ---------------------------------------------------------------------------
+# 2b. Round-2 sweep: issues filed after the initial pass, found ad-hoc-labeled
+# or unlabeled on re-reconciliation. Additive; safe to re-run.
+# ---------------------------------------------------------------------------
+echo "== Assigning bear-market-2026 epic issues (#801-807) =="
+add_label 801 "state:proposed"; add_label 801 "priority:p0"; add_label 801 "type:feature"; add_label 801 "area:ml-model"
+add_label 802 "state:proposed"; add_label 802 "priority:p0"; add_label 802 "type:feature"; add_label 802 "area:risk"
+add_label 803 "state:proposed"; add_label 803 "priority:p0"; add_label 803 "type:feature"; add_label 803 "area:data"
+add_label 804 "state:proposed"; add_label 804 "priority:p1"; add_label 804 "type:feature"; add_label 804 "area:sentiment"
+add_label 805 "state:proposed"; add_label 805 "priority:p1"; add_label 805 "type:feature"; add_label 805 "area:risk"
+add_label 806 "state:proposed"; add_label 806 "priority:p1"; add_label 806 "type:feature"; add_label 806 "area:risk"
+add_label 807 "state:proposed"; add_label 807 "priority:p2"; add_label 807 "type:feature"; add_label 807 "area:risk"; add_label 807 "area:live-ops"
+
+echo "== Assigning weekly-training-failure incidents (#619, #808, #833, #834) =="
+for n in 619 808 833 834; do
+  add_label "$n" "state:proposed"; add_label "$n" "priority:p2"; add_label "$n" "type:incident"; add_label "$n" "area:ml-model"
+done
+
+echo "== Assigning already-shipped fixes (#836, #839) =="
+add_label 836 "priority:p0"; add_label 836 "state:shipped"
+add_label 839 "priority:p0"; add_label 839 "state:shipped"
+
+echo "== Assigning research/incident/epic priority + state gaps =="
+add_label 842 "priority:p2"
+add_label 844 "priority:p2"
+add_label 845 "state:proposed"
+add_label 853 "state:proposed"
 
 # ---------------------------------------------------------------------------
 # 3. Delete retired legacy / duplicate labels
@@ -79,6 +108,7 @@ RETIRED=(
   "race-condition" "reconciliation" "refactor" "refactoring" "robustness"
   "tech debt" "technical-indicators" "testing" "tests" "thread-safety"
   "trading" "trading optimisation" "training" "workflow"
+  "P0" "P1" "P2" "risk" "signal"
 )
 
 echo "== Deleting retired labels =="

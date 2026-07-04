@@ -63,6 +63,12 @@ idempotent — run it to bring the repo's label set in line with this document.
 `source:forensics`, `source:ideation`, `source:incident`, `source:market-anomaly`,
 `source:parity-gap`, `source:human`, `source:automation`.
 
+### `epic:*` — cross-cutting initiative (zero or one)
+Groups issues belonging to the same multi-PR initiative, independent of
+`area:*`/`type:*`. Added when the first real case showed up (`epic:bear-market-2026`,
+7 issues spanning ml-model/risk/data/sentiment). Add a new `epic:*` label per
+initiative as needed; retire it once the initiative ships.
+
 ## Orthogonal flags (kept from GitHub defaults)
 
 `good first issue`, `help wanted`, `security`, `breaking-change`, `invalid`,
@@ -92,3 +98,7 @@ namespaced taxonomy. Mapping for reference:
 | `testing`, `tests` | (dropped — covered by `area:*`) |
 | `automated`, `automation`, `background-agent`, `codex`, `copilot`, `autofix` | `source:automation` |
 | `ai & workflow`, `workflow` | (dropped) |
+| `P0`, `P1`, `P2` | `priority:p0` / `priority:p1` / `priority:p2` |
+| `risk` | `area:risk` |
+| `signal` | `area:data` / `area:sentiment` / `area:strategy` (contextual) |
+| `bear-market-2026` | renamed to `epic:bear-market-2026` |
