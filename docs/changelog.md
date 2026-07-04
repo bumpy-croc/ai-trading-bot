@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Volatility-targeted position sizing** (#805): a new `VolatilityTargetSizer`
+  (`src/strategies/components/position_sizer.py`) wraps a base sizer and scales
+  its output by `target_atr_percentile / atr_percentile` (from the regime
+  detector) so per-position dollar-vol is roughly constant — smaller in high vol,
+  larger in calm, bounded to avoid blow-ups. Passes through unchanged when the
+  regime/ATR-percentile is unavailable (never guesses). Wired into
+  `ml_basic`/`ml_adaptive` behind `enable_vol_target_sizing` (**default OFF**,
+  requires regime detection). Also: `kelly_momentum` now clamps fractional Kelly
+  to `DEFAULT_MAX_KELLY_FRACTION` (0.5) for bear safety (full/half Kelly
+  over-sizes into drawdowns); and `momentum_leverage` / `hyper_growth` emit a
+  startup warning that they are not recommended for bear/high-vol regimes.
 - **Regime-gated gross exposure caps** (#802): a new `ExposureGovernor`
   (`src/strategies/components/exposure_governor.py`) caps *total gross open
   exposure* (sum of |entry notional| / current equity) by market regime — in a
