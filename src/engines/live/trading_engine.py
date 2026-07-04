@@ -921,8 +921,11 @@ class LiveTradingEngine:
         # Wire the #802 regime-gated exposure governor. Positions are read lazily
         # so ordering with live_position_tracker construction does not matter.
         # Inert unless the ``enable_exposure_governor`` feature flag is on.
+        # Resolve the flag ONCE here (not per entry) — reading feature_flags.json
+        # on every entry would add disk I/O to the hot path. A flag change
+        # requires a restart (which reconstructs the engine) anyway.
         self.live_entry_handler.configure_exposure_gate(
-            ExposureGovernor(),
+            ExposureGovernor(enabled=is_enabled("enable_exposure_governor", default=False)),
             lambda: list(self.live_position_tracker.positions.values()),
         )
 

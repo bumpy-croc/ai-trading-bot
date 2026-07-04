@@ -37,6 +37,7 @@ from src.config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
+from src.config.feature_flags import is_enabled
 from src.database.models import TradeSource
 from src.engines.backtest.execution import (
     EntryHandler,
@@ -432,10 +433,12 @@ class Backtester:
 
         # Wire the #802 regime-gated exposure governor (shared with the live
         # engine). The backtest is single-position, so at entry the book is flat
-        # and the cap bounds the new leg to the regime ceiling. Read lazily;
-        # inert unless the ``enable_exposure_governor`` feature flag is on.
+        # and the cap bounds the new leg to the regime ceiling. Positions read
+        # lazily; the flag is resolved ONCE here (not per entry) to keep
+        # feature_flags.json disk I/O out of the hot path. Inert unless
+        # ``enable_exposure_governor`` is on.
         self.entry_handler.configure_exposure_gate(
-            ExposureGovernor(),
+            ExposureGovernor(enabled=is_enabled("enable_exposure_governor", default=False)),
             lambda: (
                 [self.position_tracker.current_trade] if self.position_tracker.has_position else []
             ),
