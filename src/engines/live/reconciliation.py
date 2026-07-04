@@ -172,6 +172,16 @@ class ReconciliationResult:
 # ---------- Startup Reconciliation ----------
 
 
+def _is_exchange_close_pending(position: Any) -> bool:
+    """True when the exchange side of this position is already closed (its offline stop-loss
+    filled) but the DB row close is still pending after a failed ``close_position``. Such a
+    position is deliberately RETAINED in the tracker for close retry (removing it while the row
+    stays OPEN would diverge memory from the DB), yet it no longer backs any exchange holding —
+    so spot balance reconciliation must exclude its notional (counting it would add the
+    already-realized value back and overstate capital, oversizing later positions)."""
+    return bool(getattr(position, "exchange_close_pending", False))
+
+
 class PositionReconciler:
     """Verifies recovered positions and resolves pending orders on startup.
 
@@ -1835,7 +1845,10 @@ class PositionReconciler:
         if not db_closed:
             # Leave the position in the in-memory tracker (consistent with its still-OPEN DB
             # row) so it is re-reconciled on a later pass — removing it while the DB row stays
-            # OPEN would diverge memory from the DB (CODE.md: no silent divergence).
+            # OPEN would diverge memory from the DB (CODE.md: no silent divergence). The SL has
+            # filled, so the asset is gone from the exchange: flag it so spot balance
+            # reconciliation excludes its notional instead of adding the realized value back.
+            position.exchange_close_pending = True
             logger.warning(
                 "Skipping close for %s — DB position %s was not closed; left in tracker for "
                 "re-reconciliation on a later pass.",
@@ -2275,6 +2288,11 @@ class PositionReconciler:
         total = 0.0
         positions = self.position_tracker.positions
         for position in positions.values():
+            # Skip positions whose exchange side is already closed (offline SL fill) but whose
+            # DB close is still pending — the asset is gone, so counting notional would add the
+            # realized value back and overstate capital (oversizing later positions).
+            if _is_exchange_close_pending(position):
+                continue
             # Use quantity (actual asset amount), not size (balance fraction).
             # Coerce to float — DB-loaded positions carry Decimal (Numeric)
             # fields, and mixing Decimal with the float `total`/price below
@@ -2983,6 +3001,10 @@ class PeriodicReconciler:
             # to float — DB-loaded positions carry Decimal (Numeric) fields (#653 class).
             position_notional = 0.0
             for position in self.position_tracker.positions.values():
+                # Skip positions flat on the exchange (offline SL fill) but pending DB close —
+                # their asset is already sold, so counting notional would overstate capital.
+                if _is_exchange_close_pending(position):
+                    continue
                 qty = float(getattr(position, "quantity", None) or 0.0)
                 price = float(getattr(position, "entry_price", 0) or 0.0)
                 if qty > 0 and price > 0:
