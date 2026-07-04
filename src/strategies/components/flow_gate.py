@@ -15,7 +15,7 @@ retrained.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -38,10 +38,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Wide fetch window (once) so per-candle feature computation is in-memory.
-_HISTORY_START = datetime(2020, 1, 1, tzinfo=UTC)
-_HISTORY_END = datetime(2035, 1, 1, tzinfo=UTC)
-
 
 class ETFFlowGate:
     """Decides whether to block a new long given ETF net-flow conditions."""
@@ -63,9 +59,18 @@ class ETFFlowGate:
         self._flows: pd.DataFrame | None = None
 
     def _ensure_flows(self, as_of: datetime) -> None:
-        # Fetch the whole available series once, then compute features in-memory.
-        if self._flows is None:
-            self._flows = self._provider.get_flows(_HISTORY_START, _HISTORY_END)
+        """Load a bounded, cache-friendly flow window; refresh as the date advances.
+
+        Fetching a *bounded* window (vs the whole history) lets the provider's
+        parquet cache satisfy repeat calls, and refreshing when ``as_of`` moves
+        past the cached max keeps the gate current in a long-lived live session
+        (otherwise it would use day-0 flows forever). Per-candle feature
+        computation then runs in-memory against ``self._flows``.
+        """
+        ts = pd.Timestamp(as_of)
+        if self._flows is None or self._flows.empty or ts.normalize() > self._flows.index.max():
+            start = (ts - timedelta(days=self._long_window * 3 + 30)).to_pydatetime()
+            self._flows = self._provider.get_flows(start, ts.to_pydatetime())
 
     def should_block_long(self, as_of: datetime) -> tuple[bool, str | None]:
         """Return ``(block, reason)`` for a proposed long entry at ``as_of``.
