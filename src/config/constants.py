@@ -13,6 +13,17 @@ DEFAULT_MAX_PREDICTION_LATENCY = 0.1  # seconds
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"
 DEFAULT_ENABLE_SENTIMENT = False  # Disabled by default
 DEFAULT_ENABLE_MARKET_MICROSTRUCTURE = False  # MVP: disabled
+
+# Sentiment-extreme mean-reversion overlay (#804). At Fear & Greed extremes,
+# fading beats following and shorting into capitulation gets squeezed. Values
+# are on the F&G→[0,1] scale (sentiment_primary = F&G index / 100).
+DEFAULT_SENTIMENT_EXTREME_FEAR = 0.15  # F&G < 15 -> block new shorts; support-band longs only
+DEFAULT_SENTIMENT_EXTREME_GREED = 0.70  # F&G > 70 + trend_down -> permit small fade shorts
+# Structural support level for the extreme-fear mean-reversion long band. A
+# market level (≈ realized price) that goes STALE — a config PARAMETER, not a
+# constant. None = no band restriction (the overlay then only blocks shorts).
+DEFAULT_SENTIMENT_SUPPORT_LEVEL: float | None = None
+DEFAULT_SENTIMENT_SUPPORT_BAND_PCT = 0.05  # Longs allowed within ±5% of the support level
 DEFAULT_ENABLE_ONCHAIN_FEATURES = False  # On-chain features disabled by default
 DEFAULT_ENABLE_MACRO_FEATURES = False  # Macro economic features disabled by default
 DEFAULT_ENABLE_ENHANCED_SENTIMENT = False  # Enhanced sentiment disabled by default
@@ -380,6 +391,19 @@ DEFAULT_KELLY_EXPECTED_WIN_RATE = 0.55  # Prior from backtested momentum strateg
 DEFAULT_KELLY_EXPECTED_REWARD_RISK = 1.5  # Prior reward:risk from backtested results
 DEFAULT_KELLY_OVERFITTING_THRESHOLD = 0.15  # Flag >15% deviation from backtest priors
 DEFAULT_KELLY_MAX_FRACTION = 0.20  # Cap single-trade exposure at 20% of balance
+# Hard ceiling on fractional Kelly for bear-market safety (#805). Full/half Kelly
+# over-sizes into drawdowns; the kelly_momentum factory clamps its fractional
+# Kelly to this. Default target is quarter-Kelly.
+DEFAULT_MAX_KELLY_FRACTION = 0.5
+DEFAULT_TARGET_KELLY_FRACTION = 0.25
+
+# Volatility-targeted position sizing (#805). Scales position size inversely to
+# the regime detector's ATR percentile so per-position dollar-vol is roughly
+# constant — smaller in high vol, larger in calm. Bounded to avoid blow-ups.
+DEFAULT_VOL_TARGET_ATR_PERCENTILE = 0.5  # Reference ATR percentile → multiplier 1.0
+DEFAULT_VOL_TARGET_MIN_MULTIPLIER = 0.5  # Floor on the vol multiplier (high-vol cut)
+DEFAULT_VOL_TARGET_MAX_MULTIPLIER = 1.5  # Ceiling on the vol multiplier (calm boost)
+DEFAULT_VOL_TARGET_MIN_ATR_PERCENTILE = 0.1  # Divisor floor so tiny ATR pctile can't blow size up
 
 # Leverage Manager Defaults
 DEFAULT_MAX_LEVERAGE = 3.0  # Maximum leverage multiplier (safety cap)

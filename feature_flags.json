@@ -7,5 +7,7 @@
   "max_drawdown_reset_peak": false,
   "enable_exposure_governor": false,
   "enable_etf_flow_gate": false,
+  "enable_vol_target_sizing": false,
+  "enable_sentiment_extreme_overlay": false,
   "enable_macro_event_guard": false
 }

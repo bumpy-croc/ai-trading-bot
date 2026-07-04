@@ -26,10 +26,18 @@ from src.config.constants import (
     DEFAULT_KELLY_MAX_FRACTION,
     DEFAULT_KELLY_MIN_TRADES,
     DEFAULT_KELLY_OVERFITTING_THRESHOLD,
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_VOL_TARGET_ATR_PERCENTILE,
+    DEFAULT_VOL_TARGET_MAX_MULTIPLIER,
+    DEFAULT_VOL_TARGET_MIN_ATR_PERCENTILE,
+    DEFAULT_VOL_TARGET_MIN_MULTIPLIER,
 )
+from src.config.feature_flags import is_enabled
 from src.utils.bounds import clamp_position_size, validate_non_negative, validate_positive
 
 from .regime_utils import RegimeMultiplierCalculator, RegimeMultiplierConfig
+
+VOL_TARGET_FEATURE_FLAG = "enable_vol_target_sizing"
 
 if TYPE_CHECKING:
     from .leverage_manager import LeverageManager
@@ -1262,3 +1270,130 @@ def validate_position_size(
     position_fraction = position_size / balance
 
     return min_fraction <= position_fraction <= max_fraction
+
+
+class VolatilityTargetSizer(PositionSizer):
+    """Scales a base sizer's output inversely to volatility (#805).
+
+    Wraps another :class:`PositionSizer` (the ``LeveragedPositionSizer`` pattern)
+    and multiplies its size by ``target_atr_percentile / atr_percentile`` so that
+    per-position dollar-volatility is roughly constant — smaller positions when
+    the regime detector reports high ATR-percentile (volatile), larger when calm.
+    The multiplier is bounded to avoid blow-ups, and the ATR-percentile divisor is
+    floored so a near-zero percentile can't explode the size.
+
+    Volatility comes from ``regime.metadata["atr_percentile"]`` (already computed
+    by the enhanced regime detector). When the regime — or that metadata — is
+    unavailable (e.g. regime detection disabled), the sizer is a **pass-through**
+    and logs once, never guessing a volatility.
+    """
+
+    def __init__(
+        self,
+        base_sizer: PositionSizer,
+        *,
+        target_atr_percentile: float = DEFAULT_VOL_TARGET_ATR_PERCENTILE,
+        min_multiplier: float = DEFAULT_VOL_TARGET_MIN_MULTIPLIER,
+        max_multiplier: float = DEFAULT_VOL_TARGET_MAX_MULTIPLIER,
+        min_atr_percentile: float = DEFAULT_VOL_TARGET_MIN_ATR_PERCENTILE,
+    ) -> None:
+        super().__init__("volatility_target_sizer")
+        if not (0.0 < target_atr_percentile <= 1.0):
+            raise ValueError(
+                f"target_atr_percentile must be in (0, 1], got {target_atr_percentile}"
+            )
+        if not (0.0 < min_atr_percentile <= 1.0):
+            raise ValueError(f"min_atr_percentile must be in (0, 1], got {min_atr_percentile}")
+        if min_multiplier <= 0 or max_multiplier < min_multiplier:
+            raise ValueError(
+                f"require 0 < min_multiplier <= max_multiplier, got "
+                f"{min_multiplier}, {max_multiplier}"
+            )
+        self.base_sizer = base_sizer
+        self.target_atr_percentile = target_atr_percentile
+        self.min_multiplier = min_multiplier
+        self.max_multiplier = max_multiplier
+        self.min_atr_percentile = min_atr_percentile
+        self._warned_no_vol = False
+
+    @staticmethod
+    def _atr_percentile(regime: Optional["RegimeContext"]) -> float | None:
+        metadata = getattr(regime, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        value = metadata.get("atr_percentile")
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            return None
+        value = float(value)
+        return value if np.isfinite(value) else None
+
+    def volatility_multiplier(self, regime: Optional["RegimeContext"]) -> float | None:
+        """Return the vol-target multiplier, or ``None`` when vol is unknown."""
+        atr_pctile = self._atr_percentile(regime)
+        if atr_pctile is None:
+            return None
+        divisor = max(atr_pctile, self.min_atr_percentile)
+        raw = self.target_atr_percentile / divisor
+        return float(min(max(raw, self.min_multiplier), self.max_multiplier))
+
+    def calculate_size(
+        self,
+        signal: "Signal",
+        balance: float,
+        risk_amount: float,
+        regime: Optional["RegimeContext"] = None,
+    ) -> float:
+        self.validate_inputs(balance, risk_amount)
+        base_size = self.base_sizer.calculate_size(signal, balance, risk_amount, regime)
+        if base_size <= 0:
+            return base_size
+
+        multiplier = self.volatility_multiplier(regime)
+        if multiplier is None:
+            # No volatility signal -> do not guess; pass the base size through.
+            if not self._warned_no_vol:
+                logger.warning(
+                    "VolatilityTargetSizer: no atr_percentile in regime metadata "
+                    "(regime detection disabled?); passing base size through. "
+                    "Enable regime detection to activate vol targeting."
+                )
+                self._warned_no_vol = True
+            return base_size
+
+        sized = base_size * multiplier
+        if not np.isfinite(sized):
+            return 0.0
+        # Reuse the base sizer's bounds so the wrapper never exceeds its cap.
+        return self.apply_bounds_checking(sized, balance, max_fraction=DEFAULT_MAX_POSITION_SIZE)
+
+    @property
+    def warmup_period(self) -> int:
+        return getattr(self.base_sizer, "warmup_period", 0)
+
+    def get_feature_generators(self) -> list["FeatureGeneratorSpec"]:
+        getter = getattr(self.base_sizer, "get_feature_generators", None)
+        return getter() if callable(getter) else []
+
+    def get_parameters(self) -> dict[str, Any]:
+        params = super().get_parameters()
+        params.update(
+            {
+                "target_atr_percentile": self.target_atr_percentile,
+                "min_multiplier": self.min_multiplier,
+                "max_multiplier": self.max_multiplier,
+                "base_sizer": type(self.base_sizer).__name__,
+            }
+        )
+        return params
+
+
+def maybe_wrap_with_vol_target(base_sizer: PositionSizer) -> PositionSizer:
+    """Wrap ``base_sizer`` with volatility targeting iff the feature flag is on.
+
+    Resolves the flag ONCE (at strategy-build time) so there is no per-candle
+    feature-flag I/O; a flag change requires a restart, which rebuilds the
+    strategy. Returns the sizer unchanged when the flag is off (zero cost).
+    """
+    if is_enabled(VOL_TARGET_FEATURE_FLAG, default=False):
+        return VolatilityTargetSizer(base_sizer)
+    return base_sizer
