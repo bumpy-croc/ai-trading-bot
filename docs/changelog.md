@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Live enforcement of the portfolio max-drawdown hard cap** (risk-officer
+  2026-07-04 finding, corroborating the 2026-06-08 observability audit —
+  `RiskManager.check_drawdown()` had zero callers, so nothing halted the live
+  engine at `max_drawdown_pct`): new `MaxDrawdownGuard` + `MaxDrawdownEnforcer`
+  (`src/engines/live/monitoring/drawdown_guard.py`) measure drawdown from the
+  session peak balance on every trading-loop iteration and, at the cap (0.20),
+  trip the existing close-only mode — entries, legacy shorts, and scale-ins
+  stop (close-only now also gates the `execute_entry_locked` chokepoint and
+  the scale-in branch); exits/stop-losses keep running, nothing is
+  liquidated. Peak baseline = peak true equity since the last reconciled
+  reset (session-scoped; phantom-era ledger history deliberately excluded;
+  durable cross-session peak tracked in #847). Emits a CRITICAL `system_events` row
+  (`MAX_DRAWDOWN_BREACH`), a structured `risk_event`, and the alert webhook;
+  latched (no re-trigger spam) and restart-safe (peak recomputed from
+  `account_history` on boot via `DatabaseManager.get_session_peak_balance`).
+  Warning tiers per risk-limits.json escalation: WARNING at 50% of the cap,
+  CRITICAL at 80%, rate-limited. Operators clear a trip by restarting with
+  `FEATURE_MAX_DRAWDOWN_RESET_PEAK=true` (re-baselines the peak; remove the
+  flag afterwards). See `docs/live_trading.md` → "Max-drawdown hard cap".
 - `FEATURE_ENTRY_PAUSE` feature flag: when truthy the live engine blocks all
   exposure INCREASES — new positions (long, short, and the legacy duck-typed
   short path) AND scale-ins — while exits, partial exits, stop-loss
