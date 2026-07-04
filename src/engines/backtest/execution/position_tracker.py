@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from src.config.constants import (
     DEFAULT_FEE_RATE,
@@ -18,13 +19,11 @@ from src.config.constants import (
     DEFAULT_SLIPPAGE_RATE,
 )
 from src.engines.backtest.models import ActiveTrade, Trade
+from src.engines.shared.models import PartialExitOutcome, PositionSide
 from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.engines.shared.side_utils import to_side_string
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
-
-if TYPE_CHECKING:
-    from src.engines.shared.models import PositionSide
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +72,11 @@ class PositionTracker:
             fee_rate=fee_rate,
             slippage_rate=slippage_rate,
         )
+        # Optional strategy-feedback hook: called with a PartialExitOutcome
+        # after each successfully applied partial exit, so statistics-tracking
+        # position sizers count banked slices as outcomes (parity with the
+        # live tracker's identical hook). Wired by the engine.
+        self.on_partial_exit: Callable[[PartialExitOutcome], None] | None = None
 
     @property
     def has_position(self) -> bool:
@@ -219,7 +223,25 @@ class PositionTracker:
             result.realized_pnl,
         )
 
+        self._notify_partial_exit(exit_price=float(current_price))
+
         return result.realized_pnl
+
+    def _notify_partial_exit(self, exit_price: float) -> None:
+        """Emit a PartialExitOutcome to the strategy-feedback hook (contained)."""
+        if self.on_partial_exit is None or self.current_trade is None:
+            return
+        try:
+            self.on_partial_exit(
+                PartialExitOutcome(
+                    symbol=self.current_trade.symbol,
+                    side=cast(PositionSide, self.current_trade.side),
+                    entry_price=float(self.current_trade.entry_price),
+                    exit_price=exit_price,
+                )
+            )
+        except Exception:
+            logger.warning("Partial-exit feedback hook failed", exc_info=True)
 
     def unrealized_pnl_cash(self, current_price: float, fallback_basis: float) -> float:
         """Mark the open position to market (gross, before exit costs).

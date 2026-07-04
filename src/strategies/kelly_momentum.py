@@ -16,6 +16,7 @@ Half-Kelly is used by default to balance growth against drawdown risk.
 from __future__ import annotations
 
 from src.config.constants import (
+    DEFAULT_KELLY_FALLBACK_FRACTION,
     DEFAULT_KELLY_FRACTION,
     DEFAULT_KELLY_LOOKBACK_TRADES,
     DEFAULT_KELLY_MIN_TRADES,
@@ -37,7 +38,7 @@ def create_kelly_momentum_strategy(
     kelly_fraction: float = DEFAULT_KELLY_FRACTION,
     min_trades: int = DEFAULT_KELLY_MIN_TRADES,
     lookback_trades: int = DEFAULT_KELLY_LOOKBACK_TRADES,
-    fallback_fraction: float = 0.03,
+    fallback_fraction: float = DEFAULT_KELLY_FALLBACK_FRACTION,
     take_profit_pct: float = 0.20,
 ) -> Strategy:
     """
@@ -53,8 +54,10 @@ def create_kelly_momentum_strategy(
         base_risk: Base risk percentage for stop loss (default 8%)
         kelly_fraction: Fraction of full Kelly to use (default 0.5 = half-Kelly)
         min_trades: Minimum trades before Kelly activates
+            (default DEFAULT_KELLY_MIN_TRADES = 30)
         lookback_trades: Rolling window size for trade statistics
         fallback_fraction: Fixed fraction used during cold start
+            (default DEFAULT_KELLY_FALLBACK_FRACTION = 0.02)
         take_profit_pct: Target profit percentage for scaling out
 
     Returns:

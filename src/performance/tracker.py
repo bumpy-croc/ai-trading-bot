@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -242,6 +243,49 @@ class PerformanceTracker:
         self._cached_metrics: PerformanceMetrics | None = None
         self._metrics_dirty = True
 
+        # Observers notified after each successfully recorded trade. This is
+        # the shared backtest/live seam for closed-trade feedback (e.g.
+        # forwarding outcomes to statistics-tracking position sizers).
+        self._trade_listeners: list[Callable[[TradeProtocol], None]] = []
+
+    def add_trade_listener(self, listener: Callable[[TradeProtocol], None]) -> None:
+        """Register a callback invoked after each successfully recorded trade.
+
+        Listeners are called outside the tracker's lock (they may take their
+        own locks) and their exceptions are contained so a failing listener
+        can never corrupt or abort trade recording.
+
+        Args:
+            listener: Callable receiving the recorded trade object.
+
+        Raises:
+            TypeError: If listener is not callable.
+        """
+        if not callable(listener):
+            raise TypeError(f"listener must be callable, got {type(listener).__name__}")
+        with self._lock:
+            self._trade_listeners.append(listener)
+
+    def _notify_trade_listeners(self, trade: TradeProtocol) -> None:
+        """Invoke registered trade listeners, containing their exceptions.
+
+        Iterates a snapshot taken under the lock so concurrent registration
+        can never mutate the list mid-iteration; the callbacks themselves
+        run outside the lock.
+        """
+        with self._lock:
+            listeners = tuple(self._trade_listeners)
+        for listener in listeners:
+            try:
+                listener(trade)
+            except Exception:
+                logger.warning(
+                    "Trade listener %r failed for %s",
+                    listener,
+                    getattr(trade, "symbol", "unknown"),
+                    exc_info=True,
+                )
+
     def record_trade(
         self,
         trade: TradeProtocol,
@@ -347,6 +391,10 @@ class PerformanceTracker:
             # Limit memory usage by keeping only most recent trades
             if len(self._trades) > self._max_trade_history:
                 self._trades = self._trades[-self._max_trade_history :]
+
+        # Notify outside the lock: listeners may take their own locks and
+        # must never fire for trades the validation above rejected.
+        self._notify_trade_listeners(trade)
 
     def update_balance(
         self,

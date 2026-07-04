@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -22,6 +23,7 @@ from src.config.constants import (
 )
 from src.engines.shared.models import (
     BasePosition,
+    PartialExitOutcome,
     PartialExitResult,
     PositionSide,
     ScaleInResult,
@@ -119,6 +121,11 @@ class LivePositionTracker:
             fee_rate=fee_rate,
             slippage_rate=slippage_rate,
         )
+        # Optional strategy-feedback hook: called with a PartialExitOutcome
+        # after each successfully applied partial exit, so statistics-tracking
+        # position sizers count banked slices as outcomes (parity with the
+        # backtest tracker's identical hook). Wired by the engine.
+        self.on_partial_exit: Callable[[PartialExitOutcome], None] | None = None
 
     @property
     def positions(self) -> dict[str, LivePosition]:
@@ -627,6 +634,7 @@ class LivePositionTracker:
             # Capture values needed for calculation while under lock
             entry_price = float(position.entry_price)
             position_side = position.side
+            position_symbol = position.symbol
             actual_basis = (
                 float(position.entry_balance)
                 if position.entry_balance is not None and position.entry_balance > 0
@@ -683,6 +691,21 @@ class LivePositionTracker:
                     e,
                 )
                 raise RuntimeError(f"Partial-exit persistence failed for order {order_id}") from e
+
+        # Strategy feedback outside the lock: the hook may take its own locks
+        # and must never break partial-exit accounting.
+        if self.on_partial_exit is not None:
+            try:
+                self.on_partial_exit(
+                    PartialExitOutcome(
+                        symbol=position_symbol,
+                        side=cast(PositionSide, position_side),
+                        entry_price=entry_price,
+                        exit_price=float(price),
+                    )
+                )
+            except Exception:
+                logger.warning("Partial-exit feedback hook failed", exc_info=True)
 
         return PartialExitResult(
             realized_pnl=partial_exit_result.realized_pnl,

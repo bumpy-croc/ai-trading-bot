@@ -26,6 +26,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FEATURE_ENTRY_PAUSE` env var remains the override path.
 
 ### Fixed
+- **Kelly sizer never received trade outcomes — Kelly sizing was permanently
+  in cold-start fallback** (#840): `KellyCriterionSizer.record_trade` had zero
+  engine callers, so `has_sufficient_history` stayed `False` forever and any
+  Kelly-sized strategy silently traded its `fallback_fraction` in both
+  backtest and live. Realized outcomes now flow through shared seams: final
+  closes via `PerformanceTracker.add_trade_listener` (the same `record_trade`
+  choke point both engines already call on every close, including live
+  crash-recovery closes) and each banked partial-exit slice via an identical
+  `on_partial_exit` hook on both position trackers — all funneling into
+  `Strategy.on_trade_closed` → duck-typed `position_sizer.record_trade`, so
+  backtest/live parity is structural and a position that banks partials
+  before stopping out counts its wins, not just a final-slice loss. Outcomes
+  are UNSIZED R-multiples (directional price move), so past sizing decisions
+  cannot bias Kelly's reward:risk statistics; breakeven and near-zero-size
+  bookkeeping closes are skipped. `LeveragedPositionSizer` forwards
+  `record_trade` to its base sizer, the legacy `KellySizer` gains a
+  `record_trade` adapter onto the same seam, and `kelly_momentum`'s
+  `fallback_fraction` default now uses `DEFAULT_KELLY_FALLBACK_FRACTION`
+  (0.02) instead of a divergent local 0.03.
 - **Backtest partial-exit accounting booked fraction-of-position as
   fraction-of-balance** — a units-collision family that fabricated returns in
   every backtest with partial exits (a kelly_momentum ETHUSDT 30d run booked
