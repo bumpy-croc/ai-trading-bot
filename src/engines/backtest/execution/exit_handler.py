@@ -28,6 +28,7 @@ from src.engines.shared.execution.snapshot_builder import (
     build_snapshot_from_candle,
     map_exit_order_side_from_trade,
 )
+from src.engines.shared.exposure import scale_in_gross_cap_headroom
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
+    from src.strategies.components.exposure_governor import ExposureGovernor
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +159,13 @@ class ExitHandler:
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
+        # #802 follow-up P3: optional exposure governor to cap scale-in exposure
+        # (set by the engine; None => inert). Mirrors the live exit handler.
+        self._exposure_governor: ExposureGovernor | None = None
+
+    def configure_exposure_gate(self, exposure_governor: ExposureGovernor | None) -> None:
+        """Wire the #802 exposure governor so scale-ins respect the gross cap."""
+        self._exposure_governor = exposure_governor
 
     def _calculate_margin_interest(
         self,
@@ -456,6 +465,22 @@ class ExitHandler:
                                 self.max_position_size,
                             )
                             add_effective = headroom
+
+                    # #802 follow-up P3: respect the regime gross exposure cap on
+                    # scale-ins too (parity with live; inert unless governor on).
+                    if add_effective > 0:
+                        gross_headroom = scale_in_gross_cap_headroom(
+                            self._exposure_governor, [trade], balance
+                        )
+                        if gross_headroom is not None and add_effective > gross_headroom:
+                            logger.info(
+                                "Clamping %s scale-in to gross-exposure cap headroom: "
+                                "requested=%.4f, headroom=%.4f",
+                                trade.symbol,
+                                add_effective,
+                                gross_headroom,
+                            )
+                            add_effective = gross_headroom
 
                     if add_effective > 0:
                         # Calculate scale-in fees (same as initial entry fees)

@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from src.engines.shared.execution.entry_handler_mixin import SharedEntryHandlerMixin
-from src.engines.shared.exposure import gross_exposure_fraction, position_notional
+from src.engines.shared.exposure import (
+    gross_exposure_fraction,
+    position_notional,
+    scale_in_gross_cap_headroom,
+)
 from src.strategies.components.exposure_governor import ExposureGovernor
 
 pytestmark = pytest.mark.unit
@@ -46,6 +50,51 @@ def test_position_notional_non_finite_is_zero():
 def test_position_notional_absolute_value():
     # A short recorded with negative size still contributes positive gross.
     assert position_notional(_Pos(-0.25, 1000.0)) == 250.0
+
+
+class _PosCur:
+    def __init__(self, size, current_size, entry_balance):
+        self.size = size
+        self.current_size = current_size
+        self.entry_balance = entry_balance
+
+
+def test_position_notional_prefers_current_size_after_partial_exit():
+    # #802 P2: after a partial exit current_size < size; use current_size so
+    # gross exposure is not overstated.
+    assert position_notional(_PosCur(0.20, 0.05, 1000.0)) == 50.0
+
+
+def test_position_notional_uses_current_size_after_scale_in():
+    # Scale-in: current_size > original size.
+    assert position_notional(_PosCur(0.10, 0.16, 1000.0)) == 160.0
+
+
+def test_position_notional_falls_back_to_size_when_current_size_absent():
+    assert position_notional(_PosCur(0.20, None, 1000.0)) == 200.0
+    assert position_notional(_PosCur(0.20, 0.0, 1000.0)) == 200.0  # zero -> fall back
+
+
+# --- scale-in gross-cap headroom (#802 P3) ---------------------------------
+
+
+def test_scale_in_headroom_none_when_governor_absent_or_disabled():
+    assert scale_in_gross_cap_headroom(None, [_Pos(0.1, 1000.0)], 1000.0) is None
+    gov_off = ExposureGovernor(enabled=False)
+    assert scale_in_gross_cap_headroom(gov_off, [_Pos(0.1, 1000.0)], 1000.0) is None
+
+
+def test_scale_in_headroom_uses_conservative_cap_minus_gross():
+    gov = ExposureGovernor(enabled=True)  # unknown/conservative cap = 0.15
+    # gross = 100/1000 = 0.10 -> headroom 0.05
+    headroom = scale_in_gross_cap_headroom(gov, [_Pos(0.10, 1000.0)], 1000.0)
+    assert headroom == pytest.approx(0.05)
+
+
+def test_scale_in_headroom_zero_when_at_or_over_cap():
+    gov = ExposureGovernor(enabled=True)
+    headroom = scale_in_gross_cap_headroom(gov, [_Pos(0.20, 1000.0)], 1000.0)  # gross 0.20 > 0.15
+    assert headroom == 0.0
 
 
 def test_gross_exposure_fraction_sums_over_positions():

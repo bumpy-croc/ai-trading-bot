@@ -927,8 +927,11 @@ class LiveTradingEngine:
         # Resolve the flag ONCE here (not per entry) — reading feature_flags.json
         # on every entry would add disk I/O to the hot path. A flag change
         # requires a restart (which reconstructs the engine) anyway.
+        exposure_governor = ExposureGovernor(
+            enabled=is_enabled("enable_exposure_governor", default=False)
+        )
         self.live_entry_handler.configure_exposure_gate(
-            ExposureGovernor(enabled=is_enabled("enable_exposure_governor", default=False)),
+            exposure_governor,
             lambda: list(self.live_position_tracker.positions.values()),
         )
         # #806: macro-event de-risking guard (flag resolved once at build).
@@ -965,6 +968,9 @@ class LiveTradingEngine:
             # scale-ins; read at call time so mid-session trips take effect.
             close_only_provider=lambda: self._close_only_mode,
         )
+        # #802 follow-up P3: scale-ins respect the same gross exposure cap as
+        # entries (share the governor instance; inert unless the flag is on).
+        self.live_exit_handler.configure_exposure_gate(exposure_governor)
 
         # Stop-loss lifecycle handler — owns every exchange-facing stop-loss
         # call (place/cancel/query/re-protect) so the engine orchestrates
