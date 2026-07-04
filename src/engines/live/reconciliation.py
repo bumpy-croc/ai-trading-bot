@@ -61,6 +61,7 @@ def _emit_event(
     severity: str = "warning",
     component: str = "reconciler",
     error_code: str | None = None,
+    exc: BaseException | None = None,
     alert: bool = False,
 ) -> None:
     """Emit a ``system_events`` row (and optionally page an operator) via the
@@ -72,6 +73,9 @@ def _emit_event(
     construction the same way ``on_critical`` already is. When unset
     (standalone use / tests) this is a no-op. Never raises — observability must
     never break a reconciliation cycle.
+
+    ``exc`` (when passed from inside an ``except`` block) is forwarded so the
+    engine captures the traceback into the ``system_events`` stack-trace column.
     """
     if on_event is None:
         return
@@ -82,10 +86,11 @@ def _emit_event(
             severity=severity,
             component=component,
             error_code=error_code,
+            exc=exc,
             alert=alert,
         )
-    except Exception as exc:  # pragma: no cover - defensive; must never break reconcile
-        logger.warning("reconciler observability emit failed: %s", exc)
+    except Exception as emit_err:  # pragma: no cover - defensive; must never break reconcile
+        logger.warning("reconciler observability emit failed: %s", emit_err)
 
 
 class _OrderLookup(Protocol):
@@ -789,6 +794,13 @@ class PositionReconciler:
                                 symbol,
                                 fill_qty,
                             )
+                            # NOTE: alert=True POSTs to the webhook (10s-bounded)
+                            # while _positions_lock is held. Tolerated here: this
+                            # path runs only during startup / WS-resync recovery
+                            # (the live trading loop is not contending), and the
+                            # lock already spans the blocking emergency-sell
+                            # above. Steady-state reconciler emits (follow-up PRs)
+                            # MUST page outside the lock.
                             _emit_event(
                                 self.on_event,
                                 EventType.ALERT,
@@ -807,6 +819,9 @@ class PositionReconciler:
                             fill_qty,
                             sell_err,
                         )
+                        # Webhook POST under _positions_lock — tolerated on this
+                        # startup/WS-resync recovery path (see UNCONFIRMED branch).
+                        # exc=sell_err forwards the traceback into system_events.
                         _emit_event(
                             self.on_event,
                             EventType.ALERT,
@@ -814,6 +829,7 @@ class PositionReconciler:
                             f"exchange, manual intervention required",
                             severity="critical",
                             error_code="EMERGENCY_SELL_FAILED",
+                            exc=sell_err,
                             alert=True,
                         )
 
@@ -2864,6 +2880,9 @@ class PeriodicReconciler:
             session_id: Current trading session ID.
             interval: Seconds between reconciliation cycles.
             on_critical: Callback invoked on CRITICAL severity (e.g., enter close-only mode).
+            on_event: Callback (the engine's ``_record_event``) that writes a system_events
+                row and optionally pages an operator; propagated to the child reconciler.
+                None disables it (standalone use / tests).
             use_margin: Whether margin trading mode is active. When True,
                 skip spot-specific checks (asset holdings) that don't apply
                 to cross-margin accounts.

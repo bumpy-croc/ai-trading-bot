@@ -2830,6 +2830,8 @@ class TestEmergencySellVerification:
         assert alerts[0].args[0] == EventType.ALERT
         assert alerts[0].kwargs["severity"] == "critical"
         assert alerts[0].kwargs["alert"] is True
+        # The exchange error is forwarded so the engine captures its traceback.
+        assert isinstance(alerts[0].kwargs.get("exc"), ConnectionError)
 
     def test_emergency_sell_unconfirmed_pages_operator(
         self, mock_exchange, mock_db, mock_position_tracker
