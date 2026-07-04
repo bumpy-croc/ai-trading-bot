@@ -20,6 +20,7 @@ from src.engines.shared.models import PositionSide
 if TYPE_CHECKING:
     from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
     from src.position_management.dynamic_risk import DynamicRiskManager
+    from src.risk.circuit_breaker import AccountCircuitBreaker
     from src.strategies.components.exposure_governor import ExposureGovernor
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,8 @@ class SharedEntryHandlerMixin:
     # Optional pre-order gate wiring (#802). Absent/None => gate is inert.
     _exposure_governor: ExposureGovernor | None = None
     _positions_source: Callable[[], Iterable[Any]] | None = None
+    # Optional account-level circuit breaker (#807). Absent/None => inert.
+    _circuit_breaker: AccountCircuitBreaker | None = None
 
     def _extract_entry_plan(
         self,
@@ -132,6 +135,10 @@ class SharedEntryHandlerMixin:
             logger.warning("current_gross_exposure_fraction failed; treating as 0", exc_info=True)
             return 0.0
 
+    def configure_circuit_breaker(self, circuit_breaker: AccountCircuitBreaker | None) -> None:
+        """Wire the #807 account-level circuit breaker (None => inert)."""
+        self._circuit_breaker = circuit_breaker
+
     def apply_pre_order_gates(
         self,
         size_fraction: float,
@@ -143,14 +150,27 @@ class SharedEntryHandlerMixin:
     ) -> tuple[float, str | None]:
         """Apply the shared pre-order risk gates to a sized position fraction.
 
-        Currently the regime-gated exposure governor (#802); #806/#807 extend
-        this with event-window and circuit-breaker caps. Returns
-        ``(allowed_fraction, reason_or_None)`` where ``reason`` is set only when
-        the size was reduced (for entry-decision logging). Inert (returns the
-        input unchanged) when no governor is wired or it is disabled.
+        Order: the #807 account circuit breaker (hard halt → block new entries),
+        then the #802 regime-gated exposure governor (#806 event windows extend
+        this too). Returns ``(allowed_fraction, reason_or_None)`` where ``reason``
+        is set only when the size was reduced/blocked (for entry-decision
+        logging). Each gate is independently inert until wired/enabled, so
+        default behaviour and backtest-live parity are unchanged.
         """
+        if size_fraction <= 0:
+            return size_fraction, None
+
+        # #807: account-level circuit breaker. A hard halt blocks new entries;
+        # in dry_run it logs but does not block (entries_blocked stays False).
+        breaker = self._circuit_breaker
+        if breaker is not None and now is not None:
+            decision = breaker.evaluate(equity, now)
+            if decision.entries_blocked:
+                return 0.0, f"circuit_breaker_{decision.reason}"
+
+        # #802: regime-gated gross exposure governor.
         governor = self._exposure_governor
-        if governor is None or size_fraction <= 0 or not governor.enabled:
+        if governor is None or not governor.enabled:
             return size_fraction, None
         gross = self.current_gross_exposure_fraction(equity)
         return governor.cap_fraction(
