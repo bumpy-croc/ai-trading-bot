@@ -199,6 +199,11 @@ keep the skill generic and let the specifics live here.
 - `emergency.close` / "Stop-loss placement failed" — opened a position it couldn't protect; repeated
   = capital-bleed churn.
 - `CLOSE-ONLY MODE ACTIVATED` — entries halted (reconcile/DB problem).
+- `ACCOUNT CIRCUIT BREAKER TRIPPED` / `error_code=ACCOUNT_CIRCUIT_BREAKER_TRIP` /
+  `risk_event=account_circuit_breaker_trip` (#807) — the daily-loss (2.5% of the UTC-day baseline)
+  or drawdown (15% peak-to-trough) hard halt fired; account is close-only for the day. Operator
+  reviews & clears. `🟡 ... WOULD HALT (dry_run)` is the pre-enablement dry-run signal (report, not
+  escalate).
 - `code=-1111` (price precision) / `code=51077` (qty precision) — order precision rejection (should
   be fixed; recurrence = regression, see §1.1).
 - `-2010` / "insufficient balance" on a stop-loss → unprotected position.
