@@ -1777,8 +1777,10 @@ class PositionReconciler:
         db_closed = False
         if db_pos_id:
             try:
-                self.db_manager.close_position(db_pos_id, exit_price=exit_price)
-                db_closed = True
+                # Gate on the RETURN value, not merely the absence of an exception:
+                # DatabaseManager.close_position swallows DB errors and returns False (it
+                # raises only on invalid input), so a False here means the row is still OPEN.
+                db_closed = bool(self.db_manager.close_position(db_pos_id, exit_price=exit_price))
             except Exception as e:
                 logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
@@ -1961,15 +1963,32 @@ class PositionReconciler:
                     held_qty,
                     position_qty,
                 )
-                # Remove from in-memory tracker
-                self.position_tracker.remove_position(position.order_id)
-                # Close the DB position
+                # Close the DB row FIRST; only drop the position from the in-memory tracker
+                # when the close actually succeeded. DatabaseManager.close_position swallows
+                # DB errors and returns False (it raises only on invalid input), so gating on
+                # the RETURN value — not merely the absence of an exception — keeps the tracker
+                # from diverging from a still-OPEN row. On failure the position is left tracked
+                # and re-reconciled on a later pass (CODE.md: no silent memory/DB divergence).
                 db_pos_id = getattr(position, "db_position_id", None)
+                db_closed = True
                 if db_pos_id:
+                    db_closed = False
                     try:
-                        self.db_manager.close_position(db_pos_id)
+                        db_closed = bool(self.db_manager.close_position(db_pos_id))
                     except Exception as e:
                         logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+
+                if not db_closed:
+                    logger.warning(
+                        "External close for %s left tracked — DB position %s was not closed; "
+                        "re-reconciled on a later pass.",
+                        symbol,
+                        db_pos_id,
+                    )
+                    return
+
+                # DB row confirmed closed — now safe to drop from the in-memory tracker.
+                self.position_tracker.remove_position(position.order_id)
 
                 # Realize P&L — no exit price available for external closes,
                 # so skip balance update (P&L is unknown)
@@ -2074,7 +2093,15 @@ class PositionReconciler:
             logger.warning("Margin position check failed for %s: %s — position retained", symbol, e)
 
     def _remove_phantom_position(self, position: Any, result: ReconciliationResult) -> None:
-        """Remove a phantom position from tracker and DB, cancel its exchange SL."""
+        """Remove a phantom position from tracker and DB, cancel its exchange SL.
+
+        The DB row is closed FIRST; the position is dropped from the in-memory tracker (and the
+        result marked corrected) ONLY when the close actually succeeded. DatabaseManager.
+        close_position swallows DB errors and returns False (it raises only on invalid input),
+        so gating on the RETURN value — not merely the absence of an exception — keeps the
+        tracker from diverging from a still-OPEN row. On failure the phantom is left tracked and
+        re-reconciled on a later pass (CODE.md: no silent memory/DB divergence).
+        """
         # Cancel the server-side stop-loss before removing from tracker.
         # Leaving an orphaned SL on the exchange is a fund-loss path —
         # if it triggers with AUTO_REPAY, it opens a new naked position.
@@ -2095,13 +2122,26 @@ class PositionReconciler:
                     e,
                 )
 
-        self.position_tracker.remove_position(position.order_id)
         db_pos_id = getattr(position, "db_position_id", None)
+        db_closed = True
         if db_pos_id:
+            db_closed = False
             try:
-                self.db_manager.close_position(db_pos_id)
+                db_closed = bool(self.db_manager.close_position(db_pos_id))
             except Exception as e:
                 logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+
+        if not db_closed:
+            logger.warning(
+                "Phantom position %s left tracked — DB position %s was not closed; "
+                "re-reconciled on a later pass.",
+                getattr(position, "symbol", "?"),
+                db_pos_id,
+            )
+            return
+
+        # DB row confirmed closed (or there was none) — now safe to drop from the tracker.
+        self.position_tracker.remove_position(position.order_id)
         result.status = "corrected"
         result.severity = Severity.HIGH
 

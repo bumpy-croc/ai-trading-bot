@@ -1010,6 +1010,61 @@ class TestAssetHoldingsVerification:
         mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
         mock_db.close_position.assert_called_once_with(10)
 
+    def test_external_close_keeps_tracker_when_db_close_returns_false(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """Spot external close where close_position RETURNS False (a swallowed DB error —
+        DatabaseManager.close_position returns False rather than raising on a commit failure)
+        must NOT remove the position from the tracker. The still-OPEN DB row would otherwise
+        diverge from memory; the position is left tracked and re-reconciled on a later pass."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=20)
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        mock_exchange.get_order.return_value = entry_order
+        # Asset balance near zero — position looks externally closed.
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.0001, free=0.0001, locked=0.0
+        )
+        # Swallowed DB failure: close returns False instead of raising.
+        mock_db.close_position.return_value = False
+
+        reconciler.reconcile_position(pos)
+
+        mock_db.close_position.assert_called_once_with(20)
+        mock_position_tracker.remove_position.assert_not_called()
+
+    def test_remove_phantom_position_keeps_tracker_when_db_close_returns_false(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """_remove_phantom_position must NOT drop the position from the tracker when
+        close_position RETURNS False (a swallowed DB error). The still-OPEN DB row would
+        diverge from memory; the phantom is left tracked and re-reconciled on a later pass."""
+        pos = MockPosition(db_position_id=33, stop_loss_order_id=None)
+        mock_db.close_position.return_value = False
+        result = ReconciliationResult(entity_type="position", entity_id="test", status="resolved")
+
+        reconciler._remove_phantom_position(pos, result)
+
+        mock_db.close_position.assert_called_once_with(33)
+        mock_position_tracker.remove_position.assert_not_called()
+
+    def test_remove_phantom_position_removes_from_tracker_on_db_close_success(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """Success path: when close_position succeeds the phantom is removed from the tracker
+        and the result is marked corrected / HIGH (behavior preserved across the reorder)."""
+        pos = MockPosition(db_position_id=34, stop_loss_order_id=None)
+        mock_db.close_position.return_value = True
+        result = ReconciliationResult(entity_type="position", entity_id="test", status="resolved")
+
+        reconciler._remove_phantom_position(pos, result)
+
+        mock_db.close_position.assert_called_once_with(34)
+        mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
+        assert result.status == "corrected"
+        assert result.severity == Severity.HIGH
+
     def test_position_with_sufficient_balance_not_flagged(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):

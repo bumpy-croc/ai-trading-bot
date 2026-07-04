@@ -401,6 +401,10 @@ def test_reconciler_filled_sl_converts_short_commission_to_usd_and_dedups(monkey
     db = MockDatabaseManager()
     reconciler = _make_reconciler(db, fee_rate=0.001)
     monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
+    # Success path: the DB close confirms (returns True) so the trade is logged. (The mock
+    # would otherwise return False for an unregistered position id, which now correctly
+    # suppresses the trade — exercised by test_..._skips_trade_when_db_close_returns_false.)
+    monkeypatch.setattr(db, "close_position", Mock(return_value=True))
     position = _make_position(
         quantity=2.5, entry_fee=None, side=PositionSide.SHORT, entry_price=100.0
     )
@@ -442,6 +446,33 @@ def test_reconciler_filled_sl_skips_trade_when_db_close_fails(monkeypatch):
     reconciler._close_position_from_filled_sl(position, sl_order)
 
     assert len(db._trades) == 0  # DB close failed -> trade not logged (no duplicate risk)
+
+
+def test_reconciler_filled_sl_skips_trade_when_db_close_returns_false(monkeypatch):
+    """If the DB close RETURNS False (a swallowed DB error — DatabaseManager.close_position
+    returns False rather than raising on a commit failure), NO trade is logged and the
+    position is NOT removed from the tracker. The row stays OPEN and is re-reconciled later;
+    logging/removing now would diverge the tracker from the DB and duplicate the trade when
+    the row is re-recovered."""
+    from types import SimpleNamespace as NS
+
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
+    # close_position RETURNS False (swallowed DB failure); it does NOT raise.
+    monkeypatch.setattr(db, "close_position", Mock(return_value=False))
+    position = _make_position(
+        quantity=2.5, entry_fee=None, side=PositionSide.SHORT, entry_price=100.0
+    )
+    position.db_position_id = 88
+    position.order_id = "pos-88"
+    sl_order = NS(average_price=90.0, order_id="sl-88", commission=2.0, commission_asset="USDT")
+
+    reconciler._close_position_from_filled_sl(position, sl_order)
+
+    assert len(db._trades) == 0  # False return -> trade not logged (no duplicate risk)
+    # Row still OPEN -> position kept in the tracker for re-reconciliation, not removed.
+    reconciler.position_tracker.remove_position.assert_not_called()
 
 
 def test_reconciler_dedups_duplicate_trade_on_rerun():
