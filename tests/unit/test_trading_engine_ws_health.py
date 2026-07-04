@@ -186,13 +186,20 @@ class TestCheckUserStreamHealth:
             assert ordered == ["stop_user_stream", "mark_user_degraded"]
 
     @pytest.mark.fast
-    def test_circuit_open_pages_operator(self, mock_engine):
-        """Circuit-open (REST-degraded) pages a critical USER_WS_DEGRADED alert —
-        it was previously only a logger.warning while the bot ran blind on REST,
-        possibly forever (#717/#853)."""
+    def test_circuit_open_pages_operator_exactly_once(self, mock_engine):
+        """Circuit-open pages a critical USER_WS_DEGRADED alert — but exactly ONCE,
+        not every subsequent REST_DEGRADED cycle. Drives the REAL transition
+        (mark_user_degraded flips state to REST_DEGRADED so later cycles take the
+        early-returning degraded branch) so the anti-spam edge-trigger the audit
+        warned about is actually pinned, not just asserted in a comment (#717/#853)."""
         from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
 
-        self._dead_socket_engine(mock_engine)
+        ex, _tracker = self._dead_socket_engine(mock_engine)
+        # Real breaker semantics: degrading flips the state so the PRIMARY path
+        # (and thus the circuit-open block) is not re-entered on later cycles.
+        ex.mark_user_degraded.side_effect = lambda: setattr(
+            ex, "_user_ws_state", WebSocketState.REST_DEGRADED
+        )
         with (
             patch.object(mock_engine, "_handle_user_stream_disconnect"),
             patch.object(mock_engine, "_record_event") as rec,
@@ -200,11 +207,12 @@ class TestCheckUserStreamHealth:
             for _ in range(LIMIT):
                 mock_engine._check_user_stream_health()
             rec.assert_not_called()  # silent during the fast-reconnect phase
-            # Circuit-open cycle:
-            mock_engine._check_user_stream_health()
+            mock_engine._check_user_stream_health()  # circuit opens -> alert #1
+            for _ in range(5):
+                mock_engine._check_user_stream_health()  # REST_DEGRADED -> no re-page
 
         alerts = [c for c in rec.call_args_list if c.kwargs.get("error_code") == "USER_WS_DEGRADED"]
-        assert alerts, f"expected USER_WS_DEGRADED, got {rec.call_args_list}"
+        assert len(alerts) == 1, f"expected exactly one USER_WS_DEGRADED, got {rec.call_args_list}"
         assert alerts[0].kwargs["severity"] == "critical"
         assert alerts[0].kwargs["alert"] is True
 
