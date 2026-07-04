@@ -26,6 +26,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (money-mover / live integration): force-flatten of open positions on trip (vs
   the safe entry-block delivered here), DB-persisted daily baseline reload across
   restarts (a `seed_daily_baseline` hook is provided), and dashboard surfacing.
+- **Event-aware de-risking windows** (#806): around high-impact macro events
+  (FOMC, CPI) the bot now blocks new entries and halves regime exposure caps.
+  New `MacroEventCalendar` / `MacroEventGuard`
+  (`src/position_management/macro_events.py`) load a maintained calendar from
+  `config/macro_events.json` (dates + per-event N-hours-before / M-hours-after
+  window — config, not hardcoded; stale/empty is fail-safe). The guard plugs
+  into the shared `apply_pre_order_gates` seam alongside the #802 exposure
+  governor, so it applies identically in the backtest and live engines (and the
+  legacy short path): inside a window `entry_allowed` is False (block) and
+  `exposure_factor` is 0.5 (halves the governor's cap via `extra_factor`).
+  Behind `enable_macro_event_guard` (**default OFF**).
+- **Sentiment-extreme mean-reversion overlay + short block** (#804): at Fear &
+  Greed extremes, fading beats following. New `SentimentExtremeOverlay`
+  (`src/strategies/components/sentiment_overlay.py`) wraps the `ml_sentiment`
+  signal generator and, when F&G < 15, **blocks new SHORT entries** (capitulation
+  shorts get squeezed) and permits new LONGs only within a configurable band of a
+  **structural support level** — a config *parameter* (`DEFAULT_SENTIMENT_SUPPORT_LEVEL`,
+  default None = no band restriction), since market levels go stale. When F&G > 70
+  in a downtrend it permits small fade shorts. Implemented as a `SignalGenerator`
+  decorator, so it composes with the ETF flow gate (#803) — most-restrictive-wins,
+  any veto → HOLD — and applies in both engines via the strategy. F&G comes from
+  `FearGreedProvider` (degrades to neutral offline → overlay inert). Behind
+  `enable_sentiment_extreme_overlay` (**default OFF**).
+- **Volatility-targeted position sizing** (#805): a new `VolatilityTargetSizer`
+  (`src/strategies/components/position_sizer.py`) wraps a base sizer and scales
+  its output by `target_atr_percentile / atr_percentile` (from the regime
+  detector) so per-position dollar-vol is roughly constant — smaller in high vol,
+  larger in calm, bounded to avoid blow-ups. Passes through unchanged when the
+  regime/ATR-percentile is unavailable (never guesses). Wired into
+  `ml_basic`/`ml_adaptive` behind `enable_vol_target_sizing` (**default OFF**,
+  requires regime detection). Also: `kelly_momentum` now clamps fractional Kelly
+  to `DEFAULT_MAX_KELLY_FRACTION` (0.5) for bear safety (full/half Kelly
+  over-sizes into drawdowns); and `momentum_leverage` / `hyper_growth` emit a
+  startup warning that they are not recommended for bear/high-vol regimes.
 - **ETF net-flow signal + flow gate** (#803): US spot BTC/ETH ETF net flows are
   the marginal buyer/seller this cycle, but the bot had no flow awareness. New
   `ETFFlowProvider` (`src/data_providers/etf_flow_provider.py`) ingests daily net

@@ -15,11 +15,14 @@ Half-Kelly is used by default to balance growth against drawdown risk.
 
 from __future__ import annotations
 
+import logging
+
 from src.config.constants import (
     DEFAULT_KELLY_FALLBACK_FRACTION,
     DEFAULT_KELLY_FRACTION,
     DEFAULT_KELLY_LOOKBACK_TRADES,
     DEFAULT_KELLY_MIN_TRADES,
+    DEFAULT_MAX_KELLY_FRACTION,
 )
 from src.strategies.components import (
     EnhancedRegimeDetector,
@@ -28,6 +31,8 @@ from src.strategies.components import (
     Strategy,
     VolatilityRiskManager,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_kelly_momentum_strategy(
@@ -63,6 +68,17 @@ def create_kelly_momentum_strategy(
     Returns:
         Configured Strategy instance
     """
+    # #805: hard-cap fractional Kelly for bear-market safety. Full/half Kelly
+    # over-sizes into drawdowns; clamp to DEFAULT_MAX_KELLY_FRACTION (0.5).
+    if kelly_fraction > DEFAULT_MAX_KELLY_FRACTION:
+        logger.warning(
+            "kelly_momentum: kelly_fraction %.3f exceeds the bear-safety cap "
+            "%.3f; clamping. Full/half Kelly over-sizes into drawdowns.",
+            kelly_fraction,
+            DEFAULT_MAX_KELLY_FRACTION,
+        )
+        kelly_fraction = DEFAULT_MAX_KELLY_FRACTION
+
     signal_generator = MomentumSignalGenerator(
         name=f"{name}_signals",
         momentum_entry_threshold=momentum_entry_threshold,

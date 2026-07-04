@@ -20,6 +20,7 @@ from src.engines.shared.models import PositionSide
 if TYPE_CHECKING:
     from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
     from src.position_management.dynamic_risk import DynamicRiskManager
+    from src.position_management.macro_events import MacroEventGuard
     from src.risk.circuit_breaker import AccountCircuitBreaker
     from src.strategies.components.exposure_governor import ExposureGovernor
 
@@ -40,6 +41,8 @@ class SharedEntryHandlerMixin:
     # Optional pre-order gate wiring (#802). Absent/None => gate is inert.
     _exposure_governor: ExposureGovernor | None = None
     _positions_source: Callable[[], Iterable[Any]] | None = None
+    # Optional macro-event de-risking guard (#806). Absent/None => inert.
+    _macro_event_guard: MacroEventGuard | None = None
     # Optional account-level circuit breaker (#807). Absent/None => inert.
     _circuit_breaker: AccountCircuitBreaker | None = None
 
@@ -135,6 +138,10 @@ class SharedEntryHandlerMixin:
             logger.warning("current_gross_exposure_fraction failed; treating as 0", exc_info=True)
             return 0.0
 
+    def configure_macro_guard(self, macro_guard: MacroEventGuard | None) -> None:
+        """Wire the #806 macro-event de-risking guard (independent of the governor)."""
+        self._macro_event_guard = macro_guard
+
     def configure_circuit_breaker(self, circuit_breaker: AccountCircuitBreaker | None) -> None:
         """Wire the #807 account-level circuit breaker (None => inert)."""
         self._circuit_breaker = circuit_breaker
@@ -151,8 +158,9 @@ class SharedEntryHandlerMixin:
         """Apply the shared pre-order risk gates to a sized position fraction.
 
         Order: the #807 account circuit breaker (hard halt → block new entries),
-        then the #802 regime-gated exposure governor (#806 event windows extend
-        this too). Returns ``(allowed_fraction, reason_or_None)`` where ``reason``
+        then the #806 macro-event guard (blocks entries and halves the exposure
+        cap inside a FOMC/CPI window), then the #802 regime-gated exposure
+        governor. Returns ``(allowed_fraction, reason_or_None)`` where ``reason``
         is set only when the size was reduced/blocked (for entry-decision
         logging). Each gate is independently inert until wired/enabled, so
         default behaviour and backtest-live parity are unchanged.
@@ -167,6 +175,13 @@ class SharedEntryHandlerMixin:
             decision = breaker.evaluate(equity, now)
             if decision.entries_blocked:
                 return 0.0, f"circuit_breaker_{decision.reason}"
+
+        # #806: macro-event de-risking window (independent of the governor).
+        guard = self._macro_event_guard
+        if guard is not None and guard.enabled and now is not None:
+            if not guard.entry_allowed(now):
+                return 0.0, f"macro_event_block_{guard.active_event_name(now)}"
+            extra_factor *= guard.exposure_factor(now)
 
         # #802: regime-gated gross exposure governor.
         governor = self._exposure_governor
