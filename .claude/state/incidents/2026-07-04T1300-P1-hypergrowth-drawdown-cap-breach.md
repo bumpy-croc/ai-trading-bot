@@ -67,3 +67,19 @@ Bleeding not active this hour (position is stop-protected, sizes capped at 20%/2
 ### What went well
 ### What went poorly
 ### Action items (each links to a proposal or tracker)
+
+---
+
+## CORRECTION — 2026-07-04 (same day, ledger-verified; supersedes the live-breach claim above)
+
+The headline claim "the hard cap was breached in production (20.33%, 2026-06-06)" is **withdrawn**. pm challenged the $103.82 peak's provenance; independent re-verification against the ledger confirms the challenge:
+
+- `account_history.balance` is software-pinned in the pre-sync era: Mar 2 distinct values, Apr 4, **May exactly 1 distinct value (99.9789) across 451 hourly rows**. The base was an optimistic `session_start` book value, not an exchange read.
+- The April "$103.82 equity peak" = frozen ~$100 book + unrealized wiggle. True margin-equity reads begin 2026-06-03 (#655 sync, $84.14). **No true-equity 20% breach can be established**, and the "one stop-out from re-breach" imminence claim is likewise withdrawn.
+- Adopted baseline policy (pm, 2026-07-04): drawdown peak = peak **true** equity since the last reconciled reset (2026-06-05 / session 20, ≈$84.40) → current live DD ≈ **0.6%**; standup tripwires ($80.18 / $75.96 / $67.52) stand.
+
+**What still stands, unaffected**: the exact 365d backtest reproduction (-20.15% / 21.84% MaxDD — structural cap breach for the live config), all four control-layer failures, both counterfactuals, and the containment proposal's code/config steps (2-4). The proposal's step 1 (immediate entry-pause) is downgraded to "tripwires binding, no immediate pause" — see revised proposal.
+
+**Severity**: recommend pm reclassify **P1 → P2** ("warning thresholds approached but not breached"): the unprotected-state finding is real but there is no active bleeding and no imminent breach under the corrected baseline. Reclassification is pm's call per incident README.
+
+**Process note (blameless)**: the initial claim treated `account_history.equity` as ground truth without checking whether its balance base was a live read — the same phantom-balance failure mode documented in `project_capital_erosion_postmortem` claimed another victim: this review. Rule for future drawdown analysis: **verify the balance column varies like a market-tracking value (distinct-count sanity check) before treating any equity peak as real.**

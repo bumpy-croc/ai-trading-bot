@@ -11,7 +11,9 @@
 
 The first-ever full-year (365d, multi-regime) backtest of HyperGrowth/ETHUSDT/1h — the incumbent **live** strategy — showed **-20.15% return with 21.84% MaxDD**, breaching the 20% portfolio hard cap in `.claude/state/risk-limits.json`. Is this a backtest-window artifact (backtest lacks live's protections), or genuine tail risk in the live configuration?
 
-**Verdict up front: genuine tail risk — and live has already realized it.** Production's own equity history shows a **20.33% peak-to-trough drawdown (2026-04-22 peak $103.82 → 2026-06-06 trough $82.71)**. The hard cap has *already been breached in production*, silently, and current live drawdown from the true peak is **19.18%** ($83.92 as of 2026-07-04 10:40 UTC). One stop-out on the currently open position re-breaches the cap.
+**Verdict up front: genuine tail risk of the live configuration** — established by the exact reproduction, the drawdown's multi-regime slow-bleed anatomy, and four stacked control-layer failures verified in code. The strategy's honest full-year profile breaches the 20% cap and no automated layer would halt or even notice.
+
+> **Correction (2026-07-04, same day, ledger-verified — supersedes this review's initial live-breach claim).** The first version of this review reported that production had *already* realized a 20.33% peak-to-trough drawdown (peak $103.82 on 2026-04-22 → trough $82.71 on 2026-06-06) and was 19.18% below peak. pm challenged the peak's provenance and the ledger confirms the challenge: `account_history.balance` is **software-pinned in the pre-sync era** (Mar: 2 distinct values; Apr: 4; May: literally **one** distinct value, 99.9789, across 451 hourly rows). The April "$103.82 equity peak" was a frozen ~$100 book base plus unrealized wiggle — an optimistic `session_start` reset value, **not a true exchange read**. True margin-equity reads begin only with the #655 sync (2026-06-03, $84.14). Therefore **no true-equity 20% breach can be established**, and the "one stop-out from re-breach" urgency claim is withdrawn. Adopted baseline policy (pm, 2026-07-04): drawdown peak = peak *true* equity since the last reconciled reset (2026-06-05 / session 20, ≈$84.40) → current live DD ≈ **0.6%**, standup tripwires ($80.18 soft / $75.96 reduce / $67.52 hard) stand. Everything else in this review — the reproduction, the four control failures, and the counterfactuals — is unaffected by this correction and stands as written.
 
 ## 1. Reproduction (independent, fresh worktree)
 
@@ -36,20 +38,21 @@ Exact match. The number is real, not a one-off anomaly of the prior session. Con
 - 71% win rate with profit factor 0.47: frequent small wins, larger stop-outs (death by a thousand stop losses). All 5 largest losses were `Stop loss` exits at 0.18–0.20 size.
 - This multi-month, multi-regime bleed profile means **no plausible event-window entry-pause pattern would have avoided it** — there was no single event to pause around.
 
-## 2. Live production drawdown history (read-only, prod `account_history`)
+## 2. Live production drawdown history (read-only, prod `account_history`) — CORRECTED, see note in header
 
-Coverage 2026-03-29 → 2026-07-04, 1,949 hourly equity rows. No deposits/withdrawals distort the curve (verified via `account_balances.update_reason` ledger: only fees, realized P&L, session_start noise, and the #655 `margin_equity_sync_correction` — which booked *real* June losses, see `project_capital_erosion_postmortem`).
+Coverage 2026-03-29 → 2026-07-04, 1,949 hourly equity rows. No deposits/withdrawals distort the curve (verified via `account_balances.update_reason` ledger).
 
-| Metric | Value |
-|---|---|
-| All-time equity peak | **$103.82** (2026-04-22) |
-| Trough | **$82.71** (2026-06-06) → **20.33% drawdown — hard-cap breach, in production, unalerted and unactioned** |
-| Current equity | $83.92 → **19.18% below true peak** (critical band: >80% of the 20% limit per `risk-limits.json` escalation config) |
-| Monthly equity path | Apr: min 99.25 / max 103.82 → May: min 93.60 → Jun: min 82.71 → Jul: ~83.9 flat |
+| Metric | Initial reading | Corrected reading |
+|---|---|---|
+| Book-equity peak | $103.82 (2026-04-22) | **phantom-era book value** — balance base software-pinned at ~$100 Mar–May (May: one distinct balance value across 451 rows); not a true exchange read |
+| Trough | $82.71 (2026-06-06) → "20.33% breach" | book-value drawdown only; **no true-equity 20% breach can be established** (no true reads exist before 2026-06-03) |
+| Current equity | $83.92, "19.18% below peak" | **≈0.6% below the post-reconciled-reset true peak (~$84.40)** per the adopted baseline policy |
+| Monthly equity path | Apr 99.25–103.82 → May min 93.60 → Jun min 82.71 → Jul ~83.9 | same numbers, but Mar–May values are book, not truth |
 
-Attribution caveat, stated fairly: a large part of the June leg was the 2026-06-02 SL-fail→emergency-close cascade (bugs since fixed by #648/#653/#655) plus the phantom-balance catch-up. But the April→May leg (-~10%) was ordinary trading under HyperGrowth, and the full-year backtest of the **current, post-#835 configuration** independently produces a >20% MaxDD with no bugs involved. Both evidence lines point the same way.
+What live history *does* still establish, post-correction:
 
-**Live did not "get lucky with regime timing" — live already took the tail hit.** The backtest and live disagree only on *whether anyone noticed*.
+- Real capital went from a true ~$100 (initial deposit, March) to a true ~$84 (first honest sync reads, June) — a real ~16% capital erosion, previously post-mortemed (SL-fail cascade + phantom accounting, #648/#653/#655). The system's books hid it while it happened, which is the same observability failure mode this review documents in code.
+- Since honest accounting began (2026-06-03), equity has been flat ~$83–84.4 — live under the current config is ~2 days old (#835, 2026-07-03) and has essentially no drawdown history yet. **The live corroboration for the 21.84% backtest tail is therefore weaker than this review initially claimed** — live hasn't realized this tail under honest books; it simply has no honest history long enough to test it. The backtest evidence and the code-level control-failure evidence carry the finding on their own.
 
 ## 3. Why no circuit breaker caught it (four stacked control failures)
 
@@ -81,17 +84,17 @@ Interpretation:
 
 - *"Backtest lacks live's entry pauses / human interventions"* — rejected. `FEATURE_ENTRY_PAUSE` only shipped 2026-07-03, is manual, and defaults off; the historical human interventions (June flatten+reset) happened *after* losses were realized, they did not prevent drawdown. And the drawdown anatomy (12-month bleed, no single event) offers nothing for an event-window pause to bite on.
 - *"Backtest measures drawdown more harshly post-#838"* — rejected as an artifact claim: marked-to-market drawdown is exactly what live equity (`account_history.equity`, exchange-synced) experiences. Pre-#838 backtests *understated* it; the correction created honesty, not pessimism.
-- *"Live regime timing has been luckier"* — rejected. Live realized 20.33% peak-to-trough within its first ~10 weeks of equity history.
+- *"Live regime timing has been luckier"* — **open, not resolvable from live data** (corrected): live has only ~1 month of honestly-booked equity (post-#655 sync) and ~2 days under the current config, so it can neither corroborate nor refute the backtest tail. The initial version of this review claimed live had already realized a 20.33% drawdown; that rested on a phantom-era book peak and is withdrawn (see Correction). The verdict does not need the live leg: the backtest reproduction and the code-level control failures stand on their own.
 - *"Fees/slippage assumptions overstate losses"* — implausible direction/magnitude: verified live fee reality is ~$0.17 total over two weeks of comparable trading; the backtest's PF 0.47 with 71% win rate is a payoff-structure problem, not a cost-model problem.
 
 One honest caveat: the 365d window is a single, historically bad year for ETH (hold -31%), and HyperGrowth's original promotion story (#567, "737% over 5 years, Sharpe 2.19") was built on a different era and a pre-#838 engine whose partial-exit returns are now known to have been fabricated (#839). The tail this year is real; whether the strategy has positive expectancy in friendlier regimes is a separate question this review does not answer.
 
 ## 6. Recommendation to pm
 
-**Immediate tightening is warranted — this is not benign.** The account sits 0.8pp from re-breaching a hard limit it already breached once, the strategy's honest full-year profile shows the breach is structural, and all four defense layers between here and a deeper hole are broken or miscalibrated. Concretely, in priority order:
+**Structural tightening is warranted — but not an emergency halt.** (Recommendation revised with the Correction: the "one stop-out from re-breach" imminence claim is withdrawn; under the adopted baseline policy current live DD is ≈0.6%.) The strategy's honest full-year profile shows the breach is structural, and all four defense layers that should contain a repeat are broken or miscalibrated. Concretely, in priority order:
 
-1. **P1, now (ops, no code)**: treat the 20% line from the *true* peak ($103.82 → line at $83.06, current equity $83.92) as binding. Per `risk-limits.json` `breach_action: halt_new_entries_and_page_human`: set `FEATURE_ENTRY_PAUSE` on the live HyperGrowth session on the next close below $83.06 — or immediately, given the margin of $0.86 is smaller than one stop-out (open SHORT's stop costs ~$1.33). Existing position keeps its stop/exit logic (charter: freeze entries, maintain stops). Recalibrate the daily-standup tripwires to the true peak (they currently use the post-reset $84.40).
-2. **P1 (code)**: land the live max-drawdown halt (#749; branch `fix/live-max-drawdown-halt` exists, no commits yet). Two requirements this review adds evidence for: (a) peak must be sourced from a **persistent** store (all-time/rolling peak from `account_history`), not the in-process tracker, or restarts neutralize it; (b) halt = block new entries + alert, not liquidate.
+1. **P1, ops (no code)**: keep the standup tripwires from the post-reconciled-reset peak ($84.40: soft $80.18 / reduce $75.96 / hard $67.52 → `FEATURE_ENTRY_PAUSE` + page human) as the interim manual control, and treat them as *binding*, not advisory — they are currently the only functioning drawdown control in production. No immediate entry-pause is warranted at ≈0.6% DD.
+2. **P1 (code)**: land the live max-drawdown halt (#749; branch `fix/live-max-drawdown-halt` exists, no commits yet at review time). Two requirements this review adds evidence for: (a) the peak must survive process restarts — rehydrated from a persistent store, **scoped per pm's adopted baseline policy** (peak true equity since the last reconciled reset / session), since an unqualified all-time peak would resurrect phantom-era book values; the residual gap (re-baselining on a future clean restart creating a new session — "20% per session") needs a durable cross-session anchor as a follow-up; (b) halt = block new entries + alert, not liquidate.
 3. **P2 (code, one block)**: delete or drastically tighten HyperGrowth's `dynamic_risk` loosening (`hyper_growth.py:294-300`) so live inherits risk-limits.json's `[0.05,0.10,0.15]`/`[0.8,0.6,0.4]`. CF-A quantifies the benefit on the bad year. Sizing config was already halved once (#835) — this closes the *drawdown-reactive* gap that sizing changes don't touch.
 4. **P2 (config)**: change the backtest CLI `--max-drawdown` default from 0.5 to `DEFAULT_MAX_DRAWDOWN` (0.20) so every future backtest enforces the same hard line the book claims to run under (`risk-limits.json` calls constants divergence a P0).
 5. **Strategic (pm agenda, not urgent-path)**: HyperGrowth/ETHUSDT no longer clears the charter KPI bar on honest full-year evidence (Sharpe 0.12 vs 0.5 minimum; MaxDD 21.84% vs <15% target). The bear-market-2026 workstream (#801-#807) and the kelly_momentum paper trial are the existing venues; this review adds urgency but proposes no strategy swap on a single-window basis.
