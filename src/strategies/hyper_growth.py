@@ -182,6 +182,7 @@ def create_hyper_growth_strategy(
     min_regime_bars: int = 3,
     take_profit_pct: float = 0.30,
     stop_loss_pct: float = 0.10,
+    symbol: str | None = None,
 ) -> Strategy:
     """Create hyper-growth strategy targeting high annual returns.
 
@@ -209,6 +210,9 @@ def create_hyper_growth_strategy(
             outperform 0.20 on BTCUSDT 2024 by ~50 pp of annualized return
             because the trailing stop and partial exits capture upside while
             tight SL caps short-side losses in the 2024 uptrend).
+        symbol: Trading symbol threaded to the ML signal generator for model
+            registry selection. Runners must pass the symbol they trade;
+            None keeps the generator default (BTCUSDT).
 
     Returns:
         Configured Strategy instance.
@@ -239,7 +243,9 @@ def create_hyper_growth_strategy(
         # sentiment_momentum_scaled), so feeding it the price-only tensor
         # silently returns 0.0 on every bar — which the generator converts to
         # predicted_return = -1.0 (a constant SELL sentinel, not a prediction).
-        signal_generator = MLBasicSignalGenerator(name=f"{name}_signals", model_type="basic")
+        signal_generator = MLBasicSignalGenerator(
+            name=f"{name}_signals", model_type="basic", symbol=symbol
+        )
 
     risk_manager = FlatRiskManager(
         risk_fraction=risk_fraction,

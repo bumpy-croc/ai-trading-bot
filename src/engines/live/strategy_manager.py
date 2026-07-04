@@ -6,10 +6,12 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from src.prediction.models.execution_providers import get_preferred_providers
+from src.strategies import call_strategy_factory
 from src.strategies.components import Strategy
 from src.strategies.versioning import StrategyVersionRecord
 
@@ -37,9 +39,14 @@ class StrategyManager:
         strategies_dir: str = "strategies",
         models_dir: str = "src/ml/models",
         staging_dir: str | None = None,
+        symbol: str | None = None,
     ):
         self.strategies_dir = Path(strategies_dir)
         self.models_dir = Path(models_dir)
+        # Trading symbol of the (single-symbol) engine. Threaded into strategy
+        # factories on load/hot-swap so ML model registry selection matches
+        # the traded pair; the engine assigns it at session start.
+        self.symbol = symbol
         default_staging = Path(
             os.environ.get(
                 "ATB_STAGING_DIR", os.path.join(tempfile.gettempdir(), "ai-trading-bot-staging")
@@ -135,11 +142,17 @@ class StrategyManager:
 
         factory_function = self.strategy_registry[strategy_name]
 
-        # Call factory function with config
-        if config:
-            strategy = factory_function(**config)
+        # Call factory function with config, threading the engine's trading
+        # symbol so ML model selection matches the traded pair (#867). An
+        # explicit symbol in config wins over the engine-level symbol.
+        config_kwargs = dict(config) if config else {}
+        if "symbol" in config_kwargs:
+            strategy = factory_function(**config_kwargs)
         else:
-            strategy = factory_function()
+            factory: Callable[..., Strategy] = factory_function
+            if config_kwargs:
+                factory = partial(factory_function, **config_kwargs)
+            strategy = call_strategy_factory(factory, symbol=self.symbol)
 
         version_id = f"{strategy_name}_{version}"
         strategy_version = StrategyVersionRecord(

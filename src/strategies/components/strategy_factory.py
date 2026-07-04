@@ -249,6 +249,7 @@ class StrategyFactory:
         model_name: str | None = None,
         model_type: str = "basic",
         timeframe: str = "1h",
+        symbol: str | None = None,
     ) -> Strategy:
         """
         Create ML Basic strategy with component-based architecture
@@ -259,6 +260,8 @@ class StrategyFactory:
             model_name: Model name for registry
             model_type: Model type
             timeframe: Model timeframe
+            symbol: Trading symbol for model registry selection (None keeps
+                the generator default BTCUSDT)
 
         Returns:
             Configured ML Basic strategy
@@ -269,6 +272,7 @@ class StrategyFactory:
             model_name=model_name,
             model_type=model_type,
             timeframe=timeframe,
+            symbol=symbol,
         )
 
         risk_manager = FixedRiskManager(
@@ -422,6 +426,7 @@ class StrategyFactory:
         use_ml_basic: bool = True,
         use_ml_adaptive: bool = True,
         use_ml_sentiment: bool = False,
+        symbol: str | None = None,
     ) -> Strategy:
         """
         Create Ensemble Weighted strategy with component-based architecture
@@ -431,6 +436,8 @@ class StrategyFactory:
             use_ml_basic: Whether to include ML Basic
             use_ml_adaptive: Whether to include ML Adaptive
             use_ml_sentiment: Whether to include ML Sentiment
+            symbol: Trading symbol for model registry selection (None keeps
+                the generator default BTCUSDT)
 
         Returns:
             Configured Ensemble Weighted strategy
@@ -438,7 +445,7 @@ class StrategyFactory:
         # Create individual signal generators
         generators: dict[SignalGenerator, float] = {}
         if use_ml_basic:
-            generators[MLBasicSignalGenerator(name="ml_basic_signals")] = 0.30
+            generators[MLBasicSignalGenerator(name="ml_basic_signals", symbol=symbol)] = 0.30
         if use_ml_adaptive:
             generators[MLSignalGenerator(name="ml_adaptive_signals")] = 0.30
         if use_ml_sentiment:

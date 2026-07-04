@@ -207,7 +207,7 @@ class TestHandleBacktest:
 
             # Assert
             assert result == 0
-            mock_load_strategy.assert_called_once_with("ml_basic")
+            mock_load_strategy.assert_called_once_with("ml_basic", symbol="BTCUSDT")
             mock_backtester.run.assert_called_once()
 
     def test_backtest_with_sentiment_enabled(self, default_args, mock_backtester):
