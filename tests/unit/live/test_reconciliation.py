@@ -48,6 +48,7 @@ class MockPosition:
     last_partial_exit_price: float | None = None
     original_size: float | None = 0.1
     entry_balance: float | None = None
+    external_close_pending: bool = False
 
 
 @dataclass
@@ -1065,6 +1066,49 @@ class TestAssetHoldingsVerification:
         assert result.status == "corrected"
         assert result.severity == Severity.HIGH
 
+    def test_external_close_sets_pending_flag_when_db_close_fails(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """When a spot external close is detected but close_position RETURNS False, the retained
+        position is flagged external_close_pending so balance reconciliation excludes its
+        (already-sold) notional rather than adding it back and overstating capital."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=25)
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0
+        )
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.0001, free=0.0001, locked=0.0
+        )
+        mock_db.close_position.return_value = False
+
+        reconciler.reconcile_position(pos)
+
+        assert getattr(pos, "external_close_pending", False) is True
+        mock_position_tracker.remove_position.assert_not_called()
+
+    def test_external_close_pending_flag_cleared_when_holdings_recover(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """A stale external_close_pending flag (e.g. from a transient under-read) is cleared once
+        the asset is confirmed held again, so the position is counted/protected normally."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(current_size=0.1, db_position_id=26)
+        pos.external_close_pending = True
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0
+        )
+        # Asset comfortably held (> 50% of tracked) — not an external close.
+        mock_exchange.get_balance.return_value = MockBalance(
+            asset="BTC", total=0.08, free=0.08, locked=0.0
+        )
+
+        reconciler.reconcile_position(pos)
+
+        assert getattr(pos, "external_close_pending", False) is False
+
     def test_position_with_sufficient_balance_not_flagged(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
@@ -1265,6 +1309,46 @@ class TestBalanceAccountsForPositionNotional:
         result = reconciler._reconcile_balance()
         assert result.severity != Severity.CRITICAL
         assert result.status == "verified"
+
+    def test_external_close_pending_position_excluded_from_notional(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """A position confirmed flat on the exchange but retained pending a FAILED DB close
+        must be excluded from the notional estimate. Its asset is already sold, so counting
+        its notional would add that value back into the corrected balance — overstating
+        capital and oversizing later positions.
+
+        Scenario: $10,000 DB capital, 0.1 BTC @ $50,000 ($5,000 notional) sold externally
+        ~break-even so the exchange now holds $10,000 USDT. With the position flagged
+        external-close-pending, expected USDT = $10,000 and there is NO discrepancy.
+        """
+        pos = MockPosition(entry_price=50000.0, current_size=0.1, original_size=0.1, quantity=0.1)
+        pos.external_close_pending = True
+        mock_position_tracker.positions = {"pos_1": pos}
+        mock_exchange.get_balance.return_value = MockBalance(total=10000.0)
+        mock_db.get_current_balance.return_value = 10000.0
+
+        result = reconciler._reconcile_balance()
+
+        # Notional excluded -> expected_usdt == exchange_total -> no spurious CRITICAL/correction.
+        assert result.severity != Severity.CRITICAL
+        mock_db.update_balance.assert_not_called()
+
+    def test_estimate_notional_excludes_only_external_close_pending(
+        self, reconciler, mock_position_tracker
+    ):
+        """_estimate_position_notional counts genuinely-held positions and skips flagged ones."""
+        held = MockPosition(
+            entry_price=50000.0, current_size=0.1, original_size=0.1, quantity=0.1, symbol="BTCUSDT"
+        )
+        flat = MockPosition(
+            entry_price=3000.0, current_size=1.0, original_size=1.0, quantity=1.0, symbol="ETHUSDT"
+        )
+        flat.external_close_pending = True
+        mock_position_tracker.positions = {"held": held, "flat": flat}
+
+        # Only the held position (0.1 * 50000 = 5000) contributes; the flat one is excluded.
+        assert reconciler._estimate_position_notional() == pytest.approx(5000.0)
 
     def test_genuine_discrepancy_still_triggers_critical(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker

@@ -172,6 +172,17 @@ class ReconciliationResult:
 # ---------- Startup Reconciliation ----------
 
 
+def _is_external_close_pending(position: Any) -> bool:
+    """True when a reconciler has confirmed this position is flat on the exchange (its asset
+    sold / stop-loss filled / borrow repaid) but the row's DB close is still pending after a
+    failed ``close_position``. Such a position is deliberately RETAINED in the tracker for close
+    retry, yet it no longer backs any exchange holding — so spot balance reconciliation must
+    exclude its notional (counting it would add the already-realized value back and overstate
+    capital, oversizing later positions). Set where a reconciler retains a position on close
+    failure; cleared once holdings are re-confirmed."""
+    return bool(getattr(position, "external_close_pending", False))
+
+
 class PositionReconciler:
     """Verifies recovered positions and resolves pending orders on startup.
 
@@ -1790,7 +1801,10 @@ class PositionReconciler:
         if not db_closed:
             # Leave the position in the in-memory tracker (consistent with its still-OPEN DB
             # row) so it is re-reconciled on a later pass — removing it while the DB row stays
-            # OPEN would diverge memory from the DB (CODE.md: no silent divergence).
+            # OPEN would diverge memory from the DB (CODE.md: no silent divergence). The SL has
+            # filled, so the asset is gone from the exchange: flag it so spot balance
+            # reconciliation excludes its notional instead of adding the realized value back.
+            position.external_close_pending = True
             logger.warning(
                 "Skipping close for %s — DB position %s was not closed; left in tracker for "
                 "re-reconciliation on a later pass.",
@@ -1979,6 +1993,11 @@ class PositionReconciler:
                         logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
 
                 if not db_closed:
+                    # Asset is gone from the exchange but the DB row is still OPEN: flag the
+                    # retained position so spot balance reconciliation excludes its notional
+                    # (counting it would add the already-realized value back and overstate
+                    # capital). Cleared below once holdings are re-confirmed.
+                    position.external_close_pending = True
                     logger.warning(
                         "External close for %s left tracked — DB position %s was not closed; "
                         "re-reconciled on a later pass.",
@@ -1995,6 +2014,15 @@ class PositionReconciler:
                 # External closes have no fill price; we cannot compute P&L
                 logger.info(
                     "External close for %s — P&L not realized (no exit price)",
+                    symbol,
+                )
+            elif _is_external_close_pending(position):
+                # Asset is held again (>= 50% of tracked) — clear a stale external-close-pending
+                # flag from a prior transient under-read so the position is counted/protected
+                # normally once more.
+                position.external_close_pending = False
+                logger.info(
+                    "Asset holdings for %s recovered — cleared external-close-pending flag",
                     symbol,
                 )
         except Exception as e:
@@ -2157,6 +2185,11 @@ class PositionReconciler:
         total = 0.0
         positions = self.position_tracker.positions
         for position in positions.values():
+            # Skip positions confirmed flat on the exchange but retained pending a failed DB
+            # close — their asset is already sold, so counting notional would add the realized
+            # value back and overstate capital (oversizing later positions).
+            if _is_external_close_pending(position):
+                continue
             # Use quantity (actual asset amount), not size (balance fraction).
             # Coerce to float — DB-loaded positions carry Decimal (Numeric)
             # fields, and mixing Decimal with the float `total`/price below
@@ -3416,6 +3449,11 @@ class PeriodicReconciler:
                         # Subtract position notional to get expected USDT
                         position_notional = 0.0
                         for position in positions_snapshot.values():
+                            # Skip positions confirmed flat on the exchange but retained pending
+                            # a failed DB close — their asset is already sold, so counting
+                            # notional would overstate capital.
+                            if _is_external_close_pending(position):
+                                continue
                             # Use quantity (actual asset amount), not size (balance fraction)
                             qty = getattr(position, "quantity", None) or 0.0
                             price = getattr(position, "entry_price", 0)
