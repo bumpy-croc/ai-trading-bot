@@ -33,6 +33,7 @@ Reference: docs/research/500_percent_annual_returns.md
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from src.strategies.components import (
@@ -47,6 +48,8 @@ from src.strategies.components.leverage_manager import LeverageManager
 from src.strategies.components.position_sizer import LeveragedPositionSizer
 from src.strategies.components.regime_context import TrendLabel, VolLabel
 from src.strategies.components.risk_manager import RiskManager
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.strategies.components.regime_context import RegimeContext
@@ -210,6 +213,15 @@ def create_hyper_growth_strategy(
     Returns:
         Configured Strategy instance.
     """
+    # #805: hyper_growth targets high returns via leverage/aggressive sizing and
+    # is NOT recommended in a bear/high-vol regime, where exposure is the primary
+    # risk. Prefer ml_adaptive with the exposure governor (#802) + vol-targeted
+    # sizing (#805) when trading a downtrend.
+    logger.warning(
+        "hyper_growth is NOT recommended for bear/high-vol regimes: its leveraged, "
+        "aggressive sizing amplifies drawdowns. Consider ml_adaptive with the "
+        "exposure governor + vol-target sizing instead."
+    )
     # Signal generator (declared up-front: branches assign different subtypes)
     signal_generator: SignalGenerator
     if signal_source == "momentum":

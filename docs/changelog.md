@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any veto → HOLD — and applies in both engines via the strategy. F&G comes from
   `FearGreedProvider` (degrades to neutral offline → overlay inert). Behind
   `enable_sentiment_extreme_overlay` (**default OFF**).
+- **Volatility-targeted position sizing** (#805): a new `VolatilityTargetSizer`
+  (`src/strategies/components/position_sizer.py`) wraps a base sizer and scales
+  its output by `target_atr_percentile / atr_percentile` (from the regime
+  detector) so per-position dollar-vol is roughly constant — smaller in high vol,
+  larger in calm, bounded to avoid blow-ups. Passes through unchanged when the
+  regime/ATR-percentile is unavailable (never guesses). Wired into
+  `ml_basic`/`ml_adaptive` behind `enable_vol_target_sizing` (**default OFF**,
+  requires regime detection). Also: `kelly_momentum` now clamps fractional Kelly
+  to `DEFAULT_MAX_KELLY_FRACTION` (0.5) for bear safety (full/half Kelly
+  over-sizes into drawdowns); and `momentum_leverage` / `hyper_growth` emit a
+  startup warning that they are not recommended for bear/high-vol regimes.
 - **ETF net-flow signal + flow gate** (#803): US spot BTC/ETH ETF net flows are
   the marginal buyer/seller this cycle, but the bot had no flow awareness. New
   `ETFFlowProvider` (`src/data_providers/etf_flow_provider.py`) ingests daily net
