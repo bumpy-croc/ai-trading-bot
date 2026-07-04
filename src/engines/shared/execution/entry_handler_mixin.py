@@ -20,6 +20,7 @@ from src.engines.shared.models import PositionSide
 if TYPE_CHECKING:
     from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
     from src.position_management.dynamic_risk import DynamicRiskManager
+    from src.position_management.macro_events import MacroEventGuard
     from src.strategies.components.exposure_governor import ExposureGovernor
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,8 @@ class SharedEntryHandlerMixin:
     # Optional pre-order gate wiring (#802). Absent/None => gate is inert.
     _exposure_governor: ExposureGovernor | None = None
     _positions_source: Callable[[], Iterable[Any]] | None = None
+    # Optional macro-event de-risking guard (#806). Absent/None => inert.
+    _macro_event_guard: MacroEventGuard | None = None
 
     def _extract_entry_plan(
         self,
@@ -132,6 +135,10 @@ class SharedEntryHandlerMixin:
             logger.warning("current_gross_exposure_fraction failed; treating as 0", exc_info=True)
             return 0.0
 
+    def configure_macro_guard(self, macro_guard: MacroEventGuard | None) -> None:
+        """Wire the #806 macro-event de-risking guard (independent of the governor)."""
+        self._macro_event_guard = macro_guard
+
     def apply_pre_order_gates(
         self,
         size_fraction: float,
@@ -143,14 +150,26 @@ class SharedEntryHandlerMixin:
     ) -> tuple[float, str | None]:
         """Apply the shared pre-order risk gates to a sized position fraction.
 
-        Currently the regime-gated exposure governor (#802); #806/#807 extend
-        this with event-window and circuit-breaker caps. Returns
-        ``(allowed_fraction, reason_or_None)`` where ``reason`` is set only when
-        the size was reduced (for entry-decision logging). Inert (returns the
-        input unchanged) when no governor is wired or it is disabled.
+        Order: the #806 macro-event guard (blocks new entries and halves the
+        exposure cap inside a FOMC/CPI window), then the #802 regime-gated
+        exposure governor. Returns ``(allowed_fraction, reason_or_None)`` where
+        ``reason`` is set only when the size was reduced/blocked (for logging).
+        Each gate is independently inert until wired/enabled, so default
+        behaviour and backtest-live parity are unchanged.
         """
+        if size_fraction <= 0:
+            return size_fraction, None
+
+        # #806: macro-event de-risking window (independent of the governor).
+        guard = self._macro_event_guard
+        if guard is not None and guard.enabled and now is not None:
+            if not guard.entry_allowed(now):
+                return 0.0, f"macro_event_block_{guard.active_event_name(now)}"
+            extra_factor *= guard.exposure_factor(now)
+
+        # #802: regime-gated gross exposure governor.
         governor = self._exposure_governor
-        if governor is None or size_fraction <= 0 or not governor.enabled:
+        if governor is None or not governor.enabled:
             return size_fraction, None
         gross = self.current_gross_exposure_fraction(equity)
         return governor.cap_fraction(
