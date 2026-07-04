@@ -846,6 +846,11 @@ class PortfolioRiskManager:
     def check_drawdown(self, current_balance: float, peak_balance: float) -> bool:
         """Check if maximum drawdown has been exceeded.
 
+        Note: live enforcement of the hard cap (close-only halt, escalation
+        tiers, restart-safe peak) lives in
+        ``src.engines.live.monitoring.drawdown_guard`` — this predicate is a
+        stateless point-in-time check (strictly greater than the limit).
+
         Parameters
         ----------
         current_balance : float

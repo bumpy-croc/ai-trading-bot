@@ -64,6 +64,7 @@ def _make_state(position: MagicMock, result: MagicMock, **overrides) -> MagicMoc
     state.current_balance = 1000.0
     state.max_position_size = 1.0
     state.trading_session_id = None
+    state._close_only_mode = False
     # Protocol attributes are annotation-only (not in dir()), so a spec'd mock
     # won't auto-create them — assign each object attribute the path reads.
     state.exchange_interface = MagicMock()
@@ -334,6 +335,7 @@ def test_none_stop_loss_skips_placement():
 def _make_short_state(*, is_runtime: bool, short_signal, overrides):
     """Minimal backref for the legacy short-entry path."""
     state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = False
     state._is_runtime_strategy.return_value = is_runtime
     state.current_balance = 1000.0
     state.max_position_size = 1.0

@@ -503,6 +503,11 @@ class LiveEntryCoordinator:
         """Execute a new trading position using shared execution modules."""
         state = self._state
         # Defense-in-depth: refuse any entry routed around check_entry_conditions.
+        # Close-only mode gates the chokepoint too, so the legacy short path and
+        # any direct caller can never add exposure while halted.
+        if state._close_only_mode:
+            logger.debug("Close-only mode active — refusing entry execution for %s", symbol)
+            return
         if self._entry_paused(f"entry execution for {symbol}"):
             return
         try:
@@ -933,6 +938,10 @@ class LiveEntryCoordinator:
     ) -> None:
         """Evaluate and execute a legacy duck-typed short entry (non-runtime strategies)."""
         state = self._state
+        # Close-only mode: skip legacy short evaluation, exits/stops still active
+        if state._close_only_mode:
+            logger.debug("Close-only mode active — skipping legacy short entry check")
+            return
         if self._entry_paused(f"legacy short entry for {symbol}"):
             return
         if (not state._is_runtime_strategy()) and callable(
