@@ -3296,6 +3296,27 @@ class PeriodicReconciler:
                             "cancelling SL and removing from tracker",
                             symbol,
                         )
+                        # Audit the external close / liquidation and raise the cycle
+                        # severity so it surfaces in system_events (the cycle-severity
+                        # event) — the spot branch already does this; the margin branch
+                        # previously left a liquidation with no audit row and no severity
+                        # bump (#853). Margin capital is reconciled by AccountSynchronizer,
+                        # so this is observability-only (no balance move here).
+                        if Severity.HIGH > max_severity:
+                            max_severity = Severity.HIGH
+                        self.db_manager.log_audit_event(
+                            session_id=self.session_id,
+                            entity_type="position",
+                            entity_id=getattr(position, "db_position_id", None),
+                            field="status",
+                            old_value="OPEN",
+                            new_value="CLOSED_EXTERNALLY",
+                            reason=(
+                                f"Margin position {symbol} externally closed / liquidated "
+                                f"(borrowed/netAsset for base asset ~ 0)"
+                            ),
+                            severity=Severity.HIGH.value,
+                        )
                         # Cancel exchange SL to prevent orphaned order
                         if sl_id:
                             try:
