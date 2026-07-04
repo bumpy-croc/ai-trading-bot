@@ -29,6 +29,7 @@ class MockDatabaseManager:
         self._seen_trade_keys: set = set()
         self._positions = {}
         self._events = {}
+        self._audit_events: list[dict] = []
         self._account_snapshots = []
         self._strategy_executions = []
         self._next_id = 1
@@ -334,6 +335,40 @@ class MockDatabaseManager:
                 position["exit_reason"] = exit_reason
             return True
         return False
+
+    def log_audit_event(
+        self,
+        session_id: int,
+        entity_type: str,
+        entity_id: int | None,
+        field: str,
+        old_value: str | None,
+        new_value: str | None,
+        reason: str,
+        severity: str,
+    ) -> int:
+        """Record a reconciliation audit event (mirrors DatabaseManager.log_audit_event)."""
+        event_id = self._get_next_id()
+        self._audit_events.append(
+            {
+                "id": event_id,
+                "session_id": session_id,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "field": field,
+                "old_value": old_value,
+                "new_value": new_value,
+                "reason": reason,
+                "severity": severity,
+            }
+        )
+        return event_id
+
+    def get_audit_events(self, session_id: int | None = None) -> list[dict]:
+        """Return recorded audit events, optionally filtered by session."""
+        if session_id is None:
+            return list(self._audit_events)
+        return [a for a in self._audit_events if a.get("session_id") == session_id]
 
     def log_event(
         self,

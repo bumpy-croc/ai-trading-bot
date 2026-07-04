@@ -2957,6 +2957,69 @@ class PeriodicReconciler:
         )
         return True
 
+    def _reconcile_spot_balance(self) -> bool:
+        """Reconcile the spot session balance against exchange USDT, valuing the CURRENT
+        tracked positions (a FRESH snapshot — a position closed earlier this cycle is
+        correctly excluded, so the closed slice's notional is not double-counted, which is
+        what the stale pre-removal snapshot used to do and over-correct by). Corrects
+        ``db_balance`` to ``exchange_USDT + notional`` when the discrepancy exceeds the
+        threshold and returns ``True`` (CRITICAL). No-op in margin mode — cross-margin USDT
+        includes short-sale proceeds and doesn't reflect equity.
+
+        This owns the spot capital heal for the periodic cycle: it is BOTH the per-cycle
+        balance check AND is invoked directly after a spot external close, so the balance
+        self-heals the same cycle, independent of any other balance step.
+        """
+        if self._use_margin:
+            return False
+        try:
+            usdt_balance = self.exchange.get_balance("USDT")
+            if not usdt_balance:
+                return False
+            db_balance = self.db_manager.get_current_balance(self.session_id)
+            if db_balance <= 0:
+                return False
+            # Subtract CURRENT position notional to get expected USDT on exchange. Coerce
+            # to float — DB-loaded positions carry Decimal (Numeric) fields (#653 class).
+            position_notional = 0.0
+            for position in self.position_tracker.positions.values():
+                qty = float(getattr(position, "quantity", None) or 0.0)
+                price = float(getattr(position, "entry_price", 0) or 0.0)
+                if qty > 0 and price > 0:
+                    current = getattr(position, "current_size", None)
+                    original = getattr(position, "original_size", None)
+                    if current is not None and original is not None and float(original) > 0:
+                        qty = qty * (float(current) / float(original))
+                    position_notional += qty * price
+            expected_usdt = db_balance - position_notional
+            # Use abs(expected_usdt) to avoid a false CRITICAL when expected_usdt is
+            # negative (position notional > db_balance due to price appreciation).
+            comparison_base = max(abs(expected_usdt), db_balance * 0.01)
+            diff_pct = abs(usdt_balance.total - expected_usdt) / comparison_base
+            if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
+                logger.critical(
+                    "Balance discrepancy: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
+                    "[db=$%.2f, position_notional=$%.2f]",
+                    expected_usdt,
+                    usdt_balance.total,
+                    diff_pct * 100,
+                    db_balance,
+                    position_notional,
+                )
+                # DB balance represents total capital (USDT + position notional), not just
+                # free USDT on exchange.
+                corrected_balance = usdt_balance.total + position_notional
+                self.db_manager.update_balance(
+                    corrected_balance,
+                    "reconciliation_balance_correction",
+                    "system",
+                    self.session_id,
+                )
+                return True
+        except Exception as e:
+            logger.warning("Balance check failed: %s", e)
+        return False
+
     def _reconcile_cycle(self) -> None:
         """Execute one reconciliation cycle."""
         # Orphaned-borrow sweep runs every cycle — INCLUDING when flat — because an
@@ -3136,13 +3199,22 @@ class PeriodicReconciler:
                                 logger.info("Cancelled orphaned SL %s for %s", sl_id, symbol)
                             except Exception as e:
                                 logger.warning("Failed to cancel SL %s: %s", sl_id, e)
-                        self.position_tracker.remove_position(order_key)
+                        # Pop only if still tracked, then gate the audit row on the DB
+                        # close actually succeeding (close_position returns False without
+                        # raising on a failed commit), mirroring the startup path.
+                        removed = self.position_tracker.pop_position(order_key)
                         db_pos_id = getattr(position, "db_position_id", None)
+                        db_closed = False
                         if db_pos_id is not None:
                             try:
-                                self.db_manager.close_position(db_pos_id)
+                                db_closed = bool(self.db_manager.close_position(db_pos_id))
                             except Exception as e:
                                 logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+                        # Balance-neutral audit Trade row (delegated to the startup
+                        # reconciler so it books identically). Margin capital is owned by
+                        # AccountSynchronizer._sync_margin_equity, so no balance move here.
+                        if db_closed and removed is not None:
+                            self._position_reconciler._log_external_close_trade(position)
                 except Exception as e:
                     logger.warning(
                         "Margin position check failed for %s: %s",
@@ -3293,23 +3365,40 @@ class PeriodicReconciler:
                             severity=severity.value,
                         )
 
-                        # Remove ghost position from tracker and close in DB.
-                        # Thread safety: LivePositionTracker._positions_lock
-                        # serializes all mutations, no per-position lock needed.
-                        self.position_tracker.remove_position(order_key)
+                        # Pop only if still tracked, then gate the audit row on the DB
+                        # close actually succeeding. Thread safety:
+                        # LivePositionTracker._positions_lock serializes all mutations.
+                        removed = self.position_tracker.pop_position(order_key)
                         db_pos_id = getattr(position, "db_position_id", None)
+                        db_closed = False
                         if db_pos_id is not None:
-                            self.db_manager.close_position(db_pos_id)
-                        logger.warning(
-                            "Removed ghost position %s — externally closed "
-                            "(held=%.8f, tracked=%.8f)",
-                            order_key,
-                            held_qty,
-                            position_qty,
-                        )
+                            try:
+                                db_closed = bool(self.db_manager.close_position(db_pos_id))
+                            except Exception as e:
+                                logger.warning("Failed to close DB position %s: %s", db_pos_id, e)
+                        if removed is not None:
+                            logger.warning(
+                                "Removed ghost position %s — externally closed "
+                                "(held=%.8f, tracked=%.8f)",
+                                order_key,
+                                held_qty,
+                                position_qty,
+                            )
+                        # Balance-neutral audit Trade row (delegated to the startup
+                        # reconciler), gated on the close succeeding.
+                        if db_closed and removed is not None:
+                            self._position_reconciler._log_external_close_trade(position)
 
                         if severity > max_severity:
                             max_severity = severity
+
+                        # Self-contained spot balance heal: correct the session balance
+                        # this same cycle, valuing a FRESH snapshot (the just-closed
+                        # position is excluded — no stale-snapshot over-correction),
+                        # independent of the Step-4 check below. A CRITICAL correction
+                        # escalates so close-only mode still fires on a real divergence.
+                        if db_closed and self._reconcile_spot_balance():
+                            max_severity = Severity.CRITICAL
                 except Exception as e:
                     logger.warning("Asset holdings check failed for %s: %s", order_key, e)
 
@@ -3538,58 +3627,13 @@ class PeriodicReconciler:
         except Exception as e:
             logger.warning("Orphaned order check failed: %s", e)
 
-        # 4. Verify balance (accounting for position notional values)
-        # Skip in margin mode — spot balance doesn't reflect margin account state.
-        if not self._use_margin:
-            try:
-                usdt_balance = self.exchange.get_balance("USDT")
-                if usdt_balance:
-                    db_balance = self.db_manager.get_current_balance(self.session_id)
-                    if db_balance > 0:
-                        # Subtract position notional to get expected USDT
-                        position_notional = 0.0
-                        for position in positions_snapshot.values():
-                            # Use quantity (actual asset amount), not size (balance fraction)
-                            qty = getattr(position, "quantity", None) or 0.0
-                            price = getattr(position, "entry_price", 0)
-                            if qty > 0 and price > 0:
-                                # Scale by current_size/original_size for partial exits
-                                current = getattr(position, "current_size", None)
-                                original = getattr(position, "original_size", None)
-                                if current is not None and original is not None and original > 0:
-                                    qty = qty * (current / original)
-                                position_notional += qty * price
-                        expected_usdt = db_balance - position_notional
-                        # Use abs(expected_usdt) to avoid false CRITICAL when
-                        # expected_usdt is negative (e.g. position notional >
-                        # db_balance due to price appreciation)
-                        comparison_base = max(abs(expected_usdt), db_balance * 0.01)
-                        diff_pct = abs(usdt_balance.total - expected_usdt) / comparison_base
-                        if diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT:
-                            max_severity = Severity.CRITICAL
-                            logger.critical(
-                                "Balance discrepancy: expected=$%.2f vs Exchange=$%.2f (%.2f%%) "
-                                "[db=$%.2f, position_notional=$%.2f]",
-                                expected_usdt,
-                                usdt_balance.total,
-                                diff_pct * 100,
-                                db_balance,
-                                position_notional,
-                            )
-                            # Correct DB balance to match actual total capital.
-                            # DB balance represents total capital (USDT + position
-                            # notional), not just free USDT on exchange.
-                            corrected_balance = usdt_balance.total + position_notional
-                            self.db_manager.update_balance(
-                                corrected_balance,
-                                "reconciliation_balance_correction",
-                                "system",
-                                self.session_id,
-                            )
-            except Exception as e:
-                logger.warning("Balance check failed: %s", e)
-        else:
-            logger.debug("Skipping balance verification in margin mode")
+        # 4. Verify balance — delegates to the shared, self-contained reconcile that
+        # values a FRESH position snapshot (a position closed earlier this cycle is
+        # excluded, so no stale-snapshot over-correction) and no-ops in margin mode
+        # (AccountSynchronizer._sync_margin_equity owns margin capital). A CRITICAL
+        # correction escalates to close-only mode in step 5.
+        if self._reconcile_spot_balance():
+            max_severity = Severity.CRITICAL
 
         # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:

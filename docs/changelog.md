@@ -400,6 +400,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `execute_entry`, exit checks) is intentionally left engine-specific.
 
 ### Fixed
+- Periodic reconciler now persists a balance-neutral audit `trades` row when it
+  detects an externally-closed position (margin and spot branches of
+  `PeriodicReconciler._reconcile_cycle`), extending the startup external-close
+  audit row to the periodic cycle. Each branch delegates to the startup
+  reconciler's `_log_external_close_trade` (so it books identically: GROSS
+  `Trade.pnl` at a proxy mark-to-market price, dedup key
+  `reconcile_ext_<db_position_id>`, `balance_realized=False`), popping the
+  position only if still tracked and gating the row on the DB `close_position`
+  call actually returning `True` (it swallows DB errors to `False`) so a failed
+  close is re-reconciled rather than logged for a still-open position.
+  The periodic spot path also **self-heals** the session balance the same cycle
+  via a new `_reconcile_spot_balance`, which values a **fresh** position snapshot
+  — fixing a stale-snapshot over-correction where the periodic balance check
+  counted a just-closed position's notional and over-corrected the balance by it
+  for ~one cycle (~2 min) before self-healing. Margin balance stays owned by
+  `AccountSynchronizer._sync_margin_equity`.
 - Backtest risk tracking now covers next-bar (pending) entries (#757):
   the post-fill `RiskManager.update_position` call passed the `PositionSide`
   enum, whose string validation (`side in VALID_SIDES`) raised `ValueError`
