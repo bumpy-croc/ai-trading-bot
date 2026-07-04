@@ -30,7 +30,7 @@ from src.config.constants import (
     DEFAULT_ETF_FLOW_ZSCORE_LONG_WINDOW,
     DEFAULT_ETF_FLOW_ZSCORE_SHORT_WINDOW,
 )
-from src.config.paths import get_cache_dir, resolve_data_path
+from src.config.paths import get_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,10 @@ BTC_FLOW_COL = "btc_etf_netflow_usd"
 ETH_FLOW_COL = "eth_etf_netflow_usd"
 FLOW_COLUMNS = [BTC_FLOW_COL, ETH_FLOW_COL]
 
-SEED_FILENAME = "etf_flows_seed.csv"
 CACHE_FILENAME = "etf_flows.parquet"
+# The bundled seed lives in the package (NOT the git-ignored ``src/data/``
+# runtime dir), so it ships with the code and is available in CI/offline.
+SEED_PATH = Path(__file__).resolve().parent / "seed" / "etf_flows_seed.csv"
 
 FetchFn = Callable[[datetime, datetime], "pd.DataFrame | None"]
 
@@ -61,9 +63,7 @@ class ETFFlowProvider:
         )
         self._fetch_fn = fetch_fn if fetch_fn is not None else _default_fetch
         self._cache_ttl_hours = cache_ttl_hours
-        self._seed_path = (
-            Path(seed_path) if seed_path is not None else resolve_data_path(SEED_FILENAME)
-        )
+        self._seed_path = Path(seed_path) if seed_path is not None else SEED_PATH
 
     @property
     def _cache_file(self) -> Path:
