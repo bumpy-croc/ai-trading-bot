@@ -12,6 +12,8 @@ Modular cryptocurrency trading system supporting multiple strategies, backtestin
 
 ## Operations
 
+- Be proactive in findigs and fixing issues. Delegate to subagents as much as possible
+- Use good judgement. Staff/Principle engineer standard. Take context into account.
 - If additional out of scope work is needed for a task, don't launch a chip. Instead create a github issue and dispatch a subagent to work on it straight away. Treat it as part of your current task, although it should be handled in a separate PR by a subagent.
 
 ## Autonomous Operation (daemon mode)
