@@ -449,3 +449,31 @@ the strongest honest form of confidence available in this domain (see the §1 la
   reports are committed as durable artifacts under **`docs/refactor/reviews/`**
   (`quant_review.md`, `architecture_review.md`, `risk_review.md`) — cite these for the full
   file:line evidence behind each finding.
+
+---
+
+## PM adoption notes (2026-07-05, ownership moved to the PM daemon session)
+
+The Board directed execution of this plan via the PM session's sub-agents. Amendments to
+the decision table, applied as adopted policy:
+
+- **D1 — ratified (a), argument strengthened**: the production model trains exclusively on
+  closed bars, so forming-bar evaluation is out-of-distribution input at every live
+  decision — this is model correctness, not just parity hygiene. Conditions: protection
+  paths (SL/trailing/exit) remain tick-driven; only signal/entry evaluation gates on
+  closed candles. Evidence: forming-bar flip-rate study (docs/research/experiments/
+  2026-07-06_forming-bar-fliprate.md) quantifies the blast radius and feeds the A/B prior.
+- **D2 — ratified end-state (a); sequencing amended**: design doc + risk-officer sign-off
+  proceed now, but implementation is timed to precede the first second-live-symbol or
+  portfolio-sizing change rather than blocking the single-symbol parity milestone —
+  current prod reality is single-position, so P4 replays of real sessions do not yet
+  require it. Interim banner-clamp stands, not as end state.
+- **D3 — ratified as written** (design the financing interface, defer funding-rate
+  implementation with a ledger row; zero live dollars touched today).
+- **D4 — ratified, bundled**: T₁/T₂ thresholds ratify in the SAME Board sitting as the
+  outstanding risk-limits.json corrections (max_position_size_pct 0.10→0.20 +
+  $last_reviewed stamp). Breach action = charter breach_action (halt entries + page),
+  wired through the alert-monitor/ALERT_WEBHOOK path — never just a filed issue.
+- **Reporting**: A/B results and the P4.2 weekly parity audit publish through the frozen-
+  exam/scoreboard system (docs/architecture/model_evaluation_system.md) — one append-only
+  evidence discipline for both model and parity claims.
