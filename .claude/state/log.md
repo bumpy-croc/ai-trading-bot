@@ -74,3 +74,13 @@ Ref: incidents/2026-07-04T1300-P1-hypergrowth-drawdown-cap-breach.md · proposal
 Unaffected and still standing: the exact 365d backtest reproduction (-20.15%/21.84% MaxDD — structural breach for the live config), the four control-layer failures, both counterfactuals (risk-limits.json thresholds → 17.01% MaxDD, no breach), and proposal steps 2-4. Proposal step 1 revised: tripwires binding, no immediate entry-pause. Recommend pm reclassify the incident P1 → P2.
 Process lesson appended to the incident file: verify a balance column varies like a market-tracking value (distinct-count sanity check) before treating any equity peak as real — the phantom-balance failure mode claimed this review's first draft as a victim.
 Ref: corrects log entry 2026-07-04 13:20 · incidents/2026-07-04T1300-P1-hypergrowth-drawdown-cap-breach.md (CORRECTION section) · proposals/2026-07-04-02-hypergrowth-drawdown-containment.md (revised) · GH #845
+
+## 2026-07-05 08:10 · track-record · live-ops
+Severity: yellow  Top anomaly: session had no Railway/DB access (no `railway` CLI, no `DATABASE_URL`, no `atb`) — process/DB/log checks not directly verifiable; reported from state files + GitHub only. Pre-existing #669/#689 (staging observability gap, silent-outage risk) still open.
+Ref: docs/research/ops-snapshots/2026-07-05_0810.md
+
+---
+
+## 2026-07-05 08:16 · track-record · live-ops
+Severity: yellow  Top anomaly: session has no live production telemetry access (no railway CLI, no DATABASE_URL, no atb) — snapshot is state-file/GitHub coverage only, not a fresh DB/process read; last live figures are ~18.5h stale (2026-07-04 13:55, equity $83.92, true DD ≈0.6%, tripwires $80.18/$75.96/$67.52). Only open incident concerning the live bot is GH #845 (HyperGrowth structural 21.84% backtest MaxDD, containment proposal not yet landed). No new P0/P1 found or filed.
+Ref: docs/research/ops-snapshots/2026-07-05_0816.md
