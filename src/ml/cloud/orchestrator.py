@@ -50,6 +50,9 @@ MAX_JOB_SUFFIX_LENGTH = 100
 # Prevents slow searches on deeply nested directories or large artifact trees
 MAX_METADATA_SEARCH_DEPTH = 100
 
+# Maximum suffix counter when a synced version collides with an existing bundle
+MAX_VERSION_SUFFIX_ATTEMPTS = 1000
+
 
 def _validate_registry_component(value: str, field: str) -> str:
     """Validate a path component used to build local model-registry paths.
@@ -200,21 +203,8 @@ class CloudTrainingOrchestrator:
         start_time = perf_counter()
 
         try:
-            # Step 0: Download training data and upload to S3
-            # This is required because Binance API blocks AWS IP addresses
-            logger.info("Step 0/5: Preparing training data...")
-            s3_uri = self._prepare_training_data()
-            if s3_uri:
-                self.config.input_data_s3_uri = s3_uri
-
-            # Step 1: Build job specification
-            logger.info("Step 1/5: Building training job specification...")
-            job_spec = self._build_job_spec()
-
-            # Step 2: Submit training job
-            logger.info(f"Step 2/5: Submitting job to {self.provider.provider_name}...")
-            job_id = self.provider.submit_training_job(job_spec)
-            logger.info(f"Job submitted: {job_id}")
+            # Steps 0-2: Prepare data, upload to S3, submit job (shared with --no-wait)
+            job_id = self.submit_job()
 
             if not wait:
                 return CloudTrainingResult(
@@ -260,16 +250,52 @@ class CloudTrainingOrchestrator:
             return self._create_failure_result(f"Unexpected error: {exc}", start_time)
 
     def submit_job(self) -> str:
-        """Submit training job without waiting.
+        """Prepare the data channel and submit a training job without waiting.
+
+        Runs the same data-upload step as the blocking workflow: Binance blocks
+        AWS IPs, so a job submitted without an uploaded data channel fails at
+        the in-container fetch.
 
         Returns:
             Job identifier for status checking
 
         Raises:
             JobSubmissionError: If submission fails
+            RuntimeError: If data download or upload fails
         """
+        logger.info("Step 0/5: Preparing training data...")
+        s3_uri = self._prepare_training_data()
+        if s3_uri:
+            self.config.input_data_s3_uri = s3_uri
+
+        logger.info("Step 1/5: Building training job specification...")
         job_spec = self._build_job_spec()
-        return self.provider.submit_training_job(job_spec)
+
+        logger.info(f"Step 2/5: Submitting job to {self.provider.provider_name}...")
+        job_id = self.provider.submit_training_job(job_spec)
+        logger.info(f"Job submitted: {job_id}")
+        return job_id
+
+    def sync_artifacts(self, job_id: str) -> Path:
+        """Download and sync artifacts for a completed job.
+
+        Completes the round trip for jobs submitted with --no-wait
+        (used by ``atb train cloud-status --sync``).
+
+        Args:
+            job_id: Job identifier from submit_job()
+
+        Returns:
+            Path to the synced model directory
+
+        Raises:
+            ArtifactSyncError: If the job is not in a successful terminal state
+                or the download/sync fails
+        """
+        status = self.provider.get_job_status(job_id)
+        if not status.is_successful:
+            raise ArtifactSyncError(f"Cannot sync artifacts for job in state: {status.status}")
+        return self._sync_artifacts(job_id, status.output_s3_path)
 
     def check_status(self, job_id: str) -> CloudTrainingResult:
         """Check status of a submitted training job.
@@ -413,26 +439,38 @@ class CloudTrainingOrchestrator:
             actual_artifact_path = self._find_artifacts_root(artifact_path)
             logger.info(f"Found artifacts at: {actual_artifact_path}")
 
-            # Determine version ID and model type from metadata
+            # Determine version ID, model type, and symbol from metadata
             metadata_path = actual_artifact_path / "metadata.json"
+            metadata: dict = {}
             if metadata_path.exists():
                 with open(metadata_path) as f:
                     metadata = json.load(f)
-                version_id = metadata.get(
-                    "version_id", datetime.now(UTC).strftime("%Y-%m-%d_%Hh_v1")
-                )
-                model_type = metadata.get("model_type", "basic")
-            else:
-                version_id = datetime.now(UTC).strftime("%Y-%m-%d_%Hh_v1")
-                model_type = "basic"
+            fallback_version = datetime.now(UTC).strftime("%Y-%m-%d_%Hh%Mm%Ss_v1")
+            version_id = metadata.get("version_id", fallback_version)
+            model_type = metadata.get("model_type", "basic")
 
             # Validate metadata-supplied path components (see helper docstring).
             version_id = _validate_registry_component(version_id, "version_id")
             model_type = _validate_registry_component(model_type, "model_type")
 
+            # Prefer the bundle's own symbol: for cloud-status --sync the config
+            # symbol is only a placeholder parsed from the job name.
+            config_symbol = self.config.training_config.symbol.upper()
+            metadata_symbol = metadata.get("symbol")
+            if metadata_symbol:
+                symbol = _validate_registry_component(str(metadata_symbol).upper(), "symbol")
+                if symbol != config_symbol:
+                    logger.warning(
+                        "Metadata symbol %s differs from configured symbol %s; "
+                        "syncing under metadata symbol",
+                        symbol,
+                        config_symbol,
+                    )
+            else:
+                symbol = config_symbol
+
             # Sync to local registry
             local_registry = get_project_root() / "src" / "ml" / "models"
-            symbol = self.config.training_config.symbol.upper()
 
             # Artifacts are already extracted locally by provider.download_artifacts()
             # Use _sync_local_artifacts for both local and cloud providers
@@ -510,7 +548,7 @@ class CloudTrainingOrchestrator:
         version_dir = local_registry / symbol / model_type / version_id
 
         # Defense in depth: ensure the resolved target never escapes the registry
-        # before any destructive rmtree/copytree/symlink operation runs.
+        # before any destructive copytree/symlink operation runs.
         registry_root = local_registry.resolve()
         if not version_dir.resolve().is_relative_to(registry_root):
             raise ArtifactSyncError(f"Computed model path escapes registry root: {version_dir}")
@@ -519,10 +557,18 @@ class CloudTrainingOrchestrator:
         if artifact_path.resolve() == version_dir.resolve():
             logger.info(f"Artifacts already at correct registry location: {version_dir}")
         else:
-            # Copy artifacts to registry
-            version_dir.parent.mkdir(parents=True, exist_ok=True)
+            # Never overwrite an existing bundle: a same-name collision (e.g. two
+            # cloud jobs producing identical version IDs) syncs to a suffixed
+            # sibling instead of destroying the earlier model.
             if version_dir.exists():
-                shutil.rmtree(version_dir)
+                version_dir = self._next_free_version_dir(version_dir)
+                logger.warning(
+                    "Version %s already exists in registry; syncing to %s instead",
+                    version_id,
+                    version_dir.name,
+                )
+                version_id = version_dir.name
+            version_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(artifact_path, version_dir)
             logger.info(f"Copied artifacts to {version_dir}")
 
@@ -534,6 +580,18 @@ class CloudTrainingOrchestrator:
         logger.info(f"Updated latest symlink: {latest_link} -> {version_id}")
 
         return version_dir
+
+    @staticmethod
+    def _next_free_version_dir(version_dir: Path) -> Path:
+        """Return the first non-existing ``{version_dir}-{n}`` sibling (n >= 2)."""
+        for counter in range(2, MAX_VERSION_SUFFIX_ATTEMPTS + 1):
+            candidate = version_dir.with_name(f"{version_dir.name}-{counter}")
+            if not candidate.exists():
+                return candidate
+        raise ArtifactSyncError(
+            f"Could not find a free version directory after "
+            f"{MAX_VERSION_SUFFIX_ATTEMPTS} attempts for {version_dir}"
+        )
 
 
 class CloudTrainingResult:

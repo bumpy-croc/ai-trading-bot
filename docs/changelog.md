@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Cloud training hardening (#890)**: `atb train cloud` accepts `--start-date`/`--end-date`
+  (UTC, mutually exclusive with `--days`) for fixed-cutoff experiments; `--no-wait` now uploads
+  the S3 data channel before submitting (previously the async path always failed in-container);
+  `atb train cloud-status --sync` actually downloads and syncs artifacts; `atb train cloud-list`
+  lists real S3 job outputs; new `atb train cloud-promote SYMBOL VERSION --to basic [--set-latest]`
+  copies a synced bundle from `price/` into `basic/` without touching `basic/latest` unless
+  explicitly requested. Version IDs now include minutes/seconds (`YYYY-MM-DD_HHhMMmSSs_vN`) so
+  same-hour cloud jobs cannot collide, and the local sync never overwrites an existing bundle
+  (falls back to a `-N` suffixed sibling). Cloud workflow documented in `docs/prediction.md`.
+
 ### Changed
 - **#486 live-engine modularization complete**: `LiveTradingEngine._init_modular_handlers`
   (the last open item from `docs/refactor/live_engine_modularization.md`) is now a

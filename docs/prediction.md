@@ -102,6 +102,53 @@ Use the following knobs when running `atb train model` locally:
 
 The defaults remain equivalent to the legacy behavior (300 epochs, batch size 32, sequence length 120, diagnostics on, ONNX on), so unattended jobs continue to produce identical artifacts unless you override the flags explicitly.
 
+## Cloud training (AWS SageMaker)
+
+`atb train cloud` runs the same training pipeline on SageMaker spot GPU instances (`src/ml/cloud/`). Because Binance blocks
+AWS IPs, the CLI always downloads candles locally, uploads them to S3 as the job's data channel, and the container trains
+from that channel — both in blocking mode and with `--no-wait`.
+
+```bash
+# Fixed-cutoff experiment window (dates are UTC; --days and --start-date are mutually exclusive)
+atb train cloud BTCUSDT --start-date 2026-05-01 --end-date 2026-06-01 --epochs 50 --force-price-only
+
+# Production-style retrain: last 365 days ending now
+atb train cloud BTCUSDT --days 365 --epochs 300
+
+# Async round trip
+atb train cloud BTCUSDT --no-wait            # uploads data, submits, prints job id
+atb train cloud-status <JOB_NAME>            # poll status
+atb train cloud-status <JOB_NAME> --sync     # download + sync bundle into the registry
+atb train cloud-list [BTCUSDT]               # list job outputs in S3 (newest first)
+```
+
+### Namespace and promotion flow
+
+Cloud bundles record `model_type: price`, so syncs land in `src/ml/models/{SYMBOL}/price/{VERSION}` and only move
+`price/latest`. Live strategies load `{SYMBOL}/basic/latest`, which cloud training **never** touches — promotion to live is
+always an explicit, separate step:
+
+```bash
+# Copy the bundle into basic/ WITHOUT touching basic/latest (safe default)
+atb train cloud-promote BTCUSDT 2026-07-05_10h30m00s_v1 --to basic
+
+# Only when you intend to change what live strategies load:
+atb train cloud-promote BTCUSDT 2026-07-05_10h30m00s_v1 --to basic --set-latest
+```
+
+Version IDs include seconds (`YYYY-MM-DD_HHhMMmSSs_vN`), so parallel cloud jobs cannot collide; if a name somehow already
+exists locally, the sync writes to a `-2`/`-3` suffixed sibling instead of overwriting the existing bundle.
+
+### Cost expectations and operational notes
+
+- Spot `ml.g4dn.xlarge` (default) bills ~$0.21–0.25/hr; measured runs: a 2-epoch smoke job was 36 billable seconds
+  (~$0.0074), a full-history 1h retrain ≈ $0.37 (~1.3h). Instance startup (~3–4 min) is not billed.
+- Requires `SAGEMAKER_ROLE_ARN`, `SAGEMAKER_S3_BUCKET`, `AWS_REGION`, and `SAGEMAKER_DOCKER_IMAGE` in the environment
+  (one-time infra setup: `src/ml/cloud/README.md`).
+- **Rebuild the ECR image whenever feature engineering changes** (`./src/ml/cloud/build-and-push.sh`) — the container bakes
+  in `src/ml/training_pipeline/`, so a stale image trains with features that diverge from current inference code
+  (train/serve skew).
+
 ## macOS GPU inference verification
 
 macOS users can confirm that ONNX Runtime is activating the CoreML/MPS execution providers introduced in [issue #156](https://github.com/bumpy-croc/ai-trading-bot/issues/156) with the following steps:

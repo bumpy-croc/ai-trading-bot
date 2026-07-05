@@ -1,5 +1,6 @@
 """Unit tests for cloud training orchestrator."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -144,8 +145,10 @@ class TestSubmitJob:
             storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
         )
 
+    @pytest.mark.fast
     def test_submit_job_returns_job_id(self, cloud_config: CloudTrainingConfig) -> None:
         """Verify submit_job returns job ID from provider."""
+        cloud_config.input_data_s3_uri = "s3://test-bucket/training-data/BTCUSDT"
         mock_provider = MagicMock()
         mock_provider.submit_training_job.return_value = "job-123"
 
@@ -154,6 +157,55 @@ class TestSubmitJob:
 
         assert job_id == "job-123"
         mock_provider.submit_training_job.assert_called_once()
+
+    @pytest.mark.fast
+    def test_submit_job_uploads_data_channel(self, cloud_config: CloudTrainingConfig) -> None:
+        """submit_job must run the same data-upload step as run_training.
+
+        Without an uploaded data channel the in-container Binance fetch fails
+        (AWS IPs are blocked), which is why --no-wait used to be broken.
+        """
+        mock_provider = MagicMock()
+        mock_provider.submit_training_job.return_value = "job-async"
+        mock_s3_manager = MagicMock()
+        mock_s3_manager.upload_training_data.return_value = "s3://test-bucket/data/BTCUSDT"
+
+        orchestrator = CloudTrainingOrchestrator(
+            cloud_config, mock_provider, s3_manager=mock_s3_manager
+        )
+
+        def mock_download_func(args: MagicMock) -> int:
+            csv_path = Path(args.output_dir) / "BTCUSDT_1h_2024.csv"
+            csv_path.write_text("timestamp,open,high,low,close,volume\n2024-01-01,1,1,1,1,1")
+            return 0
+
+        with patch("cli.commands.data._download", side_effect=mock_download_func):
+            job_id = orchestrator.submit_job()
+
+        assert job_id == "job-async"
+        mock_s3_manager.upload_training_data.assert_called_once()
+        spec = mock_provider.submit_training_job.call_args.args[0]
+        assert spec.input_data_s3_uri == "s3://test-bucket/data/BTCUSDT"
+
+    @pytest.mark.fast
+    def test_submit_job_skips_upload_when_uri_provided(
+        self, cloud_config: CloudTrainingConfig
+    ) -> None:
+        """Verify submit_job skips data prep when input_data_s3_uri is preset."""
+        cloud_config.input_data_s3_uri = "s3://existing-bucket/data"
+        mock_provider = MagicMock()
+        mock_provider.submit_training_job.return_value = "job-preset"
+        mock_s3_manager = MagicMock()
+
+        orchestrator = CloudTrainingOrchestrator(
+            cloud_config, mock_provider, s3_manager=mock_s3_manager
+        )
+        job_id = orchestrator.submit_job()
+
+        assert job_id == "job-preset"
+        mock_s3_manager.upload_training_data.assert_not_called()
+        spec = mock_provider.submit_training_job.call_args.args[0]
+        assert spec.input_data_s3_uri == "s3://existing-bucket/data"
 
 
 class TestRunTrainingNoWait:
@@ -542,3 +594,170 @@ class TestFindArtifactsRoot:
         result = orchestrator._find_artifacts_root(tmp_path)
 
         assert result == nested_dir
+
+
+def _make_orchestrator(symbol: str = "BTCUSDT") -> CloudTrainingOrchestrator:
+    """Build an orchestrator with a mocked provider for sync tests."""
+    training_config = TrainingConfig(
+        symbol=symbol,
+        timeframe="1h",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 12, 1),
+        epochs=50,
+    )
+    cloud_config = CloudTrainingConfig(
+        training_config=training_config,
+        storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+    )
+    return CloudTrainingOrchestrator(cloud_config, MagicMock())
+
+
+@pytest.mark.fast
+class TestSyncLocalArtifactsCollision:
+    """Version collisions must never destroy an existing model bundle."""
+
+    def test_existing_version_dir_is_never_deleted(self, tmp_path: Path) -> None:
+        orchestrator = _make_orchestrator()
+        registry = tmp_path / "registry"
+        existing = registry / "BTCUSDT" / "price" / "2026-07-05_10h_v1"
+        existing.mkdir(parents=True)
+        (existing / "model.onnx").write_text("first-job-model")
+
+        artifact = tmp_path / "artifact"
+        artifact.mkdir()
+        (artifact / "model.onnx").write_text("second-job-model")
+
+        result = orchestrator._sync_local_artifacts(
+            artifact_path=artifact,
+            local_registry=registry,
+            symbol="BTCUSDT",
+            model_type="price",
+            version_id="2026-07-05_10h_v1",
+        )
+
+        # The first bundle survives untouched.
+        assert (existing / "model.onnx").read_text() == "first-job-model"
+        # The second bundle lands in a distinct sibling directory.
+        assert result != existing
+        assert result.parent == existing.parent
+        assert (result / "model.onnx").read_text() == "second-job-model"
+
+    def test_collision_updates_latest_to_new_bundle(self, tmp_path: Path) -> None:
+        orchestrator = _make_orchestrator()
+        registry = tmp_path / "registry"
+        existing = registry / "BTCUSDT" / "price" / "2026-07-05_10h_v1"
+        existing.mkdir(parents=True)
+        (existing / "model.onnx").write_text("first")
+
+        artifact = tmp_path / "artifact"
+        artifact.mkdir()
+        (artifact / "model.onnx").write_text("second")
+
+        result = orchestrator._sync_local_artifacts(
+            artifact_path=artifact,
+            local_registry=registry,
+            symbol="BTCUSDT",
+            model_type="price",
+            version_id="2026-07-05_10h_v1",
+        )
+
+        latest = registry / "BTCUSDT" / "price" / "latest"
+        assert latest.is_symlink()
+        assert latest.resolve() == result.resolve()
+
+    def test_repeated_collisions_pick_next_free_suffix(self, tmp_path: Path) -> None:
+        orchestrator = _make_orchestrator()
+        registry = tmp_path / "registry"
+        base = registry / "BTCUSDT" / "price"
+        (base / "2026-07-05_10h_v1").mkdir(parents=True)
+        (base / "2026-07-05_10h_v1-2").mkdir()
+
+        artifact = tmp_path / "artifact"
+        artifact.mkdir()
+        (artifact / "model.onnx").write_text("third")
+
+        result = orchestrator._sync_local_artifacts(
+            artifact_path=artifact,
+            local_registry=registry,
+            symbol="BTCUSDT",
+            model_type="price",
+            version_id="2026-07-05_10h_v1",
+        )
+
+        assert result == base / "2026-07-05_10h_v1-3"
+
+
+@pytest.mark.fast
+class TestSyncArtifactsUsesMetadataSymbol:
+    """_sync_artifacts must trust the bundle's own symbol over the config."""
+
+    def test_symbol_from_metadata_wins(self, tmp_path: Path) -> None:
+        orchestrator = _make_orchestrator(symbol="BTCUSDT")
+        metadata = {
+            "symbol": "ETHUSDT",
+            "model_type": "price",
+            "version_id": "2026-07-05_10h00m00s_v1",
+        }
+
+        def fake_download(job_id: str, temp_dir: Path) -> Path:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            (temp_dir / "metadata.json").write_text(json.dumps(metadata))
+            (temp_dir / "model.onnx").write_text("model-bytes")
+            return temp_dir
+
+        orchestrator.provider.download_artifacts.side_effect = fake_download
+
+        with patch("src.ml.cloud.orchestrator.get_project_root", return_value=tmp_path):
+            result = orchestrator._sync_artifacts("job-1", "s3://bucket/out/model.tar.gz")
+
+        expected = (
+            tmp_path / "src" / "ml" / "models" / "ETHUSDT" / "price" / "2026-07-05_10h00m00s_v1"
+        )
+        assert result == expected
+        assert (expected / "model.onnx").exists()
+
+    def test_falls_back_to_config_symbol_without_metadata(self, tmp_path: Path) -> None:
+        orchestrator = _make_orchestrator(symbol="BTCUSDT")
+
+        def fake_download(job_id: str, temp_dir: Path) -> Path:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            (temp_dir / "model.onnx").write_text("model-bytes")
+            return temp_dir
+
+        orchestrator.provider.download_artifacts.side_effect = fake_download
+
+        with patch("src.ml.cloud.orchestrator.get_project_root", return_value=tmp_path):
+            result = orchestrator._sync_artifacts("job-2", "s3://bucket/out/model.tar.gz")
+
+        assert result.parent.parent.name == "BTCUSDT"
+
+
+@pytest.mark.fast
+class TestSyncArtifactsPublic:
+    """Tests for the public sync_artifacts entry point (cloud-status --sync)."""
+
+    def test_raises_for_unsuccessful_job(self) -> None:
+        orchestrator = _make_orchestrator()
+        orchestrator.provider.get_job_status.return_value = TrainingJobStatus(
+            job_name="job-1",
+            status="InProgress",
+        )
+
+        with pytest.raises(ArtifactSyncError, match="state"):
+            orchestrator.sync_artifacts("job-1")
+
+    def test_syncs_completed_job(self) -> None:
+        orchestrator = _make_orchestrator()
+        orchestrator.provider.get_job_status.return_value = TrainingJobStatus(
+            job_name="job-1",
+            status="Completed",
+            output_s3_path="s3://bucket/out/model.tar.gz",
+        )
+
+        with patch.object(
+            orchestrator, "_sync_artifacts", return_value=Path("/synced/path")
+        ) as mock_sync:
+            result = orchestrator.sync_artifacts("job-1")
+
+        assert result == Path("/synced/path")
+        mock_sync.assert_called_once_with("job-1", "s3://bucket/out/model.tar.gz")
