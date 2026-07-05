@@ -59,9 +59,16 @@ echo "This may take 5-10 minutes..."
 # Navigate to project root (where Dockerfile expects files)
 cd "$(dirname "$0")/../../.."
 
-# Build with BuildKit for better caching
+# Build with BuildKit for better caching.
+# --platform linux/amd64: SageMaker instances are x86_64; a host-native arm64
+#   image (Apple Silicon) fails at pull time with "no matching manifest".
+# --provenance/--sbom false: attestation manifests turn the push into an OCI
+#   index whose extra entries SageMaker's puller cannot resolve.
 DOCKER_BUILDKIT=1 docker build \
     -f src/ml/cloud/Dockerfile \
+    --platform linux/amd64 \
+    --provenance=false \
+    --sbom=false \
     -t "$REPO_NAME:$IMAGE_TAG" \
     -t "$IMAGE_URI" \
     --progress=plain \
