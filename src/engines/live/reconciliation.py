@@ -35,6 +35,7 @@ from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
     NET_FLAT_DUST_USD,
     ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS,
+    RECONCILE_CYCLE_ESCALATION_SECONDS,
 )
 from src.config.feature_flags import get_flag
 from src.data_providers.exchange_interface import OrderLookupError, SideEffectType
@@ -3123,6 +3124,9 @@ class PeriodicReconciler:
         # cycle-severity event so a persistent HIGH/CRITICAL condition pages/logs
         # once on the rising edge, not every cycle.
         self._last_cycle_severity = Severity.LOW
+        # Wall-clock of the last cycle-severity emit, so a persistent HIGH/CRITICAL
+        # re-pages on a cadence instead of going silent after the first rising edge.
+        self._last_cycle_emit_ts = 0.0
         self._symbols = symbols or []
 
         self._running = False
@@ -3368,6 +3372,10 @@ class PeriodicReconciler:
             return
 
         max_severity = Severity.LOW
+        # Short operator-facing descriptions of the CRITICAL corrections this cycle,
+        # named in the paged cycle-severity event so the operator sees WHAT broke
+        # without a DB round-trip. Bounded by the position count.
+        findings: list[str] = []
 
         # 1. Verify each position's entry order
         for order_key, position in positions_snapshot.items():
@@ -3746,6 +3754,7 @@ class PeriodicReconciler:
                         # escalates so close-only mode still fires on a real divergence.
                         if db_closed and self._reconcile_spot_balance():
                             max_severity = Severity.CRITICAL
+                            findings.append("spot balance corrected beyond tolerance")
                 except Exception as e:
                     logger.warning("Asset holdings check failed for %s: %s", order_key, e)
 
@@ -3917,6 +3926,11 @@ class PeriodicReconciler:
                                     position.symbol,
                                 )
                                 max_severity = Severity.CRITICAL
+                                findings.append(
+                                    self._audit_unprotected(
+                                        position, "exchange returned no order id"
+                                    )
+                                )
                         except Exception as e:
                             logger.critical(
                                 "Exception re-placing stop-loss for %s: %s — "
@@ -3925,6 +3939,9 @@ class PeriodicReconciler:
                                 e,
                             )
                             max_severity = Severity.CRITICAL
+                            findings.append(
+                                self._audit_unprotected(position, "exception during placement")
+                            )
                     else:
                         logger.critical(
                             "Cannot re-place stop-loss for %s — no stop_price "
@@ -3932,6 +3949,9 @@ class PeriodicReconciler:
                             position.symbol,
                         )
                         max_severity = Severity.CRITICAL
+                        findings.append(
+                            self._audit_unprotected(position, "no stop price or SL unsupported")
+                        )
 
             except Exception as e:
                 logger.warning(
@@ -3995,6 +4015,7 @@ class PeriodicReconciler:
         # correction escalates to close-only mode in step 5.
         if self._reconcile_spot_balance():
             max_severity = Severity.CRITICAL
+            findings.append("spot balance corrected beyond tolerance")
 
         # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:
@@ -4007,28 +4028,43 @@ class PeriodicReconciler:
         # CRITICAL). Lock-free: positions were snapshotted at the top of the
         # cycle and per-item locks are released, so the alert webhook cannot
         # block a position mutation.
-        self._emit_cycle_severity(max_severity)
+        self._emit_cycle_severity(max_severity, findings)
 
-    def _emit_cycle_severity(self, max_severity: Severity) -> None:
+    def _emit_cycle_severity(
+        self, max_severity: Severity, findings: list[str] | None = None
+    ) -> None:
         """Emit a system_events row for a HIGH/CRITICAL reconciliation cycle.
 
         HIGH-severity drift (entry-price/qty mismatch, orphaned SL, external
         close) otherwise writes only ``reconciliation_audit_events`` + logs and
-        never reaches ``system_events`` or an operator. Edge-triggered against
-        the previous cycle's peak severity so a persistent condition surfaces
-        once on the rising edge rather than every ~60s cycle (proper
-        rate-limiting/escalation is tracked separately).
+        never reaches ``system_events`` or an operator.
+
+        Fires on the rising severity edge AND re-fires every
+        ``RECONCILE_CYCLE_ESCALATION_SECONDS`` while the condition persists, so a
+        stuck-degraded bot re-pages instead of going silent after the first alert.
+        The engine sink dedups repeat webhooks within its own short window, so the
+        escalation cadence — not per-cycle spam — sets how often an operator is paged.
+
+        ``findings`` are short operator-facing descriptions of the CRITICAL
+        corrections this cycle; when present they are named in the paged message so
+        the operator sees WHAT broke without querying ``reconciliation_audit_events``.
         """
         prev = self._last_cycle_severity
         self._last_cycle_severity = max_severity
-        if max_severity < Severity.HIGH or max_severity <= prev:
+        if max_severity < Severity.HIGH:
             return
+        now = time.time()
+        rising_edge = max_severity > prev
+        persisted = now - self._last_cycle_emit_ts >= RECONCILE_CYCLE_ESCALATION_SECONDS
+        if not (rising_edge or persisted):
+            return
+        self._last_cycle_emit_ts = now
         if max_severity == Severity.CRITICAL:
             _emit_event(
                 self.on_event,
                 EventType.ALERT,
-                "Reconciliation cycle detected a CRITICAL discrepancy — see "
-                "reconciliation_audit_events for the specific correction",
+                "Reconciliation cycle detected a CRITICAL discrepancy: "
+                + self._format_findings(findings),
                 severity="critical",
                 error_code="RECONCILE_CRITICAL",
                 alert=True,
@@ -4043,6 +4079,43 @@ class PeriodicReconciler:
                 error_code="RECONCILE_HIGH",
                 alert=False,
             )
+
+    @staticmethod
+    def _format_findings(findings: list[str] | None, limit: int = 3) -> str:
+        """Render the cycle's CRITICAL findings into a bounded, single-line summary."""
+        if not findings:
+            return "see reconciliation_audit_events for the specific correction"
+        unique = list(dict.fromkeys(findings))  # drop duplicates, preserve order
+        shown = "; ".join(unique[:limit])
+        extra = len(unique) - limit
+        return f"{shown} (+{extra} more)" if extra > 0 else shown
+
+    def _audit_unprotected(self, position: Any, cause: str) -> str:
+        """Persist a CRITICAL audit row for a position left without a stop-loss and
+        return a short operator-facing detail string.
+
+        The periodic SL re-placement failure paths previously only logged +
+        bumped the cycle severity, so the paged cycle-severity event pointed
+        operators at a ``reconciliation_audit_events`` table that held no row for
+        the cause. Writing the row here makes that pointer honest. Fault-isolated:
+        an audit-write failure must never break the reconcile cycle.
+        """
+        symbol = getattr(position, "symbol", "unknown")
+        detail = f"{symbol} unprotected — SL re-placement failed ({cause})"
+        try:
+            self.db_manager.log_audit_event(
+                session_id=self.session_id,
+                entity_type="position",
+                entity_id=getattr(position, "db_position_id", None),
+                field="stop_loss_order_id",
+                old_value=str(getattr(position, "stop_loss_order_id", None)),
+                new_value=None,
+                reason=detail,
+                severity=Severity.CRITICAL.value,
+            )
+        except Exception as e:
+            logger.error("Failed to persist unprotected-position audit: %s", e)
+        return detail
 
     def _place_missing_stop_loss(self, position: Any, order_key: str) -> None:
         """Place a stop-loss for a position that has none (e.g. phantom from timeout).

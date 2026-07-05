@@ -4039,6 +4039,58 @@ class TestReconcileCycleSeverityEvent:
         pr._emit_cycle_severity(Severity.HIGH)  # de-escalation -> silent
         assert on_event.call_count == 1
 
+    def test_persistent_critical_re_pages_after_escalation_interval(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A CRITICAL that persists past the escalation interval re-pages, so a
+        stuck-degraded bot doesn't go silent after the first alert (#892)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # rising edge -> page
+        assert on_event.call_count == 1
+        # Simulate the escalation interval having elapsed since the last emit.
+        pr._last_cycle_emit_ts = 0.0
+        pr._emit_cycle_severity(Severity.CRITICAL)  # persistent + interval elapsed -> re-page
+        assert on_event.call_count == 2
+
+    def test_critical_findings_named_in_paged_message(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Specific corrections are named in the paged message so the operator
+        sees WHAT broke without querying reconciliation_audit_events (#892)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(
+            Severity.CRITICAL, ["BTCUSDT unprotected — SL re-placement failed (x)"]
+        )
+        message = on_event.call_args.args[1]
+        assert "BTCUSDT unprotected" in message
+
+    def test_findings_summary_is_bounded(self, mock_exchange, mock_position_tracker, mock_db):
+        """More findings than the display limit collapse to '(+N more)' so the
+        alert payload stays small."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL, [f"finding {i}" for i in range(5)])
+        message = on_event.call_args.args[1]
+        assert "(+2 more)" in message
+
+    def test_audit_unprotected_persists_critical_row(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """An unprotected position writes a CRITICAL audit row so the paged event's
+        'see reconciliation_audit_events' pointer is honest (#892)."""
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, MagicMock())
+        pos = MockPosition(db_position_id=99, stop_loss_order_id="sl_x")
+        detail = pr._audit_unprotected(pos, "exchange returned no order id")
+        assert "unprotected" in detail
+        mock_db.log_audit_event.assert_called_once()
+        _, kwargs = mock_db.log_audit_event.call_args
+        assert kwargs["entity_type"] == "position"
+        assert kwargs["entity_id"] == 99
+        assert kwargs["field"] == "stop_loss_order_id"
+        assert kwargs["severity"] == Severity.CRITICAL.value
+
 
 # ---------- SL Re-placement Naked-Position Guard (externally-closed positions) ----------
 
