@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **#486 live-engine modularization complete**: `LiveTradingEngine._init_modular_handlers`
+  (the last open item from `docs/refactor/live_engine_modularization.md`) is now a
+  thin orchestrator over four construction-phase helpers — `_init_core_handlers`
+  (health/market-data/event-logger/position-tracker/execution-engine),
+  `_init_entry_handler` (entry handler + exposure/macro/circuit-breaker gates),
+  `_init_exit_handler` (exit handler, sharing the entry side's exposure governor),
+  and `_init_risk_guards` (stop-loss manager, account monitor, drawdown +
+  circuit-breaker enforcers, session recoverer) — matching the engine's existing
+  `_init_*` phase-helper convention. Pure mechanical move: construction order,
+  the public constructor signature, and the resulting object graph are unchanged;
+  backtest determinism fingerprint byte-identical.
+
 ### Fixed
 - **Exposure-governor pre-enablement fixes** (#802 follow-ups, from the PR merge
   note): (P2) `src/engines/shared/exposure.py::position_notional` now uses a
