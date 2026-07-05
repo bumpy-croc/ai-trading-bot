@@ -53,6 +53,21 @@ revisions, exchange outages). It **can** mean, precisely:
 single-position configurations; any run with `max_concurrent_positions > 1` (the
 production default) must emit a loud "parity not validated" warning in harness and CLI.
 
+**Sizing guardrail (hard rule — risk review finding #1):** the residual this plan cannot
+close is biased *optimistic* (a candle backtest cannot see the worst intrabar fill, so a
+pass makes a strategy look *safer* than live — the direction that historically bled capital:
+SL-placement failure → emergency-close cascade with phantom balance). Therefore **a
+parity-passing backtest is NOT authorization to increase live position size, risk-per-trade,
+leverage, or `max_concurrent_positions` beyond `risk-limits.json`.** Sizing changes remain a
+separate, human-ratified decision gated by the charter's `>$50 / 24h` and irreversible-action
+rules. Parity green ⇏ size up.
+
+**Language rule (governance):** the bare tokens **"100% confidence"** and **"byte-exact
+parity"** are banned from human-facing artifacts (CI output, replay reports, dashboards).
+Surface results only as the scoped claim: *"Decision/cost/accounting parity: proven
+model-vs-model within declared tolerance. Fill/slippage/liquidity/concurrency fidelity:
+bounded & monitored (L4/L5), NOT guaranteed."*
+
 ---
 
 ## 2. Current state (v1 audit 2026-06-15; env facts re-verified 2026-07-05)
@@ -75,8 +90,12 @@ production default) must emit a loud "parity not validated" warning in harness a
 - Exit orchestration (SL→TP→trailing→strategy→time→partial ordering): backtest
   `exit_handler.py` (monolithic) vs live `exit_handler.py` + `exit_coordinator.py`.
 - SL/TP high/low fill detection: inline in each exit handler, equal only by tests.
-- Partial exit/scale-in **execution**: per-engine (`shared/partial_exit_executor.py` stub
-  underused). ⚠️ Re-audit post-#838 in P0 — this area changed after the v1 audit.
+- Partial exit/scale-in **execution**: `shared/partial_exit_executor.py` is **not a stub** —
+  it is ~205 lines of complete P&L/fee/slippage logic already wired into the backtest tracker,
+  but it **duplicates fee/slippage math** (`exit_fee = abs(exit_notional * self.fee_rate)`,
+  `slippage_cost = abs(exit_notional * self.slippage_rate)`) instead of delegating to
+  `CostCalculator` — a live CODE.md "never duplicate financial logic" violation, and the real
+  P1.4 target. ⚠️ Re-audit post-#838 in P0 — this area changed after the v1 audit.
 
 ### Live↔backtest divergences (union of code caveats + panel findings)
 1. **Partial-candle decisioning (NEW, panel blocker)** — live acts on the forming candle
@@ -278,7 +297,12 @@ live fail-closed branches actually run under the harness.*
   point-in-time sentiment)*: persist per session the **raw candles actually consumed**
   (WS-fed values, not a re-fetchable range — venues revise history), model/feature-schema
   version + checksum, fully-resolved effective config, and sentiment values at decision
-  time. Replay is not well-posed without this.
+  time. Replay is not well-posed without this. *Partial reuse (verified):* the immutable,
+  INSERT-only `strategy_executions` table already persists per-decision OHLCV
+  (`indicators`) and `sentiment_data` FK'd to each trade — P4.0 should extend that record
+  (add model `version_id` + config checksum) rather than build a parallel snapshot store,
+  and must NOT rely on the mutable `cached_data_provider` parquet cache (overwritten in
+  place via `os.replace`, no provenance) as the candle source.
 - **P4.1 `atb parity replay --session <id>`**: replay the snapshot through the backtest
   engine; emit the P0.4 report.
 - **P4.2 Scheduled parity audit** (weekly): replay last N sessions. **Metrics (panel-
@@ -382,9 +406,10 @@ moment of fill (L5/P4.4 samples it; nothing proves it continuously), venue laten
 intra-session borrow/funding-rate changes. L2's exactness is model-vs-model by
 construction; only L4/L5 connect the model to the venue, statistically. The claim this
 plan supports when complete: *decisions, costs, and accounting are identical by
-construction; the remaining environment gap is measured continuously against production
-and bounded by numbers a human ratified.* That is the strongest form of "100% confidence"
-available in this domain; anything stronger is marketing.
+construction (model-vs-model, within declared tolerance); the remaining environment gap is
+measured continuously against production and bounded by numbers a human ratified.* That is
+the strongest honest form of confidence available in this domain (see the §1 language rule —
+"100% confidence" is not a claim we make); anything stronger is marketing.
 
 ---
 
@@ -416,3 +441,11 @@ available in this domain; anything stronger is marketing.
   ratification tied to a reviewed risk artifact with charter-consistent alerting; effort
   re-estimated 15–20 → 21–29 PRs. Panel also *verified*: shared cost path, shared entry
   mixin, duplication map, single-vs-multi as largest gap, #486 prereq complete.
+- **v2 merge** (2026-07-05): two sessions independently ran the three-lens panel and drafted
+  a v2 in parallel; this document is the reconciled union. Grafted from the sibling draft:
+  the explicit **sizing guardrail** and "100% confidence" language ban (risk finding #1);
+  the corrected `PartialExitExecutor` characterization (implemented-but-duplicates-fees, not
+  a stub); and the `strategy_executions` reuse note for P4.0. The three code-verified panel
+  reports are committed as durable artifacts under **`docs/refactor/reviews/`**
+  (`quant_review.md`, `architecture_review.md`, `risk_review.md`) — cite these for the full
+  file:line evidence behind each finding.
