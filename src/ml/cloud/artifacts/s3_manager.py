@@ -346,7 +346,7 @@ class S3ArtifactManager:
             return jobs
 
         except Exception as exc:
-            logger.warning(f"Failed to list training jobs: {exc}")
+            logger.warning("Failed to list training jobs: %s", exc)
             return []
 
     def _parse_s3_uri(self, s3_uri: str) -> tuple[str, str]:
