@@ -2681,6 +2681,27 @@ class PositionReconciler:
 
         return result
 
+    def _audit_pnl_skip(self, position: Any, close_reason: str, detail: str) -> None:
+        """Record (queryable, non-paging) that P&L realization was skipped on close.
+
+        These guard paths are benign but were previously silent, leaving no trail to
+        distinguish "the close skipped realization" from "realization never ran" during
+        an incident. LOW severity, so it never pages — it lives only in
+        ``reconciliation_audit_events`` for forensics. ``_persist_audit`` is
+        fault-isolated, so this can never break a close.
+        """
+        self._persist_audit(
+            AuditEvent(
+                entity_type="position",
+                entity_id=getattr(position, "db_position_id", None),
+                field="realized_pnl",
+                old_value=None,
+                new_value=None,
+                reason=f"P&L not realized on {close_reason} close: {detail}",
+                severity=Severity.LOW,
+            )
+        )
+
     def _realize_pnl_on_close(
         self,
         position: Any,
@@ -2708,6 +2729,7 @@ class PositionReconciler:
                 ``order_id`` so a re-run dedups via ``uq_trade_order_session``.
         """
         if exit_price is None or exit_price <= 0:
+            self._audit_pnl_skip(position, reason, "no usable exit price")
             return
 
         # Coerce to float — DB-loaded positions carry Decimal (Numeric) fields,
@@ -2717,6 +2739,7 @@ class PositionReconciler:
         entry_price = float(getattr(position, "entry_price", 0) or 0.0)
         qty = float(getattr(position, "quantity", 0) or 0.0)
         if entry_price <= 0 or qty <= 0:
+            self._audit_pnl_skip(position, reason, "missing entry price or quantity")
             return
 
         # Scale quantity by current_size/original_size to account for partial
@@ -2778,6 +2801,7 @@ class PositionReconciler:
                     "Cannot realize P&L — unable to read current balance " "(session_id=%s)",
                     self.session_id,
                 )
+                self._audit_pnl_skip(position, reason, "could not read session balance")
                 return
 
             # Sanitize exit_fee — treat non-finite or negative as zero
