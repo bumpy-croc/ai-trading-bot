@@ -71,7 +71,7 @@ class FlatRiskManager(RiskManager):
     # The runner consults this set to decide whether a setattr-based
     # override (as opposed to a ``_strategy_overrides`` dict override) is
     # sufficient for this manager class.
-    _direct_runtime_overrides: frozenset[str] = frozenset({"stop_loss_pct"})
+    _direct_runtime_overrides: frozenset[str] = frozenset({"stop_loss_pct", "min_confidence"})
 
     def __init__(
         self,
