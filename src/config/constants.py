@@ -13,11 +13,38 @@ DEFAULT_MAX_PREDICTION_LATENCY = 0.1  # seconds
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"
 DEFAULT_ENABLE_SENTIMENT = False  # Disabled by default
 DEFAULT_ENABLE_MARKET_MICROSTRUCTURE = False  # MVP: disabled
+
+# Sentiment-extreme mean-reversion overlay (#804). At Fear & Greed extremes,
+# fading beats following and shorting into capitulation gets squeezed. Values
+# are on the F&G→[0,1] scale (sentiment_primary = F&G index / 100).
+DEFAULT_SENTIMENT_EXTREME_FEAR = 0.15  # F&G < 15 -> block new shorts; support-band longs only
+DEFAULT_SENTIMENT_EXTREME_GREED = 0.70  # F&G > 70 + trend_down -> permit small fade shorts
+# Structural support level for the extreme-fear mean-reversion long band. A
+# market level (≈ realized price) that goes STALE — a config PARAMETER, not a
+# constant. None = no band restriction (the overlay then only blocks shorts).
+DEFAULT_SENTIMENT_SUPPORT_LEVEL: float | None = None
+DEFAULT_SENTIMENT_SUPPORT_BAND_PCT = 0.05  # Longs allowed within ±5% of the support level
 DEFAULT_ENABLE_ONCHAIN_FEATURES = False  # On-chain features disabled by default
 DEFAULT_ENABLE_MACRO_FEATURES = False  # Macro economic features disabled by default
 DEFAULT_ENABLE_ENHANCED_SENTIMENT = False  # Enhanced sentiment disabled by default
 DEFAULT_ONCHAIN_CACHE_TTL = 300  # 5 minutes cache for on-chain data
 DEFAULT_MACRO_CACHE_TTL = 3600  # 1 hour cache for macro data
+
+# Event-aware de-risking windows (#806). Around FOMC/CPI (from a maintained
+# calendar), block new entries and halve regime exposure caps.
+DEFAULT_MACRO_EVENT_HOURS_BEFORE = 12  # De-risk window opens this many hours before an event
+DEFAULT_MACRO_EVENT_HOURS_AFTER = 6  # ...and closes this many hours after
+DEFAULT_MACRO_EVENT_EXPOSURE_FACTOR = 0.5  # Halve exposure caps inside the window
+
+# US spot ETF net-flow signal + gate (#803). ETF flows are the marginal
+# buyer/seller this cycle; price legs have tracked multi-day flow streaks.
+DEFAULT_ENABLE_ETF_FLOW_FEATURES = False  # ETF-flow model features off by default (needs retrain)
+DEFAULT_ETF_FLOW_CACHE_TTL_HOURS = 12  # Daily data; refresh the current day twice a day
+DEFAULT_ETF_FLOW_ZSCORE_SHORT_WINDOW = 5  # Days for the short net-flow z-score
+DEFAULT_ETF_FLOW_ZSCORE_LONG_WINDOW = 20  # Days for the long net-flow z-score
+# Block NEW LONG entries while the 5-day net-flow z-score is below this (i.e. a
+# sustained-outflow regime that has led price down this cycle). Config, not code.
+DEFAULT_ETF_FLOW_LONG_BLOCK_ZSCORE = -1.0
 DEFAULT_FEATURE_CACHE_TTL = 3600  # 1 hour
 DEFAULT_MODEL_CACHE_TTL = 600  # seconds
 DEFAULT_CONFIDENCE_SCALE_FACTOR = 10.0  # Scale factor for confidence calculation
@@ -104,6 +131,13 @@ DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
 DRAWDOWN_WARNING_AT_PCT_OF_LIMIT = 0.50  # WARNING at 50% of the cap (10% drawdown at 0.20)
 DRAWDOWN_CRITICAL_AT_PCT_OF_LIMIT = 0.80  # CRITICAL at 80% of the cap (16% drawdown at 0.20)
 DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS = 900  # Min seconds between repeated drawdown-tier logs
+
+# Account-level circuit breakers (#807). Hard halts enforced independent of
+# strategy logic. Graduated drawdown throttling stays with dynamic-risk; these
+# are the deeper HARD stops that block new entries for the day / until recovery.
+DEFAULT_DAILY_LOSS_LIMIT = 0.025  # 2.5% of the daily UTC-anchored baseline -> halt for the day
+DEFAULT_CIRCUIT_DRAWDOWN_HALT = 0.15  # 15% peak-to-trough -> halt new entries until recovery
+DEFAULT_CIRCUIT_DRAWDOWN_RECOVERY = 0.05  # Resume once back within 5% of peak
 DEFAULT_FEE_RATE = 0.001  # 0.1% trading fee
 DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
 
@@ -161,6 +195,25 @@ DEFAULT_REGIME_MULTIPLIER_BEAR_LOW_VOL = 0.8  # Reduced in bear market
 DEFAULT_REGIME_MULTIPLIER_BEAR_HIGH_VOL = 0.5  # Much reduced in volatile bear
 DEFAULT_REGIME_MULTIPLIER_RANGE_LOW_VOL = 0.6  # Reduced in range market
 DEFAULT_REGIME_MULTIPLIER_RANGE_HIGH_VOL = 0.3  # Very reduced in volatile range
+
+# Regime-gated gross exposure caps (#802). Ceiling on TOTAL gross open exposure
+# (sum of |entry notional| / current equity) allowed per regime, applied after
+# position sizing / dynamic risk and before order placement in both engines.
+# In a bear, exposure itself is the primary risk lever. Keys are
+# "{trend}_{vol}"; the governor falls back to DEFAULT_EXPOSURE_CAP_UNKNOWN when
+# the regime (or its volatility) is unavailable. Overridable per strategy.
+DEFAULT_EXPOSURE_CAPS: dict[str, float] = {
+    "trend_up_low_vol": 0.50,
+    "trend_up_high_vol": 0.35,
+    "trend_down_low_vol": 0.20,
+    "trend_down_high_vol": 0.15,
+    "range_low_vol": 0.30,
+    "range_high_vol": 0.20,
+}
+# Most-conservative cap used when the regime is None / unknown (e.g. regime
+# detection disabled, or the legacy short path with no regime context). Chosen
+# to match the tightest bear cap so an unknown regime never over-exposes.
+DEFAULT_EXPOSURE_CAP_UNKNOWN = 0.15
 
 # Regime Strategy Switching Defaults
 DEFAULT_REGIME_SWITCH_COOLDOWN_MINUTES = 60  # Cooldown between switches
@@ -345,6 +398,19 @@ DEFAULT_KELLY_EXPECTED_WIN_RATE = 0.55  # Prior from backtested momentum strateg
 DEFAULT_KELLY_EXPECTED_REWARD_RISK = 1.5  # Prior reward:risk from backtested results
 DEFAULT_KELLY_OVERFITTING_THRESHOLD = 0.15  # Flag >15% deviation from backtest priors
 DEFAULT_KELLY_MAX_FRACTION = 0.20  # Cap single-trade exposure at 20% of balance
+# Hard ceiling on fractional Kelly for bear-market safety (#805). Full/half Kelly
+# over-sizes into drawdowns; the kelly_momentum factory clamps its fractional
+# Kelly to this. Default target is quarter-Kelly.
+DEFAULT_MAX_KELLY_FRACTION = 0.5
+DEFAULT_TARGET_KELLY_FRACTION = 0.25
+
+# Volatility-targeted position sizing (#805). Scales position size inversely to
+# the regime detector's ATR percentile so per-position dollar-vol is roughly
+# constant — smaller in high vol, larger in calm. Bounded to avoid blow-ups.
+DEFAULT_VOL_TARGET_ATR_PERCENTILE = 0.5  # Reference ATR percentile → multiplier 1.0
+DEFAULT_VOL_TARGET_MIN_MULTIPLIER = 0.5  # Floor on the vol multiplier (high-vol cut)
+DEFAULT_VOL_TARGET_MAX_MULTIPLIER = 1.5  # Ceiling on the vol multiplier (calm boost)
+DEFAULT_VOL_TARGET_MIN_ATR_PERCENTILE = 0.1  # Divisor floor so tiny ATR pctile can't blow size up
 
 # Leverage Manager Defaults
 DEFAULT_MAX_LEVERAGE = 3.0  # Maximum leverage multiplier (safety cap)
@@ -357,6 +423,10 @@ DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT = 0.05  # 5% balance discrepancy tr
 DEFAULT_RECONCILIATION_DUST_THRESHOLD = 0.00001  # Ignore dust-level asset discrepancies
 DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT = 0.01  # 1% qty tolerance for order matching
 DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN = 10  # Minutes for timestamp matching
+# A HIGH/CRITICAL reconciliation cycle pages once on the rising severity edge; if the
+# condition persists, re-surface it at this cadence so a stuck-degraded bot does not go
+# silent after the first alert. 1800s (30 min) sits well above the 300s alert-dedup window.
+RECONCILE_CYCLE_ESCALATION_SECONDS = 1800
 # Bound startup order reconciliation so a large stale-order backlog cannot block
 # the trading loop for hours (#628). Each unresolved order costs a REST round-trip;
 # excess beyond the cap / time budget is deferred to the next startup run.
@@ -427,3 +497,16 @@ DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
 DEFAULT_TFT_HIDDEN_SIZE = 64  # Hidden dimension for GRN and attention layers
 DEFAULT_TFT_DROPOUT = 0.1  # Dropout rate for regularization
 DEFAULT_TFT_NUM_LSTM_LAYERS = 1  # Number of stacked LSTM encoder layers
+
+# Bear-market model-validation gate (#801). A candidate model's 'latest'
+# symlink is only flipped when it survives the fixed validation windows in
+# ``config/validation_windows.json``. Per-window thresholds live in that file;
+# these are the fallbacks when the file omits them.
+DEFAULT_VALIDATION_MAX_DRAWDOWN_PCT = 40.0  # Reject if window max-drawdown exceeds this (%).
+DEFAULT_VALIDATION_MIN_TRADES = 3  # Fewer trades than this in a window => inconclusive => reject.
+# When True, a validation run that cannot execute (e.g. missing data in a
+# data-limited environment) BLOCKS promotion. When False, it warns loudly and
+# allows the flip so training still works where the harness cannot run. Kept
+# False by default so data-less/CI environments are not wedged; operators
+# running real promotions set the env override to require validation.
+DEFAULT_VALIDATION_REQUIRED = False

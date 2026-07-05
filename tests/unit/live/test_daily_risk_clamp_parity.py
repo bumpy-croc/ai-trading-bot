@@ -10,10 +10,13 @@ have it capped — silently understating the live risk profile a backtest
 predicted.
 
 The fix mirrors backtest: after ``check_scale_in`` returns
-``should_scale=True``, the live engine reads ``max_daily_risk`` and
-``daily_risk_used`` off the risk manager and shrinks the scale-in
-fraction to ``min(requested, remaining_daily)``. When remaining is
-zero or negative, the scale-in is skipped entirely with an info log.
+``should_scale=True``, the live engine converts the policy's
+fraction-of-original into balance-fraction units
+(``scale_fraction * original_size``, same units as the daily-risk budget),
+reads ``max_daily_risk`` and ``daily_risk_used`` off the risk manager and
+shrinks the scale-in delta to ``min(requested, remaining_daily)``. When
+remaining is zero or negative, the scale-in is skipped entirely with an
+info log.
 """
 
 from __future__ import annotations
@@ -97,9 +100,10 @@ class TestLiveDailyRiskClampParity:
     """Live's scale-in must respect the same daily-risk budget backtest does."""
 
     def test_clamps_scale_in_to_remaining_daily(self) -> None:
-        """Strategy requests 20% scale-in but only 5% of daily risk
-        remains — the executed delta must be 5%, not 20%."""
-        handler, tracker, _rm, _pm = _make_handler(max_daily_risk=0.30, daily_risk_used=0.25)
+        """Strategy requests 20%-of-original (= 2% of balance on a 10%
+        position) but only 1% of daily risk remains — the executed delta
+        must be 1%, not 2%."""
+        handler, tracker, _rm, _pm = _make_handler(max_daily_risk=0.30, daily_risk_used=0.29)
         _track_position(tracker)
 
         df = pd.DataFrame({"close": [100.0]}, index=[datetime(2024, 1, 1, tzinfo=UTC)])
@@ -113,9 +117,8 @@ class TestLiveDailyRiskClampParity:
 
         handler._execute_scale_in.assert_called_once()
         kwargs = handler._execute_scale_in.call_args.kwargs
-        # Requested 0.20, remaining 0.05 → clamp to 0.05.
-        assert kwargs["delta_fraction"] == pytest.approx(0.05)
-        assert kwargs["fraction_of_original"] == pytest.approx(0.05)
+        # Requested 0.20 x 0.10 = 0.02 of balance, remaining 0.01 → clamp.
+        assert kwargs["delta_fraction"] == pytest.approx(0.01)
 
     def test_skips_scale_in_when_budget_exhausted(self) -> None:
         """Daily-risk budget already at the cap — scale-in must NOT execute."""
@@ -150,7 +153,8 @@ class TestLiveDailyRiskClampParity:
 
         handler._execute_scale_in.assert_called_once()
         kwargs = handler._execute_scale_in.call_args.kwargs
-        assert kwargs["delta_fraction"] == pytest.approx(0.20)
+        # Full request: 0.20 of original x 0.10 position = 0.02 of balance.
+        assert kwargs["delta_fraction"] == pytest.approx(0.02)
 
     def test_no_risk_manager_does_not_crash(self) -> None:
         """Defensive: if risk_manager is missing, scale-in still runs at
@@ -170,4 +174,4 @@ class TestLiveDailyRiskClampParity:
 
         handler._execute_scale_in.assert_called_once()
         kwargs = handler._execute_scale_in.call_args.kwargs
-        assert kwargs["delta_fraction"] == pytest.approx(0.20)
+        assert kwargs["delta_fraction"] == pytest.approx(0.02)

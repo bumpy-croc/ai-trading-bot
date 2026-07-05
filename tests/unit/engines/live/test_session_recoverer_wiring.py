@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.database.models import EventType
 from src.engines.live import trade_close_accounting
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.trading_engine import (
@@ -84,3 +85,36 @@ class TestRecovererWiring:
 
         with pytest.raises(ValueError, match="not finite"):
             engine._recover_existing_session()
+
+
+class TestStartupReconcileSummary:
+    """Startup reconciliation surfaces its HIGH/CRITICAL severity as ONE summary
+    system_events row — the startup analog of the periodic cycle-severity event —
+    so the per-row audit storm (the 714 UNKNOWN-order class) reaches operators
+    without flooding them (#853)."""
+
+    def test_critical_pages_alert(self):
+        state = MagicMock()
+        rec = LiveSessionRecoverer(state)
+        rec._emit_reconcile_summary(
+            [MagicMock(corrections=[1, 2]), MagicMock(corrections=[3])], 1, 1, "reconciliation"
+        )
+        args, kwargs = state._record_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "STARTUP_RECONCILE_CRITICAL"
+        assert kwargs["severity"] == "critical"
+        assert kwargs["alert"] is True
+
+    def test_high_only_emits_warning_no_page(self):
+        state = MagicMock()
+        rec = LiveSessionRecoverer(state)
+        rec._emit_reconcile_summary([MagicMock(corrections=[3])], 0, 1, "reconciliation")
+        _, kwargs = state._record_event.call_args
+        assert kwargs["error_code"] == "STARTUP_RECONCILE_HIGH"
+        assert kwargs["alert"] is False
+
+    def test_no_findings_no_emit(self):
+        state = MagicMock()
+        rec = LiveSessionRecoverer(state)
+        rec._emit_reconcile_summary([], 0, 0, "reconciliation")
+        state._record_event.assert_not_called()

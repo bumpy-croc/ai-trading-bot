@@ -26,6 +26,7 @@ from src.infrastructure.logging.config import configure_logging
 from src.risk.risk_manager import RiskParameters
 
 # Import strategies
+from src.strategies import call_strategy_factory
 from src.strategies.chaos_test import create_chaos_test_strategy
 from src.strategies.hyper_growth import create_hyper_growth_strategy
 from src.strategies.ml_basic import create_ml_basic_strategy
@@ -35,8 +36,13 @@ configure_logging()
 logger = logging.getLogger("live_trading")
 
 
-def load_strategy(strategy_name: str):
-    """Load a strategy by name"""
+def load_strategy(strategy_name: str, symbol: str | None = None):
+    """Load a strategy by name, threading the trading symbol when supported.
+
+    The symbol must reach ML signal generators so model registry selection
+    matches the traded pair — otherwise the strategy silently scores with
+    the default (BTCUSDT) model.
+    """
     strategies = {
         "chaos_test": create_chaos_test_strategy,
         "hyper_growth": create_hyper_growth_strategy,
@@ -58,7 +64,7 @@ def load_strategy(strategy_name: str):
             msg = f"Strategy factory for {strategy_name} must be callable"
             logger.error(msg)
             raise TypeError(msg)
-        strategy = strategy_factory()
+        strategy = call_strategy_factory(strategy_factory, symbol=symbol)
         logger.info(f"Loaded strategy: {strategy.name}")
         return strategy
     except Exception as e:
@@ -189,9 +195,9 @@ def validate_configuration(args):
     else:
         logger.info("📄 PAPER TRADING MODE - No real money will be used")
 
-    # Validate strategy exists
+    # Validate strategy exists (and that a model exists for the symbol)
     try:
-        load_strategy(args.strategy)
+        load_strategy(args.strategy, symbol=args.symbol)
     except Exception:
         return False
 
@@ -219,8 +225,8 @@ def main():
         if not validate_configuration(args):
             sys.exit(1)
 
-        # Load strategy
-        strategy = load_strategy(args.strategy)
+        # Load strategy with the traded symbol so ML model selection matches
+        strategy = load_strategy(args.strategy, symbol=args.symbol)
 
         # Show startup information
         print_startup_info(args, strategy)

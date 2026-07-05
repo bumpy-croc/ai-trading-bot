@@ -37,6 +37,8 @@ from src.strategies.components import (
     RegimeAdaptiveRiskManager,
     Strategy,
 )
+from src.strategies.components.flow_gate import maybe_wrap_with_flow_gate
+from src.strategies.components.position_sizer import maybe_wrap_with_vol_target
 
 
 def create_ml_adaptive_strategy(
@@ -101,11 +103,16 @@ def create_ml_adaptive_strategy(
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
 
+    # #803: wrap with the ETF net-flow gate when enabled (resolved once).
+    gated_signal_generator = maybe_wrap_with_flow_gate(signal_generator)
+    # #805: wrap the sizer with volatility targeting when enabled (resolved once).
+    sized_position_sizer = maybe_wrap_with_vol_target(position_sizer)
+
     strategy = Strategy(
         name=name,
-        signal_generator=signal_generator,
+        signal_generator=gated_signal_generator,
         risk_manager=risk_manager,
-        position_sizer=position_sizer,
+        position_sizer=sized_position_sizer,
         regime_detector=regime_detector,
     )
 

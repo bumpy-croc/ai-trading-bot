@@ -47,6 +47,7 @@ def create_ensemble_weighted_strategy(
     use_ml_basic: bool = True,
     use_ml_adaptive: bool = True,
     use_ml_sentiment: bool = False,
+    symbol: str | None = None,
 ) -> Strategy:
     """
     Create Ensemble Weighted strategy using component composition.
@@ -56,6 +57,8 @@ def create_ensemble_weighted_strategy(
         use_ml_basic: Whether to include ML Basic signal generator
         use_ml_adaptive: Whether to include ML Adaptive signal generator
         use_ml_sentiment: Whether to include ML Sentiment signal generator
+        symbol: Trading symbol threaded to the ML Basic signal generator for
+            model registry selection (None keeps the generator default BTCUSDT).
 
     Returns:
         Configured Strategy instance
@@ -71,7 +74,7 @@ def create_ensemble_weighted_strategy(
     generators: dict[SignalGenerator, float] = {}
 
     if use_ml_basic:
-        generators[MLBasicSignalGenerator()] = 0.30
+        generators[MLBasicSignalGenerator(symbol=symbol)] = 0.30
     if use_ml_adaptive:
         generators[MLSignalGenerator()] = 0.30
     if use_ml_sentiment:

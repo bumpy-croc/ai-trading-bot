@@ -120,6 +120,10 @@ class TestReconciliationIntegration:
     def periodic_reconciler(self, mock_exchange, position_tracker, db_manager, session_id):
         """PeriodicReconciler with real DB, mock exchange, short interval."""
         on_critical = MagicMock()
+        # data_provider supplies the proxy (current-market) exit price the external-close
+        # audit trade row is valued at; without it that row is skipped.
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 52000.0
         pr = PeriodicReconciler(
             exchange_interface=mock_exchange,
             position_tracker=position_tracker,
@@ -127,6 +131,7 @@ class TestReconciliationIntegration:
             session_id=session_id,
             interval=1,
             on_critical=on_critical,
+            data_provider=data_provider,
         )
         yield pr
         pr.stop()
@@ -676,6 +681,9 @@ class TestReconciliationIntegration:
             else MockBalance(asset="BTC", total=0.0)
         )
 
+        # Balance before the cycle — the balance-neutral audit row must not move it.
+        balance_before = db_manager.get_current_balance(session_id)
+
         # Act
         periodic_reconciler._reconcile_cycle()
 
@@ -685,6 +693,21 @@ class TestReconciliationIntegration:
         # Audit event with CLOSED_EXTERNALLY
         audits = self._query_audit_events(db_manager, session_id)
         assert any("externally" in (a["reason"] or "").lower() for a in audits)
+
+        # A balance-neutral audit ``trades`` row is persisted with the synthetic non-NULL
+        # dedup key, GROSS pnl valued at the proxy exit price, and the session balance
+        # left unchanged (spot balance is owned by the cycle's own reconcile, not this row).
+        from src.database.models import Trade
+
+        with db_manager.get_session() as s:
+            rows = s.query(Trade).filter(Trade.session_id == session_id).all()
+            ext_rows = [r for r in rows if r.order_id == f"reconcile_ext_{db_id}"]
+            assert len(ext_rows) == 1
+            t = ext_rows[0]
+            assert t.exit_reason == "external_close_recovery"
+            # GROSS long pnl at the proxy price 52000 vs entry 50000 on quantity 0.001.
+            assert float(t.pnl) == pytest.approx((52000.0 - 50000.0) * 0.001)
+        assert db_manager.get_current_balance(session_id) == pytest.approx(balance_before)
 
     def test_periodic_sl_filled_closes_position(
         self,
@@ -725,6 +748,56 @@ class TestReconciliationIntegration:
         # Audit event with CLOSED_BY_SL
         audits = self._query_audit_events(db_manager, session_id)
         assert any("stop-loss" in (a["reason"] or "").lower() for a in audits)
+
+    def test_periodic_sl_filled_persists_trade_row(
+        self,
+        periodic_reconciler,
+        mock_exchange,
+        db_manager,
+        session_id,
+        position_tracker,
+    ):
+        """FILLED SL detected in the periodic cycle persists a deduped ``trades``
+        row keyed by the real SL exit order id — not just a CLOSED_BY_SL audit.
+        Without it an offline SL loss the reconciler books leaves no trade record
+        (commission/quantity/pnl unrecorded)."""
+        from src.database.models import Trade
+
+        _db_id, _position = self._seed_position(
+            db_manager,
+            session_id,
+            position_tracker,
+            stop_loss_order_id="sl_active_777",
+        )
+        # Entry order FILLED, SL FILLED @ 48000 (a loss on the seeded long).
+        mock_exchange.get_order.side_effect = lambda oid, sym: MockExchangeOrder(
+            order_id=oid,
+            status=ExOrderStatus.FILLED,
+            average_price=48000.0,
+        )
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=10000.0)
+            if asset == "USDT"
+            else MockBalance(asset="BTC", total=0.0)
+        )
+
+        periodic_reconciler._reconcile_cycle()
+
+        assert len(position_tracker.positions) == 0
+        with db_manager.get_session() as s:
+            rows = (
+                s.query(Trade)
+                .filter(Trade.session_id == session_id, Trade.order_id == "sl_active_777")
+                .all()
+            )
+            assert len(rows) == 1
+            t = rows[0]
+            assert t.exit_reason == "stop_loss_filled_offline"
+            assert float(t.exit_price) == pytest.approx(48000.0)
+            assert t.commission is not None and float(t.commission) > 0.0
+            assert t.quantity is not None and float(t.quantity) == pytest.approx(0.001)
+            # GROSS long pnl: (48000 - 50000) * 0.001 = -2.0 (fees carried in commission).
+            assert float(t.pnl) == pytest.approx(-2.0)
 
     def test_periodic_orphaned_order_cancelled(
         self,

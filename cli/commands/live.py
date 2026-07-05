@@ -167,6 +167,82 @@ def _repoint_latest(version_dir: Path) -> None:
         raise FileNotFoundError(f"Model type directory does not exist: {model_type_dir}") from e
 
 
+def _gate_and_promote(
+    version_dir: Path,
+    *,
+    symbol: str,
+    model_type: str,
+    provider: str = "binance",
+    force: bool = False,
+    known_prev_target: Path | None = None,
+):
+    """Run the bear-market validation gate, keeping ``latest`` on the candidate
+    only if it passes (else rolling back).
+
+    The gate flips ``latest`` to ``version_dir`` to score the *candidate* (the
+    registry resolves models by symlink), then rolls back on failure. When the
+    caller already promoted the candidate (training path), pass the pre-training
+    target as ``known_prev_target`` so a rollback restores the right model.
+    """
+    from src.ml.validation.gate import promote_version_if_valid
+
+    return promote_version_if_valid(
+        version_dir,
+        symbol=symbol,
+        model_type=model_type,
+        repoint_fn=_repoint_latest,
+        provider=provider,
+        force=force,
+        known_prev_target=known_prev_target,
+    )
+
+
+def _type_dir(symbol: str, model_type: str) -> Path:
+    return MODEL_REGISTRY / symbol.upper() / model_type
+
+
+def _validate_model(ns: argparse.Namespace) -> int:
+    """Score a model version against the fixed bear-market windows (no deploy).
+
+    Uses the gate's flip-validate-rollback so a specific candidate can be scored
+    without leaving it live; with no ``--model-path`` it scores the current
+    ``latest``.
+    """
+    from src.ml.validation.gate import default_resolve_latest, validate_candidate
+
+    if getattr(ns, "model_path", None):
+        try:
+            version_dir = _resolve_version_path(ns.model_path)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"❌ {exc}")
+            return 1
+        symbol = version_dir.parent.parent.name
+        model_type = version_dir.parent.name
+    else:
+        symbol = ns.symbol.upper()
+        model_type = ns.model_type
+        current = default_resolve_latest(_type_dir(symbol, model_type))
+        if current is None:
+            print(f"❌ No 'latest' model found for {symbol}/{model_type}")
+            return 1
+        version_dir = current
+
+    report = validate_candidate(
+        version_dir,
+        symbol=symbol,
+        model_type=model_type,
+        repoint_fn=_repoint_latest,
+        provider=getattr(ns, "provider", "binance"),
+    )
+    print(report.summary())
+    print(json.dumps(report.to_dict(), indent=2))
+    # Exit non-zero when the model fails outright; inconclusive is a soft signal
+    # (exit 0) so CI on data-less environments is not wedged.
+    if not report.passed and not report.inconclusive:
+        return 1
+    return 0
+
+
 def _control(ns: argparse.Namespace) -> int:
     if ns.control_cmd == "train":
         if not _TRAINING_AVAILABLE:
@@ -176,7 +252,15 @@ def _control(ns: argparse.Namespace) -> int:
             )
             print("Use a local development environment for model training.")
             return 1
+        from src.ml.validation.gate import default_resolve_latest
+
         start_date, end_date = _date_range(ns.days)
+        model_type = "sentiment" if ns.sentiment else "basic"
+        # Capture the currently-live version BEFORE training. Training promotes
+        # the freshly trained version to ``latest``; if it later fails the #801
+        # gate we roll ``latest`` back to this pre-training target.
+        prev_target = default_resolve_latest(_type_dir(ns.symbol, model_type))
+
         if ns.sentiment:
             args = SimpleNamespace(
                 symbol=ns.symbol,
@@ -194,7 +278,6 @@ def _control(ns: argparse.Namespace) -> int:
                 disable_mixed_precision=False,
             )
             code = train_model_main(args)
-            model_type = "sentiment"
         else:
             args = SimpleNamespace(
                 symbol=ns.symbol,
@@ -206,25 +289,42 @@ def _control(ns: argparse.Namespace) -> int:
                 sequence_length=120,
             )
             code = train_price_model_main(args)
-            model_type = "basic"
 
         if code != 0:
             print("❌ Model training failed")
             return code
 
-        meta_path = _latest_metadata(ns.symbol, model_type)
-        if meta_path.exists():
-            with open(meta_path, encoding="utf-8") as fh:
-                metadata = json.load(fh)
-            print("✅ Model training complete")
-            print(
-                json.dumps({"latest": metadata.get("version_id"), "metadata": metadata}, indent=2)
-            )
-        else:
-            print("✅ Model training complete (metadata unavailable)")
+        print("✅ Model training complete")
+        # Training just flipped ``latest`` to the new version; resolve it.
+        candidate = default_resolve_latest(_type_dir(ns.symbol, model_type))
 
         if ns.auto_deploy:
-            print("✅ Auto-deploy: latest symlink already updated; live components will pick it up")
+            # #801: gate the just-promoted model. If it fails, roll ``latest``
+            # back to the pre-training target so a bad model does not stay live.
+            if candidate is None:
+                print("⚠️ Auto-deploy requested but no 'latest' model resolved after training.")
+                return 1
+            decision = _gate_and_promote(
+                candidate,
+                symbol=ns.symbol.upper(),
+                model_type=model_type,
+                provider=getattr(ns, "provider", "binance"),
+                known_prev_target=prev_target,
+            )
+            if not decision.promoted:
+                print(f"❌ Auto-deploy blocked by validation gate: {decision.reason}")
+                if decision.audit_path is not None:
+                    print(f"   Audit: {decision.audit_path}")
+                return 1
+            print(f"✅ Auto-deploy: kept as latest after validation ({decision.reason})")
+        else:
+            # No auto-deploy: training already set ``latest``. Warn the operator
+            # it is UNVALIDATED and show how to validate it.
+            if candidate is not None:
+                print(f"   ⚠️ '{candidate.name}' is now 'latest' but UNVALIDATED.")
+                print(
+                    "   Validate with: atb live-control validate-model " f"--model-path {candidate}"
+                )
         return 0
 
     if ns.control_cmd == "deploy-model":
@@ -233,13 +333,28 @@ def _control(ns: argparse.Namespace) -> int:
         except (FileNotFoundError, ValueError) as exc:
             print(f"❌ {exc}")
             return 1
-        _repoint_latest(version_dir)
-        print(
-            f"✅ Latest model for {version_dir.parent.parent.name}/{version_dir.parent.name} set to {version_dir.name}"
+        symbol = version_dir.parent.parent.name
+        model_type = version_dir.parent.name
+        decision = _gate_and_promote(
+            version_dir,
+            symbol=symbol,
+            model_type=model_type,
+            provider=getattr(ns, "provider", "binance"),
+            force=getattr(ns, "skip_validation", False),
         )
+        if not decision.promoted:
+            print(f"❌ Deployment blocked by validation gate: {decision.reason}")
+            if decision.audit_path is not None:
+                print(f"   Audit: {decision.audit_path}")
+            return 1
+        print(f"✅ Latest model for {symbol}/{model_type} set to {version_dir.name}")
+        print(f"   Gate: {decision.reason}")
         if ns.close_positions:
             print("⚠️ close-positions requested (no-op in CLI helper)")
         return 0
+
+    if ns.control_cmd == "validate-model":
+        return _validate_model(ns)
 
     if ns.control_cmd == "list-models":
         print(json.dumps(_list_registry(), indent=2))
@@ -287,10 +402,32 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_train.add_argument("--auto-deploy", action="store_true")
     p_train.set_defaults(func=_control)
 
-    p_deploy = sub.add_parser("deploy-model", help="Deploy a staged model")
+    p_deploy = sub.add_parser("deploy-model", help="Deploy a staged model (validation-gated)")
     p_deploy.add_argument("--model-path", required=True)
     p_deploy.add_argument("--close-positions", action="store_true")
+    p_deploy.add_argument(
+        "--provider", default="binance", help="Data provider for validation backtests"
+    )
+    p_deploy.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Human override: promote without running the #801 validation gate (audited)",
+    )
     p_deploy.set_defaults(func=_control)
+
+    p_validate = sub.add_parser(
+        "validate-model",
+        help="Score a model against the fixed bear-market windows (#801); does not deploy",
+    )
+    p_validate.add_argument("--symbol", default="BTCUSDT")
+    p_validate.add_argument("--model-type", default="basic", choices=["basic", "sentiment"])
+    p_validate.add_argument(
+        "--model-path", help="Optional explicit version path; overrides --symbol/--model-type"
+    )
+    p_validate.add_argument(
+        "--provider", default="binance", help="Data provider for validation backtests"
+    )
+    p_validate.set_defaults(func=_control)
 
     p_models = sub.add_parser("list-models", help="List available models")
     p_models.set_defaults(func=_control)

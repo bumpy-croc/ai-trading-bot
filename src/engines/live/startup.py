@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from src.engines.live.logging.event_logger import LiveEventLogger
     from src.engines.live.order_tracker import OrderTracker
     from src.engines.live.reconciliation import BaseAssetLockRegistry, PeriodicReconciler
+    from src.engines.live.strategy_manager import StrategyManager
     from src.position_management.time_exits import TimeExitPolicy
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ class LiveStartupEngineState(Protocol):
     live_position_tracker: LivePositionTracker
     order_tracker: OrderTracker | None
     time_exit_policy: TimeExitPolicy | None
+    strategy_manager: StrategyManager | None
     _base_asset_locks: BaseAssetLockRegistry
     _periodic_reconciler: PeriodicReconciler | None
 
@@ -154,6 +156,10 @@ class LiveStartupSequencer:
         state.is_running = True
         state._active_symbol = symbol
         state.timeframe = timeframe  # Store the trading timeframe
+        # Thread the traded symbol into the hot-swap manager so swapped-in
+        # strategies select models for this pair, not the default (#867).
+        if state.strategy_manager is not None:
+            state.strategy_manager.symbol = symbol
         # Set base logging context for this engine run
         set_context(
             component="live_engine",
@@ -430,6 +436,7 @@ class LiveStartupSequencer:
                     db_manager=state.db_manager,
                     session_id=state.trading_session_id,
                     on_critical=state._enter_close_only_mode,
+                    on_event=state._record_event,
                     use_margin=use_margin,
                     symbols=[state._active_symbol] if state._active_symbol else [],
                     sweep_cooldown=state._orphan_sweep_cooldown,

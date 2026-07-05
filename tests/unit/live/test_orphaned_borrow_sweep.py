@@ -16,7 +16,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.engines.live import reconciliation
-from src.engines.live.reconciliation import BaseAssetLockRegistry, run_orphaned_borrow_sweep
+from src.engines.live.reconciliation import (
+    BaseAssetLockRegistry,
+    ReconciliationResult,
+    Severity,
+    run_orphaned_borrow_sweep,
+    surface_orphaned_borrow_sweep,
+)
 
 pytestmark = pytest.mark.fast
 
@@ -369,3 +375,70 @@ def test_active_without_lock_registry_refuses_to_repay():
     ex = _exchange()
     _run(ex, _tracker(), _db(), mode="active", lock_registry=None)
     ex.repay_margin_loan.assert_not_called()
+
+
+# ---- surfacing the sweep results to operators (#893) ----------------------- #
+
+
+class TestSurfaceOrphanedBorrowSweep:
+    """The sweep's return value must reach operators. An over-cap CRITICAL borrow
+    pages; a completed repay or a failed/partial (``unresolved``) repay records a
+    non-paging WARNING; a dry-run ``skipped`` outcome stays audit-only so a borrow
+    sitting in dry-run does not emit a system_event every sweep window (#893)."""
+
+    @staticmethod
+    def _result(severity, status):
+        return ReconciliationResult(
+            entity_type="balance", entity_id=BASE, status=status, severity=severity
+        )
+
+    def test_over_cap_critical_pages(self):
+        on_event = MagicMock()
+        surface_orphaned_borrow_sweep(on_event, [self._result(Severity.CRITICAL, "unresolved")])
+        on_event.assert_called_once()
+        args, kwargs = on_event.call_args
+        assert args[0] == reconciliation.EventType.ALERT
+        assert kwargs["error_code"] == "ORPHANED_BORROW_CRITICAL"
+        assert kwargs["alert"] is True
+        assert "manual review" in args[1]
+
+    def test_completed_repay_warns_without_paging(self):
+        on_event = MagicMock()
+        surface_orphaned_borrow_sweep(on_event, [self._result(Severity.HIGH, "corrected")])
+        _, kwargs = on_event.call_args
+        assert kwargs["error_code"] == "ORPHANED_BORROW_REPAID"
+        assert kwargs["alert"] is False
+
+    def test_failed_repay_warns_without_paging(self):
+        on_event = MagicMock()
+        surface_orphaned_borrow_sweep(on_event, [self._result(Severity.MEDIUM, "unresolved")])
+        on_event.assert_called_once()
+        _, kwargs = on_event.call_args
+        assert kwargs["error_code"] == "ORPHANED_BORROW_UNRESOLVED"
+        assert kwargs["alert"] is False
+
+    def test_dry_run_skipped_is_not_surfaced(self):
+        on_event = MagicMock()
+        surface_orphaned_borrow_sweep(on_event, [self._result(Severity.MEDIUM, "skipped")])
+        on_event.assert_not_called()
+
+    def test_none_sink_is_noop(self):
+        # Standalone / test use with no engine sink must never raise.
+        surface_orphaned_borrow_sweep(None, [self._result(Severity.CRITICAL, "unresolved")])
+
+    def test_empty_results_noop(self):
+        on_event = MagicMock()
+        surface_orphaned_borrow_sweep(on_event, [])
+        surface_orphaned_borrow_sweep(on_event, None)
+        on_event.assert_not_called()
+
+    def test_over_cap_end_to_end_pages(self):
+        # A real over-cap sweep result flows through the surfacing path and pages.
+        ex = _exchange(snapshot=_snapshot(borrowed="1.0", interest="0", free="1.0", net="0"))
+        results = _run(ex, _tracker(), _db(), mode="dry_run")
+        on_event = MagicMock()
+        surface_orphaned_borrow_sweep(on_event, results)
+        assert any(
+            c.kwargs.get("error_code") == "ORPHANED_BORROW_CRITICAL"
+            for c in on_event.call_args_list
+        )

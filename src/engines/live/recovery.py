@@ -439,6 +439,31 @@ class LiveSessionRecoverer:
         except Exception as e:
             logger.error("❌ Error recovering positions: %s", e, exc_info=True)
 
+    def _emit_reconcile_summary(
+        self, results: list, critical_count: int, high_count: int, phase: str
+    ) -> None:
+        """Surface a HIGH/CRITICAL startup reconciliation as ONE summary
+        ``system_events`` row — the startup analog of the periodic cycle-severity
+        event (#861). So the per-row audit storm (e.g. the 714 UNKNOWN-order
+        corrections from ``resolve_pending_orders``) reaches operators as a single
+        bounded event instead of silence. Paged on critical + deduped by
+        ``_record_event``; the detail stays in ``reconciliation_audit_events``.
+        """
+        if critical_count == 0 and high_count == 0:
+            return
+        corrections = sum(len(r.corrections) for r in results)
+        self._state._record_event(
+            EventType.ALERT if critical_count else EventType.WARNING,
+            f"Startup {phase}: {critical_count} critical + {high_count} high-severity "
+            f"corrections ({corrections} total) — see reconciliation_audit_events",
+            severity="critical" if critical_count else "warning",
+            component="reconciler",
+            error_code=(
+                "STARTUP_RECONCILE_CRITICAL" if critical_count else "STARTUP_RECONCILE_HIGH"
+            ),
+            alert=critical_count > 0,
+        )
+
     def reconcile_positions_with_exchange(self) -> None:
         """
         Reconcile local positions with exchange state on startup.
@@ -461,6 +486,7 @@ class LiveSessionRecoverer:
                     PositionReconciler,
                     Severity,
                     run_orphaned_borrow_sweep,
+                    surface_orphaned_borrow_sweep,
                 )
 
                 use_margin = getattr(state.exchange_interface, "is_margin_mode", False)
@@ -473,6 +499,7 @@ class LiveSessionRecoverer:
                     use_margin=use_margin,
                     fee_rate=state.live_execution_engine.fee_rate,
                     data_provider=state.data_provider,
+                    on_event=state._record_event,
                 )
 
                 if not positions_snapshot:
@@ -483,7 +510,7 @@ class LiveSessionRecoverer:
                     # position is adopted first), sweep any orphaned margin borrow.
                     # No-op unless margin + flag enabled; safe when flat.
                     if use_margin and state._active_symbol:
-                        run_orphaned_borrow_sweep(
+                        sweep_results = run_orphaned_borrow_sweep(
                             exchange=state.exchange_interface,
                             position_tracker=state.live_position_tracker,
                             db_manager=state.db_manager,
@@ -493,17 +520,29 @@ class LiveSessionRecoverer:
                             cooldown_state=state._orphan_sweep_cooldown,
                             lock_registry=state._base_asset_locks,
                         )
+                        # Surface an over-cap CRITICAL / failed repay to operators —
+                        # the sweep's return value was previously discarded here too.
+                        surface_orphaned_borrow_sweep(state._record_event, sweep_results)
 
                     # Process results even with no positions — a filled entry
                     # order may create a position, and critical issues must
                     # still trigger close-only mode.
                     critical_count = sum(1 for r in results if r.severity == Severity.CRITICAL)
+                    high_count = sum(1 for r in results if r.severity == Severity.HIGH)
                     if critical_count > 0:
                         logger.critical(
                             "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
                             critical_count,
                         )
-                        state._close_only_mode = True
+                        # Route through the guarded helper so the CLOSE_ONLY event
+                        # fires — this path previously entered close-only SILENTLY,
+                        # unlike the reconcile_startup path below. #853
+                        state._enter_close_only_mode()
+                    # One bounded, deduped, paged-on-critical summary — this
+                    # resolve_pending path is where the 714 UNKNOWN-order storm arose.
+                    self._emit_reconcile_summary(
+                        results, critical_count, high_count, "pending-order resolution"
+                    )
 
                     for r in results:
                         if r.status == "corrected" and r.severity >= Severity.HIGH:
@@ -530,6 +569,7 @@ class LiveSessionRecoverer:
 
                 # Check for critical issues
                 critical_count = sum(1 for r in results if r.severity == Severity.CRITICAL)
+                high_count = sum(1 for r in results if r.severity == Severity.HIGH)
                 if critical_count > 0:
                     logger.critical(
                         "🚨 %d CRITICAL reconciliation issues — entering close-only mode",
@@ -538,6 +578,7 @@ class LiveSessionRecoverer:
                     # Route through the guarded helper so the CLOSE_ONLY event is
                     # emitted on this startup-critical path too, not just runtime.
                     state._enter_close_only_mode()
+                self._emit_reconcile_summary(results, critical_count, high_count, "reconciliation")
 
                 # Log HIGH severity auto-corrections (cancelled entries, SL fills)
                 for r in results:

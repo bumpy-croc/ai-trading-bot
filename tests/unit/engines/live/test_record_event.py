@@ -257,3 +257,132 @@ class TestRunnerWebhookEnvFallback:
         monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
         monkeypatch.setattr(sys, "argv", ["prog", "ml_basic"])
         assert parse_args().webhook_url is None
+
+
+class TestLoopCrashEvent:
+    """An abnormal loop death must page + emit a distinct system_event so it is
+    distinguishable from a clean ENGINE_STOP — the 2026-05-19 zombie-bot class
+    where the process stayed up but the trading loop was dead (#853)."""
+
+    def test_unhandled_loop_crash_pages_and_flags(self):
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine._loop_crashed = False
+        engine._record_event = MagicMock()
+        engine._trading_loop = MagicMock(side_effect=RuntimeError("boom"))
+
+        # Must not propagate — the wrapper exists precisely to catch it.
+        engine._run_trading_loop("BTCUSDT", "1h")
+
+        assert engine._loop_crashed is True
+        engine._record_event.assert_called_once()
+        args, kwargs = engine._record_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "LOOP_CRASH"
+        assert kwargs["severity"] == "critical"
+        assert kwargs["alert"] is True
+        assert isinstance(kwargs["exc"], RuntimeError)
+
+
+class TestOrderTrackerAlertAdapter:
+    """OrderTracker calls this adapter while holding its per-order lock, so the
+    (blocking, up-to-10s) alert webhook must be delivered OFF-thread — not inline
+    under the lock (#853; the webhook-under-lock class PR #857's review flagged)."""
+
+    def test_dispatches_record_event_off_thread(self):
+        import threading
+
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        delivered = threading.Event()
+        engine._record_event = MagicMock(side_effect=lambda *a, **k: delivered.set())
+
+        # Returns immediately (does not block on _record_event / the webhook).
+        engine._order_tracker_alert("position orphaned!", "ORDER_ORPHANED")
+
+        assert delivered.wait(timeout=2.0), "adapter did not deliver the event off-thread"
+        args, kwargs = engine._record_event.call_args
+        assert args[0] == EventType.ALERT
+        assert kwargs["error_code"] == "ORDER_ORPHANED"
+        assert kwargs["component"] == "order_tracker"
+        assert kwargs["severity"] == "critical"
+        assert kwargs["alert"] is True
+
+
+class TestAlertRateLimiting:
+    """A recurring critical (same component+error_code) pages once per cooldown
+    window; the system_events row is still written but the repeat webhook is
+    suppressed, so one looping condition can't flood the operator (#853)."""
+
+    @staticmethod
+    def _engine() -> LiveTradingEngine:
+        import threading
+
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.db_manager = MagicMock()
+        engine.trading_session_id = 1
+        engine._send_alert = MagicMock(return_value=True)
+        engine._alert_dedup = {}
+        engine._alert_dedup_lock = threading.Lock()
+        return engine
+
+    def test_repeat_alert_suppressed_within_cooldown(self):
+        engine = self._engine()
+        for _ in range(3):
+            engine._record_event(
+                EventType.ALERT,
+                "orphan!",
+                severity="critical",
+                component="order_tracker",
+                error_code="ORDER_ORPHANED",
+                alert=True,
+            )
+        # Paged exactly once; the two repeats within the window are suppressed.
+        assert engine._send_alert.call_count == 1
+        calls = engine.db_manager.log_event.call_args_list
+        assert len(calls) == 3  # every row is still written (queryable)
+        assert calls[0].kwargs["alert_sent"] is True
+        assert calls[0].kwargs["alert_method"] == "webhook"
+        assert calls[1].kwargs["alert_sent"] is False
+        assert calls[1].kwargs["alert_method"] == "suppressed"
+
+    def test_distinct_error_codes_not_cross_deduped(self):
+        engine = self._engine()
+        engine._record_event(EventType.ALERT, "a", error_code="A", component="x", alert=True)
+        engine._record_event(EventType.ALERT, "b", error_code="B", component="x", alert=True)
+        assert engine._send_alert.call_count == 2
+
+    def test_no_error_code_never_rate_limited(self):
+        engine = self._engine()
+        for _ in range(3):
+            engine._record_event(EventType.ALERT, "no-code", component="x", alert=True)
+        assert engine._send_alert.call_count == 3
+
+    def test_bare_engine_without_dedup_state_not_rate_limited(self):
+        """Backward-compat: a bare engine (__new__, no dedup state) never rate-limits
+        and never raises AttributeError — the many existing bare-engine tests rely on it."""
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.db_manager = MagicMock()
+        engine.trading_session_id = 1
+        engine._send_alert = MagicMock(return_value=True)
+        for _ in range(3):
+            engine._record_event(EventType.ALERT, "x", error_code="X", component="c", alert=True)
+        assert engine._send_alert.call_count == 3
+
+    def test_failed_delivery_does_not_open_cooldown(self):
+        """The cooldown opens only on a SUCCESSFUL page: if the first delivery
+        fails, later occurrences must retry, not be silently suppressed — else a
+        transient webhook failure would blind the operator for the whole window."""
+        engine = self._engine()
+        engine._send_alert = MagicMock(return_value=False)  # delivery keeps failing
+        for _ in range(3):
+            engine._record_event(
+                EventType.ALERT,
+                "orphan!",
+                severity="critical",
+                component="order_tracker",
+                error_code="ORDER_ORPHANED",
+                alert=True,
+            )
+        # Every occurrence retried the webhook; none was suppressed.
+        assert engine._send_alert.call_count == 3
+        calls = engine.db_manager.log_event.call_args_list
+        assert all(c.kwargs["alert_method"] != "suppressed" for c in calls)

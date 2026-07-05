@@ -33,6 +33,7 @@ Reference: docs/research/500_percent_annual_returns.md
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from src.strategies.components import (
@@ -47,6 +48,8 @@ from src.strategies.components.leverage_manager import LeverageManager
 from src.strategies.components.position_sizer import LeveragedPositionSizer
 from src.strategies.components.regime_context import TrendLabel, VolLabel
 from src.strategies.components.risk_manager import RiskManager
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.strategies.components.regime_context import RegimeContext
@@ -68,7 +71,7 @@ class FlatRiskManager(RiskManager):
     # The runner consults this set to decide whether a setattr-based
     # override (as opposed to a ``_strategy_overrides`` dict override) is
     # sufficient for this manager class.
-    _direct_runtime_overrides: frozenset[str] = frozenset({"stop_loss_pct"})
+    _direct_runtime_overrides: frozenset[str] = frozenset({"stop_loss_pct", "min_confidence"})
 
     def __init__(
         self,
@@ -179,6 +182,7 @@ def create_hyper_growth_strategy(
     min_regime_bars: int = 3,
     take_profit_pct: float = 0.30,
     stop_loss_pct: float = 0.10,
+    symbol: str | None = None,
 ) -> Strategy:
     """Create hyper-growth strategy targeting high annual returns.
 
@@ -206,10 +210,22 @@ def create_hyper_growth_strategy(
             outperform 0.20 on BTCUSDT 2024 by ~50 pp of annualized return
             because the trailing stop and partial exits capture upside while
             tight SL caps short-side losses in the 2024 uptrend).
+        symbol: Trading symbol threaded to the ML signal generator for model
+            registry selection. Runners must pass the symbol they trade;
+            None keeps the generator default (BTCUSDT).
 
     Returns:
         Configured Strategy instance.
     """
+    # #805: hyper_growth targets high returns via leverage/aggressive sizing and
+    # is NOT recommended in a bear/high-vol regime, where exposure is the primary
+    # risk. Prefer ml_adaptive with the exposure governor (#802) + vol-targeted
+    # sizing (#805) when trading a downtrend.
+    logger.warning(
+        "hyper_growth is NOT recommended for bear/high-vol regimes: its leveraged, "
+        "aggressive sizing amplifies drawdowns. Consider ml_adaptive with the "
+        "exposure governor + vol-target sizing instead."
+    )
     # Signal generator (declared up-front: branches assign different subtypes)
     signal_generator: SignalGenerator
     if signal_source == "momentum":
@@ -227,7 +243,9 @@ def create_hyper_growth_strategy(
         # sentiment_momentum_scaled), so feeding it the price-only tensor
         # silently returns 0.0 on every bar — which the generator converts to
         # predicted_return = -1.0 (a constant SELL sentinel, not a prediction).
-        signal_generator = MLBasicSignalGenerator(name=f"{name}_signals", model_type="basic")
+        signal_generator = MLBasicSignalGenerator(
+            name=f"{name}_signals", model_type="basic", symbol=symbol
+        )
 
     risk_manager = FlatRiskManager(
         risk_fraction=risk_fraction,

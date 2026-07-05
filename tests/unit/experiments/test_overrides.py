@@ -305,10 +305,81 @@ def test_hyper_growth_take_profit_override_does_not_require_strategy_overrides_d
 
 def test_flat_risk_manager_declares_direct_runtime_override_contract() -> None:
     """The runner gate checks this class attribute — it must include
-    ``stop_loss_pct`` so FlatRiskManager-backed strategies are honored."""
+    ``stop_loss_pct`` so FlatRiskManager-backed strategies are honored.
+    ``min_confidence`` is likewise read from ``self`` at trade time
+    (``calculate_position_size``), so the contract set must declare it."""
     from src.strategies.hyper_growth import FlatRiskManager
 
     assert "stop_loss_pct" in FlatRiskManager._direct_runtime_overrides
+    assert "min_confidence" in FlatRiskManager._direct_runtime_overrides
+
+
+def test_hyper_growth_min_confidence_override_lands_on_flat_risk_manager(
+    runner: ExperimentRunner,
+) -> None:
+    """hyper_growth's confidence gate lives on FlatRiskManager, not the
+    position sizer (LeveragedPositionSizer has no ``min_confidence``). The
+    override must fall through to the risk manager instead of being
+    rejected as unknown."""
+    strategy = runner._load_strategy("hyper_growth")
+    assert not hasattr(strategy.position_sizer, "min_confidence")
+
+    cfg = _cfg("hyper_growth", {"hyper_growth.min_confidence": 0.12})
+    runner._apply_parameter_overrides(strategy, cfg)
+
+    assert pytest.approx(strategy.risk_manager.min_confidence, rel=1e-9) == 0.12
+
+
+def test_hyper_growth_min_confidence_floor_override_rejected(
+    runner: ExperimentRunner,
+) -> None:
+    """``min_confidence_floor`` is a ConfidenceWeightedSizer concept (lower
+    bound on the confidence *scaling factor*). FlatRiskManager never scales
+    by confidence, so no hyper_growth component accepts it — the override
+    must keep failing loudly rather than silently no-op."""
+    strategy = runner._load_strategy("hyper_growth")
+    cfg = _cfg("hyper_growth", {"hyper_growth.min_confidence_floor": 0.1})
+    with pytest.raises(ValueError, match="min_confidence_floor"):
+        runner._apply_parameter_overrides(strategy, cfg)
+
+
+def test_hyper_growth_min_confidence_override_changes_trade_gating(
+    runner: ExperimentRunner,
+) -> None:
+    """The overridden gate must actually filter trades, not just sit on the
+    attribute: FlatRiskManager.calculate_position_size reads
+    ``self.min_confidence`` at trade time."""
+    from src.strategies.components.signal_generator import Signal, SignalDirection
+
+    strategy = runner._load_strategy("hyper_growth")
+    cfg = _cfg("hyper_growth", {"hyper_growth.min_confidence": 0.12})
+    runner._apply_parameter_overrides(strategy, cfg)
+
+    rm = strategy.risk_manager
+
+    def size_for(confidence: float) -> float:
+        signal = Signal(
+            direction=SignalDirection.BUY,
+            strength=0.5,
+            confidence=confidence,
+            metadata={},
+        )
+        return rm.calculate_position_size(signal, balance=1000.0)
+
+    assert size_for(0.10) == 0.0  # below the raised gate -> filtered
+    assert size_for(0.15) > 0.0  # above the gate -> sized
+
+
+def test_hyper_growth_min_confidence_out_of_bounds_fails_invariant_check(
+    runner: ExperimentRunner,
+) -> None:
+    """Post-override validation must bound FlatRiskManager.min_confidence to
+    [0, 1] just as it bounds the sizer-owned gate on ml_* strategies."""
+    strategy = runner._load_strategy("hyper_growth")
+    cfg = _cfg("hyper_growth", {"hyper_growth.min_confidence": 1.5})
+    runner._apply_parameter_overrides(strategy, cfg)
+    with pytest.raises(ValueError, match="min_confidence"):
+        runner._validate_post_override_invariants(strategy)
 
 
 # --------------------------------------------------------------------------

@@ -368,6 +368,56 @@ def test_zero_average_price_skips_fill_callback(order_tracker, mock_exchange):
     assert order_tracker.get_tracked_count() == 1
 
 
+def test_invalid_data_force_remove_pages_operator(mock_exchange):
+    """After MAX_INVALID_DATA_RETRIES of un-processable fill data, the order is
+    force-removed with the fill unbooked — it must page an operator (#853)."""
+    from src.engines.live.order_tracker import MAX_INVALID_DATA_RETRIES
+
+    on_critical = Mock()
+    tracker = OrderTracker(
+        exchange=mock_exchange,
+        poll_interval=0.1,
+        on_fill=Mock(),
+        on_critical=on_critical,
+    )
+    mock_order = MagicMock()
+    mock_order.status = OrderStatus.FILLED
+    mock_order.filled_quantity = 1.0
+    mock_order.average_price = None  # invalid every poll -> never processable
+    mock_exchange.get_order.return_value = mock_order
+
+    tracker.track_order("order123", "BTCUSDT")
+    for _ in range(MAX_INVALID_DATA_RETRIES):
+        tracker._check_orders()
+
+    pages = [c for c in on_critical.call_args_list if c.args[1] == "ORDER_INVALID_DATA"]
+    assert len(pages) == 1, on_critical.call_args_list
+    assert tracker.get_tracked_count() == 0  # force-removed after the retry limit
+
+
+def test_cancel_callback_failure_pages_operator(mock_exchange):
+    """A failing cancel callback may leave a phantom position — it must page an
+    operator (ORDER_ORPHANED); stop_tracking still runs regardless (#853)."""
+    on_critical = Mock()
+    tracker = OrderTracker(
+        exchange=mock_exchange,
+        poll_interval=0.1,
+        on_cancel=Mock(side_effect=RuntimeError("boom")),
+        on_critical=on_critical,
+    )
+    mock_order = MagicMock()
+    mock_order.status = OrderStatus.CANCELLED
+    mock_order.filled_quantity = 0.0
+    mock_exchange.get_order.return_value = mock_order
+
+    tracker.track_order("order123", "BTCUSDT")
+    tracker._check_orders()
+
+    pages = [c for c in on_critical.call_args_list if c.args[1] == "ORDER_ORPHANED"]
+    assert len(pages) == 1, on_critical.call_args_list
+    assert tracker.get_tracked_count() == 0  # untracked even though the callback failed
+
+
 class TestApiErrorHandling:
     """Tests for persistent API error handling in order tracking."""
 
@@ -525,3 +575,42 @@ class TestApiErrorHandling:
 
         # Assert - order still force-removed despite callback failure
         assert order_tracker.get_tracked_count() == 0
+
+
+def test_fill_callback_failure_orphan_pages_operator(mock_exchange):
+    """When the fill callback fails MAX times, the order is force-removed with a
+    position ORPHANED on the exchange — previously logger.critical-only. It must
+    now page an operator via on_critical (#853)."""
+    from src.engines.live.order_tracker import MAX_CALLBACK_RETRIES
+
+    on_critical = Mock()
+    tracker = OrderTracker(
+        exchange=mock_exchange,
+        poll_interval=0.1,
+        on_fill=Mock(side_effect=RuntimeError("boom")),
+        on_critical=on_critical,
+    )
+    mock_order = MagicMock()
+    mock_order.status = OrderStatus.FILLED
+    mock_order.filled_quantity = 1.5
+    mock_order.average_price = 50000.0
+    mock_exchange.get_order.return_value = mock_order
+
+    tracker.track_order("order123", "BTCUSDT")
+    for _ in range(MAX_CALLBACK_RETRIES):
+        tracker._check_orders()
+
+    orphan = [c for c in on_critical.call_args_list if c.args[1] == "ORDER_ORPHANED"]
+    assert len(orphan) == 1, on_critical.call_args_list
+    assert "ORPHANED" in orphan[0].args[0]
+    assert tracker.get_tracked_count() == 0  # force-removed after the final failure
+
+
+def test_emit_critical_noop_and_fault_isolated(mock_exchange):
+    """_emit_critical is a no-op with no sink and never raises if the sink does."""
+    OrderTracker(exchange=mock_exchange)._emit_critical("msg", "CODE")  # no sink -> no-op
+
+    boom = Mock(side_effect=RuntimeError("sink down"))
+    tracker = OrderTracker(exchange=mock_exchange, on_critical=boom)
+    tracker._emit_critical("msg", "CODE")  # must not raise
+    boom.assert_called_once_with("msg", "CODE")

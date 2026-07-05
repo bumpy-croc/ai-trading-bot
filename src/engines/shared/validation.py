@@ -253,49 +253,6 @@ def is_position_fully_closed(
     return False
 
 
-def convert_exit_fraction_to_current(
-    exit_fraction_of_original: float,
-    current_size: float,
-    original_size: float,
-    epsilon: float = EPSILON,
-) -> float | None:
-    """Convert exit fraction of original size to fraction of current size.
-
-    Args:
-        exit_fraction_of_original: Fraction of original size to exit.
-        current_size: Current position size fraction.
-        original_size: Original position size fraction.
-        epsilon: Threshold for considering values invalid or closed.
-
-    Returns:
-        Fraction of current size to exit, or None if conversion is invalid.
-    """
-    if not isinstance(exit_fraction_of_original, int | float):
-        return None
-    if exit_fraction_of_original <= 0 or not math.isfinite(exit_fraction_of_original):
-        return None
-    if not isinstance(current_size, int | float) or not isinstance(original_size, int | float):
-        return None
-    if not math.isfinite(current_size) or not math.isfinite(original_size):
-        return None
-    if abs(original_size) < epsilon:
-        return None
-    if is_position_fully_closed(current_size, original_size, epsilon=epsilon):
-        return None
-
-    current_size_fraction = current_size / original_size
-    if abs(current_size_fraction) < epsilon:
-        return None
-
-    exit_fraction_of_current = exit_fraction_of_original / current_size_fraction
-    if not math.isfinite(exit_fraction_of_current):
-        return None
-    if exit_fraction_of_current <= 0 or exit_fraction_of_current > 1.0:
-        return None
-
-    return exit_fraction_of_current
-
-
 def clamp_fraction(value: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
     """Clamp a fraction to valid range.
 

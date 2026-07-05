@@ -1,0 +1,11 @@
+{
+  "description": "Maintained calendar of high-impact macro events (FOMC, CPI). Around each event the bot de-risks: it blocks new entries and halves regime exposure caps from `hours_before` before to `hours_after` after the event time. Times are UTC. Keep this file up to date — stale/empty is fail-safe (no windows). Per-event overrides fall back to the defaults.",
+  "default_hours_before": 12,
+  "default_hours_after": 6,
+  "events": [
+    {"name": "CPI May 2026", "type": "CPI", "time": "2026-05-13T12:30:00Z"},
+    {"name": "FOMC June 2026", "type": "FOMC", "time": "2026-06-17T18:00:00Z", "hours_before": 18, "hours_after": 18},
+    {"name": "CPI July 2026", "type": "CPI", "time": "2026-07-14T12:30:00Z"},
+    {"name": "FOMC July 2026", "type": "FOMC", "time": "2026-07-29T18:00:00Z", "hours_before": 18, "hours_after": 18}
+  ]
+}
