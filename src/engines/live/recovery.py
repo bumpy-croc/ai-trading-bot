@@ -486,6 +486,7 @@ class LiveSessionRecoverer:
                     PositionReconciler,
                     Severity,
                     run_orphaned_borrow_sweep,
+                    surface_orphaned_borrow_sweep,
                 )
 
                 use_margin = getattr(state.exchange_interface, "is_margin_mode", False)
@@ -509,7 +510,7 @@ class LiveSessionRecoverer:
                     # position is adopted first), sweep any orphaned margin borrow.
                     # No-op unless margin + flag enabled; safe when flat.
                     if use_margin and state._active_symbol:
-                        run_orphaned_borrow_sweep(
+                        sweep_results = run_orphaned_borrow_sweep(
                             exchange=state.exchange_interface,
                             position_tracker=state.live_position_tracker,
                             db_manager=state.db_manager,
@@ -519,6 +520,9 @@ class LiveSessionRecoverer:
                             cooldown_state=state._orphan_sweep_cooldown,
                             lock_registry=state._base_asset_locks,
                         )
+                        # Surface an over-cap CRITICAL / failed repay to operators —
+                        # the sweep's return value was previously discarded here too.
+                        surface_orphaned_borrow_sweep(state._record_event, sweep_results)
 
                     # Process results even with no positions — a filled entry
                     # order may create a position, and critical issues must
