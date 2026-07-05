@@ -44,7 +44,21 @@ i. `git log --oneline -20` on `develop` — recent direction.
 j. `docs/project_status.md` + `docs/changelog.md` (top) — in-flight narrative.
 k. `CODE.md` + `CLAUDE.md` task matrix — coverage gates and section-routing.
 
-Parallelize a–k in one tool-call batch. The "Sources checked:" preamble of your output must show ✓ (or ✗ with reason) for every letter.
+**Parallel sessions (added 2026-07-05 — a weekend of conflicting PRs, duplicated
+work, and a session switching the main checkout off `main` earned this gate):**
+l. Cross-session sweep — other Claude sessions may be working this repo RIGHT NOW:
+   - If session tooling is available (`ccd_session_mgmt` list_sessions): note every
+     RUNNING session in ai-trading-bot, its branch, and PR.
+   - Artifact fallback (always run, tool or not):
+     · open PRs from branches not accounted for in `.claude/state/log.md` — read
+       them before touching overlapping files;
+     · `git -C <main-checkout> branch --show-current` MUST print `main` — if not,
+       another session moved it: flag loudly; restore only if the tree is clean;
+     · `git -C <main-checkout> worktree list` — worktrees on unmerged branches are
+       someone's active workspace. NEVER start work a parallel session's open PR
+       already covers without reading it first.
+
+Parallelize a–l in one tool-call batch. The "Sources checked:" preamble of your output must show ✓ (or ✗ with reason) for every letter.
 
 ## Scoring rubric
 
@@ -113,7 +127,7 @@ The daemon session acts as PM by default. When a card needs specialist work, dis
 ```
 Sources checked: charter ✓ | risk-limits ✓ | log.md ✓ | proposals/incidents ✓ |
                  wakeups ✓ | gh issues ✓ | open PRs ✓ | git log ✓ |
-                 project_status/changelog ✓ | CODE/CLAUDE.md ✓
+                 project_status/changelog ✓ | CODE/CLAUDE.md ✓ | cross-session sweep ✓
 (ALL required. If any is ✗, STOP and re-read — do not publish a ranking.)
 
 TOP PICK: <title> [issue #N if exists]
