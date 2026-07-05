@@ -3355,7 +3355,7 @@ class PeriodicReconciler:
         # orphaned borrow exists precisely when there is no tracked position. Must
         # run before the flat early-return below. No-op unless margin + flag enabled.
         if self._use_margin and self._symbols:
-            run_orphaned_borrow_sweep(
+            sweep_results = run_orphaned_borrow_sweep(
                 exchange=self.exchange,
                 position_tracker=self.position_tracker,
                 db_manager=self.db_manager,
@@ -3365,6 +3365,9 @@ class PeriodicReconciler:
                 cooldown_state=self._sweep_cooldown,
                 lock_registry=self._lock_registry,
             )
+            # Surface the sweep here — the flat early-return below (an orphaned borrow
+            # exists precisely when flat) would otherwise discard its severity.
+            surface_orphaned_borrow_sweep(self.on_event, sweep_results)
 
         # Snapshot positions (release lock before API calls)
         positions_snapshot = self.position_tracker.positions
@@ -4303,6 +4306,54 @@ def _base_asset_of(symbol: str) -> str:
     Single source of truth — avoids a divergent copy of the quote-stripping logic.
     """
     return PositionReconciler._extract_base_asset(symbol)
+
+
+def _describe_sweep_result(result: ReconciliationResult) -> str:
+    """One-line operator description of an orphaned-borrow sweep outcome."""
+    asset = result.entity_id
+    if result.severity >= Severity.CRITICAL:
+        return f"{asset} borrow exceeds auto-repay cap — manual review required"
+    if result.status == "corrected":
+        return f"{asset} borrow repaid"
+    return f"{asset} borrow {result.status}"
+
+
+def surface_orphaned_borrow_sweep(
+    on_event: Any, sweep_results: list[ReconciliationResult] | None
+) -> None:
+    """Surface the orphaned-borrow sweep's HIGH/CRITICAL outcomes to operators.
+
+    The sweep runs even when the bot is flat (an orphaned borrow exists precisely
+    when no position is tracked) and its return value is otherwise discarded, so an
+    over-cap CRITICAL borrow ("manual review required") never reached ``system_events``
+    or an operator. Pages on the over-cap CRITICAL; records a non-paging WARNING for a
+    completed repay or a failed/partial (``unresolved``) active repay. The dry-run
+    ``skipped`` outcome is left to ``reconciliation_audit_events`` only, so a borrow
+    sitting in dry-run does not emit a system_event every sweep window.
+
+    Rate-limiting is inherited: the sweep's per-base-asset cooldown yields a result at
+    most once per window, and the engine alert-dedup throttles repeat pages — so this
+    emits directly without its own edge-trigger. No-op when ``on_event`` is unset
+    (standalone use / tests); never raises.
+    """
+    for result in sweep_results or []:
+        if result.severity >= Severity.CRITICAL:
+            spec = (EventType.ALERT, "ORPHANED_BORROW_CRITICAL", "critical", True)
+        elif result.status == "corrected":
+            spec = (EventType.WARNING, "ORPHANED_BORROW_REPAID", "warning", False)
+        elif result.status == "unresolved":
+            spec = (EventType.WARNING, "ORPHANED_BORROW_UNRESOLVED", "warning", False)
+        else:
+            continue  # dry-run 'skipped' / LOW — left to reconciliation_audit_events only
+        event_type, error_code, severity, alert = spec
+        _emit_event(
+            on_event,
+            event_type,
+            f"Orphaned-borrow sweep: {_describe_sweep_result(result)}",
+            severity=severity,
+            error_code=error_code,
+            alert=alert,
+        )
 
 
 def run_orphaned_borrow_sweep(

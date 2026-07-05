@@ -4092,6 +4092,42 @@ class TestReconcileCycleSeverityEvent:
         assert kwargs["severity"] == Severity.CRITICAL.value
 
 
+class TestOrphanedBorrowSweepSurfacedInCycle:
+    """The periodic cycle runs the orphaned-borrow sweep BEFORE its flat early-return
+    (an orphaned borrow exists precisely when flat). An over-cap CRITICAL sweep result
+    must reach the operator even when no position is tracked (#893)."""
+
+    @staticmethod
+    def _margin_reconciler(mock_exchange, mock_position_tracker, mock_db, on_event):
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+            use_margin=True,
+            symbols=["ETHUSDT"],
+        )
+
+    def test_over_cap_sweep_pages_even_when_flat(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}  # flat -> cycle returns early after the sweep
+        on_event = MagicMock()
+        pr = self._margin_reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        over_cap = ReconciliationResult(
+            entity_type="balance", entity_id="ETH", status="unresolved", severity=Severity.CRITICAL
+        )
+        with patch(
+            "src.engines.live.reconciliation.run_orphaned_borrow_sweep", return_value=[over_cap]
+        ):
+            pr._reconcile_cycle()
+        assert any(
+            c.kwargs.get("error_code") == "ORPHANED_BORROW_CRITICAL"
+            for c in on_event.call_args_list
+        ), on_event.call_args_list
+
+
 # ---------- SL Re-placement Naked-Position Guard (externally-closed positions) ----------
 
 
