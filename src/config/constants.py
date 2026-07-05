@@ -423,6 +423,10 @@ DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT = 0.05  # 5% balance discrepancy tr
 DEFAULT_RECONCILIATION_DUST_THRESHOLD = 0.00001  # Ignore dust-level asset discrepancies
 DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT = 0.01  # 1% qty tolerance for order matching
 DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN = 10  # Minutes for timestamp matching
+# A HIGH/CRITICAL reconciliation cycle pages once on the rising severity edge; if the
+# condition persists, re-surface it at this cadence so a stuck-degraded bot does not go
+# silent after the first alert. 1800s (30 min) sits well above the 300s alert-dedup window.
+RECONCILE_CYCLE_ESCALATION_SECONDS = 1800
 # Bound startup order reconciliation so a large stale-order backlog cannot block
 # the trading loop for hours (#628). Each unresolved order costs a REST round-trip;
 # excess beyond the cap / time budget is deferred to the next startup run.

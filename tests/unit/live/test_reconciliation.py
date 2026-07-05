@@ -3201,6 +3201,65 @@ class TestReconciliationFeeAccounting:
         call_kwargs = mock_pnl.call_args
         assert call_kwargs[1]["exit_fee"] == pytest.approx(0.35)
 
+    def _skip_audit_kwargs(self, mock_db):
+        """The single LOW-severity 'not realized' audit row, if one was written."""
+        skip_calls = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if "not realized" in (c.kwargs.get("reason") or "")
+        ]
+        assert len(skip_calls) == 1, mock_db.log_audit_event.call_args_list
+        return skip_calls[0].kwargs
+
+    def test_skip_on_missing_exit_price_audits_low(self, reconciler, mock_db):
+        """No usable exit price -> queryable, non-paging LOW audit row (#894)."""
+        reconciler._realize_pnl_on_close(
+            MockPosition(db_position_id=5), exit_price=None, reason="stop_loss_filled_offline"
+        )
+        mock_db.update_balance.assert_not_called()
+        kwargs = self._skip_audit_kwargs(mock_db)
+        assert kwargs["field"] == "realized_pnl"
+        assert kwargs["severity"] == Severity.LOW.value
+        assert "no usable exit price" in kwargs["reason"]
+        assert "stop_loss_filled_offline" in kwargs["reason"]
+
+    def test_skip_on_missing_entry_price_audits_low(self, reconciler, mock_db):
+        """Zero entry price -> LOW audit row, no balance mutation (#894)."""
+        reconciler._realize_pnl_on_close(
+            MockPosition(db_position_id=6, entry_price=0.0),
+            exit_price=100.0,
+            reason="exit_order_recovery",
+        )
+        mock_db.update_balance.assert_not_called()
+        assert "missing entry price or quantity" in self._skip_audit_kwargs(mock_db)["reason"]
+
+    def test_skip_on_unreadable_balance_audits_low(self, reconciler, mock_db):
+        """Unreadable session balance -> LOW audit row (#894)."""
+        mock_db.get_current_balance.return_value = None
+        reconciler._realize_pnl_on_close(
+            MockPosition(db_position_id=7, entry_price=100.0, quantity=1.0),
+            exit_price=110.0,
+            reason="exit_order_recovery",
+        )
+        mock_db.update_balance.assert_not_called()
+        assert "could not read session balance" in self._skip_audit_kwargs(mock_db)["reason"]
+
+    def test_successful_realization_writes_no_skip_row(self, reconciler, mock_db):
+        """The happy path realizes P&L and writes NO 'not realized' skip row (#894)."""
+        mock_db.get_current_balance.return_value = 1000.0
+        reconciler._realize_pnl_on_close(
+            MockPosition(entry_price=50000.0, quantity=0.001, current_size=0.1, original_size=0.1),
+            exit_price=51000.0,
+            reason="exit_order_recovery",
+        )
+        mock_db.update_balance.assert_called_once()
+        skip_calls = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if "not realized" in (c.kwargs.get("reason") or "")
+        ]
+        assert skip_calls == []
+
 
 class TestFailClosedSLLookup:
     """#713: a transient order-lookup failure must NOT be treated as a missing stop.
@@ -4038,6 +4097,94 @@ class TestReconcileCycleSeverityEvent:
         pr._emit_cycle_severity(Severity.CRITICAL)  # ALERT (rising edge)
         pr._emit_cycle_severity(Severity.HIGH)  # de-escalation -> silent
         assert on_event.call_count == 1
+
+    def test_persistent_critical_re_pages_after_escalation_interval(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A CRITICAL that persists past the escalation interval re-pages, so a
+        stuck-degraded bot doesn't go silent after the first alert (#892)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL)  # rising edge -> page
+        assert on_event.call_count == 1
+        # Simulate the escalation interval having elapsed since the last emit.
+        pr._last_cycle_emit_ts = 0.0
+        pr._emit_cycle_severity(Severity.CRITICAL)  # persistent + interval elapsed -> re-page
+        assert on_event.call_count == 2
+
+    def test_critical_findings_named_in_paged_message(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Specific corrections are named in the paged message so the operator
+        sees WHAT broke without querying reconciliation_audit_events (#892)."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(
+            Severity.CRITICAL, ["BTCUSDT unprotected — SL re-placement failed (x)"]
+        )
+        message = on_event.call_args.args[1]
+        assert "BTCUSDT unprotected" in message
+
+    def test_findings_summary_is_bounded(self, mock_exchange, mock_position_tracker, mock_db):
+        """More findings than the display limit collapse to '(+N more)' so the
+        alert payload stays small."""
+        on_event = MagicMock()
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        pr._emit_cycle_severity(Severity.CRITICAL, [f"finding {i}" for i in range(5)])
+        message = on_event.call_args.args[1]
+        assert "(+2 more)" in message
+
+    def test_audit_unprotected_persists_critical_row(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """An unprotected position writes a CRITICAL audit row so the paged event's
+        'see reconciliation_audit_events' pointer is honest (#892)."""
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, MagicMock())
+        pos = MockPosition(db_position_id=99, stop_loss_order_id="sl_x")
+        detail = pr._audit_unprotected(pos, "exchange returned no order id")
+        assert "unprotected" in detail
+        mock_db.log_audit_event.assert_called_once()
+        _, kwargs = mock_db.log_audit_event.call_args
+        assert kwargs["entity_type"] == "position"
+        assert kwargs["entity_id"] == 99
+        assert kwargs["field"] == "stop_loss_order_id"
+        assert kwargs["severity"] == Severity.CRITICAL.value
+
+
+class TestOrphanedBorrowSweepSurfacedInCycle:
+    """The periodic cycle runs the orphaned-borrow sweep BEFORE its flat early-return
+    (an orphaned borrow exists precisely when flat). An over-cap CRITICAL sweep result
+    must reach the operator even when no position is tracked (#893)."""
+
+    @staticmethod
+    def _margin_reconciler(mock_exchange, mock_position_tracker, mock_db, on_event):
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+            use_margin=True,
+            symbols=["ETHUSDT"],
+        )
+
+    def test_over_cap_sweep_pages_even_when_flat(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}  # flat -> cycle returns early after the sweep
+        on_event = MagicMock()
+        pr = self._margin_reconciler(mock_exchange, mock_position_tracker, mock_db, on_event)
+        over_cap = ReconciliationResult(
+            entity_type="balance", entity_id="ETH", status="unresolved", severity=Severity.CRITICAL
+        )
+        with patch(
+            "src.engines.live.reconciliation.run_orphaned_borrow_sweep", return_value=[over_cap]
+        ):
+            pr._reconcile_cycle()
+        assert any(
+            c.kwargs.get("error_code") == "ORPHANED_BORROW_CRITICAL"
+            for c in on_event.call_args_list
+        ), on_event.call_args_list
 
 
 # ---------- SL Re-placement Naked-Position Guard (externally-closed positions) ----------

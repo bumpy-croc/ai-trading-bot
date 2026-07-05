@@ -852,27 +852,15 @@ class LiveTradingEngine:
             logger.info("Merged strategy dynamic risk overrides from %s", self._strategy_name())
         return merged_config
 
-    def _init_modular_handlers(
+    def _init_core_handlers(
         self,
         position_tracker: LivePositionTracker | None,
         execution_engine: LiveExecutionEngine | None,
-        entry_handler: LiveEntryHandler | None,
-        exit_handler: LiveExitHandler | None,
         market_data_handler: MarketDataHandler | None,
         event_logger: LiveEventLogger | None,
         health_monitor: HealthMonitor | None,
     ) -> None:
-        """Initialize modular handlers with dependency injection or defaults.
-
-        Args:
-            position_tracker: Position tracking handler.
-            execution_engine: Order execution handler.
-            entry_handler: Entry signal processing handler.
-            exit_handler: Exit condition checking handler.
-            market_data_handler: Market data fetching handler.
-            event_logger: Event logging handler.
-            health_monitor: Health monitoring handler.
-        """
+        """Build the core handlers, using injected instances when provided."""
         # Health monitor (no dependencies)
         self.health_monitor = health_monitor or HealthMonitor(
             max_consecutive_errors=self.max_consecutive_errors,
@@ -918,6 +906,8 @@ class LiveTradingEngine:
         # Wire db_manager for order journaling (session_id set during start())
         self.live_execution_engine.db_manager = self.db_manager
 
+    def _init_entry_handler(self, entry_handler: LiveEntryHandler | None) -> ExposureGovernor:
+        """Build the entry handler and its exposure/macro/circuit-breaker gates."""
         # Entry handler. correlation_handler matches backtest engine wiring
         # so live and backtest both reduce position size for correlated
         # exposure at entry.
@@ -959,7 +949,14 @@ class LiveTradingEngine:
             mode=get_flag("account_circuit_breakers", default="off")
         )
         self.live_entry_handler.configure_circuit_breaker(self._circuit_breaker)
+        return exposure_governor
 
+    def _init_exit_handler(
+        self,
+        exit_handler: LiveExitHandler | None,
+        exposure_governor: ExposureGovernor,
+    ) -> None:
+        """Build the exit handler, reusing the entry handler's exposure governor."""
         # Wrap PartialExitPolicy in unified PartialOperationsManager
         partial_ops_manager = (
             PartialOperationsManager(policy=self.partial_manager)
@@ -988,6 +985,8 @@ class LiveTradingEngine:
         # entries (share the governor instance; inert unless the flag is on).
         self.live_exit_handler.configure_exposure_gate(exposure_governor)
 
+    def _init_risk_guards(self) -> None:
+        """Wire the stop-loss, monitoring, drawdown, circuit-breaker, and recovery guards."""
         # Stop-loss lifecycle handler — owns every exchange-facing stop-loss
         # call (place/cancel/query/re-protect) so the engine orchestrates
         # without touching the exchange interface directly (#486).
@@ -1016,6 +1015,28 @@ class LiveTradingEngine:
         # Startup recovery — session balance, persisted positions, exchange
         # reconciliation. Reads/writes engine state at call time (#486).
         self.session_recoverer = LiveSessionRecoverer(engine_state=self)
+
+    def _init_modular_handlers(
+        self,
+        position_tracker: LivePositionTracker | None,
+        execution_engine: LiveExecutionEngine | None,
+        entry_handler: LiveEntryHandler | None,
+        exit_handler: LiveExitHandler | None,
+        market_data_handler: MarketDataHandler | None,
+        event_logger: LiveEventLogger | None,
+        health_monitor: HealthMonitor | None,
+    ) -> None:
+        """Initialize modular handlers with dependency injection or defaults."""
+        self._init_core_handlers(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            market_data_handler=market_data_handler,
+            event_logger=event_logger,
+            health_monitor=health_monitor,
+        )
+        exposure_governor = self._init_entry_handler(entry_handler)
+        self._init_exit_handler(exit_handler, exposure_governor)
+        self._init_risk_guards()
 
     def _apply_dynamic_risk_adjustment(
         self,

@@ -179,7 +179,13 @@ class ExperimentRunner:
             "atr_multiplier": [risk_manager],
             # Position sizer attributes
             "base_fraction": [position_sizer],
-            "min_confidence": [position_sizer],
+            # min_confidence is owned by ConfidenceWeightedSizer on ml_*
+            # strategies but by FlatRiskManager on hyper_growth (its sizers
+            # have no confidence gate), so try both components.
+            "min_confidence": [position_sizer, risk_manager],
+            # min_confidence_floor stays sizer-only: it bounds the sizer's
+            # confidence *scaling factor*, a concept FlatRiskManager (flat
+            # sizing, no confidence scaling) does not have.
             "min_confidence_floor": [position_sizer],
             # Signal generator attributes
             "sequence_length": [signal_generator],
@@ -422,6 +428,9 @@ class ExperimentRunner:
 
         risk_manager = getattr(strategy, "risk_manager", None)
         if risk_manager is not None:
+            # FlatRiskManager owns the min_confidence gate on hyper_growth;
+            # mirror the [0, 1] bound applied to the sizer-owned gate above.
+            _check_numeric_bound(risk_manager, "min_confidence", 0.0, 1.0)
             _check_numeric_bound(risk_manager, "base_risk", 0.001, 0.1)
             _check_numeric_bound(risk_manager, "atr_multiplier", 0.5, 5.0)
             _check_numeric_bound(risk_manager, "min_risk", 0.001, 0.2)

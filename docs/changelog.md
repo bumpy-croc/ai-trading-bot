@@ -11,7 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **#486 live-engine modularization complete**: `LiveTradingEngine._init_modular_handlers`
+  (the last open item from `docs/refactor/live_engine_modularization.md`) is now a
+  thin orchestrator over four construction-phase helpers — `_init_core_handlers`
+  (health/market-data/event-logger/position-tracker/execution-engine),
+  `_init_entry_handler` (entry handler + exposure/macro/circuit-breaker gates),
+  `_init_exit_handler` (exit handler, sharing the entry side's exposure governor),
+  and `_init_risk_guards` (stop-loss manager, account monitor, drawdown +
+  circuit-breaker enforcers, session recoverer) — matching the engine's existing
+  `_init_*` phase-helper convention. Pure mechanical move: construction order,
+  the public constructor signature, and the resulting object graph are unchanged;
+  backtest determinism fingerprint byte-identical.
+
 ### Fixed
+- **Experiment runner: `hyper_growth.min_confidence` override now reaches
+  FlatRiskManager**: `ExperimentRunner._apply_strategy_attribute` routed
+  `min_confidence` to the position sizer only, which is correct for the
+  ConfidenceWeightedSizer-based ml_* strategies but rejected the override for
+  `hyper_growth`, whose confidence gate lives on `FlatRiskManager` (its
+  leveraged/fixed-fraction sizers have no such attribute). The target list now
+  falls back to the risk manager (mirroring `stop_loss_pct`), post-override
+  validation bounds the risk-manager-owned gate to [0, 1], and
+  `min_confidence_floor` intentionally stays sizer-only (FlatRiskManager does
+  no confidence scaling). Unblocks declarative YAML gate-calibration
+  experiments on hyper_growth (previously required hand-built strategy
+  scripts, as in the 2026-07-05 confidence-calibration study).
 - **Exposure-governor pre-enablement fixes** (#802 follow-ups, from the PR merge
   note): (P2) `src/engines/shared/exposure.py::position_notional` now uses a
   position's `current_size` (the live fraction after partial exits / scale-ins)

@@ -1,6 +1,11 @@
 # Live Trading Engine Modularization — Plan & Handover (#486)
 
-> **Status:** living handover doc for the ongoing `LiveTradingEngine` modularization.
+> **Status: COMPLETE (2026-07-05).** All planned steps (A–E) plus the last
+> open Step-A item (`_init_modular_handlers` folded into the `_init_*`
+> phase-helper family) are merged; issue #486's acceptance criteria are met
+> (no direct `exchange_interface` stop-loss/order calls remain in the engine).
+> This doc is retained as the architectural record of the coordinator family
+> and the extraction/parity discipline used.
 > **Audience:** an autonomous agent picking this up in a fresh session.
 > **Author:** Claude Code session `0188LNSixYW9Fa5hrJ7YWJoa` (2026-06-15).
 >
@@ -56,7 +61,7 @@ engine keeps thin delegating wrappers (so call sites and test mock points are un
 | ~~`__init__`~~ | ~~~534~~ → ~110 | **DONE (Step A).** Decomposed into 15 cohesive private initializer helpers; now a thin phase orchestrator. |
 | `_trading_loop` | ~390 → ~250 | **Orchestrator core — stays.** Step C extracted the legacy short-entry + periodic-account-state blocks; remaining per-iteration flow + error handling kept inline by design. |
 | ~~`start`~~ | ~~~326~~ → ~18 | **DONE (Step B).** Decomposed into 7 cohesive phase helpers; now a thin orchestrator. |
-| `_init_modular_handlers` | ~112 | Default-vs-injected handler construction. Could fold into the Step A helper family or a builder later. |
+| ~~`_init_modular_handlers`~~ | ~~~112~~ → ~25 | **DONE (2026-07-05).** Folded into the `_init_*` phase-helper family: `_init_core_handlers` / `_init_entry_handler` / `_init_exit_handler` / `_init_risk_guards`; now a thin orchestrator. |
 | `stop` | ~86 | Lifecycle teardown. |
 | `_is_transient_db_error`, `_record_event`, `_send_alert`, `_create_exchange_provider` | small | Cross-cutting infra. |
 
@@ -104,9 +109,11 @@ Use this for every extraction. It is the established pattern across all coordina
 - **Oracle:** `tests/integration/parity/test_backtest_determinism.py` —
   `run_deterministic_backtest()` + `_fingerprint()` (canonical JSON) /
   `_fingerprint_hash()`. This is committed and authoritative; prefer it over any ad-hoc script.
-- **Current canonical value on `develop`:** `trades=14`,
-  `final_balance=9964.469867425983`,
-  `sha256=ee76fd681362f5a251f9bd34ee40c7177ca8697e9b29e70b2c0d1ed2afd03a87`.
+- **Current canonical value on `develop`** (recaptured 2026-07-05 at
+  `da6d6ef6`; it moved from the 2026-06-15 value with the post-#838
+  partial-exit accounting fixes, not parity drift): `trades=14`,
+  `final_balance=9964.469864061437`,
+  `sha256=3f6db55246b50fb18192fe1594d8705364f762da483025ec2a4a594449018447`.
 - **Method:** capture the fingerprint before your change and after; assert **byte-identical**.
   A quick runner:
   ```python
@@ -129,12 +136,16 @@ Use this for every extraction. It is the established pattern across all coordina
 ## 5. Remaining work — prioritized plan
 
 > **Status: all planned steps (A–E) complete** as of 2026-06-15 (PRs #823–#825 +
-> the Step D/E PR). The big methods are decomposed (`__init__` 534→~110,
+> the Step D/E PR #826). The big methods are decomposed (`__init__` 534→~110,
 > `start()` 327→~18, `_trading_loop` 390→~250), the entry/exit `Protocol`s are
 > concretely typed, and the deliberate non-extractions are documented below.
-> Remaining ideas are explicitly *optional* future polish (e.g. a
-> `LiveEngineBuilder` / `LiveStartupSequencer`, folding `_init_modular_handlers`
-> into the builder) — none required for the #486 goal.
+> Post-plan follow-ups also landed: the legacy short-entry path moved into
+> `LiveEntryCoordinator` (#827), `start()`'s phase helpers moved into a
+> `LiveStartupSequencer` coordinator (#828), and `_init_modular_handlers` was
+> folded into the `_init_*` phase-helper family (2026-07-05), closing the last
+> open Step-A item. The only remaining idea — a full `LiveEngineBuilder`
+> returning a wired dependency bundle — stays explicitly *optional* future
+> polish, not required for the #486 goal.
 
 Each item is its own PR with the full workflow in §6. Re-grep line numbers first.
 
@@ -142,9 +153,11 @@ Each item is its own PR with the full workflow in §6. Re-grep line numbers firs
 `__init__` (~534) has been decomposed into 15 cohesive private initializer helpers
 (see the changelog entry / ledger below); it is now a thin ~110-line phase
 orchestrator. Construction ordering, the 35-param signature, and every public
-attribute are preserved; parity byte-identical. **Still open under Step A:**
-`_init_modular_handlers` (~112) could be folded into the helper family or a
-`LiveEngineBuilder`. The original `__init__` phases were roughly:
+attribute are preserved; parity byte-identical. **The last open Step-A item
+closed 2026-07-05:** `_init_modular_handlers` is now a thin orchestrator over
+four phase helpers (`_init_core_handlers`, `_init_entry_handler`,
+`_init_exit_handler`, `_init_risk_guards`), matching the rest of the `_init_*`
+family. The original `__init__` phases were roughly:
 input validation → settings resolution → coordinator construction → `_configure_strategy`
 → providers → risk-manager merge/bind → trailing-stop policy → dynamic-risk config →
 timing config → balance/financial/flags → partial-operations policy → correlation
@@ -357,7 +370,10 @@ The bot reviews each PR and flags carried-over CODE.md nits: f-strings in loggin
 | #823 | **Step A** — `__init__` decomposed into 15 cohesive private initializer helpers; engine `__init__` ~534 → ~110 lines. Also aligned `LiveLoopTimingEngineState.data_freshness_threshold` to `int`. |
 | #824 | **Step B** — `start()` decomposed into 7 cohesive private phase helpers; ~327 → ~18 lines. |
 | #825 | **Step C** — `_trading_loop` short-entry + periodic-account blocks extracted; ~390 → ~250 lines. |
-| (this branch) | **Steps D + E** — entry/exit coordinator `Protocol`s tightened to concrete types + tests moved to `create_autospec`; deliberate non-extractions documented. |
+| #826 | **Steps D + E** — entry/exit coordinator `Protocol`s tightened to concrete types + tests moved to `create_autospec`; deliberate non-extractions documented. |
+| #827 | Legacy duck-typed short-entry path moved from the loop helper into `LiveEntryCoordinator.process_legacy_short_entry`. |
+| #828 | `start()` bootstrap moved into `LiveStartupSequencer` (`startup.py`); the seven Step-B phase helpers now live there behind an engine-backref `Protocol`. |
+| (2026-07-05) | `_init_modular_handlers` folded into the `_init_*` phase-helper family (`_init_core_handlers` / `_init_entry_handler` / `_init_exit_handler` / `_init_risk_guards`) — last open Step-A item; #486 closed. |
 
 Engine: **6,558 → 2,493 lines** through #821; Step A keeps the engine's total
 line count roughly flat (the slim `__init__` is offset by per-helper

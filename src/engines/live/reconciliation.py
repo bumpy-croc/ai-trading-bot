@@ -35,6 +35,7 @@ from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
     NET_FLAT_DUST_USD,
     ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS,
+    RECONCILE_CYCLE_ESCALATION_SECONDS,
 )
 from src.config.feature_flags import get_flag
 from src.data_providers.exchange_interface import OrderLookupError, SideEffectType
@@ -2680,6 +2681,27 @@ class PositionReconciler:
 
         return result
 
+    def _audit_pnl_skip(self, position: Any, close_reason: str, detail: str) -> None:
+        """Record (queryable, non-paging) that P&L realization was skipped on close.
+
+        These guard paths are benign but were previously silent, leaving no trail to
+        distinguish "the close skipped realization" from "realization never ran" during
+        an incident. LOW severity, so it never pages — it lives only in
+        ``reconciliation_audit_events`` for forensics. ``_persist_audit`` is
+        fault-isolated, so this can never break a close.
+        """
+        self._persist_audit(
+            AuditEvent(
+                entity_type="position",
+                entity_id=getattr(position, "db_position_id", None),
+                field="realized_pnl",
+                old_value=None,
+                new_value=None,
+                reason=f"P&L not realized on {close_reason} close: {detail}",
+                severity=Severity.LOW,
+            )
+        )
+
     def _realize_pnl_on_close(
         self,
         position: Any,
@@ -2707,6 +2729,7 @@ class PositionReconciler:
                 ``order_id`` so a re-run dedups via ``uq_trade_order_session``.
         """
         if exit_price is None or exit_price <= 0:
+            self._audit_pnl_skip(position, reason, "no usable exit price")
             return
 
         # Coerce to float — DB-loaded positions carry Decimal (Numeric) fields,
@@ -2716,6 +2739,7 @@ class PositionReconciler:
         entry_price = float(getattr(position, "entry_price", 0) or 0.0)
         qty = float(getattr(position, "quantity", 0) or 0.0)
         if entry_price <= 0 or qty <= 0:
+            self._audit_pnl_skip(position, reason, "missing entry price or quantity")
             return
 
         # Scale quantity by current_size/original_size to account for partial
@@ -2777,6 +2801,7 @@ class PositionReconciler:
                     "Cannot realize P&L — unable to read current balance " "(session_id=%s)",
                     self.session_id,
                 )
+                self._audit_pnl_skip(position, reason, "could not read session balance")
                 return
 
             # Sanitize exit_fee — treat non-finite or negative as zero
@@ -3123,6 +3148,9 @@ class PeriodicReconciler:
         # cycle-severity event so a persistent HIGH/CRITICAL condition pages/logs
         # once on the rising edge, not every cycle.
         self._last_cycle_severity = Severity.LOW
+        # Wall-clock of the last cycle-severity emit, so a persistent HIGH/CRITICAL
+        # re-pages on a cadence instead of going silent after the first rising edge.
+        self._last_cycle_emit_ts = 0.0
         self._symbols = symbols or []
 
         self._running = False
@@ -3351,7 +3379,7 @@ class PeriodicReconciler:
         # orphaned borrow exists precisely when there is no tracked position. Must
         # run before the flat early-return below. No-op unless margin + flag enabled.
         if self._use_margin and self._symbols:
-            run_orphaned_borrow_sweep(
+            sweep_results = run_orphaned_borrow_sweep(
                 exchange=self.exchange,
                 position_tracker=self.position_tracker,
                 db_manager=self.db_manager,
@@ -3361,6 +3389,9 @@ class PeriodicReconciler:
                 cooldown_state=self._sweep_cooldown,
                 lock_registry=self._lock_registry,
             )
+            # Surface the sweep here — the flat early-return below (an orphaned borrow
+            # exists precisely when flat) would otherwise discard its severity.
+            surface_orphaned_borrow_sweep(self.on_event, sweep_results)
 
         # Snapshot positions (release lock before API calls)
         positions_snapshot = self.position_tracker.positions
@@ -3368,6 +3399,10 @@ class PeriodicReconciler:
             return
 
         max_severity = Severity.LOW
+        # Short operator-facing descriptions of the CRITICAL corrections this cycle,
+        # named in the paged cycle-severity event so the operator sees WHAT broke
+        # without a DB round-trip. Bounded by the position count.
+        findings: list[str] = []
 
         # 1. Verify each position's entry order
         for order_key, position in positions_snapshot.items():
@@ -3746,6 +3781,7 @@ class PeriodicReconciler:
                         # escalates so close-only mode still fires on a real divergence.
                         if db_closed and self._reconcile_spot_balance():
                             max_severity = Severity.CRITICAL
+                            findings.append("spot balance corrected beyond tolerance")
                 except Exception as e:
                     logger.warning("Asset holdings check failed for %s: %s", order_key, e)
 
@@ -3917,6 +3953,11 @@ class PeriodicReconciler:
                                     position.symbol,
                                 )
                                 max_severity = Severity.CRITICAL
+                                findings.append(
+                                    self._audit_unprotected(
+                                        position, "exchange returned no order id"
+                                    )
+                                )
                         except Exception as e:
                             logger.critical(
                                 "Exception re-placing stop-loss for %s: %s — "
@@ -3925,6 +3966,9 @@ class PeriodicReconciler:
                                 e,
                             )
                             max_severity = Severity.CRITICAL
+                            findings.append(
+                                self._audit_unprotected(position, "exception during placement")
+                            )
                     else:
                         logger.critical(
                             "Cannot re-place stop-loss for %s — no stop_price "
@@ -3932,6 +3976,9 @@ class PeriodicReconciler:
                             position.symbol,
                         )
                         max_severity = Severity.CRITICAL
+                        findings.append(
+                            self._audit_unprotected(position, "no stop price or SL unsupported")
+                        )
 
             except Exception as e:
                 logger.warning(
@@ -3995,6 +4042,7 @@ class PeriodicReconciler:
         # correction escalates to close-only mode in step 5.
         if self._reconcile_spot_balance():
             max_severity = Severity.CRITICAL
+            findings.append("spot balance corrected beyond tolerance")
 
         # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:
@@ -4007,28 +4055,43 @@ class PeriodicReconciler:
         # CRITICAL). Lock-free: positions were snapshotted at the top of the
         # cycle and per-item locks are released, so the alert webhook cannot
         # block a position mutation.
-        self._emit_cycle_severity(max_severity)
+        self._emit_cycle_severity(max_severity, findings)
 
-    def _emit_cycle_severity(self, max_severity: Severity) -> None:
+    def _emit_cycle_severity(
+        self, max_severity: Severity, findings: list[str] | None = None
+    ) -> None:
         """Emit a system_events row for a HIGH/CRITICAL reconciliation cycle.
 
         HIGH-severity drift (entry-price/qty mismatch, orphaned SL, external
         close) otherwise writes only ``reconciliation_audit_events`` + logs and
-        never reaches ``system_events`` or an operator. Edge-triggered against
-        the previous cycle's peak severity so a persistent condition surfaces
-        once on the rising edge rather than every ~60s cycle (proper
-        rate-limiting/escalation is tracked separately).
+        never reaches ``system_events`` or an operator.
+
+        Fires on the rising severity edge AND re-fires every
+        ``RECONCILE_CYCLE_ESCALATION_SECONDS`` while the condition persists, so a
+        stuck-degraded bot re-pages instead of going silent after the first alert.
+        The engine sink dedups repeat webhooks within its own short window, so the
+        escalation cadence — not per-cycle spam — sets how often an operator is paged.
+
+        ``findings`` are short operator-facing descriptions of the CRITICAL
+        corrections this cycle; when present they are named in the paged message so
+        the operator sees WHAT broke without querying ``reconciliation_audit_events``.
         """
         prev = self._last_cycle_severity
         self._last_cycle_severity = max_severity
-        if max_severity < Severity.HIGH or max_severity <= prev:
+        if max_severity < Severity.HIGH:
             return
+        now = time.time()
+        rising_edge = max_severity > prev
+        persisted = now - self._last_cycle_emit_ts >= RECONCILE_CYCLE_ESCALATION_SECONDS
+        if not (rising_edge or persisted):
+            return
+        self._last_cycle_emit_ts = now
         if max_severity == Severity.CRITICAL:
             _emit_event(
                 self.on_event,
                 EventType.ALERT,
-                "Reconciliation cycle detected a CRITICAL discrepancy — see "
-                "reconciliation_audit_events for the specific correction",
+                "Reconciliation cycle detected a CRITICAL discrepancy: "
+                + self._format_findings(findings),
                 severity="critical",
                 error_code="RECONCILE_CRITICAL",
                 alert=True,
@@ -4043,6 +4106,43 @@ class PeriodicReconciler:
                 error_code="RECONCILE_HIGH",
                 alert=False,
             )
+
+    @staticmethod
+    def _format_findings(findings: list[str] | None, limit: int = 3) -> str:
+        """Render the cycle's CRITICAL findings into a bounded, single-line summary."""
+        if not findings:
+            return "see reconciliation_audit_events for the specific correction"
+        unique = list(dict.fromkeys(findings))  # drop duplicates, preserve order
+        shown = "; ".join(unique[:limit])
+        extra = len(unique) - limit
+        return f"{shown} (+{extra} more)" if extra > 0 else shown
+
+    def _audit_unprotected(self, position: Any, cause: str) -> str:
+        """Persist a CRITICAL audit row for a position left without a stop-loss and
+        return a short operator-facing detail string.
+
+        The periodic SL re-placement failure paths previously only logged +
+        bumped the cycle severity, so the paged cycle-severity event pointed
+        operators at a ``reconciliation_audit_events`` table that held no row for
+        the cause. Writing the row here makes that pointer honest. Fault-isolated:
+        an audit-write failure must never break the reconcile cycle.
+        """
+        symbol = getattr(position, "symbol", "unknown")
+        detail = f"{symbol} unprotected — SL re-placement failed ({cause})"
+        try:
+            self.db_manager.log_audit_event(
+                session_id=self.session_id,
+                entity_type="position",
+                entity_id=getattr(position, "db_position_id", None),
+                field="stop_loss_order_id",
+                old_value=str(getattr(position, "stop_loss_order_id", None)),
+                new_value=None,
+                reason=detail,
+                severity=Severity.CRITICAL.value,
+            )
+        except Exception as e:
+            logger.error("Failed to persist unprotected-position audit: %s", e)
+        return detail
 
     def _place_missing_stop_loss(self, position: Any, order_key: str) -> None:
         """Place a stop-loss for a position that has none (e.g. phantom from timeout).
@@ -4230,6 +4330,54 @@ def _base_asset_of(symbol: str) -> str:
     Single source of truth — avoids a divergent copy of the quote-stripping logic.
     """
     return PositionReconciler._extract_base_asset(symbol)
+
+
+def _describe_sweep_result(result: ReconciliationResult) -> str:
+    """One-line operator description of an orphaned-borrow sweep outcome."""
+    asset = result.entity_id
+    if result.severity >= Severity.CRITICAL:
+        return f"{asset} borrow exceeds auto-repay cap — manual review required"
+    if result.status == "corrected":
+        return f"{asset} borrow repaid"
+    return f"{asset} borrow {result.status}"
+
+
+def surface_orphaned_borrow_sweep(
+    on_event: Any, sweep_results: list[ReconciliationResult] | None
+) -> None:
+    """Surface the orphaned-borrow sweep's HIGH/CRITICAL outcomes to operators.
+
+    The sweep runs even when the bot is flat (an orphaned borrow exists precisely
+    when no position is tracked) and its return value is otherwise discarded, so an
+    over-cap CRITICAL borrow ("manual review required") never reached ``system_events``
+    or an operator. Pages on the over-cap CRITICAL; records a non-paging WARNING for a
+    completed repay or a failed/partial (``unresolved``) active repay. The dry-run
+    ``skipped`` outcome is left to ``reconciliation_audit_events`` only, so a borrow
+    sitting in dry-run does not emit a system_event every sweep window.
+
+    Rate-limiting is inherited: the sweep's per-base-asset cooldown yields a result at
+    most once per window, and the engine alert-dedup throttles repeat pages — so this
+    emits directly without its own edge-trigger. No-op when ``on_event`` is unset
+    (standalone use / tests); never raises.
+    """
+    for result in sweep_results or []:
+        if result.severity >= Severity.CRITICAL:
+            spec = (EventType.ALERT, "ORPHANED_BORROW_CRITICAL", "critical", True)
+        elif result.status == "corrected":
+            spec = (EventType.WARNING, "ORPHANED_BORROW_REPAID", "warning", False)
+        elif result.status == "unresolved":
+            spec = (EventType.WARNING, "ORPHANED_BORROW_UNRESOLVED", "warning", False)
+        else:
+            continue  # dry-run 'skipped' / LOW — left to reconciliation_audit_events only
+        event_type, error_code, severity, alert = spec
+        _emit_event(
+            on_event,
+            event_type,
+            f"Orphaned-borrow sweep: {_describe_sweep_result(result)}",
+            severity=severity,
+            error_code=error_code,
+            alert=alert,
+        )
 
 
 def run_orphaned_borrow_sweep(
