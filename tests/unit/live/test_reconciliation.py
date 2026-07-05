@@ -3201,6 +3201,65 @@ class TestReconciliationFeeAccounting:
         call_kwargs = mock_pnl.call_args
         assert call_kwargs[1]["exit_fee"] == pytest.approx(0.35)
 
+    def _skip_audit_kwargs(self, mock_db):
+        """The single LOW-severity 'not realized' audit row, if one was written."""
+        skip_calls = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if "not realized" in (c.kwargs.get("reason") or "")
+        ]
+        assert len(skip_calls) == 1, mock_db.log_audit_event.call_args_list
+        return skip_calls[0].kwargs
+
+    def test_skip_on_missing_exit_price_audits_low(self, reconciler, mock_db):
+        """No usable exit price -> queryable, non-paging LOW audit row (#894)."""
+        reconciler._realize_pnl_on_close(
+            MockPosition(db_position_id=5), exit_price=None, reason="stop_loss_filled_offline"
+        )
+        mock_db.update_balance.assert_not_called()
+        kwargs = self._skip_audit_kwargs(mock_db)
+        assert kwargs["field"] == "realized_pnl"
+        assert kwargs["severity"] == Severity.LOW.value
+        assert "no usable exit price" in kwargs["reason"]
+        assert "stop_loss_filled_offline" in kwargs["reason"]
+
+    def test_skip_on_missing_entry_price_audits_low(self, reconciler, mock_db):
+        """Zero entry price -> LOW audit row, no balance mutation (#894)."""
+        reconciler._realize_pnl_on_close(
+            MockPosition(db_position_id=6, entry_price=0.0),
+            exit_price=100.0,
+            reason="exit_order_recovery",
+        )
+        mock_db.update_balance.assert_not_called()
+        assert "missing entry price or quantity" in self._skip_audit_kwargs(mock_db)["reason"]
+
+    def test_skip_on_unreadable_balance_audits_low(self, reconciler, mock_db):
+        """Unreadable session balance -> LOW audit row (#894)."""
+        mock_db.get_current_balance.return_value = None
+        reconciler._realize_pnl_on_close(
+            MockPosition(db_position_id=7, entry_price=100.0, quantity=1.0),
+            exit_price=110.0,
+            reason="exit_order_recovery",
+        )
+        mock_db.update_balance.assert_not_called()
+        assert "could not read session balance" in self._skip_audit_kwargs(mock_db)["reason"]
+
+    def test_successful_realization_writes_no_skip_row(self, reconciler, mock_db):
+        """The happy path realizes P&L and writes NO 'not realized' skip row (#894)."""
+        mock_db.get_current_balance.return_value = 1000.0
+        reconciler._realize_pnl_on_close(
+            MockPosition(entry_price=50000.0, quantity=0.001, current_size=0.1, original_size=0.1),
+            exit_price=51000.0,
+            reason="exit_order_recovery",
+        )
+        mock_db.update_balance.assert_called_once()
+        skip_calls = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if "not realized" in (c.kwargs.get("reason") or "")
+        ]
+        assert skip_calls == []
+
 
 class TestFailClosedSLLookup:
     """#713: a transient order-lookup failure must NOT be treated as a missing stop.
