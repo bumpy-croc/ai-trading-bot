@@ -477,3 +477,11 @@ the decision table, applied as adopted policy:
 - **Reporting**: A/B results and the P4.2 weekly parity audit publish through the frozen-
   exam/scoreboard system (docs/architecture/model_evaluation_system.md) — one append-only
   evidence discipline for both model and parity claims.
+
+**D1 mechanism correction (2026-07-06, flip-rate study)**: the feature window is exclusive
+of the forming bar — the model's prediction is FIXED within the hour; decisions flip because
+the live reference price (predicted_return denominator) mutates tick-by-tick. The gate is
+therefore "freeze the decision reference price to the closed bar," not "avoid OOD features"
+(the adoption note above overstated the OOD mechanism). Study also shows neither mode beats
+coin-flip on H+1 direction: the gate removes churn/whipsaw and buys input parity; it does not
+claim edge. Evidence: docs/research/experiments/2026-07-06_forming-bar-fliprate.md.
