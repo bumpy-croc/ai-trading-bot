@@ -105,9 +105,11 @@ class TestCheckUserStreamHealth:
         mock_exchange = MagicMock()
         mock_exchange._user_ws_state = WebSocketState.PRIMARY
         # Stale stream → NOT healthy (no real event), so the recovery branch is
-        # skipped and the staleness/reconnect path runs.
+        # skipped and the staleness/reconnect path runs. Liveness verification
+        # fails too (#907) — a genuinely dead socket must still reconnect.
         mock_exchange.user_ws_healthy = False
         mock_exchange._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+        mock_exchange.verify_user_stream_alive.return_value = False
         mock_engine.exchange_interface = mock_exchange
 
         mock_tracker = MagicMock()
@@ -144,6 +146,9 @@ class TestCheckUserStreamHealth:
         ex._user_ws_state = WebSocketState.PRIMARY
         ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
         ex.user_ws_healthy = False
+        # A dead multiplexed ws_api socket fails active liveness verification
+        # too (#907) — this fixture models the genuine-death cascade.
+        ex.verify_user_stream_alive.return_value = False
         mock_engine.exchange_interface = ex
         tracker = MagicMock()
         tracker.get_tracked_count.return_value = 2
@@ -528,6 +533,7 @@ class TestUserStreamRecoveringRestFallback:
         ex._user_ws_state = WebSocketState.PRIMARY
         ex.user_ws_healthy = False
         ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+        ex.verify_user_stream_alive.return_value = False  # genuinely dead (#907)
         # mark_user_degraded flips to REST_DEGRADED like the real method.
         ex.mark_user_degraded.side_effect = lambda: setattr(
             ex, "_user_ws_state", WebSocketState.REST_DEGRADED
@@ -1153,6 +1159,7 @@ class TestUserHardReconnectMode:
         ex._user_ws_state = WebSocketState.PRIMARY
         ex.user_ws_healthy = False
         ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+        ex.verify_user_stream_alive.return_value = False  # genuinely dead (#907)
         mock_engine.exchange_interface = ex
         tracker = MagicMock()
         tracker.get_tracked_count.return_value = 2
@@ -1235,3 +1242,131 @@ class TestUserHardReconnectMode:
         mock_engine._ws_kline_provider = MagicMock()
         with patch("src.config.feature_flags.is_enabled", return_value=True):
             assert mock_engine._should_hard_reconnect_user() is False
+
+
+class TestUserStreamLivenessVerification:
+    """#907: silence on the user-data stream is not death.
+
+    A quiet margin account legitimately produces zero user events for hours
+    (there is no heartbeat on a user-data stream), so the 120 s wall-clock
+    staleness alone guaranteed every subscription was torn down ~2 min after
+    creation overnight — the -2036 churn. When PRIMARY goes wall-clock stale
+    the watchdog now actively verifies the transport (bounded ws-api ping) and
+    HOLDS the subscription if it round-trips; only failed verification enters
+    the existing #717/#723 reconnect cascade, which is preserved untouched as
+    the safety net.
+    """
+
+    @staticmethod
+    def _stale_engine(mock_engine, verified: bool):
+        """PRIMARY + wall-clock-stale + tracked orders, with a liveness verdict."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = False
+        ex._last_user_event_time = datetime.now(UTC) - timedelta(seconds=300)
+        ex.verify_user_stream_alive.return_value = verified
+        ex.user_stream_age_seconds.return_value = 300.0
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        return ex
+
+    @pytest.mark.fast
+    def test_stale_but_verified_alive_holds_subscription(self, mock_engine):
+        """Quiet-but-alive: no reconnect, no breaker increment — the subscription
+        is held instead of being churned every staleness window."""
+        ex = self._stale_engine(mock_engine, verified=True)
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as mock_disconnect:
+            mock_engine._check_user_stream_health()
+
+        mock_disconnect.assert_not_called()
+        ex.verify_user_stream_alive.assert_called_once()
+        assert mock_engine._user_reconnect_failures == 0
+
+    @pytest.mark.fast
+    def test_verified_alive_resets_breaker_mid_cascade(self, mock_engine):
+        """A verification success mid-cascade clears accumulated failures so a
+        transient blip doesn't keep counting toward the circuit."""
+        self._stale_engine(mock_engine, verified=True)
+        mock_engine._user_reconnect_failures = 2
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as mock_disconnect:
+            mock_engine._check_user_stream_health()
+
+        mock_disconnect.assert_not_called()
+        assert mock_engine._user_reconnect_failures == 0
+
+    @pytest.mark.fast
+    def test_verification_failure_enters_reconnect_cascade(self, mock_engine):
+        """A failed liveness check is a REAL problem — the existing reconnect
+        cascade (fast phase → circuit → throttled probes) runs unchanged."""
+        self._stale_engine(mock_engine, verified=False)
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as mock_disconnect:
+            mock_engine._check_user_stream_health()
+
+        mock_disconnect.assert_called_once()
+        assert mock_engine._user_reconnect_failures == 1
+
+    @pytest.mark.fast
+    def test_verification_raising_is_treated_as_failed(self, mock_engine):
+        """A verifier that raises must never crash the health thread — treat it
+        as a failed verification and reconnect."""
+        ex = self._stale_engine(mock_engine, verified=False)
+        ex.verify_user_stream_alive.side_effect = RuntimeError("boom")
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as mock_disconnect:
+            mock_engine._check_user_stream_health()
+
+        mock_disconnect.assert_called_once()
+
+    @pytest.mark.fast
+    def test_exchange_without_verifier_keeps_legacy_reconnect(self, mock_engine):
+        """Providers without verify_user_stream_alive keep today's behavior."""
+        ex = self._stale_engine(mock_engine, verified=True)
+        del ex.verify_user_stream_alive  # getattr now raises AttributeError
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as mock_disconnect:
+            mock_engine._check_user_stream_health()
+
+        mock_disconnect.assert_called_once()
+
+    @pytest.mark.fast
+    def test_degrade_logs_subscription_age(self, mock_engine, caplog):
+        """#907 observability: every degrade logs the subscription age so prod
+        logs can prove lifetimes moved from ~minutes to hours."""
+        import logging
+
+        self._stale_engine(mock_engine, verified=False)
+
+        with (
+            patch.object(mock_engine, "_handle_user_stream_disconnect"),
+            caplog.at_level(logging.WARNING),
+        ):
+            mock_engine._check_user_stream_health()
+
+        assert any("subscription age 5.0m" in rec.getMessage() for rec in caplog.records)
+
+    @pytest.mark.fast
+    def test_rest_degraded_probe_path_unaffected_by_verifier(self, mock_engine):
+        """REST_DEGRADED probing (#717/#723) is not gated on liveness pings —
+        there is no held subscription to verify while degraded."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.REST_DEGRADED
+        ex.user_ws_healthy = False
+        ex.verify_user_stream_alive.return_value = True
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        mock_engine._user_reconnect_failures = 9  # next cycle hits boundary 10
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as mock_disconnect:
+            mock_engine._check_user_stream_health()
+
+        mock_disconnect.assert_called_once()
+        ex.verify_user_stream_alive.assert_not_called()
