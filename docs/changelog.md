@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Deterministic backtest inference; loud live timeout accounting** (#912
+  side-finding): `PredictionEngine` gated every model inference behind
+  `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*
+  budget misused as a hard abort — and additionally replaced *completed*
+  predictions with a zeroed error result whenever total wall time exceeded
+  that budget. Under CPU load, identical backtests diverged (measured 46 vs
+  55 trades on the same model/window/code), breaking the frozen-exam
+  evaluation guarantee. Worse, ML signal generators consumed errored results'
+  placeholder `price=0.0` as a real prediction, fabricating a −100% predicted
+  return (full-strength phantom SELL). Now: a process-wide
+  `InferenceContext` (`src/prediction/inference_context.py`) defaults to
+  DETERMINISTIC (no inference deadline, no latency-based substitution or
+  logging) and is pinned by `Backtester.__init__`; `LiveTradingEngine`
+  pins LIVE, where inference runs under a new
+  `PredictionConfig.live_inference_timeout` (default 5s, env
+  `LIVE_INFERENCE_TIMEOUT`) with loud accounting on timeout — WARNING log,
+  `inference_timeouts` counter in `get_performance_stats()`, `timed_out`
+  stamp on the error result, and a `timed_out` stamp on the degraded HOLD
+  signal's metadata. `max_prediction_latency` is now alert-only (live-context
+  WARNING, never gates a result), and both ML signal generators treat any
+  errored `PredictionResult` as a failed prediction (explicit HOLD) instead
+  of a phantom price.
+
 ### Added
 - **Cloud training hardening (#890)**: `atb train cloud` accepts `--start-date`/`--end-date`
   (UTC, mutually exclusive with `--days`) for fixed-cutoff experiments; `--no-wait` now uploads

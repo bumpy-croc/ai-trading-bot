@@ -102,6 +102,8 @@ class TestMLSignalGenerator:
 
         # Mock prediction result
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 51000.0
         mock_engine.predict.return_value = mock_result
 
@@ -137,6 +139,8 @@ class TestMLSignalGenerator:
         # Mock prediction engine
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 51000.0  # Predicted price higher than current
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -160,6 +164,8 @@ class TestMLSignalGenerator:
         # Mock prediction engine to return lower prediction (potential short signal)
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 49500.0  # Prediction lower than current price
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -256,6 +262,8 @@ class TestMLSignalGenerator:
         # Mock prediction engine
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         real_price = 50000.0  # Real price from prediction engine
         mock_result.price = real_price
         mock_engine.predict.return_value = mock_result
@@ -305,6 +313,8 @@ class TestMLSignalGenerator:
         """Test get_confidence method"""
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 50500.0  # Slight price increase
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -438,6 +448,8 @@ class TestMLBasicSignalGenerator:
         # Mock prediction engine
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 51000.0  # Predicted price higher than current
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -473,6 +485,8 @@ class TestMLBasicSignalGenerator:
         # Mock prediction engine to return higher prediction than current price
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 55000.0  # Very high predicted price
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -500,6 +514,8 @@ class TestMLBasicSignalGenerator:
         def mock_predict(window_df, model_name=None):
             # Return a price 1% below the actual current price (well below -0.05% threshold)
             mock_result = Mock(spec=PredictionResult)
+            mock_result.error = None
+            mock_result.metadata = {}
             mock_result.price = current_price * 0.99  # 1% below current
             return mock_result
 
@@ -524,6 +540,8 @@ class TestMLBasicSignalGenerator:
         # Mock prediction engine to return prediction close to current price
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 50000.0  # Neutral prediction (close to current price)
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -562,6 +580,8 @@ class TestMLBasicSignalGenerator:
         """Test get_confidence method for basic generator"""
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 51500.0  # Price prediction showing positive return
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -599,6 +619,8 @@ class TestMLBasicSignalGenerator:
         """Test prediction engine metadata inclusion"""
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 51000.0
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -623,6 +645,8 @@ class TestMLBasicSignalGenerator:
         # Mock prediction engine
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         real_price = 45000.0  # Real price from prediction engine
         mock_result.price = real_price
         mock_engine.predict.return_value = mock_result
@@ -701,6 +725,8 @@ class TestMLBasicSignalGenerator:
         mock_engine.model_registry = mock_registry
 
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 3000.0
         mock_engine.predict.return_value = mock_result
         mock_engine_class.return_value = mock_engine
@@ -813,6 +839,8 @@ class TestMLSignalGeneratorEdgeCases:
         """Test handling of zero prices"""
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
         mock_result.price = 50000.0
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
@@ -835,3 +863,115 @@ class TestMLSignalGeneratorEdgeCases:
         # Should handle zero prices gracefully
         assert isinstance(signal, Signal)
         assert signal.metadata["predicted_return"] == 0  # Should be 0 when current_price is 0
+
+
+class TestErroredPredictionResultHandling:
+    """Errored engine results must degrade to HOLD, never a phantom signal.
+
+    The engine reports failures (including live inference timeouts) as
+    PredictionResult(price=0.0, error=...). Treating that price as real
+    produced a predicted_return of -100% — a full-strength phantom SELL.
+    """
+
+    def create_test_dataframe(self, length=150):
+        np.random.seed(42)
+        base_price = 50000
+        prices = [base_price]
+        for change in np.random.normal(0, 0.02, length - 1):
+            prices.append(max(prices[-1] * (1 + change), 1000))
+        return pd.DataFrame(
+            {
+                "open": prices,
+                "high": [p * 1.01 for p in prices],
+                "low": [p * 0.99 for p in prices],
+                "close": prices,
+                "volume": np.random.uniform(1000, 10000, length),
+            },
+            index=pd.date_range("2023-01-01", periods=length, freq="1h"),
+        )
+
+    def _errored_result(self, timed_out: bool):
+        result = Mock(spec=PredictionResult)
+        result.price = 0.0
+        result.confidence = 0.0
+        result.direction = 0
+        result.model_name = "BTCUSDT:1h:basic:v1"
+        result.error = "Model inference timeout after 5.0s"
+        result.metadata = {"timed_out": True} if timed_out else {"error_type": "SomeError"}
+        return result
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_basic_generator_holds_on_errored_result(self, mock_config_class, mock_engine_class):
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine.predict.return_value = self._errored_result(timed_out=False)
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLBasicSignalGenerator(sequence_length=120)
+        signal = generator.generate_signal(self.create_test_dataframe(150), 130)
+
+        assert signal.direction == SignalDirection.HOLD
+        assert signal.strength == 0.0
+        assert signal.confidence == 0.0
+        assert signal.metadata["reason"] == "prediction_failed"
+        assert signal.metadata["timed_out"] is False
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_basic_generator_stamps_timed_out_on_timeout(
+        self, mock_config_class, mock_engine_class
+    ):
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine.predict.return_value = self._errored_result(timed_out=True)
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLBasicSignalGenerator(sequence_length=120)
+        signal = generator.generate_signal(self.create_test_dataframe(150), 130)
+
+        assert signal.direction == SignalDirection.HOLD
+        assert signal.metadata["reason"] == "prediction_failed"
+        assert signal.metadata["timed_out"] is True
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_adaptive_generator_holds_on_errored_result(self, mock_config_class, mock_engine_class):
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine.predict.return_value = self._errored_result(timed_out=True)
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLSignalGenerator(sequence_length=120)
+        signal = generator.generate_signal(self.create_test_dataframe(150), 130)
+
+        assert signal.direction == SignalDirection.HOLD
+        assert signal.strength == 0.0
+        assert signal.confidence == 0.0
+        assert signal.metadata["reason"] == "prediction_failed"
+        assert signal.metadata["timed_out"] is True
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_timed_out_stamp_resets_on_next_successful_prediction(
+        self, mock_config_class, mock_engine_class
+    ):
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        ok_result = Mock(spec=PredictionResult)
+        ok_result.price = 51000.0
+        ok_result.error = None
+        ok_result.metadata = {}
+        ok_result.model_name = "BTCUSDT:1h:basic:v1"
+        mock_engine.predict.side_effect = [self._errored_result(timed_out=True), ok_result]
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLBasicSignalGenerator(sequence_length=120)
+        df = self.create_test_dataframe(150)
+
+        failed = generator.generate_signal(df, 130)
+        assert failed.metadata["timed_out"] is True
+
+        ok = generator.generate_signal(df, 131)
+        assert ok.metadata.get("reason") != "prediction_failed"
+        assert "timed_out" not in ok.metadata

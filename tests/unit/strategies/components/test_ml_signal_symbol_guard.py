@@ -39,6 +39,8 @@ def _make_engine(registry=None, predicted_price=51000.0):
     result = Mock()
     result.price = predicted_price
     result.model_name = "BTCUSDT:1h:basic:v1"
+    result.error = None
+    result.metadata = {}
     engine.predict.return_value = result
     if registry is not None:
         engine.model_registry = registry

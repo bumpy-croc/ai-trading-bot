@@ -110,6 +110,7 @@ from src.position_management.macro_events import MacroEventGuard
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
+from src.prediction.inference_context import InferenceContext, set_inference_context
 from src.regime.detector import RegimeDetector
 from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
@@ -252,6 +253,11 @@ class LiveTradingEngine:
             app config). The runner builds these explicitly; when omitted the
             engine resolves them itself (#486).
         """
+
+        # Live inference runs under a bounded latency budget so the trading
+        # loop cannot block indefinitely on a hung model; timeouts are
+        # accounted loudly (WARNING + counter + timed_out signal stamp).
+        set_inference_context(InferenceContext.LIVE)
 
         self._validate_inputs(
             initial_balance=initial_balance,
