@@ -220,3 +220,32 @@ Results (all fee/slippage-on, hyper_growth strategy, prod-matched risk params, v
 
 ## 2026-07-05 · deploy-verify · daemon(PM)
 **PRODUCTION = DEVELOP PARITY, VERIFIED** (Board directive; PR #905-family parity merge, tree byte-identical, ours-merge history tie for clean future syncs; CI green; deploy boot 18:39Z). Boot verification: native ETHUSDT/basic/2026-07-04_22h_v1 in registry with ZERO cross-symbol/mismatch warnings (prod now trades the native ETH signal for the FIRST TIME); Max Position 20.0%; drawdown guard armed peak=$84.42; trading loop running. Expected known-flag: alert channel unset (Board item; operationally covered by the 30-min alert-monitor pull loop). Staging synced to same tree (#904). All bear-market subsystems present but flag-OFF in prod; enablement remains a separate evidence-gated decision. PM flag on early model promotion (~28h into 48h paper window, trial clean, dominates the noise incumbent on every axis) recorded — Board-directed parity explicitly included it.
+
+---
+
+## 2026-07-05 · incident-triage · daemon(PM)
+**IP-transition night: DEGRADED-NOT-DOWN, correctly triaged.** Alex rotated Railway static egress IP + Binance allowlist + deleted the unused development environment (~22:15Z). Effects: (1) user-data WS churned (400 reconnects) → circuit-open → **REST-degraded mode** (designed #717 fallback; fills/balances via polling) — 3 CRITICAL system_events fired (now also delivered to the new ALERT_WEBHOOK_URL Slack channel); (2) REST auth from the new IP verified WORKING (DB heartbeat 22:22Z + status ticks + entry evaluation post-transition); exchange-side SL unaffected; (3) railway CLI link broke ("Environment is deleted" — cached deleted-env reference) → re-linked to production, log access restored. NOT a P0: protection intact, engineered degraded state. WS-recovery checkpoint set (+45min): if user stream still circuit-open, service restart to re-establish WS cleanly on the new IP. Overnight 10-min API-error watch re-armed with fixed CLI.
+
+---
+
+## 2026-07-06 · nightcap · daemon(PM)
+**WS user-stream: chronic churn accepted overnight, daylight fix queued.** Post-restart the #723 hard-reconnect works but the subscription drops every ~10-20min (-2036 on teardown, probe #40+ by 00:12Z). Correction to earlier triage: identical -2036 signatures predate the IP rotation — chronic subscription-lifecycle defect (the #616/#617 family), aggravated not created by the transition. REST fully authorized on the new IP; fills via polling; exchange-side SL intact; equity $84.40 stable. Issue filed for daylight investigation. Posture: designed-degraded + alert-monitor; no midnight heroics on a protected account.
+
+## 2026-07-06 · track-record · quant-researcher
+Experiment #912: Confidence-calibration study — does the ETHUSDT model's raw-output→confidence mapping compress real directional edge into noise, and can recalibration recover it? → rejected (H0 supported)
+Evidence: docs/research/experiments/2026-07-05_confidence-calibration.md
+Phase 1 (code trace): confidence = clip(|predicted_return| * 12.0, 0, 1) feeds a binary min_confidence=0.05 gate; HyperGrowth's FixedFractionSizer has adjust_for_confidence=False so confidence has ZERO effect on position size once gated — any calibration fix can only ever change which bars trade, never their size. Phase 2 (freshly retrained ETHUSDT W_full model, zero train/exam overlap, verified against metadata.json): magnitude-vs-hit-rate decile table is FLAT on the frozen exam window (2026-01-01→2026-07-04, n=4,415; Cochran-Armitage p=0.669, Spearman p=0.477, every decile's 95% Wilson CI overlaps every other's) despite showing a statistically real gradient on a training-period-adjacent slice (2025-07-01→2025-12-31, n=4,391; CA p=0.019, Spearman p=0.0008) — textbook overfitting of the confidence channel, not a real OOS signal. Phase 3 (4 gate-recalibration variants, one-shot on frozen exam, thresholds pre-selected from training-period data): 3 of 4 matched/underperformed baseline; vol-normalized z-score gate showed a directionally favorable but sub-threshold result (+1.45pp return vs required ≥3pp, 49 vs 46 trades) not distinguishable from noise.
+Verdict: no calibration-layer fix clears the pre-registered bar. Recommendation: redirect to target redesign (direction-classification and/or vol-normalized-return training target) as the next research tournament, not further confidence-formula tuning.
+Side-finding (spawned as separate follow-up, not fixed here): backtests are NOT deterministic — PredictionEngine's inference timeout defaults to 0.1s (a latency-alerting budget mistakenly gating actual inference-abort), so under CPU contention a small fraction of bars silently fall back to HOLD; re-running the IDENTICAL baseline backtest twice produced materially different trade counts/returns (46 trades/-11.36% vs 55 trades/-10.33%). Threatens the model-evaluation-system's frozen-exam comparability premise; filed for dedicated fix.
+Also spawned: min_confidence override mapping gap in src/experiments/runner.py (maps to position_sizer only; HyperGrowth's gate lives on risk_manager).
+Compute: isolated `.claude/worktrees/calibration-study` (fresh from origin/develop, detached), removed on completion. Never touched main checkout, staging, or prod.
+
+---
+
+## 2026-07-06 · merge · daemon(PM)
+**#891 MERGED (squash a846cd4f-family), #890 CLOSED — cloud training production-grade.** Full arc: 5 fixes + 2 stubs + date-range flags + collision-proof versioning + ONNX-required cloud-promote (never touches basic/latest without --set-latest) + atomic shared latest-symlink helper + amd64/onnx-pin container + E2E revalidated on real SageMaker (3 jobs ≈ $0.01). Two-review gauntlet (code: zero findings; arch: P1 keras-only-promote + P2 symlink atomicity — both fixed). Weekly-model-retrain routine precondition #1 now satisfied; #2 (image freshness) true until training_pipeline next changes. Backlog adds from reviews: image-drift CI guard, --json on cloud-status/cloud-list.
+
+---
+
+## 2026-07-06 · soak-verdict · daemon(PM)
+**#907 CLOSED — WS subscription fix VALIDATED in production.** 6h soak (12:30Z→18:34Z): ZERO REST_DEGRADED transitions (pre-fix baseline: one every ~10-20min, months-old chronic). Early single-attempt reconnects at 6m/28m/28m ages = Binance idle policy, handled cleanly by the verify-ping path. The months-old churn family (#616/#617 lineage) is closed by a one-constant root cause + 4-layer fix, diagnosed-to-validated in under 24h.
