@@ -142,6 +142,20 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         help="Force price-only model (no sentiment)",
     )
     parser.add_argument(
+        "--model-type",
+        type=str,
+        default="cnn_lstm",
+        choices=["lstm", "cnn_lstm", "attention_lstm", "tcn", "tcn_attention", "tft"],
+        help="Model architecture (default: cnn_lstm)",
+    )
+    parser.add_argument(
+        "--model-variant",
+        type=str,
+        default="default",
+        choices=["default", "lightweight", "deep"],
+        help="Architecture variant (default: default)",
+    )
+    parser.add_argument(
         "--instance-type",
         type=str,
         default="ml.g4dn.xlarge",
@@ -226,6 +240,8 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         sequence_length=args.sequence_length,
         force_sentiment=args.force_sentiment,
         force_price_only=args.force_price_only,
+        model_type=args.model_type,
+        model_variant=args.model_variant,
         diagnostics=DiagnosticsOptions(
             generate_plots=False,  # Skip plots in cloud (no display)
             evaluate_robustness=True,
@@ -258,6 +274,7 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
     print(f"  Epochs:          {args.epochs}")
     print(f"  Batch Size:      {args.batch_size}")
     print(f"  Sequence Length: {args.sequence_length}")
+    print(f"  Architecture:    {args.model_type} ({args.model_variant})")
     print()
     print(f"  Provider:        {provider.provider_name}")
     print(f"  Instance:        {args.instance_type}")

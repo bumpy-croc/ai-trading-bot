@@ -9,6 +9,7 @@ import pytest
 
 from cli.commands.train_cloud import (
     DEFAULT_TRAINING_DAYS,
+    _handle_cloud,
     _handle_cloud_list,
     _handle_cloud_promote,
     _handle_cloud_status,
@@ -113,6 +114,62 @@ class TestParseJobName:
 def _ns(args: list[str]) -> argparse.Namespace:
     """Build the REMAINDER-style namespace the handlers receive."""
     return argparse.Namespace(args=args)
+
+
+@pytest.mark.fast
+class TestHandleCloudArchitectureSelection:
+    """Tests for --model-type/--model-variant threading on `atb train cloud`."""
+
+    def _submit(self, cli_args: list[str]) -> MagicMock:
+        """Run _handle_cloud with mocked provider/orchestrator; return orchestrator cls mock."""
+        provider = MagicMock()
+        provider.is_available.return_value = True
+        provider.provider_name = "sagemaker"
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.submit_job.return_value = "job-1"
+
+        with (
+            patch.dict("os.environ", {"SAGEMAKER_S3_BUCKET": "test-bucket"}),
+            patch("src.ml.cloud.providers.get_provider", return_value=provider),
+            patch(
+                "src.ml.cloud.orchestrator.CloudTrainingOrchestrator",
+                return_value=mock_orchestrator,
+            ) as mock_cls,
+        ):
+            rc = _handle_cloud(_ns(cli_args))
+
+        assert rc == 0
+        return mock_cls
+
+    def test_model_type_and_variant_reach_training_config(self) -> None:
+        mock_cls = self._submit(
+            ["BTCUSDT", "--no-wait", "--model-type", "tcn", "--model-variant", "deep"]
+        )
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.model_type == "tcn"
+        assert training_config.model_variant == "deep"
+
+    def test_defaults_preserve_current_behavior(self) -> None:
+        mock_cls = self._submit(["BTCUSDT", "--no-wait"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.model_type == "cnn_lstm"
+        assert training_config.model_variant == "default"
+
+    def test_tft_is_accepted(self) -> None:
+        mock_cls = self._submit(["BTCUSDT", "--no-wait", "--model-type", "tft"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.model_type == "tft"
+
+    def test_unknown_model_type_rejected_by_argparse(self) -> None:
+        with pytest.raises(SystemExit):
+            _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--model-type", "transformer"]))
+
+    def test_unknown_model_variant_rejected_by_argparse(self) -> None:
+        with pytest.raises(SystemExit):
+            _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--model-variant", "huge"]))
 
 
 @pytest.mark.fast

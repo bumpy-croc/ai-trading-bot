@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+if TYPE_CHECKING:
+    from sklearn.preprocessing import MinMaxScaler
+
 try:
     import tensorflow as tf
 
@@ -38,6 +41,7 @@ from src.ml.training_pipeline.features import (
 from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.ingestion import download_price_data, load_sentiment_data
 from src.ml.training_pipeline.models import create_model, get_model_callbacks
+from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -171,11 +175,28 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
                 "Check data availability and timeframe alignment."
             )
 
-        feature_data, scalers, feature_names = create_robust_features(
-            merged_df.copy(), sentiment_assessment, ctx.config.sequence_length
-        )
+        if ctx.config.force_price_only:
+            # Route through the same 5-feature, causally-normalized extractor that
+            # `atb train price` and production inference use. Historically this flag
+            # only skipped the sentiment download while still building
+            # create_robust_features' 9-feature globally-scaled pipeline, silently
+            # diverging from the price-only contract.
+            extractor = PriceOnlyFeatureExtractor(normalization_window=ctx.config.sequence_length)
+            feature_data = extractor.extract(merged_df.copy())
+            feature_names = extractor.get_feature_names()
+            feature_data = feature_data.dropna(subset=feature_names)
+            scalers: dict[str, MinMaxScaler] = {}
+            # Predict the rolling-normalized close, matching `atb train price`. The raw
+            # close would regress dollar magnitudes with no denormalization step
+            # (scalers is empty), making RMSE/MAPE incomparable with existing
+            # price-only baselines.
+            target_array = feature_data["close_normalized"].to_numpy(dtype=np.float32)
+        else:
+            feature_data, scalers, feature_names = create_robust_features(
+                merged_df.copy(), sentiment_assessment, ctx.config.sequence_length
+            )
+            target_array = feature_data["close"].to_numpy(dtype=np.float32)
         feature_array = feature_data[feature_names].to_numpy(dtype=np.float32)
-        target_array = feature_data["close"].to_numpy(dtype=np.float32)
         sequences, targets = create_sequences(
             feature_array,
             target_array,
@@ -230,6 +251,10 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             scalers.get("close"),
         )
 
+        # force_price_only bundles stay in price/ even though they share `atb train
+        # price`'s basic/ contract: writing to basic/ here would implicitly repoint
+        # basic/latest — the symlink live strategies load. Promotion into basic/ is
+        # always an explicit step (atb train cloud-promote / atb models promote).
         metadata = {
             "symbol": ctx.config.symbol,
             "model_type": "sentiment" if has_sentiment else "price",

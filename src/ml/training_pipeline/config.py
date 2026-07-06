@@ -64,7 +64,7 @@ class TrainingConfig:
 
     # Valid model types and variants for validation
     _VALID_MODEL_TYPES = frozenset(
-        {"cnn_lstm", "adaptive", "default", "attention_lstm", "tcn", "tcn_attention", "lstm"}
+        {"cnn_lstm", "adaptive", "default", "attention_lstm", "tcn", "tcn_attention", "tft", "lstm"}
     )
     _VALID_MODEL_VARIANTS = frozenset({"default", "lightweight", "deep"})
 
@@ -142,12 +142,3 @@ class TrainingContext:
             End date as ISO 8601 string (YYYY-MM-DD)
         """
         return self.config.end_date.strftime("%Y-%m-%dT23:59:59Z")
-
-    @property
-    def price_data_glob(self) -> str:
-        """Generate glob pattern for finding downloaded price data files.
-
-        Returns:
-            Glob pattern matching price data files (e.g., 'BTCUSDT_1h_*.csv')
-        """
-        return f"{self.symbol_exchange}_{self.config.timeframe}_{self.start_iso}_{self.end_iso}.*"
