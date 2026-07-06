@@ -57,7 +57,11 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
     """Generate auto-incrementing version ID to prevent collisions.
 
     Checks if version directory exists and increments counter until finding
-    a unique version ID. Format: YYYY-MM-DD_HHh_vN where N starts at 1.
+    a unique version ID. Format: YYYY-MM-DD_HHhMMmSSs_vN where N starts at 1.
+
+    Second-level granularity keeps IDs unique across cloud training containers,
+    where each job sees an empty models dir and the exists() counter cannot
+    de-duplicate against sibling jobs started in the same hour.
 
     Args:
         models_dir: Root models directory
@@ -70,7 +74,7 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
     Raises:
         RuntimeError: If unable to generate unique version ID after max retries
     """
-    base_timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%Hh")
+    base_timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%Hh%Mm%Ss")
     version_counter = 1
 
     while version_counter <= MAX_VERSION_GENERATION_RETRIES:

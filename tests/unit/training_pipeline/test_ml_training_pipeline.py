@@ -71,10 +71,28 @@ class TestGenerateVersionId:
         # Assert
         assert version_id.endswith("_v1")
         assert "_" in version_id
-        # Format: YYYY-MM-DD_HHh_vN
+        # Format: YYYY-MM-DD_HHhMMmSSs_vN
         parts = version_id.split("_")
         assert len(parts) == 3
         assert parts[2] == "v1"
+
+    def test_version_id_has_second_granularity(self, tmp_path):
+        """Two same-hour cloud containers must not generate colliding IDs.
+
+        Each container has an empty models dir, so the exists() counter cannot
+        de-duplicate across jobs — the timestamp itself must be unique.
+        """
+        import re
+
+        # Arrange
+        models_dir = tmp_path / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        # Act
+        version_id = _generate_version_id(models_dir, "BTCUSDT", "basic")
+
+        # Assert
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s_v1", version_id)
 
     def test_increments_version_when_exists(self, tmp_path):
         # Arrange

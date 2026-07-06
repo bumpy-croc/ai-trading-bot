@@ -1,9 +1,10 @@
+# Scheduled retraining is handled by a Claude Code routine with an
+# evaluate-vs-incumbent gate (see #890); this workflow remains for
+# manual/emergency cloud training only. Its models sync to the runner's
+# filesystem — download from S3 or use the routine for repo integration.
 name: Weekly Model Training
 
 on:
-  schedule:
-    # Run every Sunday at 2 AM UTC
-    - cron: '0 2 * * 0'
   workflow_dispatch:
     # Allow manual trigger with custom parameters
     inputs:
