@@ -229,7 +229,15 @@ class WebSocketHealthMonitor:
             logger.error("Failed to restart WS health monitor: %s", e)
 
     def ws_health_loop(self) -> None:
-        """Monitor WebSocket streams and trigger reconnection on failure."""
+        """Monitor WebSocket streams and trigger reconnection on failure.
+
+        The user-stream liveness ping (#907) is this loop's first bounded-
+        blocking call: on a wall-clock-stale user stream, a cycle may block
+        inside ``check_user_stream_health`` for up to the ping timeout (+1 s
+        belt, ≤ ~10 s), delaying the next kline check by that much. Future
+        reductions of the staleness thresholds or the health interval must
+        account for it.
+        """
         state = self._state
         from src.config.constants import DEFAULT_WS_HEALTH_CHECK_INTERVAL
 
@@ -386,6 +394,12 @@ class WebSocketHealthMonitor:
         ``_handle_user_stream_disconnect``) and ``disable_polling`` is flipped only
         by ``_restore_user_ws_primary``, gated on a confirmed real event.
 
+        Also unlike kline, the user-data stream has NO event cadence: a quiet
+        account emits nothing for hours, so wall-clock staleness is only a
+        *trigger to verify*, not a death verdict (#907). PRIMARY + stale first
+        runs ``verify_user_stream_alive`` (bounded ws-api ping); the reconnect
+        cascade below is entered only when verification fails or is unsupported.
+
         Runs only on the WS health-monitor thread (the single writer of
         ``_user_reconnect_failures``), matching the lock-free convention; main-loop
         reads of the polling flag are GIL-atomic.
@@ -414,7 +428,11 @@ class WebSocketHealthMonitor:
 
         # RESYNCING (set by the error callback) needs an immediate recovery cycle.
         if getattr(exchange, "_user_ws_state", None) == WebSocketState.RESYNCING:
-            logger.warning("User data stream in RESYNCING state — triggering recovery")
+            logger.warning(
+                "User data stream in RESYNCING state — triggering recovery "
+                "(subscription age %s)",
+                self._user_stream_age(exchange),
+            )
             state._handle_user_stream_disconnect()
             return
 
@@ -461,20 +479,65 @@ class WebSocketHealthMonitor:
         if age <= DEFAULT_WS_USER_STALENESS_THRESHOLD:
             return
 
-        # Stale while PRIMARY with tracked orders means the previous reconnect
-        # produced no real events. python-binance's start_margin_socket is
-        # fire-and-forget and reports success even on a dead multiplexed ws_api
-        # socket, so reconnect_user returns True and this watchdog would otherwise
-        # reconnect every ~2 min forever (spewing asyncio re-entrancy errors).
-        # After a few unproductive reconnects, open the circuit: tear down the dead
-        # socket, mark REST_DEGRADED, and run REST-polling-only. Unlike #616, the
-        # REST_DEGRADED branch above now keeps throttled-probing, so this is the
-        # fast-phase boundary, not a terminal state (#717).
+        # THE #907 FIX — silence is not death on an event-driven stream. A quiet
+        # margin account legitimately emits ZERO user events for hours (no fills,
+        # no balance changes — a user-data stream has no heartbeat), so wall-clock
+        # staleness alone guaranteed every subscription was torn down ~2 min after
+        # creation overnight (the -2036 churn: stale → 3 futile reconnects →
+        # circuit → hard probes, forever). Before assuming death, actively verify
+        # the transport with a bounded ws-api ping; a verified round-trip refreshes
+        # provider freshness, deferring the next check one staleness window.
+        # Genuine failures still recover promptly: transport drops surface as
+        # error events (→ the RESYNCING branch above) and server-side kills as
+        # eventStreamTerminated (handled as a disconnect by the provider) — the
+        # cascade below remains the safety net when verification fails.
+        verify = getattr(exchange, "verify_user_stream_alive", None)
+        if callable(verify):
+            try:
+                alive = bool(verify())
+            except Exception as e:
+                # A broken verifier must never crash the health thread nor hold a
+                # possibly-dead subscription — treat as failed verification.
+                alive = False
+                logger.error("User-stream liveness verification errored: %s", e)
+            if alive:
+                if state._user_reconnect_failures:
+                    logger.info(
+                        "User data stream verified alive mid-cascade — holding "
+                        "subscription, breaker reset (%d failures cleared, #907)",
+                        state._user_reconnect_failures,
+                    )
+                state._user_reconnect_failures = 0
+                logger.debug(
+                    "User data stream quiet (%ds) but transport verified alive — "
+                    "holding subscription (age %s, #907)",
+                    int(age),
+                    self._user_stream_age(exchange),
+                )
+                return
+
+        # Subscription age at degrade (#907 observability): captured BEFORE the
+        # teardown below clears it, so every degrade logs how long the
+        # subscription actually held (the fix's empirical success metric).
+        sub_age = self._user_stream_age(exchange)
+
+        # Stale while PRIMARY with tracked orders — and NOT verifiably alive —
+        # means the previous reconnect produced no real events. python-binance's
+        # start_margin_socket is fire-and-forget and reports success even on a
+        # dead multiplexed ws_api socket, so reconnect_user returns True and this
+        # watchdog would otherwise reconnect every ~2 min forever (spewing asyncio
+        # re-entrancy errors). After a few unproductive reconnects, open the
+        # circuit: tear down the dead socket, mark REST_DEGRADED, and run
+        # REST-polling-only. Unlike #616, the REST_DEGRADED branch above now keeps
+        # throttled-probing, so this is the fast-phase boundary, not a terminal
+        # state (#717).
         if state._user_reconnect_failures >= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
             logger.warning(
                 "User data stream did not recover after %d reconnects — circuit open, "
-                "falling back to REST polling and throttled-probing the WS (#717).",
+                "falling back to REST polling and throttled-probing the WS "
+                "(subscription age %s, #717).",
                 state._user_reconnect_failures,
+                sub_age,
             )
             # Tear down the dead user socket BEFORE marking degraded so the terminal
             # state is REST_DEGRADED, not DISCONNECTED (stop_user_stream sets
@@ -496,7 +559,8 @@ class WebSocketHealthMonitor:
             state._record_event(
                 EventType.ALERT,
                 f"User data stream circuit-open after {state._user_reconnect_failures} "
-                "reconnects — REST-degraded; real-time fills/balance updates unavailable",
+                "reconnects — REST-degraded; real-time fills/balance updates unavailable "
+                f"(subscription age {sub_age})",
                 severity="critical",
                 component="connectivity",
                 error_code="USER_WS_DEGRADED",
@@ -506,12 +570,32 @@ class WebSocketHealthMonitor:
 
         state._user_reconnect_failures += 1
         logger.warning(
-            "User data stream stale (%ds) with tracked orders — reconnecting (attempt %d/%d)",
+            "User data stream stale (%ds) with tracked orders and not verifiably "
+            "alive — reconnecting (attempt %d/%d, subscription age %s)",
             int(age),
             state._user_reconnect_failures,
             DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
+            sub_age,
         )
         state._handle_user_stream_disconnect()
+
+    @staticmethod
+    def _user_stream_age(exchange: Any) -> str:
+        """Current user-stream subscription age as a compact string, or "n/a".
+
+        Diagnostic only (#907): logged at each degrade/recovery so prod logs
+        prove whether the liveness fix moved subscription lifetimes from
+        ~minutes to hours. Never raises — providers without the accessor (or
+        with no active subscription) yield "n/a".
+        """
+        try:
+            age_fn = getattr(exchange, "user_stream_age_seconds", None)
+            age = age_fn() if callable(age_fn) else None
+            if age is None:
+                return "n/a"
+            return f"{age / 60.0:.1f}m"
+        except Exception:
+            return "n/a"
 
     def should_probe_user_reconnect(self, failures: int) -> bool:
         """Whether to probe a user-stream WS reconnect on this degraded cycle (#717/#723).
