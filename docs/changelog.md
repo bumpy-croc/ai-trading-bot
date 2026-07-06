@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backtest determinism fingerprint byte-identical.
 
 ### Fixed
+- **#914 `strategy_executions.ml_predictions` no longer always null**: every row
+  ever written (151k+ in prod) carried JSON `null` because the logging call sites
+  extracted prediction data from dataframe columns (`onnx_pred`, `ml_prediction`)
+  that component strategies never populate — model outputs live on `Signal.metadata`.
+  A new shared extractor (`extract_ml_predictions_from_signal` in
+  `src/tech/adapters/row_extractors.py`) pulls the predicted price/return, model
+  identity (`engine_model_name`, `model_type`, `model_timeframe`, symbol-guard
+  stamps), and generator from the decision's signal metadata, and both engines
+  merge it into the logged dict (live entry/exit coordinators; backtest
+  entry/no-action/exit sites). Failed predictions now persist
+  `{prediction_failed: true, reason: ...}` (plus `error`/`error_type` when
+  generators provide them) instead of null, so prediction-path defects like the
+  #913 phantom-short class are visible in the DB.
 - **Experiment runner: `hyper_growth.min_confidence` override now reaches
   FlatRiskManager**: `ExperimentRunner._apply_strategy_attribute` routed
   `min_confidence` to the position sizer only, which is correct for the

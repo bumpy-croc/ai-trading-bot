@@ -113,8 +113,62 @@ def extract_ml_predictions(df: pd.DataFrame, index: int) -> dict[str, float]:
     return ml
 
 
+# Metadata keys the ML signal generators attach to their Signals
+# (src/strategies/components/ml_signal_generator.py). "error"/"error_type" are
+# included so richer failure detail flows through if generators start emitting it.
+_ML_SIGNAL_METADATA_KEYS = (
+    "prediction",
+    "predicted_return",
+    "current_price",
+    "engine_model_name",
+    "model_type",
+    "model_timeframe",
+    "model_symbol",
+    "trading_symbol",
+    "generator",
+    "error",
+    "error_type",
+)
+
+# Failure reasons only the ML generators emit. Generic reasons such as
+# "insufficient_history" are shared with technical generators and would
+# mislabel non-ML decisions as prediction failures.
+_ML_FAILURE_REASONS = frozenset({"prediction_failed", "invalid_prediction_or_price"})
+
+
+def extract_ml_predictions_from_signal(signal: Any) -> dict[str, Any]:
+    """Extract ML prediction context from a Signal's metadata for DB logging.
+
+    Model outputs (predicted price/return, model identity) live on Signal
+    metadata rather than dataframe columns, so the column-based extractor
+    above never sees them (#914). Returns ``{}`` for signals that no ML
+    prediction informed; failed predictions return their failure reason with
+    ``prediction_failed=True`` so they stay visible in ``strategy_executions``
+    instead of persisting as null.
+    """
+
+    metadata = getattr(signal, "metadata", None)
+    if not isinstance(metadata, dict):
+        return {}
+
+    reason = metadata.get("reason")
+    is_failure = reason in _ML_FAILURE_REASONS
+    has_prediction = "prediction" in metadata or "predicted_return" in metadata
+    if not has_prediction and not is_failure:
+        return {}
+
+    extracted: dict[str, Any] = {
+        key: metadata[key] for key in _ML_SIGNAL_METADATA_KEYS if metadata.get(key) is not None
+    }
+    if is_failure:
+        extracted["prediction_failed"] = True
+        extracted["reason"] = reason
+    return extracted
+
+
 __all__ = [
     "extract_indicators",
     "extract_sentiment_data",
     "extract_ml_predictions",
+    "extract_ml_predictions_from_signal",
 ]

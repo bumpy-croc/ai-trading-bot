@@ -52,6 +52,9 @@ from src.engines.backtest.regime import RegimeHandler
 from src.engines.backtest.risk import CorrelationHandler
 from src.engines.backtest.utils import extract_indicators as util_extract_indicators
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
+from src.engines.backtest.utils import (
+    extract_ml_predictions_from_signal as util_extract_ml_from_signal,
+)
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
@@ -1355,7 +1358,12 @@ class Backtester:
         # Log exit decision
         if self.event_logger.enabled:
             sentiment_data = util_extract_sentiment(df, index)
-            ml_predictions = util_extract_ml(df, index)
+            # Signal metadata carries the model outputs (or failure reason)
+            # that the dataframe columns don't (#914).
+            ml_predictions = {
+                **util_extract_ml(df, index),
+                **util_extract_ml_from_signal(getattr(runtime_decision, "signal", None)),
+            }
             current_pnl_pct = self.exit_handler.calculate_current_pnl_pct(current_price)
 
             self.event_logger.log_exit_decision(
@@ -1471,7 +1479,12 @@ class Backtester:
             if self.event_logger.should_log_candle(index):
                 indicators = util_extract_indicators(df, index)
                 sentiment_data = util_extract_sentiment(df, index)
-                ml_predictions = util_extract_ml(df, index)
+                # Signal metadata carries the model outputs (or failure reason)
+                # that the dataframe columns don't (#914).
+                ml_predictions = {
+                    **util_extract_ml(df, index),
+                    **util_extract_ml_from_signal(getattr(runtime_decision, "signal", None)),
+                }
 
                 self.event_logger.log_entry_decision(
                     strategy_name=self.strategy.__class__.__name__,
@@ -1511,7 +1524,12 @@ class Backtester:
             # Log entry
             indicators = util_extract_indicators(df, index)
             sentiment_data = util_extract_sentiment(df, index)
-            ml_predictions = util_extract_ml(df, index)
+            # Signal metadata carries the model outputs (or failure reason)
+            # that the dataframe columns don't (#914).
+            ml_predictions = {
+                **util_extract_ml(df, index),
+                **util_extract_ml_from_signal(getattr(runtime_decision, "signal", None)),
+            }
 
             self.event_logger.log_entry_decision(
                 strategy_name=self.strategy.__class__.__name__,
