@@ -294,3 +294,61 @@ def test_check_exit_conditions_safety_mode_keeps_dataframe_ml_predictions():
 
     kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
     assert kwargs["ml_predictions"] == {"onnx_pred": 50700.0}
+
+
+def test_check_exit_conditions_attributes_prediction_to_exit_decision_not_entry():
+    """The persisted ml_predictions belong to the CURRENT exit decision's
+    signal, not the (different) prediction that opened the position."""
+    position = _make_position()
+    # Entry-time prediction context carried on the position; must not leak
+    # into the exit row.
+    position.metadata = {
+        "prediction": 48000.0,
+        "predicted_return": -0.04,
+        "engine_model_name": "BTCUSDT:1h:basic:v1",
+    }
+    state = _make_state(position, _make_exit_check(should_exit=True, reason="take_profit"))
+    decision = _exit_runtime_decision(
+        {
+            "generator": "ml_basic_signal_generator",
+            "prediction": 52000.0,
+            "predicted_return": 0.038,
+            "engine_model_name": "BTCUSDT:1h:basic:v2",
+        }
+    )
+
+    LiveExitCoordinator(engine_state=state).check_exit_conditions(
+        _make_df(), 0, 50100.0, runtime_decision=decision
+    )
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["signal_type"] == "exit"
+    assert kwargs["action_taken"] == "closed_position"
+    assert kwargs["ml_predictions"]["prediction"] == 52000.0
+    assert kwargs["ml_predictions"]["predicted_return"] == 0.038
+    assert kwargs["ml_predictions"]["engine_model_name"] == "BTCUSDT:1h:basic:v2"
+
+
+def test_check_exit_conditions_logs_prediction_error_details_end_to_end():
+    """error/error_type metadata reaches the persisted ml_predictions dict
+    through the real logging call site (helper-level coverage is not enough)."""
+    position = _make_position()
+    state = _make_state(position, _make_exit_check(should_exit=False))
+    decision = _exit_runtime_decision(
+        {
+            "generator": "ml_basic_signal_generator",
+            "reason": "prediction_failed",
+            "error": "ONNX session timed out",
+            "error_type": "TimeoutError",
+        },
+        confidence=0.0,
+    )
+
+    LiveExitCoordinator(engine_state=state).check_exit_conditions(
+        _make_df(), 0, 50100.0, runtime_decision=decision
+    )
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction_failed"] is True
+    assert kwargs["ml_predictions"]["error"] == "ONNX session timed out"
+    assert kwargs["ml_predictions"]["error_type"] == "TimeoutError"

@@ -262,3 +262,60 @@ class TestBacktestEngineMlPredictionsLogging:
         kwargs = bt.event_logger.log_exit_decision.call_args.kwargs
         assert kwargs["ml_predictions"]["prediction"] == 101.5
         assert kwargs["ml_predictions"]["engine_model_name"] == "BTCUSDT:1h:basic:v1"
+
+    def test_exit_decision_attributes_prediction_to_exit_signal_not_entry(self):
+        """The logged ml_predictions belong to the CURRENT exit decision's
+        signal, not the (different) prediction that opened the trade."""
+        bt = _make_backtester_stub()
+        bt.exit_handler.update_trailing_stop.return_value = (False, None)
+        partial_result = MagicMock()
+        partial_result.realized_pnl = 0.0
+        partial_result.scale_in_fees = 0.0
+        bt.exit_handler.check_partial_operations.return_value = partial_result
+        # Open trade carrying entry-time prediction context; must not leak
+        # into the exit row.
+        open_trade = MagicMock()
+        open_trade.current_size = 1.0
+        open_trade.original_size = 1.0
+        open_trade.size = 0.1
+        open_trade.partial_exits_taken = 0
+        open_trade.metadata = {
+            "prediction": 98.0,
+            "predicted_return": -0.02,
+            "engine_model_name": "BTCUSDT:1h:basic:v1",
+        }
+        bt.position_tracker.current_trade = open_trade
+        exit_check = MagicMock()
+        exit_check.should_exit = False
+        bt.exit_handler.check_exit_conditions.return_value = exit_check
+        bt.exit_handler.calculate_current_pnl_pct.return_value = 0.01
+
+        exit_signal = Signal(
+            direction=SignalDirection.HOLD,
+            strength=0.0,
+            confidence=0.3,
+            metadata={
+                "generator": "ml_basic_signal_generator",
+                "prediction": 104.0,
+                "predicted_return": 0.015,
+                "engine_model_name": "BTCUSDT:1h:basic:v2",
+            },
+        )
+
+        df = _sample_df()
+        bt._process_position_exit(
+            runtime_decision=_runtime_decision(exit_signal),
+            candle=df.iloc[2],
+            current_price=102.5,
+            current_time=datetime(2024, 1, 1, 2, tzinfo=UTC),
+            df=df,
+            index=2,
+            symbol="BTCUSDT",
+            timeframe="1h",
+        )
+
+        kwargs = bt.event_logger.log_exit_decision.call_args.kwargs
+        assert kwargs["ml_predictions"]["prediction"] == 104.0
+        assert kwargs["ml_predictions"]["predicted_return"] == 0.015
+        assert kwargs["ml_predictions"]["engine_model_name"] == "BTCUSDT:1h:basic:v2"
+        assert kwargs["position_size"] == 0.1
