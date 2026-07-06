@@ -92,8 +92,26 @@ class TestPromoteModelVersion:
         bad_dir.mkdir(parents=True)
         (bad_dir / "metadata.json").write_text("{}")
 
-        with pytest.raises(ModelPromotionError, match="model file"):
+        with pytest.raises(ModelPromotionError, match="model.onnx"):
             promote_model_version("BTCUSDT", bad_version, registry_root=registry)
+
+    def test_keras_only_bundle_refused(self, registry: Path) -> None:
+        """A bundle without model.onnx must never be promoted.
+
+        Live loading requires ONNX; promoting a keras-only bundle into basic/
+        (especially with --set-latest) would silently disable live trading.
+        """
+        keras_version = "2026-07-05_12h00m00s_v1"
+        keras_dir = registry / "BTCUSDT" / "price" / keras_version
+        keras_dir.mkdir(parents=True)
+        (keras_dir / "model.keras").write_text("keras-bytes")
+        (keras_dir / "metadata.json").write_text("{}")
+
+        with pytest.raises(ModelPromotionError, match="model.onnx"):
+            promote_model_version("BTCUSDT", keras_version, set_latest=True, registry_root=registry)
+
+        assert not (registry / "BTCUSDT" / "basic" / keras_version).exists()
+        assert not (registry / "BTCUSDT" / "basic" / "latest").is_symlink()
 
     @pytest.mark.parametrize("bad_component", ["..", "a/b", "", "x/../y"])
     def test_unsafe_path_components_rejected(self, registry: Path, bad_component: str) -> None:

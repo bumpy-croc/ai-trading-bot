@@ -10,18 +10,15 @@ The ``basic/latest`` symlink is only touched when ``set_latest`` is passed.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shutil
 from pathlib import Path
 
 from src.infrastructure.runtime.paths import get_project_root
+from src.ml.cloud.artifacts.latest_link import update_latest_symlink
 from src.ml.cloud.exceptions import ModelPromotionError
 
 logger = logging.getLogger(__name__)
-
-# Model bundle is only usable with at least one of these files present.
-_MODEL_FILES = ("model.onnx", "model.keras")
 
 
 def _validate_component(value: str, field: str) -> str:
@@ -34,18 +31,6 @@ def _validate_component(value: str, field: str) -> str:
     if text in (".", "..") or not re.match(r"^[\w\-.]+$", text):
         raise ModelPromotionError(f"Unsafe {field}: {value!r}")
     return text
-
-
-def _update_latest_symlink(type_dir: Path, version_id: str) -> None:
-    """Atomically point ``{type_dir}/latest`` at ``version_id``."""
-    latest_link = type_dir / "latest"
-    temp_link = type_dir / f".latest.{version_id}.tmp"
-
-    if temp_link.exists() or temp_link.is_symlink():
-        temp_link.unlink()
-    temp_link.symlink_to(version_id)
-    # os.replace is atomic on POSIX, so readers never see a missing symlink
-    os.replace(str(temp_link), str(latest_link))
 
 
 def promote_model_version(
@@ -92,9 +77,11 @@ def promote_model_version(
 
     if not source_dir.is_dir():
         raise ModelPromotionError(f"Source version not found: {source_dir}")
-    if not any((source_dir / name).exists() for name in _MODEL_FILES):
+    # Live loading requires ONNX; a keras-only bundle promoted into basic/
+    # would make the strategy fail safe to HOLD and silently stop trading.
+    if not (source_dir / "model.onnx").exists():
         raise ModelPromotionError(
-            f"Source bundle has no model file ({' or '.join(_MODEL_FILES)}): {source_dir}"
+            f"Source bundle has no model.onnx (live loading requires ONNX): {source_dir}"
         )
     if target_dir.exists():
         raise ModelPromotionError(
@@ -106,7 +93,7 @@ def promote_model_version(
     logger.info("Promoted %s/%s/%s -> %s", symbol, source_type, version_id, target_dir)
 
     if set_latest:
-        _update_latest_symlink(target_dir.parent, version_id)
+        update_latest_symlink(target_dir.parent, version_id)
         logger.info("Updated %s/%s/latest -> %s", symbol, target_type, version_id)
 
     return target_dir

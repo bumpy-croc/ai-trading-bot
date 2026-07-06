@@ -19,6 +19,7 @@ from pathlib import Path
 from time import perf_counter
 
 from src.infrastructure.runtime.paths import get_project_root
+from src.ml.cloud.artifacts.latest_link import update_latest_symlink
 from src.ml.cloud.artifacts.s3_manager import S3ArtifactManager
 from src.ml.cloud.config import CloudTrainingConfig
 from src.ml.cloud.exceptions import (
@@ -572,12 +573,10 @@ class CloudTrainingOrchestrator:
             shutil.copytree(artifact_path, version_dir)
             logger.info(f"Copied artifacts to {version_dir}")
 
-        # Update 'latest' symlink
-        latest_link = local_registry / symbol / model_type / "latest"
-        if latest_link.exists() or latest_link.is_symlink():
-            latest_link.unlink()
-        latest_link.symlink_to(version_id)
-        logger.info(f"Updated latest symlink: {latest_link} -> {version_id}")
+        # Update 'latest' symlink atomically so readers never see it missing
+        type_dir = local_registry / symbol / model_type
+        update_latest_symlink(type_dir, version_id)
+        logger.info(f"Updated latest symlink: {type_dir / 'latest'} -> {version_id}")
 
         return version_dir
 

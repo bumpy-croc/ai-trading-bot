@@ -686,6 +686,32 @@ class TestSyncLocalArtifactsCollision:
 
         assert result == base / "2026-07-05_10h_v1-3"
 
+    def test_sync_updates_latest_via_atomic_helper(self, tmp_path: Path) -> None:
+        """The sync path must use the shared atomic symlink helper.
+
+        A plain unlink-then-symlink leaves a window where readers see no
+        'latest' at all.
+        """
+        orchestrator = _make_orchestrator()
+        registry = tmp_path / "registry"
+        artifact = tmp_path / "artifact"
+        artifact.mkdir()
+        (artifact / "model.onnx").write_text("model")
+
+        with patch("src.ml.cloud.orchestrator.update_latest_symlink") as mock_update:
+            result = orchestrator._sync_local_artifacts(
+                artifact_path=artifact,
+                local_registry=registry,
+                symbol="BTCUSDT",
+                model_type="price",
+                version_id="2026-07-06_10h00m00s_v1",
+            )
+
+        mock_update.assert_called_once_with(
+            registry / "BTCUSDT" / "price", "2026-07-06_10h00m00s_v1"
+        )
+        assert result == registry / "BTCUSDT" / "price" / "2026-07-06_10h00m00s_v1"
+
 
 @pytest.mark.fast
 class TestSyncArtifactsUsesMetadataSymbol:
