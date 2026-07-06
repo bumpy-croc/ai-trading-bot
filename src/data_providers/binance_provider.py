@@ -2567,7 +2567,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         disconnect). On success the provider freshness timestamp is refreshed
         under the generation guard — but never ``_user_event_received``, so a
         ping can NOT fake the real-event confirmation that gates disabling REST
-        polling (#717). Bounded (#631): total wall clock ≤ the probe timeout.
+        polling (#717). Bounded (#631): the timeout is enforced ON the TWM loop
+        via ``asyncio.wait_for``, which cancels a hung ping coroutine loop-side —
+        a ``concurrent.futures.Future.cancel()`` from the waiting thread cannot
+        interrupt an already-running coroutine, so thread-side-only enforcement
+        would let a hung ws-api accumulate orphaned pending pings on the loop
+        across health cycles. The outer ``future.result`` timeout (+1 s) is only
+        a belt against a stalled loop.
 
         Returns:
             True iff a ws-api ping round-tripped within the timeout.
@@ -2581,9 +2587,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return False  # AsyncClient still being created on the TWM thread
         with self._user_stream_lock:
             generation = self._user_stream_generation
-        future = asyncio.run_coroutine_threadsafe(client.ws_ping(), loop)
+        future = asyncio.run_coroutine_threadsafe(
+            asyncio.wait_for(client.ws_ping(), DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT),
+            loop,
+        )
         try:
-            future.result(timeout=DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT)
+            future.result(timeout=DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT + 1)
         except Exception as e:
             future.cancel()
             logger.warning("User-stream liveness ping failed: %s", e)

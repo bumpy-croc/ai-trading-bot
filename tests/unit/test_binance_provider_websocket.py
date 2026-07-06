@@ -1197,6 +1197,51 @@ class TestVerifyUserStreamAlive:
         finally:
             stop()
 
+    @pytest.mark.fast
+    def test_hung_ping_times_out_on_the_loop_and_cancels_the_coroutine(self, provider):
+        """The ping timeout is enforced ON the TWM loop (asyncio.wait_for), not
+        merely by the waiting thread: concurrent.futures.Future.cancel() cannot
+        interrupt an already-running coroutine, so thread-side-only enforcement
+        would leave a hung ping orphaned-pending on the loop every health cycle.
+        A hung ws-api must yield False AND a loop-side CancelledError in the ping."""
+        import threading
+
+        loop, stop = _run_twm_loop_on_thread()
+        try:
+            twm = MagicMock()
+            client = MagicMock()
+            started = threading.Event()
+            cancelled = threading.Event()
+
+            async def ws_ping(**params):
+                started.set()
+                try:
+                    await asyncio.sleep(60)  # hung ws-api: never responds
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                return {}
+
+            client.ws_ping = ws_ping
+            twm._client = client
+            provider._twm = twm
+            provider._twm_loop = loop
+            stale = datetime.now(UTC) - timedelta(seconds=999)
+            provider._last_user_event_time = stale
+
+            with patch(
+                "src.data_providers.binance_provider.DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT",
+                0.2,
+            ):
+                assert provider.verify_user_stream_alive() is False
+
+            assert started.wait(timeout=1)  # the ping actually ran on the loop
+            # wait_for cancelled it loop-side — no orphaned pending coroutine.
+            assert cancelled.wait(timeout=2)
+            assert provider._last_user_event_time == stale  # no freshness refresh
+        finally:
+            stop()
+
 
 class TestUserStreamSubscriptionAge:
     """#907 observability: subscription age is logged at each degrade so prod

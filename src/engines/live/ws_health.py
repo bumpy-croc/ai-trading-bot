@@ -229,7 +229,15 @@ class WebSocketHealthMonitor:
             logger.error("Failed to restart WS health monitor: %s", e)
 
     def ws_health_loop(self) -> None:
-        """Monitor WebSocket streams and trigger reconnection on failure."""
+        """Monitor WebSocket streams and trigger reconnection on failure.
+
+        The user-stream liveness ping (#907) is this loop's first bounded-
+        blocking call: on a wall-clock-stale user stream, a cycle may block
+        inside ``check_user_stream_health`` for up to the ping timeout (+1 s
+        belt, ≤ ~10 s), delaying the next kline check by that much. Future
+        reductions of the staleness thresholds or the health interval must
+        account for it.
+        """
         state = self._state
         from src.config.constants import DEFAULT_WS_HEALTH_CHECK_INTERVAL
 
