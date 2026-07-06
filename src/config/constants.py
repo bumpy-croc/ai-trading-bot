@@ -442,6 +442,16 @@ DEFAULT_WS_USER_STALENESS_THRESHOLD = (
     120  # Seconds before user stream considered stale (only when orders tracked)
 )
 DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
+# Bounded wall-clock timeout (seconds) for the user-stream liveness ping (#907).
+# A user-data stream has NO heartbeat: a quiet margin account legitimately emits
+# zero events for hours, so wall-clock silence past the staleness threshold must
+# not be read as death (doing so tore every subscription down ~120 s after
+# creation overnight — the -2036 churn). On staleness the watchdog instead
+# round-trips a ws-api `ping` on the TWM loop and holds the subscription if it
+# succeeds; only a failed/timed-out ping (or a provider-reported error /
+# eventStreamTerminated) enters the reconnect cascade. The ping doubles as cheap
+# keepalive traffic on the ws-api TCP path (~1 ping per staleness window).
+DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT = 10
 DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
 # Consecutive unproductive user-stream reconnects (stale again with no real event)
 # before the watchdog opens a circuit breaker: stop the futile ~2-min reconnect loop

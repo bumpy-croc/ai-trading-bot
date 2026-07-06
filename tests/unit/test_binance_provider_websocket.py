@@ -1058,3 +1058,351 @@ class TestCircuitOpenTeardownNoUncaughtKeyError:
 
         assert len(delegated) == 1
         assert isinstance(delegated[0].get("exception"), KeyError)
+
+
+def _run_twm_loop_on_thread():
+    """Real event loop running on a background thread, as the TWM does.
+
+    Returns (loop, stop) — call ``stop()`` to tear it down.
+    """
+    import threading
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    def stop() -> None:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+        loop.close()
+
+    return loop, stop
+
+
+class TestVerifyUserStreamAlive:
+    """#907: active liveness verification for the user-data stream.
+
+    A quiet margin account legitimately emits ZERO user events for hours (a
+    user-data stream has no heartbeat), so wall-clock silence must not be read
+    as death. ``verify_user_stream_alive`` round-trips a ws-api ``ping`` on the
+    TWM loop: True refreshes freshness (holding the subscription); False/raise
+    lets the watchdog run the existing reconnect cascade.
+    """
+
+    @pytest.mark.fast
+    def test_returns_false_without_twm(self, provider):
+        """No TWM/loop → cannot verify → False (watchdog reconnects as before)."""
+        provider._twm = None
+        provider._twm_loop = None
+        assert provider.verify_user_stream_alive() is False
+
+    @pytest.mark.fast
+    def test_returns_false_when_loop_not_running(self, provider):
+        """A stopped TWM loop cannot run the ping — verification fails closed."""
+        provider._twm = MagicMock()
+        loop = asyncio.new_event_loop()
+        try:
+            provider._twm_loop = loop
+            assert provider.verify_user_stream_alive() is False
+        finally:
+            loop.close()
+
+    @pytest.mark.fast
+    def test_returns_false_when_async_client_not_ready(self, provider):
+        """TWM started but AsyncClient not yet created → fail closed."""
+        loop, stop = _run_twm_loop_on_thread()
+        try:
+            twm = MagicMock()
+            twm._client = None
+            provider._twm = twm
+            provider._twm_loop = loop
+            assert provider.verify_user_stream_alive() is False
+        finally:
+            stop()
+
+    @pytest.mark.fast
+    def test_ping_roundtrip_refreshes_freshness_but_never_event_flag(self, provider):
+        """A verified ping refreshes _last_user_event_time (holding the
+        subscription for another staleness window) but must NEVER set
+        _user_event_received — WS-primary promotion stays real-event-gated so a
+        ping can't disable REST polling on a never-delivering socket (#717)."""
+        loop, stop = _run_twm_loop_on_thread()
+        try:
+            twm = MagicMock()
+            client = MagicMock()
+
+            async def ws_ping(**params):
+                return {}
+
+            client.ws_ping = ws_ping
+            twm._client = client
+            provider._twm = twm
+            provider._twm_loop = loop
+            provider._user_event_received = False
+            stale = datetime.now(UTC) - timedelta(seconds=999)
+            provider._last_user_event_time = stale
+
+            assert provider.verify_user_stream_alive() is True
+            assert provider._last_user_event_time > stale
+            assert provider._user_event_received is False
+        finally:
+            stop()
+
+    @pytest.mark.fast
+    def test_ping_failure_returns_false_and_keeps_freshness(self, provider):
+        """A failed ping (dead ws-api) returns False and leaves freshness stale
+        so the watchdog proceeds to reconnect."""
+        loop, stop = _run_twm_loop_on_thread()
+        try:
+            twm = MagicMock()
+            client = MagicMock()
+
+            async def ws_ping(**params):
+                raise RuntimeError("ws-api down")
+
+            client.ws_ping = ws_ping
+            twm._client = client
+            provider._twm = twm
+            provider._twm_loop = loop
+            stale = datetime.now(UTC) - timedelta(seconds=999)
+            provider._last_user_event_time = stale
+
+            assert provider.verify_user_stream_alive() is False
+            assert provider._last_user_event_time == stale
+        finally:
+            stop()
+
+    @pytest.mark.fast
+    def test_generation_change_mid_ping_skips_freshness_refresh(self, provider):
+        """A stop/start racing the ping supersedes it: the ping's freshness
+        refresh must not be attributed to the NEW generation (#717 discipline)."""
+        loop, stop = _run_twm_loop_on_thread()
+        try:
+            twm = MagicMock()
+            client = MagicMock()
+
+            async def ws_ping(**params):
+                provider._user_stream_generation += 1  # concurrent teardown/restart
+                return {}
+
+            client.ws_ping = ws_ping
+            twm._client = client
+            provider._twm = twm
+            provider._twm_loop = loop
+            stale = datetime.now(UTC) - timedelta(seconds=999)
+            provider._last_user_event_time = stale
+
+            assert provider.verify_user_stream_alive() is True
+            assert provider._last_user_event_time == stale  # refresh skipped
+        finally:
+            stop()
+
+
+class TestUserStreamSubscriptionAge:
+    """#907 observability: subscription age is logged at each degrade so prod
+    logs can prove the fix moved lifetimes from ~minutes to hours."""
+
+    @pytest.mark.fast
+    def test_age_none_before_start(self, provider):
+        assert provider.user_stream_age_seconds() is None
+
+    @pytest.mark.fast
+    def test_start_records_subscription_time(self, provider):
+        mock_twm = MagicMock()
+        mock_twm.start_user_socket.return_value = "k"
+        provider._twm = mock_twm
+        provider._use_margin = False
+
+        provider.start_user_stream(MagicMock())
+
+        age = provider.user_stream_age_seconds()
+        assert age is not None
+        assert 0 <= age < 5
+
+    @pytest.mark.fast
+    def test_stop_user_stream_clears_subscription_time(self, provider):
+        mock_twm = MagicMock()
+        mock_twm.start_user_socket.return_value = "k"
+        provider._twm = mock_twm
+        provider._use_margin = False
+        provider.start_user_stream(MagicMock())
+        provider._user_socket_key = "k"
+
+        provider.stop_user_stream()
+
+        assert provider.user_stream_age_seconds() is None
+
+    @pytest.mark.fast
+    def test_stop_streams_clears_subscription_time(self, provider):
+        mock_twm = MagicMock()
+        mock_twm.start_user_socket.return_value = "k"
+        provider._twm = mock_twm
+        provider._use_margin = False
+        provider.start_user_stream(MagicMock())
+
+        provider.stop_streams()
+
+        assert provider.user_stream_age_seconds() is None
+
+
+class TestUserCallbackEventStreamTerminated:
+    """#907: ``eventStreamTerminated`` is the ws-api server declaring THIS
+    subscription dead (the ws-api analogue of listenKeyExpired). It must drive
+    the RESYNCING recovery path like an error — counting it as a healthy event
+    would fake freshness on a stream that just died."""
+
+    @pytest.mark.fast
+    def test_terminated_event_enters_resyncing_without_faking_freshness(self, provider):
+        cb, sink = TestUserStreamGeneration._capture_user_callback(provider)
+        provider._user_event_received = False
+        stale = datetime.now(UTC) - timedelta(seconds=999)
+        provider._last_user_event_time = stale
+
+        cb({"e": "eventStreamTerminated", "E": 1751760000000})
+
+        assert provider._user_ws_state == WebSocketState.RESYNCING
+        assert sink == []  # never forwarded as a data event
+        assert provider._user_event_received is False
+        assert provider._last_user_event_time == stale
+
+    @pytest.mark.fast
+    def test_stale_generation_terminated_event_is_dropped(self, provider):
+        """Our own unsubscribe also triggers a server-side termination event; the
+        generation bump in stop_* must drop it before it flips state."""
+        cb, _sink = TestUserStreamGeneration._capture_user_callback(provider)
+        provider._user_stream_generation += 1  # superseded socket
+        provider._user_ws_state = WebSocketState.PRIMARY
+
+        cb({"e": "eventStreamTerminated"})
+
+        assert provider._user_ws_state == WebSocketState.PRIMARY
+
+
+def _make_subscription_not_active_exc():
+    """Real BinanceAPIException carrying the prod -2036 payload."""
+    from binance.exceptions import BinanceAPIException
+
+    return BinanceAPIException(
+        MagicMock(),
+        400,
+        '{"code": -2036, "msg": "User Data Stream subscription not active."}',
+    )
+
+
+def _capture_real_teardown_unsubscribe_error(inner_exc: Exception) -> BaseException:
+    """Drive the REAL ``KeepAliveWebsocket.__aexit__`` exit-unsubscribe path.
+
+    Reproduces the #907 prod signature: tearing down a socket whose server-side
+    subscription is already gone raises through
+    ``_unsubscribe_from_user_data_stream`` inside the library's listener task —
+    surfacing as "Task exception was never retrieved". The captured exception
+    carries the genuine ``keepalive_websocket.py`` frames the discriminator
+    anchors on.
+    """
+    from binance.ws.keepalive_websocket import KeepAliveWebsocket
+
+    captured: dict[str, BaseException] = {}
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda _loop, ctx: captured.__setitem__("exc", ctx["exception"]))
+        kaw = KeepAliveWebsocket.__new__(KeepAliveWebsocket)
+        kaw._timer = None
+        kaw._subscription_id = 7
+        kaw._uses_ws_api_subscription = True
+        kaw._path = "margin_subscription:7"
+        client = MagicMock()
+
+        async def failing_ws_api_request(*args, **kwargs):
+            raise inner_exc
+
+        client._ws_api_request = failing_ws_api_request
+        client.ws_api = MagicMock()
+        kaw._client = client
+
+        task = asyncio.create_task(kaw.__aexit__(None, None, None))
+        await asyncio.sleep(0.05)
+        del task  # drop ref → exception reported as "never retrieved"
+        gc.collect()
+        await asyncio.sleep(0.05)
+
+    asyncio.run(scenario())
+    exc = captured.get("exc")
+    assert exc is not None, "expected a teardown unsubscribe error"
+    return exc
+
+
+class TestTeardownUnsubscribeSuppression:
+    """#907: exceptions escaping python-binance's exit-unsubscribe (notably the
+    -2036 'subscription not active' on an already-dead subscription) are
+    teardown noise by construction — the socket is being discarded — and must
+    never surface as unretrieved task exceptions."""
+
+    @pytest.mark.fast
+    def test_detects_real_teardown_unsubscribe_2036(self, provider):
+        exc = _capture_real_teardown_unsubscribe_error(_make_subscription_not_active_exc())
+        assert provider._is_teardown_unsubscribe_error(exc) is True
+
+    @pytest.mark.fast
+    def test_detects_non_api_teardown_unsubscribe_error(self, provider):
+        """A ws-api timeout through the same teardown path is also teardown noise."""
+        exc = _capture_real_teardown_unsubscribe_error(RuntimeError("Request timed out"))
+        assert provider._is_teardown_unsubscribe_error(exc) is True
+
+    @pytest.mark.fast
+    def test_does_not_match_error_without_teardown_frames(self, provider):
+        """The same -2036 raised OUTSIDE the teardown path is not matched."""
+        try:
+            raise _make_subscription_not_active_exc()
+        except Exception as e:
+            caught = e
+        assert provider._is_teardown_unsubscribe_error(caught) is False
+        assert provider._is_teardown_unsubscribe_error(None) is False
+
+    @pytest.mark.fast
+    def test_handler_suppresses_2036_at_debug(self, provider, caplog):
+        """The prod -2036 teardown signature is downgraded to DEBUG, never
+        delegated to the default handler (no more 'Task exception was never
+        retrieved' ERROR + Traceback)."""
+        mock_loop = MagicMock()
+        exc = _capture_real_teardown_unsubscribe_error(_make_subscription_not_active_exc())
+        context = {"message": "Task exception was never retrieved", "exception": exc}
+
+        with caplog.at_level(logging.DEBUG, logger="src.data_providers.binance_provider"):
+            provider._twm_loop_exception_handler(mock_loop, context)
+
+        mock_loop.default_exception_handler.assert_not_called()
+        assert any(
+            "-2036" in rec.getMessage() and rec.levelno == logging.DEBUG for rec in caplog.records
+        )
+
+    @pytest.mark.fast
+    def test_handler_warns_other_teardown_unsubscribe_errors(self, provider, caplog):
+        """Non--2036 failures on the teardown path are suppressed too (the socket
+        is already being discarded) but stay visible at WARNING."""
+        mock_loop = MagicMock()
+        exc = _capture_real_teardown_unsubscribe_error(RuntimeError("Request timed out"))
+        context = {"message": "Task exception was never retrieved", "exception": exc}
+
+        with caplog.at_level(logging.DEBUG, logger="src.data_providers.binance_provider"):
+            provider._twm_loop_exception_handler(mock_loop, context)
+
+        mock_loop.default_exception_handler.assert_not_called()
+        assert any(
+            "teardown unsubscribe" in rec.getMessage() and rec.levelno == logging.WARNING
+            for rec in caplog.records
+        )
+
+    @pytest.mark.fast
+    def test_unrelated_exception_still_delegates(self, provider):
+        """An exception without teardown frames keeps full ERROR visibility."""
+        mock_loop = MagicMock()
+        try:
+            raise _make_subscription_not_active_exc()
+        except Exception as e:
+            caught = e
+        context = {"message": "boom", "exception": caught}
+
+        provider._twm_loop_exception_handler(mock_loop, context)
+
+        mock_loop.default_exception_handler.assert_called_once_with(context)
