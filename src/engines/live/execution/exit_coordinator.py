@@ -44,6 +44,7 @@ from src.engines.shared.models import PositionSide
 from src.engines.shared.validation import is_same_bar_entry
 from src.infrastructure.logging.events import log_order_event
 from src.performance.metrics import Side, pnl_percent
+from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -158,6 +159,13 @@ class LiveExitCoordinator:
 
         component_strategy = None if safety_mode else state._component_strategy
         decision_for_exit = None if safety_mode else runtime_decision
+
+        # Enrich with model outputs from the signal metadata — the dataframe
+        # columns the extractor reads are never populated by component
+        # strategies, which left ml_predictions null (#914).
+        signal_ml = extract_ml_predictions_from_signal(getattr(decision_for_exit, "signal", None))
+        if signal_ml:
+            ml_predictions = {**ml_predictions, **signal_ml}
 
         # Get current candle timestamp for same-bar exit protection
         candle_time = None

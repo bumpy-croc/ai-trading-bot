@@ -219,3 +219,78 @@ def test_execute_exit_locked_returns_on_failed_close():
     # skip_live_close -> filled-exit path; failure means no trade recorded.
     state.live_exit_handler.execute_filled_exit.assert_called_once()
     assert state.completed_trades == []
+
+
+# ---------------------------------------------------------------------------
+# ml_predictions logging (#914): signal-metadata prediction context must reach
+# the strategy_executions row instead of the historical always-null value.
+# ---------------------------------------------------------------------------
+
+
+def _exit_runtime_decision(metadata: dict, *, confidence: float = 0.42) -> MagicMock:
+    from src.strategies.components import Signal, SignalDirection
+
+    decision = MagicMock()
+    decision.signal = Signal(
+        direction=SignalDirection.HOLD, strength=0.0, confidence=confidence, metadata=metadata
+    )
+    decision.regime = None
+    decision.risk_metrics = None
+    return decision
+
+
+def test_check_exit_conditions_logs_signal_ml_predictions():
+    position = _make_position()
+    state = _make_state(position, _make_exit_check(should_exit=False))
+    decision = _exit_runtime_decision(
+        {
+            "generator": "ml_basic_signal_generator",
+            "prediction": 50750.0,
+            "current_price": 50000.0,
+            "predicted_return": 0.015,
+            "engine_model_name": "BTCUSDT:1h:basic:v1",
+        }
+    )
+
+    LiveExitCoordinator(engine_state=state).check_exit_conditions(
+        _make_df(), 0, 50100.0, runtime_decision=decision
+    )
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction"] == 50750.0
+    assert kwargs["ml_predictions"]["predicted_return"] == 0.015
+    assert kwargs["ml_predictions"]["engine_model_name"] == "BTCUSDT:1h:basic:v1"
+
+
+def test_check_exit_conditions_logs_prediction_failure():
+    position = _make_position()
+    state = _make_state(position, _make_exit_check(should_exit=False))
+    decision = _exit_runtime_decision(
+        {"generator": "ml_basic_signal_generator", "reason": "prediction_failed", "index": 0},
+        confidence=0.0,
+    )
+
+    LiveExitCoordinator(engine_state=state).check_exit_conditions(
+        _make_df(), 0, 50100.0, runtime_decision=decision
+    )
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction_failed"] is True
+    assert kwargs["ml_predictions"]["reason"] == "prediction_failed"
+
+
+def test_check_exit_conditions_safety_mode_keeps_dataframe_ml_predictions():
+    """Safety mode drops the runtime decision, so only df-column values remain."""
+    position = _make_position()
+    state = _make_state(position, _make_exit_check(should_exit=False))
+    state._extract_ml_predictions.return_value = {"onnx_pred": 50700.0}
+    decision = _exit_runtime_decision(
+        {"generator": "ml_basic_signal_generator", "prediction": 50750.0}
+    )
+
+    LiveExitCoordinator(engine_state=state).check_exit_conditions(
+        _make_df(), 0, 50100.0, runtime_decision=decision, safety_mode=True
+    )
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"] == {"onnx_pred": 50700.0}

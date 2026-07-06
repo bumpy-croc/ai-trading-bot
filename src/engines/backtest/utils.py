@@ -22,6 +22,7 @@ from src.tech.adapters import row_extractors
 extract_indicators = row_extractors.extract_indicators
 extract_sentiment_data = row_extractors.extract_sentiment_data
 extract_ml_predictions = row_extractors.extract_ml_predictions
+extract_ml_predictions_from_signal = row_extractors.extract_ml_predictions_from_signal
 
 
 def compute_performance_metrics(

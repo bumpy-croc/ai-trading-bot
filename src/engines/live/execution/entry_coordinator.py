@@ -37,6 +37,7 @@ from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
 from src.strategies.components import Strategy as ComponentStrategy
+from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -190,6 +191,10 @@ class LiveEntryCoordinator:
         indicators = state._extract_indicators(df, current_index)
         sentiment_data = state._extract_sentiment_data(df, current_index)
         ml_predictions = state._extract_ml_predictions(df, current_index)
+        # Signal whose metadata carries the model outputs (or failure reason)
+        # for ml_predictions logging (#914); the component path overwrites it
+        # with its locally produced decision below.
+        decision_signal = getattr(runtime_decision, "signal", None)
 
         if use_runtime:
             perf_metrics = state.performance_tracker.get_metrics()
@@ -248,6 +253,7 @@ class LiveEntryCoordinator:
                     state.current_balance,
                     current_positions or None,
                 )
+                decision_signal = decision.signal
                 state._apply_policies_from_decision(decision)
 
                 notional_size = float(decision.position_size or 0.0)
@@ -284,6 +290,13 @@ class LiveEntryCoordinator:
             position_size = state._apply_dynamic_risk_adjustment(position_size, current_time)
 
         if state.db_manager:
+            # Enrich with model outputs from the signal metadata — the
+            # dataframe columns the extractor reads are never populated by
+            # component strategies, which left ml_predictions null (#914).
+            signal_ml = extract_ml_predictions_from_signal(decision_signal)
+            if signal_ml:
+                ml_predictions = {**ml_predictions, **signal_ml}
+
             # Prepare logging data - include TradingDecision data if available
             log_reasons = [
                 (
