@@ -33,7 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signal's metadata. `max_prediction_latency` is now alert-only (live-context
   WARNING, never gates a result), and both ML signal generators treat any
   errored `PredictionResult` as a failed prediction (explicit HOLD) instead
-  of a phantom price.
+  of a phantom price. The `timed_out` stamp also flows into
+  `strategy_executions.ml_predictions` rows via the #917 signal extractor,
+  so degraded live decisions are attributable in the database. Closes #913.
 
 ### Added
 - **Cloud training hardening (#890)**: `atb train cloud` accepts `--start-date`/`--end-date`

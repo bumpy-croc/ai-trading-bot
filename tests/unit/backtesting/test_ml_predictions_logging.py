@@ -83,6 +83,16 @@ class TestExtractMlPredictionsFromSignal:
         assert result["reason"] == "prediction_failed"
         assert result["generator"] == "ml_basic_signal_generator"
 
+    def test_timed_out_stamp_flows_to_logged_row(self):
+        """Live inference-timeout substitutions stay attributable in DB rows."""
+        signal = _ml_failure_signal()
+        signal.metadata["timed_out"] = True
+
+        result = extract_ml_predictions_from_signal(signal)
+
+        assert result["prediction_failed"] is True
+        assert result["timed_out"] is True
+
     def test_invalid_prediction_or_price_is_flagged_as_failure(self):
         signal = Signal(
             direction=SignalDirection.HOLD,

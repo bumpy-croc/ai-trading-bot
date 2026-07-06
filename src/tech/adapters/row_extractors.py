@@ -128,6 +128,8 @@ _ML_SIGNAL_METADATA_KEYS = (
     "generator",
     "error",
     "error_type",
+    # Live inference-timeout substitutions (see PredictionEngine._run_inference)
+    "timed_out",
 )
 
 # Failure reasons only the ML generators emit. Generic reasons such as
