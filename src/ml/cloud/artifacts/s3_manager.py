@@ -308,6 +308,47 @@ class S3ArtifactManager:
             logger.warning(f"Failed to list model versions: {exc}")
             return []
 
+    def list_training_jobs(self, symbol: str | None = None) -> list[str]:
+        """List SageMaker training-job outputs stored in this bucket.
+
+        SageMaker writes each job's artifacts to ``models/{job_name}/output/``,
+        so the job-name prefixes under ``models/`` are the actual catalogue of
+        cloud-trained model bundles (job names embed symbol and timeframe,
+        e.g. ``atb-btcusdt-1h-20260704-215649``).
+
+        Args:
+            symbol: Optional trading symbol to filter by (e.g., BTCUSDT)
+
+        Returns:
+            Job names sorted newest first (empty list on error)
+        """
+        self._ensure_client()
+        if self._s3_client is None:
+            raise ArtifactSyncError("S3 client not initialized")
+
+        try:
+            paginator = self._s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=self.bucket_name, Prefix="models/", Delimiter="/")
+
+            jobs = []
+            for page in pages:
+                for common_prefix in page.get("CommonPrefixes", []):
+                    job_name = common_prefix["Prefix"].rstrip("/").split("/")[-1]
+                    jobs.append(job_name)
+
+            if symbol:
+                token = f"-{symbol.lower()}-"
+                jobs = [job for job in jobs if token in job]
+
+            # Job names end in YYYYmmdd-HHMMSS, so reverse lexicographic order
+            # is newest-first within a symbol/timeframe
+            jobs.sort(reverse=True)
+            return jobs
+
+        except Exception as exc:
+            logger.warning("Failed to list training jobs: %s", exc)
+            return []
+
     def _parse_s3_uri(self, s3_uri: str) -> tuple[str, str]:
         """Parse S3 URI into bucket and prefix.
 

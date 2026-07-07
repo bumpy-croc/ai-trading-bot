@@ -714,12 +714,15 @@ class TestMLBasicSignalGenerator:
         df = self.create_test_dataframe(150)
         generator._get_ml_prediction(df, 130)
 
-        # Verify registry select_bundle was called with correct symbol
-        mock_registry.select_bundle.assert_called_once_with(
-            symbol="ETHUSDT",
-            model_type="basic",
-            timeframe="1h",
-        )
+        # Verify registry select_bundle was called with correct symbol.
+        # Called twice: startup model-availability validation + prediction.
+        assert mock_registry.select_bundle.call_count == 2
+        for call in mock_registry.select_bundle.call_args_list:
+            assert call.kwargs == {
+                "symbol": "ETHUSDT",
+                "model_type": "basic",
+                "timeframe": "1h",
+            }
 
 
 class TestMLSignalGeneratorEdgeCases:

@@ -19,6 +19,8 @@ Research-backed approach:
 Key insight: Beat buy-and-hold by being MORE aggressive, not more conservative.
 """
 
+import logging
+
 from src.config.constants import DEFAULT_STRATEGY_MIN_CONFIDENCE_AGGRESSIVE
 from src.strategies.components import (
     ConfidenceWeightedSizer,
@@ -27,6 +29,8 @@ from src.strategies.components import (
     Strategy,
     VolatilityRiskManager,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_momentum_leverage_strategy(
@@ -58,6 +62,15 @@ def create_momentum_leverage_strategy(
     Returns:
         Configured Strategy instance
     """
+    # #805: concentrated, aggressive sizing (base_fraction up to ~0.70) is not
+    # recommended in a bear/high-vol regime, where exposure itself is the primary
+    # risk. Prefer ml_adaptive with the exposure governor (#802) + vol-targeted
+    # sizing (#805) when trading a downtrend.
+    logger.warning(
+        "momentum_leverage is NOT recommended for bear/high-vol regimes: its "
+        "concentrated position sizing amplifies drawdowns. Consider ml_adaptive "
+        "with the exposure governor + vol-target sizing instead."
+    )
     # Create momentum signal generator with aggressive thresholds
     signal_generator = MomentumSignalGenerator(
         name=f"{name}_signals",

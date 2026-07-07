@@ -75,7 +75,6 @@ from src.engines.shared.trailing_stop_manager import (
 from src.engines.shared.validation import (
     EPSILON,
     clamp_fraction,
-    convert_exit_fraction_to_current,
     is_position_fully_closed,
     is_valid_fraction,
     is_valid_price,
@@ -156,7 +155,6 @@ __all__ = [
     "is_valid_fraction",
     "safe_divide",
     "is_position_fully_closed",
-    "convert_exit_fraction_to_current",
     "clamp_fraction",
     "validate_parallel_lists",
 ]

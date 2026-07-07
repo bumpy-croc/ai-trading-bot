@@ -32,6 +32,7 @@ from src.config.constants import (
     DEFAULT_STARTUP_BAN_MAX_WAIT,
     DEFAULT_WS_KLINE_STALENESS_THRESHOLD,
     DEFAULT_WS_RECONNECT_MAX_RETRIES,
+    DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT,
     DEFAULT_WS_USER_STALENESS_THRESHOLD,
 )
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
@@ -108,6 +109,11 @@ DEFINITIVE_REJECT_CODES = {
 # Stop-loss limit price slippage to ensure fills
 # For sells: limit below stop price, for buys: limit above stop price
 STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005  # 0.5% slippage
+
+# ws-api "User Data Stream subscription not active" — the server no longer holds
+# the subscription being unsubscribed (it died with its connection). Expected
+# during socket teardown after a transport drop/full rebuild (#907).
+_BINANCE_SUBSCRIPTION_NOT_ACTIVE = -2036
 
 
 _BAN_EXPIRY_PATTERN = re.compile(r"banned until (\d{13})")
@@ -310,6 +316,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         self._last_user_event_time = datetime.now(UTC)
         self._kline_event_received = False  # True after first kline WS event
         self._user_event_received = False  # True after first user WS event
+        # When the CURRENT user-stream subscription was created; None while no
+        # subscription is active. Diagnostic only (#907): logged at each degrade
+        # so prod logs show whether subscription lifetimes are minutes or hours.
+        self._user_stream_subscribed_at: datetime | None = None
         # Monotonic token identifying the current user-socket "generation" (#717).
         # Bumped before every teardown (stop_user_stream / stop_streams) and on
         # each (re)start; the user callback captures the generation live at start
@@ -2175,11 +2185,34 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         delegated to asyncio's default handler so genuine errors keep their
         normal ERROR visibility.
         """
-        if self._is_socket_teardown_keyerror(context.get("exception")):
+        exc = context.get("exception")
+        if self._is_socket_teardown_keyerror(exc):
             logger.debug(
                 "Suppressed python-binance socket-teardown KeyError(%s) on stop (#716)",
-                self._keyerror_path(context.get("exception")),
+                self._keyerror_path(exc),
             )
+            return
+        if self._is_teardown_unsubscribe_error(exc):
+            # Exceptions escaping KeepAliveWebsocket.__aexit__'s exit-unsubscribe
+            # are teardown noise by construction — the socket is being discarded.
+            # The canonical case is -2036 "subscription not active": the server-
+            # side subscription is already gone (it died with its ws-api
+            # connection, or TWM.stop() closed the AsyncClient before the
+            # listener exited so the unsubscribe went out over a fresh connection
+            # that never held it). Surfacing it as "Task exception was never
+            # retrieved" spams ERROR+Traceback and masks real errors (#907).
+            if getattr(exc, "code", None) == _BINANCE_SUBSCRIPTION_NOT_ACTIVE:
+                logger.debug(
+                    "User-stream teardown unsubscribe: subscription already "
+                    "inactive server-side (-2036) — expected after a transport "
+                    "drop or full teardown; suppressed (#907)"
+                )
+            else:
+                logger.warning(
+                    "User-stream teardown unsubscribe failed (suppressed — socket "
+                    "already being discarded, #907): %s",
+                    exc,
+                )
             return
         loop.default_exception_handler(context)
 
@@ -2212,6 +2245,35 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             and filename.endswith("threaded_stream.py")
             and "binance" in filename
         )
+
+    @staticmethod
+    def _is_teardown_unsubscribe_error(exc: BaseException | None) -> bool:
+        """True iff ``exc`` escaped python-binance's exit-unsubscribe teardown path.
+
+        ``KeepAliveWebsocket.__aexit__`` unconditionally awaits
+        ``_unsubscribe_from_user_data_stream``; when the server-side subscription
+        is already gone the ws-api answers 400/-2036 and the exception propagates
+        out of the listener task as an unretrieved task exception (#907). That
+        frame runs ONLY while a socket is being torn down and never invokes our
+        callbacks, so any exception whose traceback passes through it is teardown
+        noise by construction — matched by walking the frames for
+        ``_unsubscribe_from_user_data_stream`` in python-binance's
+        ``keepalive_websocket.py`` (separator-agnostic path anchor, as #716).
+        """
+        if exc is None:
+            return False
+        tb = exc.__traceback__
+        while tb is not None:
+            code = tb.tb_frame.f_code
+            filename = code.co_filename
+            if (
+                code.co_name == "_unsubscribe_from_user_data_stream"
+                and filename.endswith("keepalive_websocket.py")
+                and "binance" in filename
+            ):
+                return True
+            tb = tb.tb_next
+        return False
 
     @staticmethod
     def _keyerror_path(exc: BaseException | None) -> str:
@@ -2319,7 +2381,16 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             def _user_callback(msg: dict) -> None:
                 """Route user data events, handling errors before user callback."""
-                is_error = msg.get("e") == "error"
+                event_type = msg.get("e")
+                is_error = event_type == "error"
+                # eventStreamTerminated is the ws-api server declaring THIS
+                # subscription dead (the ws-api analogue of listenKeyExpired, e.g.
+                # listenToken expiry). It must drive the RESYNCING recovery path
+                # like an error — counting it as a healthy event would fake
+                # freshness on a stream that just died (#907). Our own unsubscribe
+                # also triggers one server-side, but the generation bump in stop_*
+                # drops it below before it can flip state.
+                is_terminated = event_type == "eventStreamTerminated"
                 # Drop events from a superseded socket, and record freshness/the
                 # event flag, atomically w.r.t. the generation bump in start/stop. A
                 # python-binance read_ready callback can still fire on the shared TWM
@@ -2329,7 +2400,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 with self._user_stream_lock:
                     if generation != self._user_stream_generation:
                         return
-                    if is_error:
+                    if is_error or is_terminated:
                         self._on_user_disconnect()
                     else:
                         self._last_user_event_time = datetime.now(UTC)
@@ -2338,6 +2409,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 # or long-running work under a lock).
                 if is_error:
                     logger.error("User data WS error: %s", msg.get("m", "unknown"))
+                    return
+                if is_terminated:
+                    logger.warning(
+                        "User data stream terminated server-side "
+                        "(eventStreamTerminated) — entering RESYNCING (#907)"
+                    )
                     return
                 on_user_event(msg)
 
@@ -2352,6 +2429,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     lambda: cast(Any, self._twm).start_user_socket(callback=_user_callback)
                 )
             self._last_user_event_time = datetime.now(UTC)
+            self._user_stream_subscribed_at = datetime.now(UTC)
             self._user_ws_state = WebSocketState.PRIMARY
             return True
         except Exception as e:
@@ -2366,6 +2444,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         with self._user_stream_lock:
             self._user_stream_generation += 1
             self._user_event_received = False
+        self._user_stream_subscribed_at = None
         if self._user_socket_key and self._twm:
             try:
                 self._twm.stop_socket(self._user_socket_key)
@@ -2382,6 +2461,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         with self._user_stream_lock:
             self._user_stream_generation += 1
             self._user_event_received = False
+        self._user_stream_subscribed_at = None
         if self._twm:
             twm, loop = self._twm, self._twm_loop
             twm.stop()
@@ -2466,6 +2546,74 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return False
         user_age = (datetime.now(UTC) - self._last_user_event_time).total_seconds()
         return user_age < DEFAULT_WS_USER_STALENESS_THRESHOLD
+
+    def verify_user_stream_alive(self) -> bool:
+        """Actively verify the user-stream transport with a bounded ws-api ping (#907).
+
+        A user-data stream has NO heartbeat: a quiet margin account legitimately
+        emits zero events for hours, so the watchdog must not read wall-clock
+        silence as death (doing so tore every subscription down ~120 s after
+        creation on quiet nights — the -2036 churn). This round-trips the ws-api
+        ``ping`` method on the TWM loop: success proves the loop, the shared
+        ws-api transport, and its read loop (response futures resolve) are all
+        functioning, so a silent stream is idle-healthy and the subscription is
+        held. Fails CLOSED — any doubt (no TWM/loop/client, timeout, error)
+        returns False and the watchdog runs the existing reconnect cascade.
+
+        Transport drops cannot hide behind a successful ping: python-binance
+        propagates every read-loop error/reconnect into the subscription queue
+        (→ our error callback → RESYNCING, checked BEFORE staleness), and a
+        server-side kill emits ``eventStreamTerminated`` (handled as a
+        disconnect). On success the provider freshness timestamp is refreshed
+        under the generation guard — but never ``_user_event_received``, so a
+        ping can NOT fake the real-event confirmation that gates disabling REST
+        polling (#717). Bounded (#631): the timeout is enforced ON the TWM loop
+        via ``asyncio.wait_for``, which cancels a hung ping coroutine loop-side —
+        a ``concurrent.futures.Future.cancel()`` from the waiting thread cannot
+        interrupt an already-running coroutine, so thread-side-only enforcement
+        would let a hung ws-api accumulate orphaned pending pings on the loop
+        across health cycles. The outer ``future.result`` timeout (+1 s) is only
+        a belt against a stalled loop.
+
+        Returns:
+            True iff a ws-api ping round-tripped within the timeout.
+        """
+        twm = self._twm
+        loop = self._twm_loop
+        if twm is None or loop is None or not loop.is_running():
+            return False
+        client = getattr(twm, "_client", None)
+        if client is None:
+            return False  # AsyncClient still being created on the TWM thread
+        with self._user_stream_lock:
+            generation = self._user_stream_generation
+        future = asyncio.run_coroutine_threadsafe(
+            asyncio.wait_for(client.ws_ping(), DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT),
+            loop,
+        )
+        try:
+            future.result(timeout=DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT + 1)
+        except Exception as e:
+            future.cancel()
+            logger.warning("User-stream liveness ping failed: %s", e)
+            return False
+        with self._user_stream_lock:
+            # A stop/start racing the ping supersedes it: the refresh belongs to
+            # the generation the ping was issued under, never the new one (#717).
+            if generation == self._user_stream_generation:
+                self._last_user_event_time = datetime.now(UTC)
+        return True
+
+    def user_stream_age_seconds(self) -> float | None:
+        """Age of the current user-stream subscription; None when inactive.
+
+        Diagnostic only (#907): the WS health monitor logs it at each degrade so
+        prod logs show whether subscription lifetimes are minutes or hours.
+        """
+        subscribed_at = self._user_stream_subscribed_at
+        if subscribed_at is None:
+            return None
+        return (datetime.now(UTC) - subscribed_at).total_seconds()
 
     def mark_kline_degraded(self) -> None:
         """Transition kline stream to REST_DEGRADED state (thread-safe)."""

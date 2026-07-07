@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -20,6 +21,7 @@ from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
+from src.engines.live.execution.entry_pause import EntryPauseGate
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import (
     LivePosition,
@@ -33,6 +35,7 @@ from src.engines.shared.execution.snapshot_builder import (
     build_snapshot_from_ohlc,
     map_exit_order_side_from_position,
 )
+from src.engines.shared.exposure import scale_in_gross_cap_headroom
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -40,7 +43,6 @@ from src.engines.shared.partial_operations_manager import (
 from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 from src.engines.shared.validation import (
-    convert_exit_fraction_to_current,
     is_position_fully_closed,
     is_same_bar_entry,
 )
@@ -50,6 +52,7 @@ if TYPE_CHECKING:
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
+    from src.strategies.components.exposure_governor import ExposureGovernor
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,7 @@ class LiveExitHandler:
         use_high_low_for_stops: bool = True,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
+        close_only_provider: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize exit handler.
 
@@ -119,6 +123,9 @@ class LiveExitHandler:
             use_high_low_for_stops: Use candle high/low for SL/TP detection.
             max_position_size: Maximum position size for scale-ins.
             max_filled_price_deviation: Threshold for logging suspicious fill prices.
+            close_only_provider: Reads the engine's close-only flag at call
+                time; scale-ins (exposure increases) are suppressed while it
+                returns True. Exits and partial exits are never gated.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -130,9 +137,20 @@ class LiveExitHandler:
         self.use_high_low_for_stops = use_high_low_for_stops
         self.max_position_size = max_position_size
         self.max_filled_price_deviation = max_filled_price_deviation
+        self._close_only_provider = close_only_provider
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
+        # FEATURE_ENTRY_PAUSE also suppresses scale-ins (exposure increases);
+        # own instance so warnings rate-limit independently of the entry path.
+        self._entry_pause = EntryPauseGate()
+        # #802 follow-up P3: optional exposure governor to cap scale-in exposure
+        # (set by the engine; None => inert). Mirrors the entry handler's gate.
+        self._exposure_governor: ExposureGovernor | None = None
+
+    def configure_exposure_gate(self, exposure_governor: ExposureGovernor | None) -> None:
+        """Wire the #802 exposure governor so scale-ins respect the gross cap."""
+        self._exposure_governor = exposure_governor
 
     def _build_snapshot(
         self,
@@ -785,7 +803,7 @@ class LiveExitHandler:
                     if not exit_result.should_exit:
                         break
 
-                    # Convert from fraction of original to fraction of current.
+                    # Policy sizes are fractions of the ORIGINAL position.
                     # should_exit=True guarantees exit_fraction/target_index are set.
                     exit_size_of_original = cast(float, exit_result.exit_fraction)
                     exit_target_level = cast(int, exit_result.target_index)
@@ -804,26 +822,37 @@ class LiveExitHandler:
                         )
                         break
 
-                    exit_size_of_current = convert_exit_fraction_to_current(
-                        exit_fraction_of_original=exit_size_of_original,
-                        current_size=current_size,
-                        original_size=original_size,
-                        epsilon=EPSILON,
+                    # Convert to balance-fraction units (the PartialExitExecutor
+                    # contract, identical to current_size units), capped at what
+                    # remains of the position.
+                    exit_size_of_balance = min(
+                        exit_size_of_original * original_size,
+                        current_size,
                     )
-                    if exit_size_of_current is None:
+                    if exit_size_of_balance <= EPSILON:
                         break
 
                     self._execute_partial_exit(
                         order_id=order_id,
                         position=position,
-                        delta_fraction=exit_size_of_current,
+                        delta_fraction=exit_size_of_balance,
                         price=current_price,
                         target_level=exit_target_level,
-                        fraction_of_original=exit_size_of_original,
                         current_balance=current_balance,
                     )
 
                     iteration_count += 1
+
+                # A position fully consumed by partial exits must not be
+                # revived by a scale-in (zombie position). Re-read sizes:
+                # the partial loop above may have just consumed the remainder
+                # (and execute_exit may have already removed it from the tracker).
+                if is_position_fully_closed(
+                    cast(float, position.current_size),
+                    cast(float, position.original_size),
+                    epsilon=EPSILON,
+                ):
+                    continue
 
                 # Check for scale-ins
                 scale_result = self.partial_manager.check_scale_in(
@@ -833,29 +862,37 @@ class LiveExitHandler:
                 )
 
                 if scale_result.should_scale:
+                    # Scale-ins INCREASE exposure, so close-only mode and the
+                    # entry-pause flag suppress them just like new entries.
+                    # Partial exits and full exits above keep running — they
+                    # reduce risk.
+                    if self._close_only_provider is not None and self._close_only_provider():
+                        logger.debug(
+                            "Close-only mode active — skipping scale-in for %s",
+                            position.symbol,
+                        )
+                        continue
+                    if self._entry_pause.paused(f"scale-in for {position.symbol}"):
+                        continue
+
+                    # Policy sizes are fractions of the ORIGINAL position;
+                    # convert to balance-fraction units — the same units as
+                    # ``position.size``, ``daily_risk_used`` and
+                    # ``max_daily_risk`` — matching backtest's scale-in path
+                    # (src/engines/backtest/execution/exit_handler.py) and
+                    # ``PartialExitPolicy.apply_scale_in``.
                     # should_scale=True guarantees scale_fraction/target_index are set.
                     add_size_of_original = cast(float, scale_result.scale_fraction)
+                    original_size = cast(float, position.original_size)
 
                     # Clamp scale-in size by remaining daily-risk budget so
                     # the live engine never exceeds the per-day exposure
                     # cap that backtest already enforces in its scale-in
-                    # path (src/engines/backtest/execution/exit_handler.py:357-361).
-                    # Without this clamp, a strategy with two scale-in
+                    # path. Without this clamp, a strategy with two scale-in
                     # targets could push total exposure above
                     # ``risk_manager.params.max_daily_risk`` while
                     # backtest results would have it capped.
-                    #
-                    # NOTE on units: in the live engine, ``scale_fraction`` is
-                    # applied as a fraction-of-balance delta — ``apply_scale_in``
-                    # adds it straight onto ``position.size`` and
-                    # ``risk_manager.adjust_position_after_scale_in`` adds it
-                    # straight onto ``daily_risk_used`` (same unit as
-                    # ``max_daily_risk``). So we compare against ``remaining_daily``
-                    # directly and must NOT multiply by ``original_size`` here.
-                    # Backtest multiplies by ``original_size`` only because its
-                    # tracker stores size in a different unit; replicating that
-                    # multiplication in live would under-size the scale-in.
-                    add_effective = add_size_of_original
+                    add_effective = add_size_of_original * original_size
                     if self.risk_manager is not None and add_effective > 0:
                         try:
                             params = getattr(self.risk_manager, "params", None)
@@ -876,13 +913,55 @@ class LiveExitHandler:
                                 e,
                             )
 
+                    # Enforce the engine-wide max-position cap on scale-ins.
+                    # Entries are clamped at the coordinator, but the daily-risk
+                    # budget resets each day, so without this clamp a scale-in
+                    # could grow an at-cap position past --max-position
+                    # (observed live: ~10% entry + 6% daily-budget scale-in
+                    # reached ~16% exposure against a 10% cap).
+                    if add_effective > 0:
+                        current_exposure = float(
+                            position.current_size
+                            if position.current_size is not None
+                            else position.size
+                        )
+                        headroom = max(0.0, self.max_position_size - current_exposure)
+                        if add_effective > headroom:
+                            logger.info(
+                                "Clamping %s scale-in to max-position headroom: "
+                                "requested=%.4f, headroom=%.4f (current=%.4f, cap=%.4f)",
+                                position.symbol,
+                                add_effective,
+                                headroom,
+                                current_exposure,
+                                self.max_position_size,
+                            )
+                            add_effective = headroom
+
+                    # #802 follow-up P3: respect the regime gross exposure cap on
+                    # scale-ins too (inert unless the exposure governor is on).
+                    if add_effective > 0:
+                        gross_headroom = scale_in_gross_cap_headroom(
+                            self._exposure_governor,
+                            list(self.position_tracker.positions.values()),
+                            current_balance,
+                        )
+                        if gross_headroom is not None and add_effective > gross_headroom:
+                            logger.info(
+                                "Clamping %s scale-in to gross-exposure cap headroom: "
+                                "requested=%.4f, headroom=%.4f",
+                                position.symbol,
+                                add_effective,
+                                gross_headroom,
+                            )
+                            add_effective = gross_headroom
+
                     if add_effective <= 0:
                         logger.info(
-                            "Skipping %s scale-in: daily-risk budget exhausted "
-                            "(requested=%.4f, remaining=%.4f)",
+                            "Skipping %s scale-in: no daily-risk budget or "
+                            "max-position headroom remaining (requested=%.4f)",
                             position.symbol,
                             add_size_of_original,
-                            add_effective,
                         )
                     else:
                         self._execute_scale_in(
@@ -892,7 +971,6 @@ class LiveExitHandler:
                             price=current_price,
                             # should_scale=True guarantees target_index is set.
                             threshold_level=cast(int, scale_result.target_index),
-                            fraction_of_original=add_effective,
                         )
 
             except (AttributeError, ValueError, KeyError, ZeroDivisionError) as e:
@@ -907,7 +985,6 @@ class LiveExitHandler:
         delta_fraction: float,
         price: float,
         target_level: int,
-        fraction_of_original: float,
         current_balance: float,
     ) -> None:
         """Execute a partial exit.
@@ -915,10 +992,11 @@ class LiveExitHandler:
         Args:
             order_id: Order ID of position.
             position: Position to partially exit.
-            delta_fraction: Fraction of current position to exit.
+            delta_fraction: Exited slice in balance-fraction units (same
+                units as ``position.current_size``; the PartialExitExecutor
+                contract, also persisted as-is to the DB).
             price: Current market price.
             target_level: Profit target level.
-            fraction_of_original: Fraction of original position.
             current_balance: Current account balance.
         """
         result = self.position_tracker.apply_partial_exit(
@@ -926,7 +1004,6 @@ class LiveExitHandler:
             delta_fraction=delta_fraction,
             price=price,
             target_level=target_level,
-            fraction_of_original=fraction_of_original,
             basis_balance=current_balance,
             fee_rate=self.execution_engine.fee_rate,
             slippage_rate=self.execution_engine.slippage_rate,
@@ -967,24 +1044,22 @@ class LiveExitHandler:
         delta_fraction: float,
         price: float,
         threshold_level: int,
-        fraction_of_original: float,
     ) -> None:
         """Execute a scale-in.
 
         Args:
             order_id: Order ID of position.
             position: Position to scale into.
-            delta_fraction: Fraction to add.
+            delta_fraction: Size to add, in balance-fraction units (same
+                units as ``position.current_size``).
             price: Current market price.
             threshold_level: Threshold level.
-            fraction_of_original: Fraction of original position.
         """
         result = self.position_tracker.apply_scale_in(
             order_id=order_id,
             delta_fraction=delta_fraction,
             price=price,
             threshold_level=threshold_level,
-            fraction_of_original=fraction_of_original,
             max_position_size=self.max_position_size,
         )
 

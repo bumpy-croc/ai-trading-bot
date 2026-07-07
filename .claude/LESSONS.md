@@ -122,7 +122,10 @@ rebase onto the fresh base, and force-push; don't wait on or re-trigger phantom 
   `permissions.deny` (`railway variables --set`, `railway ssh`, `railway run`, `redeploy`/`up`/
   `down`/`delete`). Owner's rule: **only ask before deploying something live.**
 - **`railway logs`:** `--since <N>m` hangs — use `railway logs -n <N>` (bounded). It shows **only
-  the current deployment**, so a brand-new deploy's logs replace the old one's.
+  the current deployment**, so a brand-new deploy's logs replace the old one's. Confirmed
+  empirically (2026-07-06, #913 forensics): no `--since` value reaches prior containers, so
+  **historical incident forensics must come from the Postgres tables** (`strategy_executions`,
+  `system_events`, …) via the read-only public proxy — logs are gone once a deploy/restart lands.
 - **`railway variables --set` triggers a redeploy** (a restart). Setting a feature flag = a restart.
 - **Feature flags** resolve from `FEATURE_<UPPER_SNAKE_KEY>` env vars (e.g.
   `FEATURE_ORPHANED_BORROW_SWEEP_MODE`); `get_flag(key, default)` returns the string; no
@@ -199,6 +202,11 @@ keep the skill generic and let the specifics live here.
 - `emergency.close` / "Stop-loss placement failed" — opened a position it couldn't protect; repeated
   = capital-bleed churn.
 - `CLOSE-ONLY MODE ACTIVATED` — entries halted (reconcile/DB problem).
+- `ACCOUNT CIRCUIT BREAKER TRIPPED` / `error_code=ACCOUNT_CIRCUIT_BREAKER_TRIP` /
+  `risk_event=account_circuit_breaker_trip` (#807) — the daily-loss (2.5% of the UTC-day baseline)
+  or drawdown (15% peak-to-trough) hard halt fired; account is close-only for the day. Operator
+  reviews & clears. `🟡 ... WOULD HALT (dry_run)` is the pre-enablement dry-run signal (report, not
+  escalate).
 - `code=-1111` (price precision) / `code=51077` (qty precision) — order precision rejection (should
   be fixed; recurrence = regression, see §1.1).
 - `-2010` / "insufficient balance" on a stop-loss → unprotected position.
@@ -245,3 +253,14 @@ This has repeatedly been a **phantom**: no SL order existed, account sync showed
 held ETH was sub-threshold dust. Treat automated/stale context as a hypothesis; confirm against live
 state — `get_open_orders`, account-sync open-order count, the actual SL order id, tracked `Positions`,
 and `free` vs `borrowed` vs `netAsset` — before reporting an incident (see §2.5).
+
+### 5.6 Pre-2026-06-03 `account_history` equity is BOOK VALUE, not a live read — distinct-count check before trusting any peak
+A drawdown/peak analysis over prod `account_history` reported "20% cap already breached (20.33% from
+a $103.82 April peak)". **Phantom**: the `balance` base was software-pinned at the optimistic $100
+`session_start` value through Mar–May 2026 (May: ONE distinct balance value across 451 hourly rows);
+`equity` = frozen book + unrealized wiggle. True margin-equity reads only begin 2026-06-03 (#655 sync,
+$84.14). Drawdown baseline policy (pm, 2026-07-04): peak = peak TRUE equity since the last reconciled
+reset (2026-06-05 / session 20).
+- **Rule:** before treating any `account_history` peak/trough as real, sanity-check that `balance`
+  varies like a market-tracking value: `count(DISTINCT round(balance,4))` per month. A pinned or
+  near-constant base means book value — do not compute drawdowns across it.

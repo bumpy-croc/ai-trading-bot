@@ -7,6 +7,15 @@ ARCHITECTURE:
 - Single source of truth for partial exit calculations
 - Used by both PositionTracker (backtest) and LivePositionTracker (live)
 - Prevents divergence in financial calculations
+
+UNITS CONTRACT:
+- ``exit_fraction`` is the exited slice expressed as a fraction of
+  ``basis_balance`` — the SAME balance-fraction units as
+  ``BasePosition.size`` / ``current_size`` / ``original_size``.
+- A policy's "fraction of ORIGINAL position" must be converted by the caller
+  via ``fraction_of_original * original_size`` before calling this executor.
+  Passing a fraction-of-position here books P&L as if the slice were that
+  fraction of the whole account (the #734 units bug).
 """
 
 from __future__ import annotations
@@ -96,8 +105,13 @@ class PartialExitExecutor:
             entry_price: Original entry price of the position.
             exit_price: Current exit price.
             position_side: Position side (LONG or SHORT).
-            exit_fraction: Fraction of position being exited (0-1).
-            basis_balance: Balance basis for P&L calculation.
+            exit_fraction: Exited slice as a fraction of ``basis_balance``
+                (0-1) — balance-fraction units, identical to
+                ``BasePosition.current_size``. NOT a fraction of the
+                position: convert policy sizes with
+                ``fraction_of_original * original_size`` first.
+            basis_balance: Balance basis for P&L calculation (account
+                balance at entry, falling back to current balance).
 
         Returns:
             PartialExitExecutionResult with P&L and cost breakdown.

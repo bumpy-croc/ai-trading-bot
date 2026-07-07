@@ -50,10 +50,13 @@ atb train cloud BTCUSDT --provider local --days 30 --epochs 10
 
 ## Workflow
 
-1. Build a training job spec from local TrainingConfig.
-2. Upload training data and submit the job to the provider.
-3. Poll for completion and collect metrics.
-4. Download artifacts from S3 and sync into `src/ml/models`.
+1. Download candles locally and upload them to S3 as the job's data channel
+   (Binance blocks AWS IPs, so the container never fetches market data itself).
+2. Build a training job spec from local TrainingConfig and submit it.
+3. Poll for completion and collect metrics (skipped with `--no-wait`).
+4. Download artifacts from S3 and sync into `src/ml/models/{SYMBOL}/price/`.
+5. Optionally promote the bundle into `basic/` with `atb train cloud-promote`
+   (live strategies load `basic/latest`; cloud sync never touches it).
 
 ## Modules
 
@@ -61,6 +64,7 @@ atb train cloud BTCUSDT --provider local --days 30 --epochs 10
 - `orchestrator.py`: End-to-end workflow coordinator and artifact sync.
 - `entrypoint.py`: SageMaker container entrypoint that runs the training pipeline.
 - `artifacts/s3_manager.py`: S3 upload/download helpers and registry sync.
+- `promotion.py`: Explicit promotion of synced bundles between registry namespaces.
 - `providers/`: Provider interface and implementations (`sagemaker`, `local`).
 - `exceptions.py`: Typed errors for cloud training failures.
 
@@ -70,12 +74,29 @@ atb train cloud BTCUSDT --provider local --days 30 --epochs 10
 # Run a cloud training job and wait for completion
 atb train cloud BTCUSDT --timeframe 1h --days 365
 
-# Submit without waiting, then check status later
-atb train cloud BTCUSDT --no-wait
-atb train cloud-status <JOB_ID>
+# Fixed-cutoff window for experiments (UTC dates; --days and --start-date are mutually exclusive)
+atb train cloud BTCUSDT --start-date 2026-05-01 --end-date 2026-06-01 --epochs 50
 
-# List model versions stored in S3
-atb train cloud-list BTCUSDT --model-type basic
+# Submit without waiting (data channel is still uploaded first), then finish later
+atb train cloud BTCUSDT --no-wait
+atb train cloud-status <JOB_NAME>
+atb train cloud-status <JOB_NAME> --sync   # download + sync into the registry
+
+# List cloud training outputs in S3 (job names embed symbol/timeframe/timestamp)
+atb train cloud-list [BTCUSDT]
+
+# Promote a synced bundle into the live namespace (basic/latest only moves with --set-latest)
+atb train cloud-promote BTCUSDT <VERSION> --to basic [--set-latest]
+```
+
+## Keeping the training image fresh
+
+The ECR image bakes in `src/ml/training_pipeline/`. Rebuild and push it whenever
+feature engineering or pipeline code changes, or cloud-trained models will skew
+from current inference code:
+
+```bash
+./src/ml/cloud/build-and-push.sh
 ```
 
 ## Configuration

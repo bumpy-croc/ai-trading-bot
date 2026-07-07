@@ -190,6 +190,63 @@ class TestSymlinkUpdate:
         assert latest_link.resolve() == new_version.resolve()
 
 
+@pytest.mark.fast
+class TestListTrainingJobs:
+    """Tests for listing SageMaker training-job outputs under models/."""
+
+    @pytest.fixture
+    def manager(self) -> S3ArtifactManager:
+        """Create a manager with a mocked S3 client and paginator."""
+        from unittest.mock import MagicMock
+
+        manager = S3ArtifactManager(bucket_name="test-bucket")
+        mock_client = MagicMock()
+        paginator = MagicMock()
+        paginator.paginate.return_value = [
+            {
+                "CommonPrefixes": [
+                    {"Prefix": "models/atb-btcusdt-1h-20260111-024904/"},
+                    {"Prefix": "models/atb-btcusdt-1h-20260704-215649/"},
+                    {"Prefix": "models/atb-ethusdt-1h-20260120-005532/"},
+                ]
+            }
+        ]
+        mock_client.get_paginator.return_value = paginator
+        manager._s3_client = mock_client
+        return manager
+
+    def test_lists_all_job_outputs_newest_first(self, manager: S3ArtifactManager) -> None:
+        jobs = manager.list_training_jobs()
+
+        assert jobs == [
+            "atb-ethusdt-1h-20260120-005532",
+            "atb-btcusdt-1h-20260704-215649",
+            "atb-btcusdt-1h-20260111-024904",
+        ]
+
+    def test_filters_by_symbol(self, manager: S3ArtifactManager) -> None:
+        jobs = manager.list_training_jobs(symbol="BTCUSDT")
+
+        assert jobs == [
+            "atb-btcusdt-1h-20260704-215649",
+            "atb-btcusdt-1h-20260111-024904",
+        ]
+
+    def test_uses_models_prefix_with_delimiter(self, manager: S3ArtifactManager) -> None:
+        manager.list_training_jobs()
+
+        assert manager._s3_client is not None
+        paginate_kwargs = manager._s3_client.get_paginator.return_value.paginate.call_args.kwargs
+        assert paginate_kwargs["Prefix"] == "models/"
+        assert paginate_kwargs["Delimiter"] == "/"
+
+    def test_returns_empty_list_on_error(self, manager: S3ArtifactManager) -> None:
+        assert manager._s3_client is not None
+        manager._s3_client.get_paginator.side_effect = RuntimeError("boom")
+
+        assert manager.list_training_jobs() == []
+
+
 class TestBoto3LazyLoading:
     """Tests for boto3 lazy loading behavior."""
 

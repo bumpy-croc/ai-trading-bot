@@ -46,6 +46,8 @@ from src.strategies.components import (
     TrendLabel,
     VolLabel,
 )
+from src.strategies.components.flow_gate import maybe_wrap_with_flow_gate
+from src.strategies.components.position_sizer import maybe_wrap_with_vol_target
 
 
 def create_ml_basic_strategy(
@@ -56,6 +58,7 @@ def create_ml_basic_strategy(
     timeframe: str | None = None,
     fast_mode: bool = False,
     *,
+    symbol: str | None = None,
     long_entry_threshold: float | None = None,
     short_entry_threshold: float | None = None,
     confidence_multiplier: float | None = None,
@@ -75,6 +78,8 @@ def create_ml_basic_strategy(
         model_type: Model type (e.g., "basic")
         timeframe: Model timeframe (e.g., "1h")
         fast_mode: Enable fast mode for testing (disables ML)
+        symbol: Trading symbol threaded to the ML signal generator for model
+            registry selection (None keeps the generator default BTCUSDT).
         long_entry_threshold: Minimum predicted return for long entry.
         short_entry_threshold: Maximum predicted return for short entry.
         confidence_multiplier: Scales |predicted_return| → confidence.
@@ -147,6 +152,7 @@ def create_ml_basic_strategy(
             model_name=model_name,
             model_type=model_type,
             timeframe=timeframe,
+            symbol=symbol,
             long_entry_threshold=long_entry_threshold,
             short_entry_threshold=short_entry_threshold,
             confidence_multiplier=confidence_multiplier,
@@ -168,6 +174,12 @@ def create_ml_basic_strategy(
             ),
         )
         regime_detector = EnhancedRegimeDetector()
+
+    # #803: wrap the signal generator with the ETF net-flow gate when enabled.
+    # Resolved once here (not per candle) — a flag change requires a restart.
+    signal_generator = maybe_wrap_with_flow_gate(signal_generator)
+    # #805: wrap the sizer with volatility targeting when enabled (resolved once).
+    position_sizer = maybe_wrap_with_vol_target(position_sizer)
 
     strategy = Strategy(
         name=name,

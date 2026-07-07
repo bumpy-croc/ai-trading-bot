@@ -32,10 +32,12 @@ from src.config.constants import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
 from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
+from src.engines.live.execution.entry_pause import EntryPauseGate
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
 from src.strategies.components import Strategy as ComponentStrategy
+from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -148,6 +150,13 @@ class LiveEntryCoordinator:
     def __init__(self, engine_state: LiveEntryEngineState) -> None:
         """Bind to the engine's live state (see protocol for the surface)."""
         self._state = engine_state
+        # FEATURE_ENTRY_PAUSE gate for new entries (scale-ins are gated by the
+        # exit handler's own instance — see EntryPauseGate).
+        self._entry_pause = EntryPauseGate()
+
+    def _entry_paused(self, context: str) -> bool:
+        """True when FEATURE_ENTRY_PAUSE suppresses new entries (rate-limit logged)."""
+        return self._entry_pause.paused(context)
 
     def check_entry_conditions(
         self,
@@ -166,6 +175,9 @@ class LiveEntryCoordinator:
             logger.debug("Close-only mode active — skipping entry check")
             return
 
+        if self._entry_paused(f"entry evaluation for {symbol}"):
+            return
+
         use_runtime = state._is_runtime_strategy()
         entry_signal = False
         position_size = 0.0
@@ -179,6 +191,10 @@ class LiveEntryCoordinator:
         indicators = state._extract_indicators(df, current_index)
         sentiment_data = state._extract_sentiment_data(df, current_index)
         ml_predictions = state._extract_ml_predictions(df, current_index)
+        # Signal whose metadata carries the model outputs (or failure reason)
+        # for ml_predictions logging (#914); the component path overwrites it
+        # with its locally produced decision below.
+        decision_signal = getattr(runtime_decision, "signal", None)
 
         if use_runtime:
             perf_metrics = state.performance_tracker.get_metrics()
@@ -237,6 +253,7 @@ class LiveEntryCoordinator:
                     state.current_balance,
                     current_positions or None,
                 )
+                decision_signal = decision.signal
                 state._apply_policies_from_decision(decision)
 
                 notional_size = float(decision.position_size or 0.0)
@@ -273,6 +290,13 @@ class LiveEntryCoordinator:
             position_size = state._apply_dynamic_risk_adjustment(position_size, current_time)
 
         if state.db_manager:
+            # Enrich with model outputs from the signal metadata — the
+            # dataframe columns the extractor reads are never populated by
+            # component strategies, which left ml_predictions null (#914).
+            signal_ml = extract_ml_predictions_from_signal(decision_signal)
+            if signal_ml:
+                ml_predictions = {**ml_predictions, **signal_ml}
+
             # Prepare logging data - include TradingDecision data if available
             log_reasons = [
                 (
@@ -491,6 +515,14 @@ class LiveEntryCoordinator:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         state = self._state
+        # Defense-in-depth: refuse any entry routed around check_entry_conditions.
+        # Close-only mode gates the chokepoint too, so the legacy short path and
+        # any direct caller can never add exposure while halted.
+        if state._close_only_mode:
+            logger.debug("Close-only mode active — refusing entry execution for %s", symbol)
+            return
+        if self._entry_paused(f"entry execution for {symbol}"):
+            return
         try:
             # Prevent duplicate positions on the same symbol (guards against multi-slot
             # risk managers with max_concurrent_positions > 1).
@@ -919,6 +951,12 @@ class LiveEntryCoordinator:
     ) -> None:
         """Evaluate and execute a legacy duck-typed short entry (non-runtime strategies)."""
         state = self._state
+        # Close-only mode: skip legacy short evaluation, exits/stops still active
+        if state._close_only_mode:
+            logger.debug("Close-only mode active — skipping legacy short entry check")
+            return
+        if self._entry_paused(f"legacy short entry for {symbol}"):
+            return
         if (not state._is_runtime_strategy()) and callable(
             getattr(state.strategy, "check_short_entry_conditions", None)
         ):
@@ -975,6 +1013,25 @@ class LiveEntryCoordinator:
                     short_position_size,
                     current_time,
                 )
+
+                # Regime-gated gross exposure cap (#802). This legacy path has no
+                # regime context, so the governor uses its most-conservative
+                # (unknown-regime) cap by design — tightly bounding legacy shorts.
+                # Routed through the same live entry handler as the runtime path
+                # so the cap arithmetic is shared (no bypass).
+                if short_position_size > 0:
+                    short_position_size, short_gate_reason = (
+                        state.live_entry_handler.apply_pre_order_gates(
+                            short_position_size,
+                            regime=None,
+                            equity=state.current_balance,
+                            now=current_time,
+                        )
+                    )
+                    if short_gate_reason:
+                        logger.info(
+                            "Legacy short exposure-capped for %s: %s", symbol, short_gate_reason
+                        )
                 if short_position_size > 0:
                     if overrides and (
                         ("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)

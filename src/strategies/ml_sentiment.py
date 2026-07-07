@@ -38,6 +38,7 @@ from src.strategies.components import (
     MLSignalGenerator,
     Strategy,
 )
+from src.strategies.components.sentiment_overlay import maybe_wrap_with_sentiment_overlay
 
 
 def create_ml_sentiment_strategy(
@@ -133,9 +134,13 @@ def create_ml_sentiment_strategy(
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
 
+    # #804: fade Fear & Greed extremes (block capitulation shorts; support-band
+    # mean-reversion longs). Resolved once; off by default.
+    gated_signal_generator = maybe_wrap_with_sentiment_overlay(signal_generator)
+
     strategy = Strategy(
         name=name,
-        signal_generator=signal_generator,
+        signal_generator=gated_signal_generator,
         risk_manager=risk_manager,
         position_sizer=position_sizer,
         regime_detector=regime_detector,

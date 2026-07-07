@@ -10,6 +10,12 @@ Modular cryptocurrency trading system supporting multiple strategies, backtestin
 
 **Coding rules in `CODE.md` must be followed at all times.**
 
+## Operations
+
+- Be proactive in findigs and fixing issues. Delegate to subagents as much as possible
+- Use good judgement. Staff/Principle engineer standard. Take context into account.
+- If additional out of scope work is needed for a task, don't launch a chip. Instead create a github issue and dispatch a subagent to work on it straight away. Treat it as part of your current task, although it should be handled in a separate PR by a subagent.
+
 ## Autonomous Operation (daemon mode)
 
 This repo is set up to be operated by a persistent Claude Code daemon (e.g. Claudeclaw) acting as the **PM**, delegating to specialist subagents (`.claude/agents/`) and reading/writing shared state (`.claude/state/`).
@@ -37,7 +43,7 @@ This repo is set up to be operated by a persistent Claude Code daemon (e.g. Clau
 - Never change `.claude/state/charter.md` or `.claude/state/risk-limits.json` — those are human-owned.
 - Never rewrite history in `log.md` or closed incidents — append-only; corrections are new entries referencing the earlier one.
 - Never execute a `board_required: true` action without a human approving the proposal.
-- Never promote a model's `latest` symlink for a live-trading symbol without human sign-off.
+- Model promotion for a live-trading symbol does **not** require human sign-off (per `charter.md`'s autonomy envelope and stated high risk appetite) — but only once the model has cleared the standard promotion bar: held-out temporal eval, per-regime breakdown, calibration check, and >=48h paper-trading validation (see `ml-engineer` agent). Self-certifying against that bar without actually running it does not count as "verified." Log every promotion decision and its evidence in `log.md`.
 - If the charter is missing or invalid, refuse to make material decisions.
 
 Full schema and lifecycle: `.claude/state/README.md`.
@@ -123,36 +129,10 @@ Data Providers → Indicators → Strategy → Risk Manager → Execution
   (Sentiment)   (MACD, ATR) (Signals)     Sizing)
 ```
 
-### Directory Structure
-
-**`src/`**:
-- `config/` — Typed config loader, constants, feature flags
-- `data_providers/` — Market & sentiment providers (Binance, Coinbase) with caching
-- `database/` — SQLAlchemy models, DatabaseManager, Flask-Admin UI
-- `engines/backtest/` — Vectorized simulation engine
-- `engines/live/` — Live trading engine with real-time execution
-- `engines/shared/` — Unified logic for both engines (models, cost calculator, risk handlers)
-- `infrastructure/` — Logging, path resolution, geo detection, cache TTL, secrets
-- `ml/` — Trained models: `models/{SYMBOL}/{TYPE}/{VERSION}/` with `latest` symlinks
-- `prediction/` — Model registry, ONNX runtime, caching, feature pipeline
-- `position_management/` — Position sizing policies
-- `regime/` — Market regime detection
-- `risk/` — Global risk management
-- `sentiment/` — Sentiment adapters
-- `strategies/` — Built-in strategies (ml_basic, ml_adaptive, ml_with_sentiment)
-- `trading/` — Symbol conversion, reusable trading components
-
-**`cli/`** — `atb` CLI entry point, commands organized by function.
-
-**`tests/`** — `unit/` (fast, isolated) and `integration/` (DB, external providers).
-
 ### Strategy System
 
 Strategies compose `SignalGenerator`, `RiskManager`, `PositionSizer`. Main interface: `process_candle(df, index, balance, positions) -> TradingDecision`. Components are independently testable.
 
-### Database Schema
-
-Core tables: `trading_sessions`, `trades`, `positions`, `account_history`, `performance_metrics`. Alembic manages migrations (`alembic upgrade head`).
 
 ### Configuration Priority
 

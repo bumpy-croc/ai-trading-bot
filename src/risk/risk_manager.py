@@ -846,6 +846,11 @@ class PortfolioRiskManager:
     def check_drawdown(self, current_balance: float, peak_balance: float) -> bool:
         """Check if maximum drawdown has been exceeded.
 
+        Note: live enforcement of the hard cap (close-only halt, escalation
+        tiers, restart-safe peak) lives in
+        ``src.engines.live.monitoring.drawdown_guard`` — this predicate is a
+        stateless point-in-time check (strictly greater than the limit).
+
         Parameters
         ----------
         current_balance : float
@@ -1088,12 +1093,8 @@ class PortfolioRiskManager:
         """Return the maximum number of concurrent positions allowed."""
         return self.max_concurrent_positions
 
-    def adjust_position_after_partial_exit(
-        self, symbol: str, executed_fraction_of_original: float
-    ) -> None:
+    def adjust_position_after_partial_exit(self, symbol: str, executed_size_delta: float) -> None:
         """Reduce tracked exposure after a partial exit.
-
-        executed_fraction_of_original is the fraction of ORIGINAL size removed.
 
         Thread-safe: protected by internal lock.
 
@@ -1101,16 +1102,19 @@ class PortfolioRiskManager:
         ----------
         symbol : str
             Symbol identifier.
-        executed_fraction_of_original : float
-            Fraction of the original position size that was exited (must be positive).
+        executed_size_delta : float
+            Exited slice in balance-fraction units — the same units as the
+            tracked position ``size`` and ``daily_risk_used`` (must be
+            positive). NOT a fraction of the original position; callers
+            convert policy sizes with ``fraction_of_original * original_size``.
         """
         # Validate input
         if not symbol:
             raise ValueError("symbol cannot be None or empty")
-        if not math.isfinite(executed_fraction_of_original) or executed_fraction_of_original <= 0:
+        if not math.isfinite(executed_size_delta) or executed_size_delta <= 0:
             logging.warning(
-                "Invalid executed_fraction for partial exit: %s, ignoring adjustment",
-                executed_fraction_of_original,
+                "Invalid executed_size_delta for partial exit: %s, ignoring adjustment",
+                executed_size_delta,
             )
             return
 
@@ -1122,9 +1126,9 @@ class PortfolioRiskManager:
                 )
                 return
             current = float(pos.get("size", 0.0))
-            new_size = max(0.0, current - float(executed_fraction_of_original))
+            new_size = max(0.0, current - float(executed_size_delta))
 
-            # Calculate actual reduction (handles case where executed_fraction > current)
+            # Calculate actual reduction (handles case where executed_size_delta > current)
             actual_reduction = current - new_size
 
             # If position fully exited, remove from tracking
@@ -1136,9 +1140,7 @@ class PortfolioRiskManager:
             # Reduce daily risk used by actual amount removed
             self.daily_risk_used = max(0.0, self.daily_risk_used - actual_reduction)
 
-    def adjust_position_after_scale_in(
-        self, symbol: str, added_fraction_of_original: float
-    ) -> None:
+    def adjust_position_after_scale_in(self, symbol: str, added_size_delta: float) -> None:
         """Increase tracked exposure after a scale-in, enforcing daily and per-position caps.
 
         Thread-safe: protected by internal lock.
@@ -1147,16 +1149,19 @@ class PortfolioRiskManager:
         ----------
         symbol : str
             Symbol identifier.
-        added_fraction_of_original : float
-            Fraction of the original position size to add (must be positive).
+        added_size_delta : float
+            Added slice in balance-fraction units — the same units as the
+            tracked position ``size`` and ``daily_risk_used`` (must be
+            positive). NOT a fraction of the original position; callers
+            convert policy sizes with ``fraction_of_original * original_size``.
         """
         # Validate input
         if not symbol:
             raise ValueError("symbol cannot be None or empty")
-        if not math.isfinite(added_fraction_of_original) or added_fraction_of_original <= 0:
+        if not math.isfinite(added_size_delta) or added_size_delta <= 0:
             logging.warning(
-                "Invalid added_fraction for scale-in: %s, ignoring adjustment",
-                added_fraction_of_original,
+                "Invalid added_size_delta for scale-in: %s, ignoring adjustment",
+                added_size_delta,
             )
             return
 
@@ -1169,7 +1174,7 @@ class PortfolioRiskManager:
             # Enforce per-position cap and remaining daily risk
             remaining_daily = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
             effective_add = min(
-                float(added_fraction_of_original),
+                float(added_size_delta),
                 remaining_daily,
                 max(0.0, self.params.max_position_size - current),
             )

@@ -22,6 +22,7 @@ from src.engines.live.execution.entry_coordinator import (
     LiveEntryEngineState,
 )
 from src.engines.shared.models import PositionSide
+from src.strategies.components import SignalDirection
 
 pytestmark = pytest.mark.fast
 
@@ -63,6 +64,7 @@ def _make_state(position: MagicMock, result: MagicMock, **overrides) -> MagicMoc
     state.current_balance = 1000.0
     state.max_position_size = 1.0
     state.trading_session_id = None
+    state._close_only_mode = False
     # Protocol attributes are annotation-only (not in dir()), so a spec'd mock
     # won't auto-create them — assign each object attribute the path reads.
     state.exchange_interface = MagicMock()
@@ -333,6 +335,7 @@ def test_none_stop_loss_skips_placement():
 def _make_short_state(*, is_runtime: bool, short_signal, overrides):
     """Minimal backref for the legacy short-entry path."""
     state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = False
     state._is_runtime_strategy.return_value = is_runtime
     state.current_balance = 1000.0
     state.max_position_size = 1.0
@@ -352,6 +355,10 @@ def _make_short_state(*, is_runtime: bool, short_signal, overrides):
     state._apply_dynamic_risk_adjustment.side_effect = lambda original_size, current_time: (
         original_size
     )
+    # #802 exposure gate is routed through the live entry handler; with the
+    # governor inert (default) it returns the size unchanged.
+    state.live_entry_handler = MagicMock()
+    state.live_entry_handler.apply_pre_order_gates.side_effect = lambda size, **kwargs: (size, None)
     return state
 
 
@@ -430,6 +437,20 @@ def test_legacy_short_entry_logs_when_get_risk_overrides_raises(caplog):
     assert any("get_risk_overrides() raised" in r.message for r in caplog.records)
 
 
+def test_legacy_short_entry_size_clamped_to_max_position():
+    """A sizer fraction above the cap is clamped on the legacy short path."""
+    state = _make_short_state(
+        is_runtime=False,
+        short_signal=True,
+        overrides={"position_sizer": "x", "stop_loss_pct": 0.05, "take_profit_pct": 0.04},
+    )
+    state.max_position_size = 0.2  # below the sizer's 0.5
+    coordinator = _run_short_entry(state)
+
+    coordinator.execute_entry.assert_called_once()
+    assert coordinator.execute_entry.call_args.kwargs["size"] == pytest.approx(0.2)
+
+
 def test_legacy_short_entry_sl_fallback_when_overrides_lack_sl_tp():
     """Sizer override present but no SL/TP keys → default-stop fallback branch."""
     state = _make_short_state(
@@ -446,3 +467,249 @@ def test_legacy_short_entry_sl_fallback_when_overrides_lack_sl_tp():
     assert kwargs["stop_loss"] == pytest.approx(50000.0 * (1 + DEFAULT_STOP_LOSS_PCT))
     assert kwargs["take_profit"] == pytest.approx(50000.0 * (1 - 0.04))
     state.risk_manager.compute_sl_tp.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Max-position cap regression: every entry path clamps above-cap requests
+# ---------------------------------------------------------------------------
+
+
+def _make_component_entry_state(*, max_position_size: float, notional: float) -> MagicMock:
+    """Backref for the direct ComponentStrategy path of check_entry_conditions."""
+    from src.strategies.components import Strategy as ComponentStrategy
+
+    state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = False
+    state._is_runtime_strategy.return_value = False
+    state.current_balance = 1000.0
+    state.max_position_size = max_position_size
+    state.trading_session_id = None
+    state.db_manager = None  # skip strategy-execution DB logging
+
+    strategy = MagicMock(spec=ComponentStrategy)
+    decision = MagicMock()
+    decision.position_size = notional
+    decision.signal.direction = SignalDirection.BUY
+    decision.signal.strength = 0.9
+    decision.signal.confidence = 0.8
+    strategy.process_candle.return_value = decision
+    strategy.get_stop_loss_price.return_value = 45000.0
+    state.strategy = strategy
+
+    state._extract_indicators.return_value = {}
+    state._extract_sentiment_data.return_value = {}
+    state._extract_ml_predictions.return_value = {}
+    state._build_component_positions.return_value = []
+    state._get_correlation_context.return_value = None
+    state._resolve_take_profit_pct.return_value = 0.3
+    # Identity: dynamic-risk adjustment leaves the size unchanged here.
+    state._apply_dynamic_risk_adjustment.side_effect = lambda original_size, current_time: (
+        original_size
+    )
+    # #802 exposure gate is routed through the live entry handler; with the
+    # governor inert (default) it returns the size unchanged.
+    state.live_entry_handler = MagicMock()
+    state.live_entry_handler.apply_pre_order_gates.side_effect = lambda size, **kwargs: (size, None)
+    return state
+
+
+def _run_component_entry(state: MagicMock) -> MagicMock:
+    """Drive check_entry_conditions on the component path with a 1-candle df."""
+    import pandas as pd
+
+    coordinator = LiveEntryCoordinator(engine_state=state)
+    coordinator.execute_entry = MagicMock()  # type: ignore[method-assign]
+    df = pd.DataFrame({"close": [50000.0]})
+    coordinator.check_entry_conditions(
+        df=df,
+        current_index=0,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    return coordinator
+
+
+def test_component_path_entry_size_clamped_to_max_position():
+    """A component-strategy notional above the cap is clamped before execution."""
+    # 500 notional on a 1000 balance = 0.5 fraction, above the 0.2 cap.
+    state = _make_component_entry_state(max_position_size=0.2, notional=500.0)
+
+    coordinator = _run_component_entry(state)
+
+    coordinator.execute_entry.assert_called_once()
+    assert coordinator.execute_entry.call_args.kwargs["size"] == pytest.approx(0.2)
+
+
+def test_component_path_entry_size_below_cap_unclamped():
+    """A below-cap component-strategy notional passes through unchanged."""
+    state = _make_component_entry_state(max_position_size=0.2, notional=150.0)
+
+    coordinator = _run_component_entry(state)
+
+    coordinator.execute_entry.assert_called_once()
+    assert coordinator.execute_entry.call_args.kwargs["size"] == pytest.approx(0.15)
+
+
+# ---------------------------------------------------------------------------
+# ml_predictions logging (#914): signal-metadata prediction context must reach
+# the strategy_executions row instead of the historical always-null value.
+# ---------------------------------------------------------------------------
+
+
+def _ml_signal(metadata: dict, *, confidence: float = 0.42):
+    from src.strategies.components import Signal
+
+    return Signal(
+        direction=SignalDirection.HOLD, strength=0.0, confidence=confidence, metadata=metadata
+    )
+
+
+def _make_runtime_entry_state() -> MagicMock:
+    """Backref for the runtime-strategy path of check_entry_conditions."""
+    state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = False
+    state._is_runtime_strategy.return_value = True
+    state.current_balance = 1000.0
+    state.max_position_size = 0.2
+    state.timeframe = "1h"
+    state.trading_session_id = 7
+    state.db_manager = MagicMock()
+    state.live_position_tracker = MagicMock()
+    state.live_position_tracker.position_count = 0
+    state.risk_manager = MagicMock()
+    state.risk_manager.get_max_concurrent_positions.return_value = 1
+    state.performance_tracker = MagicMock()
+    state.performance_tracker.get_metrics.return_value = MagicMock(peak_balance=1000.0)
+    state.live_entry_handler = MagicMock()
+    no_entry = MagicMock()
+    no_entry.should_enter = False
+    no_entry.side = None
+    state.live_entry_handler.process_runtime_decision.return_value = no_entry
+    state._extract_indicators.return_value = {}
+    state._extract_sentiment_data.return_value = {}
+    state._extract_ml_predictions.return_value = {}
+    state._strategy_name.return_value = "ml_basic"
+    return state
+
+
+def _run_runtime_entry(state: MagicMock, runtime_decision: MagicMock) -> None:
+    import pandas as pd
+
+    coordinator = LiveEntryCoordinator(engine_state=state)
+    coordinator.execute_entry = MagicMock()  # type: ignore[method-assign]
+    df = pd.DataFrame({"close": [50000.0]})
+    coordinator.check_entry_conditions(
+        df=df,
+        current_index=0,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+        runtime_decision=runtime_decision,
+    )
+
+
+def _runtime_decision_with(signal) -> MagicMock:
+    decision = MagicMock()
+    decision.signal = signal
+    decision.regime = None
+    decision.risk_metrics = None
+    decision.metadata = {}
+    return decision
+
+
+def test_runtime_entry_logs_signal_ml_predictions():
+    state = _make_runtime_entry_state()
+    decision = _runtime_decision_with(
+        _ml_signal(
+            {
+                "generator": "ml_basic_signal_generator",
+                "prediction": 50750.0,
+                "current_price": 50000.0,
+                "predicted_return": 0.015,
+                "engine_model_name": "BTCUSDT:1h:basic:v1",
+            }
+        )
+    )
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction"] == 50750.0
+    assert kwargs["ml_predictions"]["predicted_return"] == 0.015
+    assert kwargs["ml_predictions"]["engine_model_name"] == "BTCUSDT:1h:basic:v1"
+
+
+def test_runtime_entry_logs_prediction_failure():
+    state = _make_runtime_entry_state()
+    decision = _runtime_decision_with(
+        _ml_signal(
+            {"generator": "ml_basic_signal_generator", "reason": "prediction_failed", "index": 0},
+            confidence=0.0,
+        )
+    )
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction_failed"] is True
+    assert kwargs["ml_predictions"]["reason"] == "prediction_failed"
+
+
+def test_runtime_entry_merges_signal_over_dataframe_columns():
+    state = _make_runtime_entry_state()
+    state._extract_ml_predictions.return_value = {"onnx_pred": 50700.0}
+    decision = _runtime_decision_with(
+        _ml_signal(
+            {
+                "generator": "ml_basic_signal_generator",
+                "prediction": 50750.0,
+                "predicted_return": 0.015,
+            }
+        )
+    )
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["onnx_pred"] == 50700.0
+    assert kwargs["ml_predictions"]["prediction"] == 50750.0
+
+
+def test_runtime_entry_non_ml_signal_logs_null_ml_predictions():
+    state = _make_runtime_entry_state()
+    decision = _runtime_decision_with(
+        _ml_signal({"generator": "rsi_signal_generator", "reason": "insufficient_history"})
+    )
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"] is None
+
+
+def test_component_entry_logs_signal_ml_predictions():
+    state = _make_component_entry_state(max_position_size=0.2, notional=150.0)
+    # _make_component_entry_state skips DB logging; enable it and provide the
+    # state the logging block reads.
+    state.db_manager = MagicMock()
+    state.live_position_tracker = MagicMock()
+    state.live_position_tracker.position_count = 0
+    state.risk_manager = MagicMock()
+    state.risk_manager.get_max_concurrent_positions.return_value = 1
+    state._strategy_name.return_value = "ml_basic"
+    decision = state.strategy.process_candle.return_value
+    decision.signal = _ml_signal(
+        {
+            "generator": "ml_basic_signal_generator",
+            "prediction": 50750.0,
+            "predicted_return": 0.015,
+            "engine_model_name": "BTCUSDT:1h:basic:v1",
+        }
+    )
+
+    _run_component_entry(state)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction"] == 50750.0
+    assert kwargs["ml_predictions"]["engine_model_name"] == "BTCUSDT:1h:basic:v1"

@@ -49,6 +49,18 @@ class ArtifactSyncError(CloudTrainingError):
     pass
 
 
+class ModelPromotionError(CloudTrainingError):
+    """Raised when promoting a model version between registry namespaces fails.
+
+    Common causes:
+    - Source version missing or incomplete (no model file)
+    - Target version already exists (never overwritten)
+    - Unsafe path components in symbol/version/type
+    """
+
+    pass
+
+
 class JobTimeoutError(CloudTrainingError):
     """Raised when training job exceeds maximum runtime.
 

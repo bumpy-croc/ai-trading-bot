@@ -24,6 +24,7 @@ from src.data_providers.exchange_interface import (
 from src.data_providers.exchange_interface import (
     OrderStatus as ExchangeOrderStatus,
 )
+from src.database.models import EventType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
 from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
@@ -248,6 +249,50 @@ class TestExecuteEntry:
         assert result.client_order_id is not None
         # order_id equals client_order_id for phantom positions
         assert result.order_id == result.client_order_id
+
+    def test_entry_rejection_records_reason_in_system_events(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """A definitive exchange rejection captures the reason (e.g. -2010) in
+        system_events — previously only in logs + a reason-less FAILED row (#853)."""
+        engine = execution_engine_with_exchange
+        engine.db_manager = MagicMock()
+        engine.session_id = 1
+        mock_exchange.place_order.side_effect = ValueError(
+            "APIError(code=-2010): Account has insufficient balance"
+        )
+
+        result = engine.execute_entry("BTCUSDT", PositionSide.LONG, 0.1, 50000.0, 10000.0)
+
+        assert result.success is False
+        rejects = [
+            c
+            for c in engine.db_manager.log_event.call_args_list
+            if c.kwargs.get("error_code") == "ORDER_REJECTED"
+        ]
+        assert rejects, engine.db_manager.log_event.call_args_list
+        assert rejects[0].kwargs["event_type"] == EventType.ERROR
+        assert "-2010" in rejects[0].kwargs["message"]
+
+    def test_entry_unknown_records_system_event(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """A None place_order result (phantom-order window) is surfaced in
+        system_events so the possibly-live order is queryable (#853)."""
+        engine = execution_engine_with_exchange
+        engine.db_manager = MagicMock()
+        engine.session_id = 1
+        mock_exchange.place_order.return_value = None
+
+        engine.execute_entry("BTCUSDT", PositionSide.LONG, 0.1, 50000.0, 10000.0)
+
+        unknowns = [
+            c
+            for c in engine.db_manager.log_event.call_args_list
+            if c.kwargs.get("error_code") == "ORDER_UNKNOWN"
+        ]
+        assert unknowns, engine.db_manager.log_event.call_args_list
+        assert unknowns[0].kwargs["event_type"] == EventType.WARNING
 
     def test_execute_entry_no_symbol_info(self, execution_engine_with_exchange, mock_exchange):
         """Order succeeds without symbol info (uses defaults)."""
