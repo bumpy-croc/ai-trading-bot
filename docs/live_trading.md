@@ -104,6 +104,44 @@ numbers `account_history.drawdown` is derived from.
   current balance (the guard stays armed from the new baseline). **Remove the flag after the
   restart** — leaving it set re-baselines the peak on every future restart, weakening the cap.
 
+## Manual kill-switch (`atb live-control halt` / `resume`)
+
+The human/PM manual halt required by `risk-limits.json` `kill_switch.manual_trigger_command`
+(#922). One command durably puts the TARGET environment's engine into a no-new-risk state
+with **FEATURE_ENTRY_PAUSE semantics**: new entries and scale-ins are blocked; exits,
+partial exits, stop-loss management, and reconciliation keep running. Nothing is liquidated.
+
+```bash
+atb live-control halt --env production --reason "duplicate order storm"
+atb live-control resume --env production --reason "root cause fixed"
+```
+
+- **Mechanism (restartless)**: the command upserts the `system_halt` row in the target
+  environment's `system_control_flags` table (resolved from
+  `RAILWAY_PRODUCTION_DATABASE_URL` / `RAILWAY_STAGING_DATABASE_URL` / `DATABASE_URL`).
+  The running engine's `SystemHaltEnforcer`
+  (`src/engines/live/monitoring/system_halt_enforcer.py`) polls the flag at the **top of
+  every trading-loop iteration** and mirrors it into the shared gate consulted by entry
+  evaluation, the `execute_entry_locked` chokepoint, the legacy short path, and scale-ins.
+- **Latency**: command → effect is at most one loop iteration (the adaptive check interval,
+  seconds up to `DEFAULT_MAX_CHECK_INTERVAL`; ~2 min at prod cadence). No restart/redeploy.
+- **Fallback (requires restart)**: `railway variables --set FEATURE_ENTRY_PAUSE=true` on the
+  target service — a Railway variable change triggers a redeploy, so expect ~3 minutes of
+  latency; use it only if the database write path is unavailable.
+- **Observability**: the command emits a CRITICAL `system_events` row
+  (`error_code=SYSTEM_HALT_COMMAND`) plus a webhook page (when `ALERT_WEBHOOK_URL` is set),
+  and prints the resulting account state — active session, open positions and their
+  protective stops (positions without a stop are flagged `NO STOP`). The engine emits its
+  own row when it honors the flag (`error_code=SYSTEM_HALT`; `SYSTEM_HALT_CLEARED` on
+  resume) — that second event is the proof of enforcement.
+- **Fail-safe**: a DB outage never releases an active halt (the engine keeps its last-known
+  state); halting twice is idempotent. The halt is independent of close-only mode, so
+  `resume` cannot accidentally clear a drawdown/circuit-breaker trip.
+- The former `emergency-stop` subcommand printed "(simulated)" and did nothing; it has been
+  removed — `halt` is the real safety command. Cancelling in-flight entry orders from an
+  out-of-process CLI would race the running engine's order tracking, so unfilled entries are
+  left to the engine's own timeout/cancel logic while the halt guarantees no new ones start.
+
 ## Position management features
 
 - Dynamic risk adjustment (`DynamicRiskManager`) tapers exposure after drawdowns and relaxes limits during recoveries. Configure
@@ -245,7 +283,9 @@ The control surface lives under `atb live-control`:
   registry’s `latest` symlink automatically so the live engine picks up the new model.
 - `atb live-control deploy-model --model-path <staging-dir> --close-positions` – promote a staged bundle into the live strategy
   directory.
-- `atb live-control list-models` / `status` / `emergency-stop` – quick operational actions when supervising a running engine.
+- `atb live-control list-models` / `status` – quick operational reads when supervising a running engine.
+- `atb live-control halt --env <production|staging|development> [--reason "..."]` / `resume` – the manual kill-switch
+  (see "Manual kill-switch" below): durably blocks new entries + scale-ins in the target environment without a restart.
 
 ## Programmatic usage
 

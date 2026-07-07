@@ -33,6 +33,7 @@ from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffe
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
 from src.engines.live.execution.entry_pause import EntryPauseGate
+from src.engines.live.system_halt import SystemHaltState
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
@@ -147,15 +148,23 @@ class LiveEntryEngineState(Protocol):
 class LiveEntryCoordinator:
     """Owns the live engine's entry decision + execution pipeline."""
 
-    def __init__(self, engine_state: LiveEntryEngineState) -> None:
-        """Bind to the engine's live state (see protocol for the surface)."""
+    def __init__(
+        self,
+        engine_state: LiveEntryEngineState,
+        system_halt: SystemHaltState | None = None,
+    ) -> None:
+        """Bind to the engine's live state (see protocol for the surface).
+
+        ``system_halt`` is the engine's shared manual kill-switch state (#922);
+        None (tests, standalone use) leaves only the feature-flag pause active.
+        """
         self._state = engine_state
-        # FEATURE_ENTRY_PAUSE gate for new entries (scale-ins are gated by the
-        # exit handler's own instance — see EntryPauseGate).
-        self._entry_pause = EntryPauseGate()
+        # Entry-pause gate (FEATURE_ENTRY_PAUSE + manual system halt) for new
+        # entries; scale-ins are gated by the exit handler's own instance.
+        self._entry_pause = EntryPauseGate(halt_state=system_halt)
 
     def _entry_paused(self, context: str) -> bool:
-        """True when FEATURE_ENTRY_PAUSE suppresses new entries (rate-limit logged)."""
+        """True when a pause source suppresses new entries (rate-limit logged)."""
         return self._entry_pause.paused(context)
 
     def check_entry_conditions(

@@ -210,6 +210,11 @@ keep the skill generic and let the specifics live here.
 - `code=-1111` (price precision) / `code=51077` (qty precision) — order precision rejection (should
   be fixed; recurrence = regression, see §1.1).
 - `-2010` / "insufficient balance" on a stop-loss → unprotected position.
+- `MANUAL SYSTEM HALT ENFORCED` / `error_code=SYSTEM_HALT` (#922) — the manual kill-switch
+  (`atb live-control halt`) is in force: entries + scale-ins blocked, exits/stops continue.
+  Expected if an operator just pulled it (a `SYSTEM_HALT_COMMAND` event precedes it); if nobody
+  did, investigate WHO wrote the `system_control_flags.system_halt` row. `SYSTEM_HALT_CLEARED`
+  = resumed.
 - "No active trading session for balance update" — balance updates silently failing (§1.3, #693).
 - `Margin position check failed` — reconciler erroring every cycle (§1.2, #674).
 - A **new** position opened while an **untracked**/orphaned position may be live → double-exposure.

@@ -632,6 +632,35 @@ class SystemEvent(Base):
     created_at = Column(DateTime, default=utc_now)
 
 
+# Name of the manual kill-switch flag row (#922). Written by
+# `atb live-control halt` / `resume`; polled by the live trading loop.
+SYSTEM_HALT_FLAG_NAME = "system_halt"
+
+
+class SystemControlFlag(Base):
+    """Operator-set control flags the live engine polls at runtime.
+
+    One row per flag name (upserted, never appended) — the durable channel for
+    out-of-process operator commands such as the manual kill-switch
+    (``system_halt``). The audit trail of WHO flipped WHAT and WHEN lives in
+    ``system_events``; this table only holds the current state.
+    """
+
+    __tablename__ = "system_control_flags"
+
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
+    name = Column(String(50), nullable=False, unique=True, index=True)
+    active: Mapped[bool] = cast(Mapped[bool], Column(Boolean, nullable=False, default=False))
+    reason: Mapped[str | None] = cast(Mapped[str | None], Column(Text))
+    # Who set it, e.g. 'cli:alex'
+    source: Mapped[str | None] = cast(Mapped[str | None], Column(String(100)))
+
+    created_at = Column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime | None] = cast(
+        Mapped[datetime | None], Column(DateTime, default=utc_now, onupdate=utc_now)
+    )
+
+
 class ReconciliationAuditEvent(Base):
     """Immutable audit trail for reconciliation corrections.
 
