@@ -74,6 +74,7 @@ from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskM
 from src.position_management.macro_events import MacroEventGuard
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
+from src.prediction.inference_context import InferenceContext, set_inference_context
 from src.regime.detector import RegimeDetector
 from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
@@ -240,6 +241,11 @@ class Backtester:
             _regime_switcher_class: Optional regime switcher class for testing (internal).
             _strategy_manager: Optional strategy manager class or instance for testing (internal).
         """
+        # Backtest results must not depend on wall-clock/CPU load: pin the
+        # prediction pipeline to its deterministic policy (no inference
+        # deadline, no latency-based substitution). See #912 side-finding.
+        set_inference_context(InferenceContext.DETERMINISTIC)
+
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
         if annual_margin_interest_rate < 0 or not math.isfinite(annual_margin_interest_rate):

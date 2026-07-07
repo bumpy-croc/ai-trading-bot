@@ -230,6 +230,7 @@ class TestEndToEndTradingWorkflows:
             mock_result = Mock(spec=PredictionResult)
             mock_result.price = current_price * 1.05  # 5% higher = bullish
             mock_result.confidence = 0.85
+            mock_result.error = None
             mock_result.metadata = {"model": "test_model"}
             return mock_result
 
