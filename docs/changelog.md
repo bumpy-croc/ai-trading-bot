@@ -66,6 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backtest determinism fingerprint byte-identical.
 
 ### Fixed
+- **#928 `create_model` TypeError for non-CNN architectures**: the trainer always
+  forwards `has_sentiment` to `create_model`, but only the CNN-LSTM baseline
+  accepts it — `tft`, `tcn_attention`, and the default variants of
+  `attention_lstm`/`tcn` crashed at model construction with
+  `TypeError: ... unexpected keyword argument 'has_sentiment'`. `create_model`
+  now pops `has_sentiment` before the architecture dispatch, so CNN-LSTM still
+  receives the real flag and no other factory sees it. A parametrized smoke test
+  now constructs every CLI-selectable `(model_type, variant)` pair with the
+  trainer's exact kwargs.
 - **#914 `strategy_executions.ml_predictions` no longer always null**: every row
   ever written (151k+ in prod) carried JSON `null` because the logging call sites
   extracted prediction data from dataframe columns (`onnx_pred`, `ml_prediction`)
