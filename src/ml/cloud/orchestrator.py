@@ -6,7 +6,6 @@ upload data → submit job → wait → download artifacts → sync to registry.
 
 from __future__ import annotations
 
-import argparse
 import itertools
 import json
 import logging
@@ -133,59 +132,48 @@ class CloudTrainingOrchestrator:
         )
 
     def _prepare_training_data(self) -> str | None:
-        """Download training data locally and upload to S3.
+        """Assemble the training corpus locally and upload it to S3.
 
-        This step is required because Binance API blocks requests from AWS IP addresses.
-        Data is downloaded fresh from Binance (no cache) and uploaded to S3
-        for SageMaker to use as input channel.
+        This step is required because the Binance API blocks requests from AWS IP
+        addresses. The corpus comes from the training pipeline's single-source
+        loader: prefilled parquet cache first, Binance for missing ranges, and a
+        loud failure instead of any third-party fallback (#909) — so cloud jobs
+        train on exactly the rows a local run would see.
 
         Returns:
             S3 URI of uploaded data, or None if input_data_s3_uri was already set
 
         Raises:
-            RuntimeError: If data download or upload fails
+            RuntimeError: If the corpus cannot be assembled or fails coverage checks
         """
         # Skip if S3 URI already provided by user
         if self.config.input_data_s3_uri:
             logger.info(f"Using provided S3 data URI: {self.config.input_data_s3_uri}")
             return None
 
-        from cli.commands.data import _download
+        from src.ml.training_pipeline.config import TrainingContext
+        from src.ml.training_pipeline.ingestion import load_training_corpus
 
         tc = self.config.training_config
 
-        logger.info(f"Downloading {tc.symbol} data from Binance (fresh, no cache)...")
+        logger.info(f"Loading {tc.symbol} training corpus (cache first, Binance for gaps)...")
+        corpus = load_training_corpus(TrainingContext(config=tc))
 
-        # Create temp directory for downloads
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Download data from Binance using existing CLI function
-            args = argparse.Namespace(
-                symbol=tc.symbol,
-                timeframe=tc.timeframe,
-                start_date=tc.start_date.strftime("%Y-%m-%d"),
-                end_date=tc.end_date.strftime("%Y-%m-%d"),
-                output_dir=tmpdir,
-                format="csv",
+            csv_path = (
+                Path(tmpdir)
+                / f"{tc.symbol}_{tc.timeframe}_{tc.start_date:%Y-%m-%d}_{tc.end_date:%Y-%m-%d}.csv"
             )
+            # The container's loader looks up a "timestamp" column by name
+            corpus.rename_axis("timestamp").to_csv(csv_path, index=True)
 
-            if _download(args) != 0:
-                raise RuntimeError("Failed to download training data from Binance")
-
-            # Find downloaded file
-            data_files = list(Path(tmpdir).glob("*.csv"))
-            if not data_files:
-                raise RuntimeError("No data files found after download")
-
-            logger.info(f"Downloaded {len(data_files)} file(s)")
-
-            # Upload to S3 using existing artifact manager
             logger.info(
                 f"Uploading training data to S3 bucket {self.config.storage_config.s3_bucket}..."
             )
             s3_uri = self.s3_manager.upload_training_data(
                 symbol=tc.symbol,
                 timeframe=tc.timeframe,
-                data_files=data_files,
+                data_files=[csv_path],
             )
 
             logger.info(f"Training data uploaded to {s3_uri}")
@@ -356,6 +344,8 @@ class CloudTrainingOrchestrator:
                 "force_sentiment": str(tc.force_sentiment).lower(),
                 "force_price_only": str(tc.force_price_only).lower(),
                 "mixed_precision": str(tc.mixed_precision).lower(),
+                "model_type": tc.model_type,
+                "model_variant": tc.model_variant,
             },
         )
 

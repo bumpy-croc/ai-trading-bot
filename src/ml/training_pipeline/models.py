@@ -191,9 +191,13 @@ def create_model(
     """
     model_type_lower = model_type.lower()
 
+    # Only the CNN-LSTM baseline consumes has_sentiment. Pop it here so the other
+    # architecture factories — which don't accept it — never receive it via the
+    # **kwargs forwarding below (the trainer always passes it; see #928).
+    has_sentiment = kwargs.pop("has_sentiment", True)
+
     # CNN-LSTM (original/baseline) - use optimized adaptive model
     if model_type_lower in ["cnn_lstm", "adaptive", "default"]:
-        has_sentiment = kwargs.get("has_sentiment", True)
         return create_adaptive_model(input_shape, has_sentiment)
 
     # Attention-LSTM

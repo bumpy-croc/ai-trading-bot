@@ -38,6 +38,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so degraded live decisions are attributable in the database. Closes #913.
 
 ### Added
+- **Cloud-first model tournaments (#918, #909)**: `atb train cloud` gains
+  `--model-type {lstm,cnn_lstm,attention_lstm,tcn,tcn_attention,tft}` and
+  `--model-variant {default,lightweight,deep}`, threaded end-to-end through
+  `TrainingConfig` → SageMaker job hyperparameters → the training container
+  entrypoint (defaults preserve current behavior: `cnn_lstm`/`default`).
+  Training-corpus ingestion now consults the year-based parquet cache
+  (`atb data prefill-cache`) before any network fetch, fetches missing ranges
+  from Binance only, and validates coverage (open-time boundary slack,
+  calendar-day start check, ≥99% expected-bar ratio). **Training corpora no
+  longer fall back to a third-party provider** — a range Binance/cache cannot
+  cover fails loudly with remediation guidance instead of silently switching
+  sources mid-corpus (#909). Archive CSV timestamp parsing hardened with
+  `format="mixed", utc=True` (Binance's earliest kline archives mix on-the-hour
+  and sub-second timestamps in one file). Tournaments run cloud-first from now
+  on; see `docs/prediction.md`.
+  **⚠️ Deploy note: the ECR training image must be rebuilt and pushed
+  (`./src/ml/cloud/build-and-push.sh`) after this merge and before any cloud
+  training run uses these fixes — the container bakes in
+  `src/ml/training_pipeline/`, and the weekly training routine's image-freshness
+  precondition will refuse to run against a stale image.**
+
 - **Cloud training hardening (#890)**: `atb train cloud` accepts `--start-date`/`--end-date`
   (UTC, mutually exclusive with `--days`) for fixed-cutoff experiments; `--no-wait` now uploads
   the S3 data channel before submitting (previously the async path always failed in-container);
@@ -49,6 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (falls back to a `-N` suffixed sibling). Cloud workflow documented in `docs/prediction.md`.
 
 ### Changed
+- **`--force-price-only` behavior change (#918)**: `atb train model
+  --force-price-only` now routes through `PriceOnlyFeatureExtractor` (the 5
+  causally-normalized OHLCV features used by `atb train price` and live
+  inference) and regresses `close_normalized` instead of the raw dollar close.
+  Previously the flag only skipped the sentiment download while still building
+  the 9-feature globally-scaled pipeline and predicting raw prices — metrics
+  were incomparable with price-only baselines. Bundles still land in the
+  `price/` registry namespace (never implicitly in `basic/`), and
+  `atb train price` itself is untouched. Pinned by unit tests.
 - **#486 live-engine modularization complete**: `LiveTradingEngine._init_modular_handlers`
   (the last open item from `docs/refactor/live_engine_modularization.md`) is now a
   thin orchestrator over four construction-phase helpers — `_init_core_handlers`
@@ -62,6 +92,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backtest determinism fingerprint byte-identical.
 
 ### Fixed
+- **#928 `create_model` TypeError for non-CNN architectures**: the trainer always
+  forwards `has_sentiment` to `create_model`, but only the CNN-LSTM baseline
+  accepts it — `tft`, `tcn_attention`, and the default variants of
+  `attention_lstm`/`tcn` crashed at model construction with
+  `TypeError: ... unexpected keyword argument 'has_sentiment'`. `create_model`
+  now pops `has_sentiment` before the architecture dispatch, so CNN-LSTM still
+  receives the real flag and no other factory sees it. A parametrized smoke test
+  now constructs every CLI-selectable `(model_type, variant)` pair with the
+  trainer's exact kwargs.
 - **#914 `strategy_executions.ml_predictions` no longer always null**: every row
   ever written (151k+ in prod) carried JSON `null` because the logging call sites
   extracted prediction data from dataframe columns (`onnx_pred`, `ml_prediction`)
