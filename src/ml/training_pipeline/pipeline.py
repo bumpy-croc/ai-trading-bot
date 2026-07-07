@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -237,19 +237,35 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             verbose=1,
         )
 
-        robustness_results = (
-            validate_model_robustness(model, X_val, y_val, feature_names, has_sentiment)
-            if ctx.config.diagnostics.evaluate_robustness
-            else {}
-        )
-        evaluation_results = evaluate_model_performance(
-            model,
-            X_train,
-            y_train,
-            X_val,
-            y_val,
-            scalers.get("close"),
-        )
+        # Diagnostics run after model.fit() but before save_artifacts. A crash here
+        # (e.g. a per-architecture metric-set mismatch) must not discard a fully-trained
+        # model with nothing persisted -- degrade to a metadata gap instead, and let only
+        # a genuine training/data failure (the outer except below) abort without saving.
+        robustness_results: Any
+        evaluation_results: Any
+        try:
+            robustness_results = (
+                validate_model_robustness(model, X_val, y_val, feature_names, has_sentiment)
+                if ctx.config.diagnostics.evaluate_robustness
+                else {}
+            )
+            evaluation_results = evaluate_model_performance(
+                model,
+                X_train,
+                y_train,
+                X_val,
+                y_val,
+                scalers.get("close"),
+            )
+        except (ValueError, RuntimeError, KeyError) as exc:
+            logger.error(
+                "Post-training evaluation/robustness diagnostics failed: %s. "
+                "Saving the trained model anyway with a diagnostics-error placeholder.",
+                exc,
+                exc_info=True,
+            )
+            robustness_results = {}
+            evaluation_results = {"error": str(exc)}
 
         # force_price_only bundles stay in price/ even though they share `atb train
         # price`'s basic/ contract: writing to basic/ here would implicitly repoint
