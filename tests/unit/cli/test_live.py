@@ -311,10 +311,28 @@ class TestControlTrain:
 
 
 class TestControlDeployModel:
-    """Tests for the deploy-model subcommand of live-control."""
+    """Tests for the deploy-model subcommand of live-control.
+
+    The validation gate is mocked at the `_gate_and_promote` seam: its verdict
+    depends on real multi-window backtests of whatever model the repo registry
+    holds (model quality + market data), which is not a unit-test concern —
+    the gate itself is covered by the src/ml/validation tests.
+    """
+
+    @staticmethod
+    def _gate_decision(promoted: bool):
+        from src.ml.validation.gate import GateDecision
+
+        return GateDecision(
+            passed=promoted,
+            promoted=promoted,
+            reason="all windows passed" if promoted else "failed one or more validation windows",
+            report=None,
+            audit_path=None,
+        )
 
     def test_deploys_model_successfully(self):
-        """Test that model deployment executes successfully."""
+        """Test that model deployment executes successfully when the gate passes."""
         # Arrange
         with tempfile.TemporaryDirectory() as tmpdir:
             registry = Path(tmpdir)
@@ -328,11 +346,47 @@ class TestControlDeployModel:
             )
 
             # Act
-            with patch("cli.commands.live.MODEL_REGISTRY", registry):
+            with (
+                patch("cli.commands.live.MODEL_REGISTRY", registry),
+                patch(
+                    "cli.commands.live._gate_and_promote",
+                    return_value=self._gate_decision(promoted=True),
+                ) as gate,
+            ):
                 result = _control(args)
 
                 # Assert
                 assert result == 0
+                gate.assert_called_once()
+                assert gate.call_args.kwargs["symbol"] == "BTCUSDT"
+                assert gate.call_args.kwargs["model_type"] == "basic"
+
+    def test_deploy_blocked_when_gate_fails(self):
+        """Test that a failing validation gate blocks deployment with exit code 1."""
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = Path(tmpdir)
+            version_dir = registry / "BTCUSDT" / "basic" / "2024-10-01_v1"
+            version_dir.mkdir(parents=True)
+
+            args = argparse.Namespace(
+                control_cmd="deploy-model",
+                model_path=str(version_dir),
+                close_positions=False,
+            )
+
+            # Act
+            with (
+                patch("cli.commands.live.MODEL_REGISTRY", registry),
+                patch(
+                    "cli.commands.live._gate_and_promote",
+                    return_value=self._gate_decision(promoted=False),
+                ),
+            ):
+                result = _control(args)
+
+                # Assert
+                assert result == 1
 
     def test_returns_error_for_invalid_model_path(self):
         """Test that error is returned for invalid model path."""
