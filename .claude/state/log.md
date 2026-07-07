@@ -315,3 +315,9 @@ Ref: GH #913, #914, #915, #912 (addendum), #723 · docs/research/notes/2026-07-0
 
 ---
 
+
+## 2026-07-07 11:30 · track-record · quant-researcher
+Experiment #933: ML target-design literature/ecosystem survey for the TARGET-REDESIGN tournament → informational (no backtest run; ranked shortlist produced).
+Evidence: docs/research/2026-07-07_ml-target-design-research.md — surveys FreqAI target conventions, freqst.com (skeptical: 100% non-ML technical-indicator leaderboard, zero disclosed methodology, unmaintained), triple-barrier/meta-labeling/trend-scanning/quantile literature (cited, evidence quality flagged per source), and what correlates with live profitability (coverage/precision tradeoff, not raw accuracy). Ranked shortlist: (1) meta-labeling secondary classifier, (2) binary direction classification, (3) triple-barrier ternary classification, (4) vol-normalized regression, (5) quantile/distributional regression, (6) trend-scanning — top-3 recommended for Round 1.
+Key self-diagnosed risk: a meta-labeling entrant built on |predicted_return| alone would reproduce #912's already-falsified degenerate one-feature result — must use a richer feature set (vol regime, rolling hit-rate, session) to be a genuinely new test.
+Recommendation: promising direction, ready to pre-register — do NOT reuse the 2026-01-01→2026-07-04 exam window again (already served 7 candidates across #898+#912, near the ~10-candidate multiple-comparison budget); new frozen exam window required before Round 1 runs. Confirm #913 (backtest non-determinism) fix holds before trusting new numbers.

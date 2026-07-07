@@ -1,6 +1,7 @@
 """Unit tests for ML training pipeline data ingestion module."""
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -9,6 +10,7 @@ import pytest
 from src.ml.training_pipeline.config import TrainingConfig, TrainingContext, TrainingPaths
 from src.ml.training_pipeline.ingestion import (
     _load_price_data_file,
+    _validate_data_coverage,
     download_price_data,
     load_sentiment_data,
     load_training_corpus,
@@ -206,6 +208,79 @@ class TestLoadTrainingCorpus:
         # Assert
         assert result.index.tz is not None
         assert len(result) == len(df)
+
+
+@pytest.mark.fast
+class TestValidateDataCoverage:
+    """Tests for _validate_data_coverage (SageMaker S3 input-channel sanity check)."""
+
+    def test_intraday_listing_offset_on_start_day_accepted(self, tmp_path):
+        # Arrange - ETHUSDT's genuine first-ever candle opens 04:00 UTC on 2017-08-17,
+        # hours after midnight of the requested start date (issue #931)
+        ctx = _make_ctx(
+            tmp_path,
+            start=datetime(2017, 8, 17),
+            end=datetime(2017, 9, 17),
+            symbol="ETHUSDT",
+        )
+        df = _hourly_frame("2017-08-17 04:00", "2017-09-17 23:00")
+
+        # Act & Assert - must not raise
+        _validate_data_coverage(df, ctx, Path("ETHUSDT_1h.csv"))
+
+    def test_start_a_calendar_day_late_rejected(self, tmp_path):
+        # Arrange - data genuinely starts the day after the requested start
+        ctx = _make_ctx(
+            tmp_path,
+            start=datetime(2017, 8, 17),
+            end=datetime(2017, 9, 17),
+            symbol="ETHUSDT",
+        )
+        df = _hourly_frame("2017-08-18 00:00", "2017-09-17 23:00")
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="Data starts at"):
+            _validate_data_coverage(df, ctx, Path("ETHUSDT_1h.csv"))
+
+    def test_days_now_end_at_last_closed_candle_accepted(self, tmp_path):
+        # Arrange - "--days N" runs set end_date to a mid-day "now"; the staged channel
+        # can only contain bars up to the most recent closed candle at staging time
+        now = datetime.now(UTC)
+        start = (now - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+        ctx = _make_ctx(tmp_path, start=start, end=now)
+        last_closed = pd.Timestamp(now).floor("1h") - pd.Timedelta(hours=1)
+        df = _hourly_frame(
+            start.strftime("%Y-%m-%d %H:%M"),
+            last_closed.tz_localize(None).strftime("%Y-%m-%d %H:%M"),
+        )
+
+        # Act & Assert - must not raise
+        _validate_data_coverage(df, ctx, Path("BTCUSDT_1h.csv"))
+
+    def test_end_one_bar_before_end_day_midnight_accepted(self, tmp_path):
+        # Arrange - candle index is open time: the 23:00 bar covers through midnight
+        ctx = _make_ctx(tmp_path, start=datetime(2024, 1, 1), end=datetime(2024, 1, 31))
+        df = _hourly_frame("2024-01-01 00:00", "2024-01-30 23:00")
+
+        # Act & Assert - must not raise
+        _validate_data_coverage(df, ctx, Path("BTCUSDT_1h.csv"))
+
+    def test_end_a_calendar_day_short_rejected(self, tmp_path):
+        # Arrange - data stops a full day before the requested end
+        ctx = _make_ctx(tmp_path, start=datetime(2024, 1, 1), end=datetime(2024, 1, 31))
+        df = _hourly_frame("2024-01-01 00:00", "2024-01-29 23:00")
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="Data ends at"):
+            _validate_data_coverage(df, ctx, Path("BTCUSDT_1h.csv"))
+
+    def test_empty_data_rejected(self, tmp_path):
+        # Arrange
+        ctx = _make_ctx(tmp_path)
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="empty"):
+            _validate_data_coverage(pd.DataFrame(), ctx, Path("BTCUSDT_1h.csv"))
 
 
 @pytest.mark.fast
