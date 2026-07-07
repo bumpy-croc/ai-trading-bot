@@ -38,6 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so degraded live decisions are attributable in the database. Closes #913.
 
 ### Added
+- **Real manual kill-switch (#922)**: `atb live-control halt --env production|staging|development
+  [--reason "..."]` and `atb live-control resume` now exist and are REAL. Halt durably upserts a
+  `system_halt` row in the target environment's new `system_control_flags` table; the running
+  engine's `SystemHaltEnforcer` polls it at the top of every trading-loop iteration and mirrors
+  it into the entry-pause gate, so entries + scale-ins stop within ONE iteration (no restart) while
+  exits, stop-losses and reconciliation continue — FEATURE_ENTRY_PAUSE semantics. Both commands
+  emit `system_events` rows (`SYSTEM_HALT_COMMAND`/`SYSTEM_RESUME_COMMAND` from the CLI;
+  `SYSTEM_HALT`/`SYSTEM_HALT_CLEARED` from the engine when it honors the flag), page the alert
+  webhook, and print the account state (open positions + protective stops, `NO STOP` flagged).
+  Fail-safe: a DB outage never releases an active halt; halt/resume are idempotent; the halt is
+  independent of close-only mode so `resume` cannot clear a drawdown/circuit-breaker trip.
+  Fail-CLOSED startup: until the flag has been successfully read once (priming read at engine
+  construction, retried each loop iteration) the entry gates refuse new risk, so a reboot behind
+  a dead database cannot trade past an operator halt (`SYSTEM_HALT_UNVERIFIED` pages the operator);
+  exits/stops/reconciliation are never gated. The CLI echoes the masked resolved DB host before
+  mutating. Table also covered by Alembic migration `0012_add_system_control_flags`. The
+  simulated `emergency-stop` subcommand was REMOVED — no fake safety commands.
 - **Cloud-first model tournaments (#918, #909)**: `atb train cloud` gains
   `--model-type {lstm,cnn_lstm,attention_lstm,tcn,tcn_attention,tft}` and
   `--model-variant {default,lightweight,deep}`, threaded end-to-end through

@@ -449,19 +449,47 @@ class TestControlStatus:
         assert result == 0
 
 
-class TestControlEmergencyStop:
-    """Tests for the emergency-stop subcommand of live-control."""
+class TestLiveControlParser:
+    """Parser-level contract for the live-control safety subcommands (#922)."""
 
-    def test_executes_emergency_stop(self):
-        """Test that emergency stop executes successfully."""
-        # Arrange
-        args = argparse.Namespace(control_cmd="emergency-stop")
+    @staticmethod
+    def _build_parser() -> argparse.ArgumentParser:
+        from cli.commands.live import register
 
-        # Act
-        result = _control(args)
+        parser = argparse.ArgumentParser()
+        register(parser.add_subparsers(dest="cmd"))
+        return parser
 
-        # Assert
-        assert result == 0
+    def test_emergency_stop_subcommand_removed(self):
+        """The simulated emergency-stop is gone — no fake safety commands."""
+        parser = self._build_parser()
+
+        with pytest.raises(SystemExit):
+            parser.parse_args(["live-control", "emergency-stop"])
+
+    def test_halt_subcommand_registered(self):
+        parser = self._build_parser()
+
+        ns = parser.parse_args(["live-control", "halt", "--env", "staging", "--reason", "drill"])
+
+        assert ns.control_cmd == "halt"
+        assert ns.env == "staging"
+        assert ns.reason == "drill"
+
+    def test_halt_requires_env(self):
+        parser = self._build_parser()
+
+        with pytest.raises(SystemExit):
+            parser.parse_args(["live-control", "halt"])
+
+    def test_resume_subcommand_registered(self):
+        parser = self._build_parser()
+
+        ns = parser.parse_args(["live-control", "resume", "--env", "production"])
+
+        assert ns.control_cmd == "resume"
+        assert ns.env == "production"
+        assert ns.reason is None
 
 
 class TestControlSwapStrategy:

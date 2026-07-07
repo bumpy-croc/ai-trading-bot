@@ -51,6 +51,10 @@ def _is_signature_compatible(real_sig: inspect.Signature, mock_sig: inspect.Sign
         "log_position",
         "log_event",
         "log_account_snapshot",
+        # Manual kill-switch (#922) — the engine fails CLOSED if the read is
+        # missing, so the mock must stay signature-compatible.
+        "get_system_halt",
+        "set_system_halt",
     ],
 )
 def test_mock_and_real_database_signatures_are_compatible(method_name: str):
