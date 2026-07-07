@@ -272,8 +272,8 @@ class TestEvaluateModelPerformance:
         # Arrange
         model = MagicMock()
         model.evaluate.side_effect = [
-            (0.1, 0.3),  # train_loss, train_rmse
-            (0.2, 0.4),  # test_loss, test_rmse
+            {"loss": 0.1, "rmse": 0.3},  # train
+            {"loss": 0.2, "rmse": 0.4},  # test
         ]
         model.predict.return_value = np.array([[0.5], [0.6], [0.7]])
 
@@ -295,13 +295,41 @@ class TestEvaluateModelPerformance:
         assert result["test_loss"] == 0.2
         assert result["train_rmse"] == 0.3
         assert result["test_rmse"] == 0.4
+        model.evaluate.assert_called_with(X_test, y_test, verbose=0, return_dict=True)
+
+    def test_evaluate_handles_extra_compiled_metrics(self):
+        """Regression guard for #936: architectures compiling with metrics=[rmse, mae]
+        return a 3-entry dict from model.evaluate(return_dict=True). Reading by key
+        must ignore the extra "mae" entry instead of positionally unpacking it.
+        """
+        # Arrange
+        model = MagicMock()
+        model.evaluate.side_effect = [
+            {"loss": 0.1, "rmse": 0.3, "mae": 0.25},  # train
+            {"loss": 0.2, "rmse": 0.4, "mae": 0.35},  # test
+        ]
+        model.predict.return_value = np.array([[0.5], [0.6], [0.7]])
+
+        X_train = np.random.rand(10, 120, 5).astype(np.float32)
+        y_train = np.random.rand(10).astype(np.float32)
+        X_test = np.random.rand(3, 120, 5).astype(np.float32)
+        y_test = np.array([0.5, 0.6, 0.7])
+
+        # Act - must not raise ValueError: too many values to unpack
+        result = evaluate_model_performance(model, X_train, y_train, X_test, y_test)
+
+        # Assert
+        assert result["train_loss"] == 0.1
+        assert result["train_rmse"] == 0.3
+        assert result["test_loss"] == 0.2
+        assert result["test_rmse"] == 0.4
 
     def test_mape_calculation_with_scaler(self):
         # Arrange
         from sklearn.preprocessing import MinMaxScaler
 
         model = MagicMock()
-        model.evaluate.side_effect = [(0.1, 0.3), (0.2, 0.4)]
+        model.evaluate.side_effect = [{"loss": 0.1, "rmse": 0.3}, {"loss": 0.2, "rmse": 0.4}]
         model.predict.return_value = np.array([[0.5], [0.6], [0.7]])
 
         X_train = np.random.rand(10, 120, 5).astype(np.float32)
@@ -324,7 +352,7 @@ class TestEvaluateModelPerformance:
     def test_mape_handles_near_zero_values(self):
         # Arrange
         model = MagicMock()
-        model.evaluate.side_effect = [(0.1, 0.3), (0.2, 0.4)]
+        model.evaluate.side_effect = [{"loss": 0.1, "rmse": 0.3}, {"loss": 0.2, "rmse": 0.4}]
         model.predict.return_value = np.array([[0.5], [0.6], [0.7]])
 
         X_train = np.random.rand(10, 120, 5).astype(np.float32)
@@ -342,7 +370,7 @@ class TestEvaluateModelPerformance:
     def test_mape_caps_extreme_outliers(self):
         # Arrange
         model = MagicMock()
-        model.evaluate.side_effect = [(0.1, 0.3), (0.2, 0.4)]
+        model.evaluate.side_effect = [{"loss": 0.1, "rmse": 0.3}, {"loss": 0.2, "rmse": 0.4}]
         model.predict.return_value = np.array([[100.0], [100.0], [100.0]])
 
         X_train = np.random.rand(10, 120, 5).astype(np.float32)
