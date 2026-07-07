@@ -9,6 +9,7 @@ import math
 import os
 from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -23,6 +24,7 @@ from sqlalchemy.pool import QueuePool
 from src.config.config_manager import get_config
 
 from .models import (
+    SYSTEM_HALT_FLAG_NAME,
     AccountBalance,
     AccountHistory,
     Base,
@@ -40,6 +42,7 @@ from .models import (
     ReconciliationAuditEvent,
     RiskAdjustment,
     StrategyExecution,
+    SystemControlFlag,
     SystemEvent,
     Trade,
     TradeSource,
@@ -66,6 +69,20 @@ class QueryTimeout:
 # When gross_loss is 0 but gross_profit > 0, profit factor would be infinite.
 # This cap indicates "extremely profitable" while remaining storable in Numeric(18, 8).
 MAX_PROFIT_FACTOR = 999999.99
+
+
+@dataclass(frozen=True)
+class SystemHaltStatus:
+    """Detached snapshot of the ``system_halt`` control flag (#922).
+
+    Returned instead of the ORM row so callers (trading loop, CLI) never touch
+    a session-bound object outside its transaction.
+    """
+
+    active: bool
+    reason: str | None
+    source: str | None
+    updated_at: datetime | None
 
 
 def _trade_net_pnl(trade: Any) -> float:
@@ -1627,6 +1644,90 @@ class DatabaseManager:
                 raise
 
             return event.id
+
+    def get_system_halt(self) -> SystemHaltStatus:
+        """Read the manual kill-switch flag (#922).
+
+        A missing row reads as not-halted so normal boot on a fresh database is
+        unaffected. Polled by the live trading loop each iteration — uses the
+        CRITICAL_READ timeout so a slow query cannot stall the loop.
+        """
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
+            flag = (
+                session.query(SystemControlFlag)
+                .filter(SystemControlFlag.name == SYSTEM_HALT_FLAG_NAME)
+                .one_or_none()
+            )
+            if flag is None:
+                return SystemHaltStatus(active=False, reason=None, source=None, updated_at=None)
+            return SystemHaltStatus(
+                active=bool(flag.active),
+                reason=flag.reason,
+                source=flag.source,
+                updated_at=flag.updated_at,
+            )
+
+    def set_system_halt(
+        self,
+        active: bool,
+        *,
+        reason: str | None = None,
+        source: str | None = None,
+    ) -> SystemHaltStatus:
+        """Durably set/clear the manual kill-switch flag (#922); returns the new state.
+
+        Upserts the single ``system_halt`` row under a row lock so concurrent
+        operators cannot interleave a halt and a resume into a torn state. A
+        lost INSERT race on the unique name (first-ever halt issued twice at
+        once) retries once as an UPDATE — a kill-switch must not fail on a
+        duplicate pull.
+        """
+        try:
+            return self._upsert_system_halt(active, reason=reason, source=source)
+        except IntegrityError:
+            logger.warning("system_halt insert raced another writer — retrying as update")
+            return self._upsert_system_halt(active, reason=reason, source=source)
+
+    def _upsert_system_halt(
+        self,
+        active: bool,
+        *,
+        reason: str | None,
+        source: str | None,
+    ) -> SystemHaltStatus:
+        """Single upsert attempt for the ``system_halt`` row."""
+        with self.get_session() as session:
+            flag = (
+                session.query(SystemControlFlag)
+                .filter(SystemControlFlag.name == SYSTEM_HALT_FLAG_NAME)
+                .with_for_update()
+                .one_or_none()
+            )
+            if flag is None:
+                flag = SystemControlFlag(
+                    name=SYSTEM_HALT_FLAG_NAME, active=active, reason=reason, source=source
+                )
+                session.add(flag)
+            else:
+                flag.active = active
+                flag.reason = reason
+                flag.source = source
+                flag.updated_at = datetime.now(UTC)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                raise
+            except Exception as e:
+                session.rollback()
+                logger.error("Failed to set system_halt=%s: %s", active, e, exc_info=True)
+                raise
+            return SystemHaltStatus(
+                active=bool(flag.active),
+                reason=flag.reason,
+                source=flag.source,
+                updated_at=flag.updated_at,
+            )
 
     def log_strategy_execution(
         self,

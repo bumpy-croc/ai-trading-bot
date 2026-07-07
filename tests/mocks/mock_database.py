@@ -596,6 +596,29 @@ class MockDatabaseManager:
         """Get the active session ID."""
         return self._current_session_id
 
+    def set_system_halt(self, active: bool, *, reason=None, source=None):
+        """Set the manual kill-switch flag (#922)."""
+        from src.database.manager import SystemHaltStatus
+
+        self._system_halt = SystemHaltStatus(
+            active=bool(active), reason=reason, source=source, updated_at=datetime.now(UTC)
+        )
+        return self._system_halt
+
+    def get_system_halt(self):
+        """Read the manual kill-switch flag; not-halted by default (#922).
+
+        Must exist on the mock: the engine's SystemHaltEnforcer fails CLOSED
+        (entries blocked) when this read raises.
+        """
+        from src.database.manager import SystemHaltStatus
+
+        return getattr(
+            self,
+            "_system_halt",
+            SystemHaltStatus(active=False, reason=None, source=None, updated_at=None),
+        )
+
     def recover_last_balance(self, session_id: int | None = None) -> float:
         """Recover the last balance for a session."""
         return self.get_current_balance(session_id)

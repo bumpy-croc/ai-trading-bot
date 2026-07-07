@@ -72,11 +72,13 @@ from src.engines.live.monitoring import (
 )
 from src.engines.live.monitoring.circuit_breaker_enforcer import CircuitBreakerEnforcer
 from src.engines.live.monitoring.drawdown_guard import MaxDrawdownEnforcer, MaxDrawdownGuard
+from src.engines.live.monitoring.system_halt_enforcer import SystemHaltEnforcer
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.startup import LiveStartupSequencer
 from src.engines.live.strategy_hot_swap import StrategyHotSwapCoordinator
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.live.strategy_runtime import StrategyRuntimeCoordinator
+from src.engines.live.system_halt import SystemHaltState
 
 # Re-exported close-accounting helpers: the exit path (now LiveExitCoordinator)
 # uses them directly, and tests import them from this module, so keep the
@@ -110,6 +112,7 @@ from src.position_management.macro_events import MacroEventGuard
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
+from src.prediction.inference_context import InferenceContext, set_inference_context
 from src.regime.detector import RegimeDetector
 from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
@@ -252,6 +255,11 @@ class LiveTradingEngine:
             app config). The runner builds these explicitly; when omitted the
             engine resolves them itself (#486).
         """
+
+        # Live inference runs under a bounded latency budget so the trading
+        # loop cannot block indefinitely on a hung model; timeouts are
+        # accounted loudly (WARNING + counter + timed_out signal stamp).
+        set_inference_context(InferenceContext.LIVE)
 
         self._validate_inputs(
             initial_balance=initial_balance,
@@ -414,6 +422,11 @@ class LiveTradingEngine:
         """Construct the coordinator family that owns extracted engine behaviors."""
         self._runtime_dataset = None
         self._runtime_warmup = 0
+        # Manual kill-switch (#922): one shared holder — the loop enforcer
+        # mirrors the DB `system_halt` flag into it, and the entry/scale-in
+        # gates (entry coordinator + exit handler) read it. Created first so
+        # every consumer below can bind the same instance.
+        self._system_halt = SystemHaltState()
         # Strategy-runtime state, owned by StrategyRuntimeCoordinator and assigned
         # via configure_strategy below. Declared here so the type-checker tracks
         # the attributes now that the coordinator — not an engine method — writes
@@ -437,7 +450,9 @@ class LiveTradingEngine:
         # writes engine state (balance, trackers, risk manager, session) through
         # the engine backref at call time, preserving the base-asset locking and
         # ordering of the real-money entry path (#486).
-        self.entry_coordinator = LiveEntryCoordinator(engine_state=self)
+        self.entry_coordinator = LiveEntryCoordinator(
+            engine_state=self, system_halt=self._system_halt
+        )
         self.exit_coordinator = LiveExitCoordinator(engine_state=self)
         self.dynamic_risk_coordinator = LiveDynamicRiskCoordinator(engine_state=self)
         self.loop_timing_coordinator = LiveLoopTimingCoordinator(engine_state=self)
@@ -980,7 +995,13 @@ class LiveTradingEngine:
             # Close-only mode must block ALL exposure increases, including
             # scale-ins; read at call time so mid-session trips take effect.
             close_only_provider=lambda: self._close_only_mode,
+            # Manual kill-switch (#922): scale-ins share the engine's halt state.
+            system_halt=self._system_halt,
         )
+        # A DI-injected handler was built without the engine's halt state —
+        # rebind so its scale-ins cannot bypass the kill-switch. Idempotent
+        # for the default handler constructed above.
+        self.live_exit_handler.bind_system_halt(self._system_halt)
         # #802 follow-up P3: scale-ins respect the same gross exposure cap as
         # entries (share the governor instance; inert unless the flag is on).
         self.live_exit_handler.configure_exposure_gate(exposure_governor)
@@ -1011,6 +1032,18 @@ class LiveTradingEngine:
             engine_state=self,
             breaker=self._circuit_breaker,
         )
+        # Manual kill-switch (#922): polls the DB `system_halt` flag at the top
+        # of every loop iteration so `atb live-control halt` takes effect
+        # within one iteration — no restart needed. The priming read makes a
+        # boot fail-CLOSED: until the flag is successfully read once, the
+        # entry gates refuse new risk (an active halt row behind a dead DB
+        # cannot be traded past), while a healthy boot establishes the state
+        # here and starts trading immediately.
+        self._system_halt_enforcer = SystemHaltEnforcer(
+            engine_state=self,
+            halt_state=self._system_halt,
+        )
+        self._system_halt_enforcer.prime()
 
         # Startup recovery — session balance, persisted positions, exchange
         # reconciliation. Reads/writes engine state at call time (#486).
@@ -1465,6 +1498,11 @@ class LiveTradingEngine:
                 # would `continue` below before reaching them (#631).
                 self._ensure_ws_health_monitor_alive()
                 self._drain_pending_fill_exits()
+                # Manual kill-switch (#922): mirror the DB `system_halt` flag
+                # BEFORE any entry/scale-in evaluation so a halt issued via
+                # `atb live-control halt` blocks new risk in this very
+                # iteration (and on every data-outage `continue` path below).
+                self._system_halt_enforcer.check()
                 # For mock and real providers, update live data if supported.
                 # Skip when WS kline cache is active (no REST needed).
                 if not self._ws_kline_active and hasattr(self.data_provider, "update_live_data"):

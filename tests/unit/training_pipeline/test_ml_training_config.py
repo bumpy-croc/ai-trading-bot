@@ -139,6 +139,41 @@ class TestTrainingConfig:
         assert config.mixed_precision is False
         assert config.diagnostics.generate_plots is False
 
+    def test_accepts_tft_model_type(self):
+        # Arrange & Act
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            model_type="tft",
+        )
+
+        # Assert
+        assert config.model_type == "tft"
+
+    def test_rejects_unknown_model_type(self):
+        # Act & Assert
+        with pytest.raises(ValueError, match="model_type"):
+            TrainingConfig(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_date=datetime(2024, 1, 1),
+                end_date=datetime(2024, 12, 31),
+                model_type="transformer",
+            )
+
+    def test_rejects_unknown_model_variant(self):
+        # Act & Assert
+        with pytest.raises(ValueError, match="model_variant"):
+            TrainingConfig(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_date=datetime(2024, 1, 1),
+                end_date=datetime(2024, 12, 31),
+                model_variant="huge",
+            )
+
     def test_days_requested(self):
         # Arrange
         start = datetime(2024, 1, 1)
@@ -260,23 +295,3 @@ class TestTrainingContext:
 
         # Assert
         assert end_iso == "2024-12-31T23:59:59Z"
-
-    @patch("src.trading.symbols.factory.SymbolFactory.to_exchange_symbol")
-    def test_price_data_glob_property(self, mock_factory):
-        # Arrange
-        mock_factory.return_value = "BTCUSDT"
-        start = datetime(2024, 1, 1)
-        end = datetime(2024, 1, 31)
-        config = TrainingConfig(
-            symbol="BTCUSDT",
-            timeframe="1h",
-            start_date=start,
-            end_date=end,
-        )
-        ctx = TrainingContext(config=config)
-
-        # Act
-        glob_pattern = ctx.price_data_glob
-
-        # Assert
-        assert glob_pattern == "BTCUSDT_1h_2024-01-01T00:00:00Z_2024-01-31T23:59:59Z.*"

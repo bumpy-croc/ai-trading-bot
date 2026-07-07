@@ -210,6 +210,21 @@ def pytest_collection_modifyitems(config, items):  # noqa: D401
         config._has_integration_selected = has_integration
 
 
+@pytest.fixture(autouse=True)
+def _reset_inference_context():
+    """Keep the process-wide inference context from leaking across tests.
+
+    Engine constructors pin it (Backtester -> deterministic, live engine ->
+    live); without a reset, one test's engine would change timeout behavior
+    for every later test in the same worker.
+    """
+    from src.prediction.inference_context import reset_inference_context
+
+    reset_inference_context()
+    yield
+    reset_inference_context()
+
+
 @pytest.fixture
 def sample_ohlcv_data():
     """Generate realistic OHLCV data for testing"""

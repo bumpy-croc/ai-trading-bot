@@ -7,7 +7,14 @@ DEFAULT_INITIAL_BALANCE: float = 1000  # Default starting balance in USD
 # Prediction Engine Constants
 DEFAULT_PREDICTION_HORIZONS = [1]  # Single horizon for MVP
 DEFAULT_MIN_CONFIDENCE_THRESHOLD = 0.6
-DEFAULT_MAX_PREDICTION_LATENCY = 0.1  # seconds
+# Latency ALERTING budget (seconds): exceeding it logs a WARNING in live
+# trading but never gates or substitutes a completed prediction.
+DEFAULT_MAX_PREDICTION_LATENCY = 0.1
+# Hard inference deadline (seconds) applied only in the LIVE inference
+# context so the trading loop cannot block on a hung model. CPU ONNX
+# inference measures ~30-400ms even under heavy load; 5s is headroom, not a
+# latency target. Backtests apply no deadline (determinism requirement).
+DEFAULT_LIVE_INFERENCE_TIMEOUT = 5.0
 # Default model registry base path (legacy flat layout). The registry also
 # auto-detects a structured subdirectory at base/models when present.
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"

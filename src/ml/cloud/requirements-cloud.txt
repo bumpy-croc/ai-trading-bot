@@ -8,8 +8,11 @@ scikit-learn>=1.3.2
 pandas>=2.1.4
 numpy<2.0.0,>=1.23.5
 
-# Model export - TensorFlow 2.15 requires protobuf<5
-onnx>=1.15.0
+# Model export - TensorFlow 2.15 requires protobuf<5.
+# onnx must stay <1.18: newer onnx imports float4 types from ml_dtypes that
+# TF 2.15's pinned ml-dtypes lacks, breaking tf2onnx at import time and
+# silently producing bundles without model.onnx.
+onnx>=1.15.0,<1.18
 onnxruntime>=1.17.0
 tf2onnx>=1.16.0
 protobuf<5.0.0,>=3.20.3

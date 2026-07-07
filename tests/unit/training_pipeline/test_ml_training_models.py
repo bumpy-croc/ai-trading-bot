@@ -367,3 +367,41 @@ class TestDefaultCallbacks:
         reduce_lr = next(cb for cb in result if isinstance(cb, callbacks.ReduceLROnPlateau))
         # patience // 3 = 1, but minimum is 3
         assert reduce_lr.patience == 3
+
+
+# Every architecture selectable from the train CLIs, crossed with every variant.
+# Mirrors the choices exposed by `atb train cloud --model-type/--model-variant`.
+TRAINER_MODEL_MATRIX = [
+    (model_type, variant)
+    for model_type in ["lstm", "cnn_lstm", "attention_lstm", "tcn", "tcn_attention", "tft"]
+    for variant in ["default", "lightweight", "deep"]
+]
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
+class TestCreateModelTrainerContract:
+    """Regression guard for #928: every CLI-selectable (model_type, variant) pair
+    must construct with the exact kwargs run_training_pipeline passes.
+
+    The trainer always forwards has_sentiment; factories that don't accept it
+    must never see it (create_model pops it before dispatch).
+    """
+
+    @pytest.mark.parametrize(("model_type", "variant"), TRAINER_MODEL_MATRIX)
+    def test_constructs_with_trainer_kwargs(self, model_type, variant):
+        # Arrange - mirror run_training_pipeline's call exactly (price-only shape)
+        input_shape = (120, 5)
+
+        # Act
+        model = create_model(
+            model_type=model_type,
+            input_shape=input_shape,
+            variant=variant,
+            has_sentiment=False,
+        )
+
+        # Assert
+        assert isinstance(model, tf.keras.Model)
+        assert model.input_shape == (None, 120, 5)
+        assert model.output_shape == (None, 1)

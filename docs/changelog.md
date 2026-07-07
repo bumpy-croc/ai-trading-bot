@@ -11,7 +11,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Deterministic backtest inference; loud live timeout accounting** (#912
+  side-finding): `PredictionEngine` gated every model inference behind
+  `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*
+  budget misused as a hard abort — and additionally replaced *completed*
+  predictions with a zeroed error result whenever total wall time exceeded
+  that budget. Under CPU load, identical backtests diverged (measured 46 vs
+  55 trades on the same model/window/code), breaking the frozen-exam
+  evaluation guarantee. Worse, ML signal generators consumed errored results'
+  placeholder `price=0.0` as a real prediction, fabricating a −100% predicted
+  return (full-strength phantom SELL). Now: a process-wide
+  `InferenceContext` (`src/prediction/inference_context.py`) defaults to
+  DETERMINISTIC (no inference deadline, no latency-based substitution or
+  logging) and is pinned by `Backtester.__init__`; `LiveTradingEngine`
+  pins LIVE, where inference runs under a new
+  `PredictionConfig.live_inference_timeout` (default 5s, env
+  `LIVE_INFERENCE_TIMEOUT`) with loud accounting on timeout — WARNING log,
+  `inference_timeouts` counter in `get_performance_stats()`, `timed_out`
+  stamp on the error result, and a `timed_out` stamp on the degraded HOLD
+  signal's metadata. `max_prediction_latency` is now alert-only (live-context
+  WARNING, never gates a result), and both ML signal generators treat any
+  errored `PredictionResult` as a failed prediction (explicit HOLD) instead
+  of a phantom price. The `timed_out` stamp also flows into
+  `strategy_executions.ml_predictions` rows via the #917 signal extractor,
+  so degraded live decisions are attributable in the database. Closes #913.
+
+### Added
+- **Real manual kill-switch (#922)**: `atb live-control halt --env production|staging|development
+  [--reason "..."]` and `atb live-control resume` now exist and are REAL. Halt durably upserts a
+  `system_halt` row in the target environment's new `system_control_flags` table; the running
+  engine's `SystemHaltEnforcer` polls it at the top of every trading-loop iteration and mirrors
+  it into the entry-pause gate, so entries + scale-ins stop within ONE iteration (no restart) while
+  exits, stop-losses and reconciliation continue — FEATURE_ENTRY_PAUSE semantics. Both commands
+  emit `system_events` rows (`SYSTEM_HALT_COMMAND`/`SYSTEM_RESUME_COMMAND` from the CLI;
+  `SYSTEM_HALT`/`SYSTEM_HALT_CLEARED` from the engine when it honors the flag), page the alert
+  webhook, and print the account state (open positions + protective stops, `NO STOP` flagged).
+  Fail-safe: a DB outage never releases an active halt; halt/resume are idempotent; the halt is
+  independent of close-only mode so `resume` cannot clear a drawdown/circuit-breaker trip.
+  Fail-CLOSED startup: until the flag has been successfully read once (priming read at engine
+  construction, retried each loop iteration) the entry gates refuse new risk, so a reboot behind
+  a dead database cannot trade past an operator halt (`SYSTEM_HALT_UNVERIFIED` pages the operator);
+  exits/stops/reconciliation are never gated. The CLI echoes the masked resolved DB host before
+  mutating. Table also covered by Alembic migration `0012_add_system_control_flags`. The
+  simulated `emergency-stop` subcommand was REMOVED — no fake safety commands.
+- **Cloud-first model tournaments (#918, #909)**: `atb train cloud` gains
+  `--model-type {lstm,cnn_lstm,attention_lstm,tcn,tcn_attention,tft}` and
+  `--model-variant {default,lightweight,deep}`, threaded end-to-end through
+  `TrainingConfig` → SageMaker job hyperparameters → the training container
+  entrypoint (defaults preserve current behavior: `cnn_lstm`/`default`).
+  Training-corpus ingestion now consults the year-based parquet cache
+  (`atb data prefill-cache`) before any network fetch, fetches missing ranges
+  from Binance only, and validates coverage (open-time boundary slack,
+  calendar-day start check, ≥99% expected-bar ratio). **Training corpora no
+  longer fall back to a third-party provider** — a range Binance/cache cannot
+  cover fails loudly with remediation guidance instead of silently switching
+  sources mid-corpus (#909). Archive CSV timestamp parsing hardened with
+  `format="mixed", utc=True` (Binance's earliest kline archives mix on-the-hour
+  and sub-second timestamps in one file). Tournaments run cloud-first from now
+  on; see `docs/prediction.md`.
+  **⚠️ Deploy note: the ECR training image must be rebuilt and pushed
+  (`./src/ml/cloud/build-and-push.sh`) after this merge and before any cloud
+  training run uses these fixes — the container bakes in
+  `src/ml/training_pipeline/`, and the weekly training routine's image-freshness
+  precondition will refuse to run against a stale image.**
+
+- **Cloud training hardening (#890)**: `atb train cloud` accepts `--start-date`/`--end-date`
+  (UTC, mutually exclusive with `--days`) for fixed-cutoff experiments; `--no-wait` now uploads
+  the S3 data channel before submitting (previously the async path always failed in-container);
+  `atb train cloud-status --sync` actually downloads and syncs artifacts; `atb train cloud-list`
+  lists real S3 job outputs; new `atb train cloud-promote SYMBOL VERSION --to basic [--set-latest]`
+  copies a synced bundle from `price/` into `basic/` without touching `basic/latest` unless
+  explicitly requested. Version IDs now include minutes/seconds (`YYYY-MM-DD_HHhMMmSSs_vN`) so
+  same-hour cloud jobs cannot collide, and the local sync never overwrites an existing bundle
+  (falls back to a `-N` suffixed sibling). Cloud workflow documented in `docs/prediction.md`.
+
 ### Changed
+- **`--force-price-only` behavior change (#918)**: `atb train model
+  --force-price-only` now routes through `PriceOnlyFeatureExtractor` (the 5
+  causally-normalized OHLCV features used by `atb train price` and live
+  inference) and regresses `close_normalized` instead of the raw dollar close.
+  Previously the flag only skipped the sentiment download while still building
+  the 9-feature globally-scaled pipeline and predicting raw prices — metrics
+  were incomparable with price-only baselines. Bundles still land in the
+  `price/` registry namespace (never implicitly in `basic/`), and
+  `atb train price` itself is untouched. Pinned by unit tests.
 - **#486 live-engine modularization complete**: `LiveTradingEngine._init_modular_handlers`
   (the last open item from `docs/refactor/live_engine_modularization.md`) is now a
   thin orchestrator over four construction-phase helpers — `_init_core_handlers`
@@ -25,6 +109,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backtest determinism fingerprint byte-identical.
 
 ### Fixed
+- **#928 `create_model` TypeError for non-CNN architectures**: the trainer always
+  forwards `has_sentiment` to `create_model`, but only the CNN-LSTM baseline
+  accepts it — `tft`, `tcn_attention`, and the default variants of
+  `attention_lstm`/`tcn` crashed at model construction with
+  `TypeError: ... unexpected keyword argument 'has_sentiment'`. `create_model`
+  now pops `has_sentiment` before the architecture dispatch, so CNN-LSTM still
+  receives the real flag and no other factory sees it. A parametrized smoke test
+  now constructs every CLI-selectable `(model_type, variant)` pair with the
+  trainer's exact kwargs.
+- **#914 `strategy_executions.ml_predictions` no longer always null**: every row
+  ever written (151k+ in prod) carried JSON `null` because the logging call sites
+  extracted prediction data from dataframe columns (`onnx_pred`, `ml_prediction`)
+  that component strategies never populate — model outputs live on `Signal.metadata`.
+  A new shared extractor (`extract_ml_predictions_from_signal` in
+  `src/tech/adapters/row_extractors.py`) pulls the predicted price/return, model
+  identity (`engine_model_name`, `model_type`, `model_timeframe`, symbol-guard
+  stamps), and generator from the decision's signal metadata, and both engines
+  merge it into the logged dict (live entry/exit coordinators; backtest
+  entry/no-action/exit sites). Failed predictions now persist
+  `{prediction_failed: true, reason: ...}` (plus `error`/`error_type` when
+  generators provide them) instead of null, so prediction-path defects like the
+  #913 phantom-short class are visible in the DB.
 - **Experiment runner: `hyper_growth.min_confidence` override now reaches
   FlatRiskManager**: `ExperimentRunner._apply_strategy_attribute` routed
   `min_confidence` to the position sizer only, which is correct for the

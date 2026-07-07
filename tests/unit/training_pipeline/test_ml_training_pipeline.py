@@ -71,10 +71,28 @@ class TestGenerateVersionId:
         # Assert
         assert version_id.endswith("_v1")
         assert "_" in version_id
-        # Format: YYYY-MM-DD_HHh_vN
+        # Format: YYYY-MM-DD_HHhMMmSSs_vN
         parts = version_id.split("_")
         assert len(parts) == 3
         assert parts[2] == "v1"
+
+    def test_version_id_has_second_granularity(self, tmp_path):
+        """Two same-hour cloud containers must not generate colliding IDs.
+
+        Each container has an empty models dir, so the exists() counter cannot
+        de-duplicate across jobs — the timestamp itself must be unique.
+        """
+        import re
+
+        # Arrange
+        models_dir = tmp_path / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        # Act
+        version_id = _generate_version_id(models_dir, "BTCUSDT", "basic")
+
+        # Assert
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s_v1", version_id)
 
     def test_increments_version_when_exists(self, tmp_path):
         # Arrange
@@ -303,6 +321,181 @@ class TestRunTrainingPipeline:
         assert result.duration_seconds > 0
         assert "symbol" in result.metadata
         assert result.metadata["symbol"] == "BTCUSDT"
+
+    def _make_price_df(self, periods=200):
+        """Build a deterministic OHLCV frame with varying prices."""
+        rng = np.random.default_rng(42)
+        closes = 100.0 + np.cumsum(rng.normal(0, 1, periods))
+        return pd.DataFrame(
+            {
+                "open": closes - 0.5,
+                "high": closes + 1.0,
+                "low": closes - 1.0,
+                "close": closes,
+                "volume": 1000.0 + rng.uniform(0, 100, periods),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )
+
+    def _run_pipeline_with_mocks(self, ctx, price_df, mocks):
+        """Run the pipeline with the standard post-feature stages mocked out."""
+        sequences = np.random.rand(50, ctx.config.sequence_length, 5).astype(np.float32)
+        targets = np.random.rand(50).astype(np.float32)
+        mocks["create_sequences"].return_value = (sequences, targets)
+        mocks["split_sequences"].return_value = (
+            sequences[:40],
+            targets[:40],
+            sequences[40:],
+            targets[40:],
+        )
+        mocks["build_tf_datasets"].return_value = (MagicMock(), MagicMock())
+        model = MagicMock()
+        model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
+        mocks["create_model"].return_value = model
+        mocks["validate_model_robustness"].return_value = {}
+        mocks["evaluate_model_performance"].return_value = {"test_rmse": 0.1}
+        artifact_paths = MagicMock()
+        artifact_paths.directory = ctx.paths.models_dir
+        mocks["save_artifacts"].return_value = artifact_paths
+        mocks["create_training_plots"].return_value = None
+        return run_training_pipeline(ctx)
+
+    def _pipeline_mocks(self):
+        """Context-manage patches for the post-feature pipeline stages."""
+        from contextlib import ExitStack
+
+        stack = ExitStack()
+        names = [
+            "configure_gpu",
+            "download_price_data",
+            "load_sentiment_data",
+            "create_robust_features",
+            "create_sequences",
+            "split_sequences",
+            "build_tf_datasets",
+            "create_model",
+            "validate_model_robustness",
+            "evaluate_model_performance",
+            "save_artifacts",
+            "create_training_plots",
+            "enable_mixed_precision",
+        ]
+        mocks = {
+            name: stack.enter_context(patch(f"src.ml.training_pipeline.pipeline.{name}"))
+            for name in names
+        }
+        mocks["configure_gpu"].return_value = None
+        return stack, mocks
+
+    def test_force_price_only_routes_through_price_only_extractor(self, tmp_path):
+        """force_price_only must produce the production 5-feature price-only contract.
+
+        Pins the contract: PriceOnlyFeatureExtractor features (not
+        create_robust_features' 9-feature pipeline), target = close_normalized
+        (not raw close). The bundle stays in the price/ namespace so basic/latest
+        (loaded by live strategies) is never repointed implicitly.
+        """
+        from src.prediction.features.price_only import PriceOnlyFeatureExtractor
+
+        # Arrange
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+            force_price_only=True,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+
+            # Act
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        # Assert
+        assert result.success is True, result.metadata
+        mocks["create_robust_features"].assert_not_called()
+
+        expected = PriceOnlyFeatureExtractor(normalization_window=10).extract(price_df.copy())
+        expected_names = [
+            "close_normalized",
+            "volume_normalized",
+            "high_normalized",
+            "low_normalized",
+            "open_normalized",
+        ]
+        feature_array, target_array, seq_len = mocks["create_sequences"].call_args.args
+        assert feature_array.shape[1] == 5
+        assert seq_len == 10
+        np.testing.assert_allclose(
+            target_array,
+            expected["close_normalized"].to_numpy(dtype=np.float32),
+            rtol=1e-6,
+        )
+
+        assert result.metadata["model_type"] == "price"
+        assert result.metadata["feature_names"] == expected_names
+        assert mocks["create_model"].call_args.kwargs["input_shape"] == (10, 5)
+        # Bundle must be saved under price/, never basic/ (which would flip the
+        # live-loaded basic/latest symlink as a training side effect)
+        assert mocks["save_artifacts"].call_args.args[2] == "price"
+
+    def test_default_path_regresses_raw_close(self, tmp_path):
+        """Without force_price_only the existing contract is unchanged.
+
+        create_robust_features supplies the features and the raw close is the
+        regression target; registry model_type stays price/sentiment.
+        """
+        # Arrange
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+
+        feature_df = price_df.copy()
+        feature_df["close_scaled"] = 0.5
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+
+            # Act
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        # Assert
+        assert result.success is True, result.metadata
+        mocks["create_robust_features"].assert_called_once()
+        _, target_array, _ = mocks["create_sequences"].call_args.args
+        np.testing.assert_allclose(target_array, feature_df["close"].to_numpy(dtype=np.float32))
+        assert result.metadata["model_type"] == "price"
 
     @patch("src.ml.training_pipeline.pipeline.download_price_data")
     def test_handles_download_failure(self, mock_download, tmp_path):

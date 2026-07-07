@@ -17,6 +17,7 @@ from src.config.constants import (
     DEFAULT_ENABLE_SENTIMENT,
     DEFAULT_ENSEMBLE_METHOD,
     DEFAULT_FEATURE_CACHE_TTL,
+    DEFAULT_LIVE_INFERENCE_TIMEOUT,
     DEFAULT_MAX_PREDICTION_LATENCY,
     DEFAULT_MIN_CONFIDENCE_THRESHOLD,
     DEFAULT_MODEL_CACHE_TTL,
@@ -41,7 +42,10 @@ class PredictionConfig:
         default_factory=lambda: DEFAULT_PREDICTION_HORIZONS.copy()
     )
     min_confidence_threshold: float = DEFAULT_MIN_CONFIDENCE_THRESHOLD
+    # Alerting budget only — never gates a completed prediction.
     max_prediction_latency: float = DEFAULT_MAX_PREDICTION_LATENCY
+    # Hard deadline applied only in the LIVE inference context.
+    live_inference_timeout: float = DEFAULT_LIVE_INFERENCE_TIMEOUT
     model_registry_path: str = DEFAULT_MODEL_REGISTRY_PATH
     enable_sentiment: bool = DEFAULT_ENABLE_SENTIMENT
     enable_market_microstructure: bool = DEFAULT_ENABLE_MARKET_MICROSTRUCTURE
@@ -82,6 +86,9 @@ class PredictionConfig:
             ),
             max_prediction_latency=config.get_float(
                 "MAX_PREDICTION_LATENCY", default=DEFAULT_MAX_PREDICTION_LATENCY
+            ),
+            live_inference_timeout=config.get_float(
+                "LIVE_INFERENCE_TIMEOUT", default=DEFAULT_LIVE_INFERENCE_TIMEOUT
             ),
             model_registry_path=config.get(
                 "MODEL_REGISTRY_PATH", default=DEFAULT_MODEL_REGISTRY_PATH
@@ -126,6 +133,9 @@ class PredictionConfig:
         if self.max_prediction_latency <= 0.0:
             raise ValueError("max_prediction_latency must be positive")
 
+        if self.live_inference_timeout <= 0.0:
+            raise ValueError("live_inference_timeout must be positive")
+
         if self.feature_cache_ttl <= 0:
             raise ValueError("feature_cache_ttl must be positive")
 
@@ -166,6 +176,7 @@ class PredictionConfig:
             f"horizons={self.prediction_horizons}, "
             f"confidence_threshold={self.min_confidence_threshold}, "
             f"max_latency={self.max_prediction_latency}s, "
+            f"live_timeout={self.live_inference_timeout}s, "
             f"sentiment={self.enable_sentiment}, "
             f"microstructure={self.enable_market_microstructure}, "
             f"ensemble={self.enable_ensemble}/{self.ensemble_method}, "
