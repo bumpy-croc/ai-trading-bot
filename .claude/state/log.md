@@ -315,3 +315,11 @@ Ref: GH #913, #914, #915, #912 (addendum), #723 · docs/research/notes/2026-07-0
 
 ---
 
+
+## 2026-07-07 01:50 · decision · daemon(PM) · [D-2026-07-07-01]
+**#923 (inference determinism + phantom-SELL fix) merged to develop after two-reviewer gauntlet; prod promotion deliberately deferred to post-FOMC.**
+- Gauntlet: architecture-reviewer APPROVE-WITH-NITS, code-reviewer APPROVE (100 targeted tests pass; hostile pass found no blockers). Fast-follows filed: #926 (InferenceContext process-global last-writer-wins invariant + parity test), #927 (repeated live timeouts never escalate past WARNING to health state).
+- Determinism proof stands: fix branch bit-identical across repeat runs under load-74–98 (601/601 per-bar decisions identical); develop control diverged 86 vs 89 trades with 63/179 silent timeout substitutions, ~80 of 86 trades phantom shorts.
+- **Deliberate risk acceptance**: prod still runs the 0.1s-abort code until the post-FOMC parity promote. Basis: #913 forensics found ZERO historical prod rows matching the bug signature (max opened-position confidence 0.371; Railway containers lightly loaded so inference typically <<100ms), and the charter forbids prod deploys immediately pre-macro-event (FOMC 2026-07-08; entry-pause arms 2026-07-07 19:00 UK). An emergency pre-FOMC deploy carries more risk than the accepted latent one. Revisit immediately after fomc-pause-off (2026-07-08 21:00 UK).
+- Also merged this session: #921 (13 process skills + memory architecture), #924 (institutional memory: decision log streams interleaved, experiment corpus, model_evaluation_system.md). #925 (cloud-first training pipeline) in review. Issue #928-candidate work queued: min_trades gate recalibration filed as GH issue (post-#923 honest trade counts).
+Ref: GH #923, #926, #927, #925, #913, #916, #917
