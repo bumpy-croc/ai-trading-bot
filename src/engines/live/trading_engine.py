@@ -998,6 +998,10 @@ class LiveTradingEngine:
             # Manual kill-switch (#922): scale-ins share the engine's halt state.
             system_halt=self._system_halt,
         )
+        # A DI-injected handler was built without the engine's halt state —
+        # rebind so its scale-ins cannot bypass the kill-switch. Idempotent
+        # for the default handler constructed above.
+        self.live_exit_handler.bind_system_halt(self._system_halt)
         # #802 follow-up P3: scale-ins respect the same gross exposure cap as
         # entries (share the governor instance; inert unless the flag is on).
         self.live_exit_handler.configure_exposure_gate(exposure_governor)
@@ -1030,11 +1034,16 @@ class LiveTradingEngine:
         )
         # Manual kill-switch (#922): polls the DB `system_halt` flag at the top
         # of every loop iteration so `atb live-control halt` takes effect
-        # within one iteration — no restart needed.
+        # within one iteration — no restart needed. The priming read makes a
+        # boot fail-CLOSED: until the flag is successfully read once, the
+        # entry gates refuse new risk (an active halt row behind a dead DB
+        # cannot be traded past), while a healthy boot establishes the state
+        # here and starts trading immediately.
         self._system_halt_enforcer = SystemHaltEnforcer(
             engine_state=self,
             halt_state=self._system_halt,
         )
+        self._system_halt_enforcer.prime()
 
         # Startup recovery — session balance, persisted positions, exchange
         # reconciliation. Reads/writes engine state at call time (#486).

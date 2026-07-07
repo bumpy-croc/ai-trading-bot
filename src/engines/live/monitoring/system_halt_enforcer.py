@@ -11,7 +11,11 @@ stop-loss management and reconciliation continue. Nothing is liquidated.
 Transitions are announced once (CRITICAL system_event + alert on halt, WARNING
 on clear). Fail-safe: a failed poll keeps the last-known state, so a database
 outage can never silently release an active halt — and never trips one either
-(the existing DB-outage close-only guard covers prolonged outages).
+(the existing DB-outage close-only guard covers prolonged outages). Startup is
+fail-CLOSED: until the FIRST successful poll (a priming read at engine
+construction, retried every loop iteration) the shared state is unestablished
+and the entry gates refuse new risk — a reboot behind a dead database cannot
+trade past an operator halt it never managed to read.
 
 Fault-isolated: a failing check never crashes the trading loop, and the
 protective action (mirroring the halt) is taken before observability so an
@@ -58,28 +62,67 @@ class SystemHaltEnforcer:
         self._state = engine_state
         self._halt = halt_state
 
+    def prime(self) -> None:
+        """One authoritative startup read; loudly fail-closed if unverifiable.
+
+        Called at engine construction so a healthy boot establishes the halt
+        state BEFORE the trading loop starts. If the read fails, the state
+        stays unestablished — the entry gates refuse new risk until the first
+        successful in-loop poll — and the operator is paged.
+        """
+        self.check()
+        if self._halt.established:
+            return
+        message = (
+            "System-halt state UNVERIFIED at startup (the system_halt flag could not "
+            "be read) — failing CLOSED: new entries and scale-ins stay blocked until "
+            "the flag is successfully polled. Exits, stop-losses and reconciliation "
+            "run normally."
+        )
+        logger.critical("🛑 %s", message)
+        try:
+            self._state._record_event(
+                EventType.ALERT,
+                message,
+                severity="critical",
+                component="ops",
+                error_code="SYSTEM_HALT_UNVERIFIED",
+                alert=True,
+            )
+        except Exception as e:
+            logger.warning("Unverified-halt boot announcement failed: %s", e)
+
     def check(self) -> None:
         """Mirror the DB flag into the loop-owned halt state; announce transitions."""
         try:
             status = self._state.db_manager.get_system_halt()
         except Exception as e:
             # Fail-safe: keep the last-known state. An active halt stays
-            # latched through a DB outage; an inactive one is not tripped.
+            # latched through a DB outage; an inactive one is not tripped —
+            # and an UNESTABLISHED state stays fail-closed at the gates.
             logger.warning(
-                "system_halt flag poll failed: %s — keeping last state (halted=%s)",
+                "system_halt flag poll failed: %s — keeping last state "
+                "(halted=%s, established=%s)",
                 e,
                 self._halt.active,
+                self._halt.established,
             )
             return
 
-        if status.active == self._halt.active:
-            if status.active:
+        # Only an explicit boolean True halts. The real read coerces the DB
+        # column to bool; this guards test doubles/garbage from phantom-halting
+        # a live engine.
+        active = status.active is True
+        self._halt.established = True
+
+        if active == self._halt.active:
+            if active:
                 # Reason may be amended while halted; keep the mirror fresh
                 # without re-announcing.
                 self._halt.reason = status.reason
             return
 
-        if status.active:
+        if active:
             self._activate(status.reason, status.source)
         else:
             self._deactivate()

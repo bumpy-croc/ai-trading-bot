@@ -8,6 +8,8 @@ continue):
 - ``FEATURE_ENTRY_PAUSE`` — env-var flag; requires a restart/redeploy to flip.
 - The manual kill-switch (#922) — the DB ``system_halt`` flag mirrored into a
   ``SystemHaltState`` by the loop enforcer; takes effect without a restart.
+  A halt state that was never successfully read (``established=False``) gates
+  as if halted — fail closed until the database confirms otherwise.
 """
 
 from __future__ import annotations
@@ -62,11 +64,20 @@ class EntryPauseGate:
 
     def _active_cause(self) -> str | None:
         """The active pause source's log prefix, or None when not paused."""
-        if self._halt_state is not None and self._halt_state.active:
-            return (
-                "MANUAL SYSTEM HALT active "
-                f"(reason: {self._halt_state.reason or 'no reason recorded'})"
-            )
+        if self._halt_state is not None:
+            if not self._halt_state.established:
+                # Fail closed: the halt flag has never been successfully read
+                # (e.g. DB unreachable at boot) — do not add risk on the
+                # optimistic default.
+                return (
+                    "MANUAL SYSTEM HALT state UNVERIFIED "
+                    "(system_halt flag not successfully read yet — failing closed)"
+                )
+            if self._halt_state.active:
+                return (
+                    "MANUAL SYSTEM HALT active "
+                    f"(reason: {self._halt_state.reason or 'no reason recorded'})"
+                )
         if is_enabled("entry_pause", default=False):
             return "FEATURE_ENTRY_PAUSE active"
         return None

@@ -152,6 +152,39 @@ class TestHalt:
         assert result == 0
         db.set_system_halt.assert_called_once()
 
+    def test_halt_echoes_masked_target_host_before_mutation(self, db, monkeypatch, capsys):
+        """The resolved DB host is printed (credentials masked) BEFORE the flag
+        write, so a mis-set RAILWAY_*_DATABASE_URL is visible to the operator."""
+        monkeypatch.setenv(
+            _STAGING_URL_VAR, "postgresql://bot:s3cretpw@db.staging.rlwy.net:5432/railway"
+        )
+
+        halt_main(_ns("halt", reason="drill"))
+
+        out = capsys.readouterr().out
+        assert "db.staging.rlwy.net:5432/railway" in out
+        assert "s3cretpw" not in out
+        assert "bot:" not in out
+        target_line = next(i for i, line in enumerate(out.splitlines()) if "target:" in line)
+        mutation_line = next(i for i, line in enumerate(out.splitlines()) if "HALT set" in line)
+        assert target_line < mutation_line
+
+    def test_halt_source_survives_getpass_failure(self, db, monkeypatch):
+        """Operator attribution must never block the flag write (#929 review)."""
+        monkeypatch.delenv("USER", raising=False)
+        with patch("cli.commands.live_halt.getpass.getuser", side_effect=OSError("no passwd")):
+            result = halt_main(_ns("halt", reason="drill"))
+
+        assert result == 0
+        assert db.set_system_halt.call_args.kwargs["source"] == "cli:unknown"
+
+    def test_halt_source_falls_back_to_user_env(self, db, monkeypatch):
+        monkeypatch.setenv("USER", "ops-oncall")
+        with patch("cli.commands.live_halt.getpass.getuser", side_effect=KeyError("uid")):
+            halt_main(_ns("halt", reason="drill"))
+
+        assert db.set_system_halt.call_args.kwargs["source"] == "cli:ops-oncall"
+
 
 class TestResume:
     def test_resume_clears_flag_and_emits_event(self, db, capsys):

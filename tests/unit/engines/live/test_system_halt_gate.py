@@ -84,7 +84,7 @@ def _run_entry_check(state: MagicMock, halt: SystemHaltState) -> LiveEntryCoordi
 
 def test_halt_skips_entry_check_before_strategy_evaluation():
     state = _make_component_state()
-    halt = SystemHaltState(active=True, reason="kill-switch drill")
+    halt = SystemHaltState(active=True, reason="kill-switch drill", established=True)
 
     coordinator = _run_entry_check(state, halt)
 
@@ -103,7 +103,7 @@ def test_halt_blocks_execute_entry_locked_defense_in_depth():
     state.risk_manager = MagicMock()
     state.risk_manager.get_max_concurrent_positions.return_value = 1
     state.max_position_size = 1.0
-    halt = SystemHaltState(active=True, reason="drill")
+    halt = SystemHaltState(active=True, reason="drill", established=True)
 
     coordinator = LiveEntryCoordinator(engine_state=state, system_halt=halt)
     coordinator.execute_entry_locked(
@@ -128,7 +128,7 @@ def test_halt_blocks_legacy_short_entry():
     strategy.check_short_entry_conditions.return_value = True
     strategy.get_risk_overrides.return_value = {"position_sizer": "x"}
     state.strategy = strategy
-    halt = SystemHaltState(active=True, reason="drill")
+    halt = SystemHaltState(active=True, reason="drill", established=True)
 
     coordinator = LiveEntryCoordinator(engine_state=state, system_halt=halt)
     coordinator.execute_entry = MagicMock()  # type: ignore[method-assign]
@@ -146,7 +146,7 @@ def test_halt_blocks_legacy_short_entry():
 
 def test_halt_warning_mentions_manual_halt_and_reason(caplog):
     state = _make_component_state()
-    halt = SystemHaltState(active=True, reason="FOMC de-risk")
+    halt = SystemHaltState(active=True, reason="FOMC de-risk", established=True)
 
     with caplog.at_level(logging.WARNING):
         _run_entry_check(state, halt)
@@ -205,7 +205,7 @@ def _make_partial_ops_handler(
 
 
 def test_halt_suppresses_scale_in():
-    halt = SystemHaltState(active=True, reason="drill")
+    halt = SystemHaltState(active=True, reason="drill", established=True)
     handler, tracker = _make_partial_ops_handler(halt, should_scale=True)
 
     handler.check_partial_operations(
@@ -219,7 +219,7 @@ def test_halt_suppresses_scale_in():
 
 
 def test_halt_keeps_partial_exits_running():
-    halt = SystemHaltState(active=True, reason="drill")
+    halt = SystemHaltState(active=True, reason="drill", established=True)
     handler, tracker = _make_partial_ops_handler(halt, should_exit=True, should_scale=True)
 
     handler.check_partial_operations(
@@ -241,7 +241,7 @@ def test_halt_keeps_partial_exits_running():
 def test_inactive_halt_entries_proceed(monkeypatch):
     monkeypatch.delenv("FEATURE_ENTRY_PAUSE", raising=False)
     state = _make_component_state(notional=150.0)
-    halt = SystemHaltState()
+    halt = SystemHaltState(established=True)
 
     coordinator = _run_entry_check(state, halt)
 
@@ -250,7 +250,9 @@ def test_inactive_halt_entries_proceed(monkeypatch):
 
 def test_inactive_halt_scale_in_proceeds(monkeypatch):
     monkeypatch.delenv("FEATURE_ENTRY_PAUSE", raising=False)
-    handler, tracker = _make_partial_ops_handler(SystemHaltState(), should_scale=True)
+    handler, tracker = _make_partial_ops_handler(
+        SystemHaltState(established=True), should_scale=True
+    )
 
     handler.check_partial_operations(
         df=MagicMock(),
@@ -267,10 +269,20 @@ def test_inactive_halt_scale_in_proceeds(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _make_engine():
-    """Real LiveTradingEngine with mocked externals (DB, provider, strategy)."""
-    with patch("src.engines.live.trading_engine.DatabaseManager"):
+def _make_engine(get_system_halt=None, **engine_kwargs):
+    """Real LiveTradingEngine with mocked externals (DB, provider, strategy).
+
+    ``get_system_halt`` configures the DB mock BEFORE construction so boot-time
+    priming reads see it (a SystemHaltStatus return value or an Exception
+    side effect).
+    """
+    with patch("src.engines.live.trading_engine.DatabaseManager") as manager_cls:
         from src.engines.live.trading_engine import LiveTradingEngine
+
+        if isinstance(get_system_halt, Exception):
+            manager_cls.return_value.get_system_halt.side_effect = get_system_halt
+        elif get_system_halt is not None:
+            manager_cls.return_value.get_system_halt.return_value = get_system_halt
 
         mock_strategy = MagicMock()
         mock_strategy.get_risk_overrides.return_value = {}
@@ -286,8 +298,45 @@ def _make_engine():
             initial_balance=1000.0,
             enable_dynamic_risk=False,
             enable_hot_swapping=False,
+            **engine_kwargs,
         )
         return engine
+
+
+def _run_one_loop_iteration(engine, *, entry_probe, exit_probe):
+    """Drive one real `_trading_loop` iteration with the data pipeline mocked."""
+    rows = 5
+    idx = pd.date_range(end=datetime.now(UTC), periods=rows, freq="1h", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [50000.0] * rows,
+            "high": [51000.0] * rows,
+            "low": [49000.0] * rows,
+            "close": [50500.0] * rows,
+            "volume": [100.0] * rows,
+        },
+        index=idx,
+    )
+
+    engine._ensure_ws_health_monitor_alive = MagicMock()
+    engine._drain_pending_fill_exits = MagicMock()
+    engine._get_latest_data = MagicMock(return_value=df)
+    engine._is_data_fresh = MagicMock(return_value=True)
+    engine._prepare_strategy_dataframe = MagicMock(side_effect=lambda d: d)
+    engine._is_context_ready = MagicMock(return_value=(True, "ready"))
+    engine._runtime_process_decision = MagicMock(return_value=None)
+    engine._check_entry_conditions = MagicMock(side_effect=entry_probe)
+    engine._check_exit_conditions = MagicMock(side_effect=exit_probe)
+    engine._update_performance_metrics = MagicMock()
+    engine._check_max_drawdown = MagicMock()
+    engine._log_periodic_account_state = MagicMock()
+    engine._log_status = MagicMock()
+    engine._calculate_adaptive_interval = MagicMock(return_value=0)
+    engine._sleep_with_interrupt = MagicMock()
+    engine.stop = MagicMock()
+
+    engine.is_running = True
+    engine._trading_loop("BTCUSDT", "1h", max_steps=1)
 
 
 def test_engine_wires_shared_halt_state():
@@ -310,45 +359,13 @@ def test_trading_loop_honors_halt_within_one_iteration():
         active=True, reason="drill", source="cli:test", updated_at=None
     )
 
-    rows = 5
-    idx = pd.date_range(end=datetime.now(UTC), periods=rows, freq="1h", tz="UTC")
-    df = pd.DataFrame(
-        {
-            "open": [50000.0] * rows,
-            "high": [51000.0] * rows,
-            "low": [49000.0] * rows,
-            "close": [50500.0] * rows,
-            "volume": [100.0] * rows,
-        },
-        index=idx,
-    )
-
     halt_seen_by_entry_check: list[bool] = []
     halt_seen_by_exit_check: list[bool] = []
-
-    engine._ensure_ws_health_monitor_alive = MagicMock()
-    engine._drain_pending_fill_exits = MagicMock()
-    engine._get_latest_data = MagicMock(return_value=df)
-    engine._is_data_fresh = MagicMock(return_value=True)
-    engine._prepare_strategy_dataframe = MagicMock(side_effect=lambda d: d)
-    engine._is_context_ready = MagicMock(return_value=(True, "ready"))
-    engine._runtime_process_decision = MagicMock(return_value=None)
-    engine._check_entry_conditions = MagicMock(
-        side_effect=lambda *a, **k: halt_seen_by_entry_check.append(engine._system_halt.active)
+    _run_one_loop_iteration(
+        engine,
+        entry_probe=lambda *a, **k: halt_seen_by_entry_check.append(engine._system_halt.active),
+        exit_probe=lambda *a, **k: halt_seen_by_exit_check.append(engine._system_halt.active),
     )
-    engine._check_exit_conditions = MagicMock(
-        side_effect=lambda *a, **k: halt_seen_by_exit_check.append(engine._system_halt.active)
-    )
-    engine._update_performance_metrics = MagicMock()
-    engine._check_max_drawdown = MagicMock()
-    engine._log_periodic_account_state = MagicMock()
-    engine._log_status = MagicMock()
-    engine._calculate_adaptive_interval = MagicMock(return_value=0)
-    engine._sleep_with_interrupt = MagicMock()
-    engine.stop = MagicMock()
-
-    engine.is_running = True
-    engine._trading_loop("BTCUSDT", "1h", max_steps=1)
 
     # Halt mirrored from the DB before entry evaluation of the SAME iteration.
     assert halt_seen_by_entry_check == [True]
@@ -356,3 +373,98 @@ def test_trading_loop_honors_halt_within_one_iteration():
     assert halt_seen_by_exit_check == [True]
     # The legacy short path went through the real gate and evaluated nothing.
     engine.strategy.check_short_entry_conditions.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed startup (#929 review P1): never-successfully-polled = halted
+# ---------------------------------------------------------------------------
+
+
+def test_unestablished_state_blocks_entries_fail_closed(caplog):
+    """A never-successfully-polled halt state gates entries (fail closed)."""
+    state = _make_component_state()
+    halt = SystemHaltState()  # unestablished default
+
+    with caplog.at_level(logging.WARNING):
+        coordinator = _run_entry_check(state, halt)
+
+    coordinator.execute_entry.assert_not_called()
+    state.strategy.process_candle.assert_not_called()
+    unverified = [r for r in caplog.records if "UNVERIFIED" in r.message]
+    assert len(unverified) == 1
+
+
+def test_unestablished_state_blocks_scale_in():
+    handler, tracker = _make_partial_ops_handler(SystemHaltState(), should_scale=True)
+
+    handler.check_partial_operations(
+        df=MagicMock(),
+        current_index=0,
+        current_price=51000.0,
+        current_balance=1000.0,
+    )
+
+    tracker.apply_scale_in.assert_not_called()
+
+
+def test_boot_with_dead_db_fails_closed_until_first_successful_poll():
+    """Boot while the DB is unreachable (whether or not an active halt row
+    exists): entries stay blocked; exits keep running."""
+    engine = _make_engine(get_system_halt=RuntimeError("db unreachable at boot"))
+
+    assert engine._system_halt.established is False
+
+    exit_ran: list[bool] = []
+    _run_one_loop_iteration(
+        engine,
+        entry_probe=lambda *a, **k: None,
+        exit_probe=lambda *a, **k: exit_ran.append(True),
+    )
+
+    # Still unestablished (poll failing) -> the real gates refuse new risk.
+    assert engine._system_halt.established is False
+    assert engine.entry_coordinator._entry_pause.paused("probe") is True
+    engine.strategy.check_short_entry_conditions.assert_not_called()
+    # Exits are never gated, even fail-closed.
+    assert exit_ran == [True]
+
+
+def test_healthy_boot_establishes_state_and_trades_immediately(monkeypatch):
+    """DB up + no halt row at boot: no fail-closed window, entries evaluated."""
+    monkeypatch.delenv("FEATURE_ENTRY_PAUSE", raising=False)
+    engine = _make_engine(
+        get_system_halt=SystemHaltStatus(active=False, reason=None, source=None, updated_at=None)
+    )
+
+    # Priming read at construction established the state before the loop.
+    assert engine._system_halt.established is True
+    assert engine._system_halt.active is False
+
+    entries_evaluated: list[bool] = []
+    engine.strategy.check_short_entry_conditions.return_value = False
+    _run_one_loop_iteration(
+        engine,
+        entry_probe=lambda *a, **k: entries_evaluated.append(True),
+        exit_probe=lambda *a, **k: None,
+    )
+
+    assert entries_evaluated == [True]
+    # The real legacy-short gate let evaluation through (halt inactive).
+    engine.strategy.check_short_entry_conditions.assert_called_once()
+
+
+def test_injected_exit_handler_rebound_to_shared_halt_state():
+    """A DI-injected exit handler must not bypass the manual halt (#929 review)."""
+    execution_engine = MagicMock()
+    execution_engine.fee_rate = 0.0
+    execution_engine.slippage_rate = 0.0
+    injected = LiveExitHandler(
+        execution_engine=execution_engine,
+        position_tracker=MagicMock(),
+        execution_model=MagicMock(),
+    )
+
+    engine = _make_engine(exit_handler=injected)
+
+    assert engine.live_exit_handler is injected
+    assert injected._entry_pause._halt_state is engine._system_halt

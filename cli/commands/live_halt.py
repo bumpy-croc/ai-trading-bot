@@ -23,6 +23,7 @@ import argparse
 import getpass
 import os
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from src.database.manager import DatabaseManager, SystemHaltStatus
 from src.database.models import EventType
@@ -47,6 +48,31 @@ def resume_main(ns: argparse.Namespace) -> int:
     return _apply(ns, halt=False)
 
 
+def _operator_source() -> str:
+    """Best-effort operator attribution — must NEVER block the flag write.
+
+    ``getpass.getuser()`` raises on hardened containers with no passwd entry
+    for the UID (OSError, or KeyError from the pwd lookup on older Pythons).
+    """
+    try:
+        user = getpass.getuser()
+    except (OSError, KeyError):
+        user = os.environ.get("USER", "unknown")
+    return f"cli:{user}"
+
+
+def _masked_target(url: str) -> str:
+    """The DB target as ``host:port/dbname`` with credentials stripped."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or "unknown-host"
+        port = f":{parts.port}" if parts.port else ""
+        dbname = parts.path.lstrip("/") or "unknown-db"
+        return f"{host}{port}/{dbname}"
+    except ValueError:
+        return "unparseable-url"
+
+
 def _apply(ns: argparse.Namespace, *, halt: bool) -> int:
     """Shared halt/resume flow: resolve env -> flip flag -> announce -> print state."""
     action = "HALT" if halt else "RESUME"
@@ -59,6 +85,10 @@ def _apply(ns: argparse.Namespace, *, halt: bool) -> int:
             f"{ns.env} Railway service (`railway variables --set FEATURE_ENTRY_PAUSE=true`)."
         )
         return 1
+
+    # Echo the resolved target BEFORE any mutation: a mis-set RAILWAY_* var
+    # silently pointing at the wrong database must be visible to the operator.
+    _line(f"target: env={ns.env} db={_masked_target(url)} (from ${url_var})")
 
     try:
         db = DatabaseManager(url)
@@ -75,7 +105,7 @@ def _apply(ns: argparse.Namespace, *, halt: bool) -> int:
             f"reason={current.reason or 'none'}, by={current.source or 'unknown'}) — no change"
         )
     else:
-        source = f"cli:{getpass.getuser()}"
+        source = _operator_source()
         status = db.set_system_halt(halt, reason=ns.reason, source=source)
         _line(
             f"system_halt {action} set (env={ns.env}, by={source}, "

@@ -124,7 +124,9 @@ atb live-control resume --env production --reason "root cause fixed"
   every trading-loop iteration** and mirrors it into the shared gate consulted by entry
   evaluation, the `execute_entry_locked` chokepoint, the legacy short path, and scale-ins.
 - **Latency**: command → effect is at most one loop iteration (the adaptive check interval,
-  seconds up to `DEFAULT_MAX_CHECK_INTERVAL`; ~2 min at prod cadence). No restart/redeploy.
+  30–300 s per `DEFAULT_MIN_CHECK_INTERVAL`/`DEFAULT_MAX_CHECK_INTERVAL`; ~2 min at prod
+  cadence). No restart/redeploy. The CLI echoes the masked resolved DB host
+  (`target: env=... db=host:port/dbname`) before mutating anything.
 - **Fallback (requires restart)**: `railway variables --set FEATURE_ENTRY_PAUSE=true` on the
   target service — a Railway variable change triggers a redeploy, so expect ~3 minutes of
   latency; use it only if the database write path is unavailable.
@@ -137,6 +139,12 @@ atb live-control resume --env production --reason "root cause fixed"
 - **Fail-safe**: a DB outage never releases an active halt (the engine keeps its last-known
   state); halting twice is idempotent. The halt is independent of close-only mode, so
   `resume` cannot accidentally clear a drawdown/circuit-breaker trip.
+- **Fail-closed startup**: until the engine has successfully read the flag ONCE (a priming
+  read at construction, retried every loop iteration), the entry gates treat the state as
+  halted — a reboot behind an unreachable database cannot trade past an operator halt it
+  never managed to read. A boot that cannot verify the flag pages the operator
+  (`error_code=SYSTEM_HALT_UNVERIFIED`); a healthy boot establishes the state at
+  construction and starts trading immediately. Exits/stops/reconciliation are never gated.
 - The former `emergency-stop` subcommand printed "(simulated)" and did nothing; it has been
   removed — `halt` is the real safety command. Cancelling in-flight entry orders from an
   out-of-process CLI would race the running engine's order tracking, so unfilled entries are

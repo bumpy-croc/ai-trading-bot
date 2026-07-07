@@ -48,7 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SYSTEM_HALT`/`SYSTEM_HALT_CLEARED` from the engine when it honors the flag), page the alert
   webhook, and print the account state (open positions + protective stops, `NO STOP` flagged).
   Fail-safe: a DB outage never releases an active halt; halt/resume are idempotent; the halt is
-  independent of close-only mode so `resume` cannot clear a drawdown/circuit-breaker trip. The
+  independent of close-only mode so `resume` cannot clear a drawdown/circuit-breaker trip.
+  Fail-CLOSED startup: until the flag has been successfully read once (priming read at engine
+  construction, retried each loop iteration) the entry gates refuse new risk, so a reboot behind
+  a dead database cannot trade past an operator halt (`SYSTEM_HALT_UNVERIFIED` pages the operator);
+  exits/stops/reconciliation are never gated. The CLI echoes the masked resolved DB host before
+  mutating. Table also covered by Alembic migration `0012_add_system_control_flags`. The
   simulated `emergency-stop` subcommand was REMOVED — no fake safety commands.
 - **Cloud-first model tournaments (#918, #909)**: `atb train cloud` gains
   `--model-type {lstm,cnn_lstm,attention_lstm,tcn,tcn_attention,tft}` and

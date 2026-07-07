@@ -158,6 +158,16 @@ class LiveExitHandler:
         """Wire the #802 exposure governor so scale-ins respect the gross cap."""
         self._exposure_governor = exposure_governor
 
+    def bind_system_halt(self, system_halt: SystemHaltState | None) -> None:
+        """Rebind the scale-in gate to the engine's shared manual-halt state (#922).
+
+        A DI-injected handler is constructed before the engine (and its halt
+        state) exists, so the engine rebinds it here; scale-ins must never
+        bypass the kill-switch. Rebinding resets the gate's log rate-limit
+        only — no behavioral state is lost.
+        """
+        self._entry_pause = EntryPauseGate(halt_state=system_halt)
+
     def _build_snapshot(
         self,
         symbol: str,
