@@ -206,8 +206,14 @@ def evaluate_model_performance(
             "tensorflow is required for model performance evaluation but is not installed. "
             "Install it with: pip install tensorflow"
         )
-    train_loss, train_rmse = model.evaluate(X_train, y_train, verbose=0)
-    test_loss, test_rmse = model.evaluate(X_test, y_test, verbose=0)
+    # A positional unpack assumes every architecture compiles with exactly one metric
+    # (loss + rmse). attention_lstm and tcn compile with metrics=[rmse, mae], so
+    # model.evaluate() returns 3 values there -- read by key instead, which is robust
+    # to any per-architecture metric set.
+    train_metrics = model.evaluate(X_train, y_train, verbose=0, return_dict=True)
+    test_metrics = model.evaluate(X_test, y_test, verbose=0, return_dict=True)
+    train_loss, train_rmse = train_metrics["loss"], train_metrics["rmse"]
+    test_loss, test_rmse = test_metrics["loss"], test_metrics["rmse"]
     test_predictions = model.predict(X_test, verbose=0)
 
     if close_scaler is not None:

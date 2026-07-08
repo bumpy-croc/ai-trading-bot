@@ -7,10 +7,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from sklearn.preprocessing import MinMaxScaler
 
 try:
     import tensorflow as tf
@@ -38,6 +41,7 @@ from src.ml.training_pipeline.features import (
 from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.ingestion import download_price_data, load_sentiment_data
 from src.ml.training_pipeline.models import create_model, get_model_callbacks
+from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +61,11 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
     """Generate auto-incrementing version ID to prevent collisions.
 
     Checks if version directory exists and increments counter until finding
-    a unique version ID. Format: YYYY-MM-DD_HHh_vN where N starts at 1.
+    a unique version ID. Format: YYYY-MM-DD_HHhMMmSSs_vN where N starts at 1.
+
+    Second-level granularity keeps IDs unique across cloud training containers,
+    where each job sees an empty models dir and the exists() counter cannot
+    de-duplicate against sibling jobs started in the same hour.
 
     Args:
         models_dir: Root models directory
@@ -70,7 +78,7 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
     Raises:
         RuntimeError: If unable to generate unique version ID after max retries
     """
-    base_timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%Hh")
+    base_timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%Hh%Mm%Ss")
     version_counter = 1
 
     while version_counter <= MAX_VERSION_GENERATION_RETRIES:
@@ -167,11 +175,28 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
                 "Check data availability and timeframe alignment."
             )
 
-        feature_data, scalers, feature_names = create_robust_features(
-            merged_df.copy(), sentiment_assessment, ctx.config.sequence_length
-        )
+        if ctx.config.force_price_only:
+            # Route through the same 5-feature, causally-normalized extractor that
+            # `atb train price` and production inference use. Historically this flag
+            # only skipped the sentiment download while still building
+            # create_robust_features' 9-feature globally-scaled pipeline, silently
+            # diverging from the price-only contract.
+            extractor = PriceOnlyFeatureExtractor(normalization_window=ctx.config.sequence_length)
+            feature_data = extractor.extract(merged_df.copy())
+            feature_names = extractor.get_feature_names()
+            feature_data = feature_data.dropna(subset=feature_names)
+            scalers: dict[str, MinMaxScaler] = {}
+            # Predict the rolling-normalized close, matching `atb train price`. The raw
+            # close would regress dollar magnitudes with no denormalization step
+            # (scalers is empty), making RMSE/MAPE incomparable with existing
+            # price-only baselines.
+            target_array = feature_data["close_normalized"].to_numpy(dtype=np.float32)
+        else:
+            feature_data, scalers, feature_names = create_robust_features(
+                merged_df.copy(), sentiment_assessment, ctx.config.sequence_length
+            )
+            target_array = feature_data["close"].to_numpy(dtype=np.float32)
         feature_array = feature_data[feature_names].to_numpy(dtype=np.float32)
-        target_array = feature_data["close"].to_numpy(dtype=np.float32)
         sequences, targets = create_sequences(
             feature_array,
             target_array,
@@ -212,20 +237,40 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             verbose=1,
         )
 
-        robustness_results = (
-            validate_model_robustness(model, X_val, y_val, feature_names, has_sentiment)
-            if ctx.config.diagnostics.evaluate_robustness
-            else {}
-        )
-        evaluation_results = evaluate_model_performance(
-            model,
-            X_train,
-            y_train,
-            X_val,
-            y_val,
-            scalers.get("close"),
-        )
+        # Diagnostics run after model.fit() but before save_artifacts. A crash here
+        # (e.g. a per-architecture metric-set mismatch) must not discard a fully-trained
+        # model with nothing persisted -- degrade to a metadata gap instead, and let only
+        # a genuine training/data failure (the outer except below) abort without saving.
+        robustness_results: Any
+        evaluation_results: Any
+        try:
+            robustness_results = (
+                validate_model_robustness(model, X_val, y_val, feature_names, has_sentiment)
+                if ctx.config.diagnostics.evaluate_robustness
+                else {}
+            )
+            evaluation_results = evaluate_model_performance(
+                model,
+                X_train,
+                y_train,
+                X_val,
+                y_val,
+                scalers.get("close"),
+            )
+        except (ValueError, RuntimeError, KeyError) as exc:
+            logger.error(
+                "Post-training evaluation/robustness diagnostics failed: %s. "
+                "Saving the trained model anyway with a diagnostics-error placeholder.",
+                exc,
+                exc_info=True,
+            )
+            robustness_results = {}
+            evaluation_results = {"error": str(exc)}
 
+        # force_price_only bundles stay in price/ even though they share `atb train
+        # price`'s basic/ contract: writing to basic/ here would implicitly repoint
+        # basic/latest — the symlink live strategies load. Promotion into basic/ is
+        # always an explicit step (atb train cloud-promote / atb models promote).
         metadata = {
             "symbol": ctx.config.symbol,
             "model_type": "sentiment" if has_sentiment else "price",

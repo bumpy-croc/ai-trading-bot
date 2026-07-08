@@ -1,5 +1,6 @@
 """Unit tests for ML training pipeline model factories module."""
 
+import numpy as np
 import pytest
 
 try:
@@ -12,6 +13,7 @@ except ImportError:
     tf = None  # type: ignore
     callbacks = None  # type: ignore
 
+from src.ml.training_pipeline.artifacts import evaluate_model_performance
 from src.ml.training_pipeline.models import (
     build_price_only_model,
     create_model,
@@ -367,3 +369,89 @@ class TestDefaultCallbacks:
         reduce_lr = next(cb for cb in result if isinstance(cb, callbacks.ReduceLROnPlateau))
         # patience // 3 = 1, but minimum is 3
         assert reduce_lr.patience == 3
+
+
+# Every architecture selectable from the train CLIs, crossed with every variant.
+# Mirrors the choices exposed by `atb train cloud --model-type/--model-variant`.
+TRAINER_MODEL_MATRIX = [
+    (model_type, variant)
+    for model_type in ["lstm", "cnn_lstm", "attention_lstm", "tcn", "tcn_attention", "tft"]
+    for variant in ["default", "lightweight", "deep"]
+]
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
+class TestCreateModelTrainerContract:
+    """Regression guard for #928: every CLI-selectable (model_type, variant) pair
+    must construct with the exact kwargs run_training_pipeline passes.
+
+    The trainer always forwards has_sentiment; factories that don't accept it
+    must never see it (create_model pops it before dispatch).
+    """
+
+    @pytest.mark.parametrize(("model_type", "variant"), TRAINER_MODEL_MATRIX)
+    def test_constructs_with_trainer_kwargs(self, model_type, variant):
+        # Arrange - mirror run_training_pipeline's call exactly (price-only shape)
+        input_shape = (120, 5)
+
+        # Act
+        model = create_model(
+            model_type=model_type,
+            input_shape=input_shape,
+            variant=variant,
+            has_sentiment=False,
+        )
+
+        # Assert
+        assert isinstance(model, tf.keras.Model)
+        assert model.input_shape == (None, 120, 5)
+        assert model.output_shape == (None, 1)
+
+
+# lstm/cnn_lstm compile with a single metric ([rmse]); attention_lstm/tcn/tcn_attention
+# compile with two ([rmse, mae]). tft is excluded: it's a binary direction-classification
+# model (loss=binary_crossentropy, metrics=[accuracy, auc]) with no "rmse" key at all --
+# a fundamentally different evaluation contract that evaluate_model_performance was never
+# meant to score, not an instance of this regression.
+EVAL_COMPATIBLE_MATRIX = [
+    (model_type, variant)
+    for model_type in ["lstm", "cnn_lstm", "attention_lstm", "tcn", "tcn_attention"]
+    for variant in ["default", "lightweight", "deep"]
+]
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
+class TestCreateModelEvaluationContract:
+    """Regression guard for #936: every CLI-selectable, regression-scored
+    (model_type, variant) pair must survive a real evaluate_model_performance() call,
+    not just construction (see TestCreateModelTrainerContract above). attention_lstm and
+    tcn/tcn_attention compile with metrics=[rmse, mae] -- a 3-value model.evaluate()
+    return that crashed the positional 2-value unpack this evaluate_model_performance
+    used before #936, destroying a fully-trained model on SageMaker. Construction alone
+    never exercises model.evaluate() and would not have caught it.
+    """
+
+    @pytest.mark.parametrize(("model_type", "variant"), EVAL_COMPATIBLE_MATRIX)
+    def test_evaluate_model_performance_does_not_crash(self, model_type, variant):
+        # Arrange - tiny synthetic data, no training needed to exercise model.evaluate()
+        input_shape = (120, 5)
+        model = create_model(
+            model_type=model_type,
+            input_shape=input_shape,
+            variant=variant,
+            has_sentiment=False,
+        )
+        rng = np.random.default_rng(0)
+        X_train = rng.random((4, *input_shape)).astype("float32")
+        y_train = rng.random(4).astype("float32")
+        X_test = rng.random((3, *input_shape)).astype("float32")
+        y_test = rng.random(3).astype("float32")
+
+        # Act
+        result = evaluate_model_performance(model, X_train, y_train, X_test, y_test)
+
+        # Assert
+        assert set(result) == {"train_loss", "test_loss", "train_rmse", "test_rmse", "mape"}
+        assert all(np.isfinite(v) for v in result.values())

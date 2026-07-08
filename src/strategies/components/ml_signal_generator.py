@@ -197,6 +197,9 @@ class MLSignalGenerator(SignalGenerator):
         self.prediction_engine: PredictionEngine | None = None
         self._engine_warning_emitted = False
         self.use_engine_batch = get_config().get_bool("ENGINE_BATCH_INFERENCE", default=False)
+        # True when the most recent failed prediction was a live inference
+        # timeout — stamped into the HOLD signal for attributability.
+        self._last_prediction_timed_out = False
 
         # Initialize feature pipeline
         self._setup_feature_pipeline()
@@ -292,7 +295,12 @@ class MLSignalGenerator(SignalGenerator):
                 direction=SignalDirection.HOLD,
                 strength=0.0,
                 confidence=0.0,
-                metadata={"generator": self.name, "reason": "prediction_failed", "index": index},
+                metadata={
+                    "generator": self.name,
+                    "reason": "prediction_failed",
+                    "timed_out": self._last_prediction_timed_out,
+                    "index": index,
+                },
             )
 
         current_price = df["close"].iloc[index]
@@ -399,6 +407,7 @@ class MLSignalGenerator(SignalGenerator):
         Returns:
             Predicted price or None if prediction fails
         """
+        self._last_prediction_timed_out = False
         try:
             # Feature pipeline transformation currently not used
             # (prediction engine handles raw price data directly)
@@ -412,6 +421,20 @@ class MLSignalGenerator(SignalGenerator):
                 index - self.sequence_length : index
             ]
             result = self.prediction_engine.predict(window_df, model_name=self.model_name)
+
+            # An errored result carries a placeholder price of 0.0 — treating
+            # it as real would fabricate a -100% predicted return (phantom
+            # SELL). Degrade to a failed prediction (caller emits HOLD).
+            if result.error is not None:
+                self._last_prediction_timed_out = bool(result.metadata.get("timed_out", False))
+                logger.warning(
+                    "MLSignalGenerator: prediction failed at index %d (timed_out=%s): %s",
+                    index,
+                    self._last_prediction_timed_out,
+                    result.error,
+                )
+                return None
+
             pred = float(result.price)
 
             # Prediction engine returns real prices
@@ -621,6 +644,9 @@ class MLBasicSignalGenerator(SignalGenerator):
         self._registry: PredictionModelRegistry | None = None
         self._engine_warning_emitted = False
         self.use_engine_batch = get_config().get_bool("ENGINE_BATCH_INFERENCE", default=False)
+        # True when the most recent failed prediction was a live inference
+        # timeout — stamped into the HOLD signal for attributability.
+        self._last_prediction_timed_out = False
 
         # Cross-symbol guard state: which model symbol actually scored the
         # last prediction, the pinned substitute bundle (flag opt-in only),
@@ -858,6 +884,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                 metadata={
                     "generator": self.name,
                     "reason": "prediction_failed",
+                    "timed_out": self._last_prediction_timed_out,
                     "index": index,
                     **self._symbol_guard_stamps(),
                 },
@@ -965,6 +992,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         Returns:
             Predicted price or None if prediction fails
         """
+        self._last_prediction_timed_out = False
         try:
             # Get prediction from prediction engine
             if self.prediction_engine is None:
@@ -1034,6 +1062,20 @@ class MLBasicSignalGenerator(SignalGenerator):
             except (KeyError, ValueError):
                 # Fall back to default registry resolution if explicit lookup fails
                 result = self.prediction_engine.predict(window_df)
+
+            # An errored result carries a placeholder price of 0.0 — treating
+            # it as real would fabricate a -100% predicted return (phantom
+            # SELL). Degrade to a failed prediction (caller emits HOLD).
+            if result.error is not None:
+                self._last_prediction_timed_out = bool(result.metadata.get("timed_out", False))
+                self._model_symbol = None
+                logger.warning(
+                    "MLBasicSignalGenerator: prediction failed at index %d (timed_out=%s): %s",
+                    index,
+                    self._last_prediction_timed_out,
+                    result.error,
+                )
+                return None
 
             # Detect which symbol's model actually scored this prediction so
             # signals can be stamped and mismatches surfaced loudly.

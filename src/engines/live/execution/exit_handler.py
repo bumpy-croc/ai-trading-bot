@@ -28,6 +28,7 @@ from src.engines.live.execution.position_tracker import (
     LivePositionTracker,
     PositionSide,
 )
+from src.engines.live.system_halt import SystemHaltState
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -109,6 +110,7 @@ class LiveExitHandler:
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
         close_only_provider: Callable[[], bool] | None = None,
+        system_halt: SystemHaltState | None = None,
     ) -> None:
         """Initialize exit handler.
 
@@ -126,6 +128,9 @@ class LiveExitHandler:
             close_only_provider: Reads the engine's close-only flag at call
                 time; scale-ins (exposure increases) are suppressed while it
                 returns True. Exits and partial exits are never gated.
+            system_halt: The engine's shared manual kill-switch state (#922);
+                scale-ins are suppressed while it is active. None (tests,
+                standalone use) leaves only the feature-flag pause active.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -141,9 +146,10 @@ class LiveExitHandler:
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
-        # FEATURE_ENTRY_PAUSE also suppresses scale-ins (exposure increases);
-        # own instance so warnings rate-limit independently of the entry path.
-        self._entry_pause = EntryPauseGate()
+        # The entry-pause gate (FEATURE_ENTRY_PAUSE + manual system halt) also
+        # suppresses scale-ins (exposure increases); own instance so warnings
+        # rate-limit independently of the entry path.
+        self._entry_pause = EntryPauseGate(halt_state=system_halt)
         # #802 follow-up P3: optional exposure governor to cap scale-in exposure
         # (set by the engine; None => inert). Mirrors the entry handler's gate.
         self._exposure_governor: ExposureGovernor | None = None
@@ -151,6 +157,16 @@ class LiveExitHandler:
     def configure_exposure_gate(self, exposure_governor: ExposureGovernor | None) -> None:
         """Wire the #802 exposure governor so scale-ins respect the gross cap."""
         self._exposure_governor = exposure_governor
+
+    def bind_system_halt(self, system_halt: SystemHaltState | None) -> None:
+        """Rebind the scale-in gate to the engine's shared manual-halt state (#922).
+
+        A DI-injected handler is constructed before the engine (and its halt
+        state) exists, so the engine rebinds it here; scale-ins must never
+        bypass the kill-switch. Rebinding resets the gate's log rate-limit
+        only — no behavioral state is lost.
+        """
+        self._entry_pause = EntryPauseGate(halt_state=system_halt)
 
     def _build_snapshot(
         self,

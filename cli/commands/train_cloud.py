@@ -8,6 +8,71 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.ml.cloud.providers.base import CloudTrainingProvider
+
+# Training window length used when neither --days nor --start-date is given
+DEFAULT_TRAINING_DAYS = 365
+
+
+def _parse_utc_date(value: str) -> datetime:
+    """Parse an ISO date/datetime string into a UTC-aware datetime."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid date {value!r}: expected ISO format (YYYY-MM-DD)") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _resolve_date_range(
+    days: int | None,
+    start_date_str: str | None,
+    end_date_str: str | None,
+) -> tuple[datetime, datetime]:
+    """Resolve the training data window from CLI arguments.
+
+    Supported combinations:
+    - nothing: last DEFAULT_TRAINING_DAYS days ending now
+    - --days N: last N days ending now
+    - --start-date [--end-date]: explicit window (end defaults to now)
+    - --end-date --days N: fixed-cutoff window of N days ending at --end-date
+
+    Raises:
+        ValueError: If --days is combined with --start-date, a date string is
+            invalid, or the resolved start is not before the end.
+    """
+    if days is not None and start_date_str:
+        raise ValueError("--days and --start-date are mutually exclusive")
+
+    end_date = _parse_utc_date(end_date_str) if end_date_str else datetime.now(UTC)
+    if start_date_str:
+        start_date = _parse_utc_date(start_date_str)
+    else:
+        start_date = end_date - timedelta(days=days if days is not None else DEFAULT_TRAINING_DAYS)
+
+    if start_date >= end_date:
+        raise ValueError(f"start date must be before end date ({start_date} >= {end_date})")
+
+    return start_date, end_date
+
+
+def _parse_job_name(job_id: str) -> tuple[str, str] | None:
+    """Recover (SYMBOL, timeframe) from a job name or ARN.
+
+    Job names are generated as ``atb-{symbol}-{timeframe}-{YYYYmmdd-HHMMSS}``.
+
+    Returns:
+        (symbol, timeframe) tuple, or None if the name doesn't match.
+    """
+    job_name = job_id.split("/")[-1]
+    parts = job_name.split("-")
+    if len(parts) >= 4 and parts[0] == "atb" and parts[1] and parts[2]:
+        return parts[1].upper(), parts[2]
+    return None
 
 
 def _handle_cloud(ns: argparse.Namespace) -> int:
@@ -23,8 +88,24 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
     parser.add_argument(
         "--days",
         type=int,
-        default=365,
-        help="Days of training data (default: 365)",
+        default=None,
+        help=f"Days of training data ending at --end-date or now "
+        f"(default: {DEFAULT_TRAINING_DAYS}; mutually exclusive with --start-date)",
+    )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Training data start date (UTC). Mutually exclusive with --days.",
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Training data end date (UTC, default: now). "
+        "Enables fixed-cutoff experimental protocols.",
     )
     parser.add_argument(
         "--timeframe",
@@ -59,6 +140,20 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         "--force-price-only",
         action="store_true",
         help="Force price-only model (no sentiment)",
+    )
+    parser.add_argument(
+        "--model-type",
+        type=str,
+        default="cnn_lstm",
+        choices=["lstm", "cnn_lstm", "attention_lstm", "tcn", "tcn_attention", "tft"],
+        help="Model architecture (default: cnn_lstm)",
+    )
+    parser.add_argument(
+        "--model-variant",
+        type=str,
+        default="default",
+        choices=["default", "lightweight", "deep"],
+        help="Architecture variant (default: default)",
     )
     parser.add_argument(
         "--instance-type",
@@ -104,6 +199,13 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
 
     args = parser.parse_args(ns.args or [])
 
+    # Resolve dates first: cheap validation should fail before any AWS call
+    try:
+        start_date, end_date = _resolve_date_range(args.days, args.start_date, args.end_date)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
+
     # Import cloud training modules (may fail if boto3 not installed)
     try:
         from src.ml.cloud.config import CloudInstanceConfig, CloudTrainingConfig
@@ -128,10 +230,6 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         print("For local testing, use: --provider local")
         return 1
 
-    # Build training configuration
-    end_date = datetime.now(UTC)
-    start_date = end_date - timedelta(days=args.days)
-
     training_config = TrainingConfig(
         symbol=args.symbol.upper(),
         timeframe=args.timeframe,
@@ -142,6 +240,8 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         sequence_length=args.sequence_length,
         force_sentiment=args.force_sentiment,
         force_price_only=args.force_price_only,
+        model_type=args.model_type,
+        model_variant=args.model_variant,
         diagnostics=DiagnosticsOptions(
             generate_plots=False,  # Skip plots in cloud (no display)
             evaluate_robustness=True,
@@ -167,10 +267,14 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
     print("=" * 60)
     print(f"  Symbol:          {args.symbol.upper()}")
     print(f"  Timeframe:       {args.timeframe}")
-    print(f"  Data Range:      {start_date.date()} to {end_date.date()} ({args.days} days)")
+    print(
+        f"  Data Range:      {start_date.date()} to {end_date.date()} "
+        f"({(end_date - start_date).days} days)"
+    )
     print(f"  Epochs:          {args.epochs}")
     print(f"  Batch Size:      {args.batch_size}")
     print(f"  Sequence Length: {args.sequence_length}")
+    print(f"  Architecture:    {args.model_type} ({args.model_variant})")
     print()
     print(f"  Provider:        {provider.provider_name}")
     print(f"  Instance:        {args.instance_type}")
@@ -184,13 +288,15 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
     orchestrator = CloudTrainingOrchestrator(cloud_config, provider)
 
     if args.no_wait:
-        print("Submitting training job (not waiting for completion)...")
+        print("Uploading training data and submitting job (not waiting for completion)...")
         try:
             job_id = orchestrator.submit_job()
             print(f"Job submitted: {job_id}")
             print()
             print("To check status:")
             print(f"  atb train cloud-status {job_id}")
+            print("To download and sync artifacts once completed:")
+            print(f"  atb train cloud-status {job_id} --sync")
             return 0
         except Exception as exc:
             print(f"Error: Failed to submit job: {exc}")
@@ -240,7 +346,13 @@ def _handle_cloud_status(ns: argparse.Namespace) -> int:
     parser.add_argument(
         "--sync",
         action="store_true",
-        help="Sync artifacts if job is complete",
+        help="Download artifacts and sync to the local registry if job is complete",
+    )
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        default=None,
+        help="Trading symbol for --sync when it cannot be derived from the job name",
     )
 
     args = parser.parse_args(ns.args or [])
@@ -280,11 +392,12 @@ def _handle_cloud_status(ns: argparse.Namespace) -> int:
                 print(f"    {key}: {value:.4f}")
         print("=" * 60)
 
-        if args.sync and status.is_successful:
-            print()
-            print("Syncing artifacts to local registry...")
-            # Would need full config to sync, simplified for status check
-            print("Use 'atb train cloud' with --wait to auto-sync on completion.")
+        if args.sync:
+            if not status.is_successful:
+                print()
+                print(f"Cannot sync: job is in state {status.status}.")
+                return 1
+            return _sync_job_artifacts(args.job_id, status.job_name, args.symbol, provider)
 
         return 0 if status.is_successful or not status.is_terminal else 1
 
@@ -293,15 +406,65 @@ def _handle_cloud_status(ns: argparse.Namespace) -> int:
         return 1
 
 
+def _sync_job_artifacts(
+    job_id: str,
+    job_name: str,
+    symbol_override: str | None,
+    provider: CloudTrainingProvider,
+) -> int:
+    """Download a completed job's artifacts and sync them into the registry.
+
+    The symbol/timeframe recovered from the job name only seed a placeholder
+    config; the synced bundle's own metadata.json determines the final
+    registry location.
+    """
+    from src.ml.cloud.config import CloudTrainingConfig
+    from src.ml.cloud.orchestrator import CloudTrainingOrchestrator
+    from src.ml.training_pipeline.config import TrainingConfig
+
+    parsed = _parse_job_name(job_name)
+    if parsed:
+        symbol, timeframe = parsed
+    elif symbol_override:
+        symbol, timeframe = symbol_override.upper(), "1h"
+    else:
+        print("Error: Cannot derive symbol from job name; pass --symbol explicitly.")
+        return 1
+
+    # Placeholder window: sync only reads symbol/timeframe, never the dates
+    placeholder_config = TrainingConfig(
+        symbol=symbol,
+        timeframe=timeframe,
+        start_date=datetime(2020, 1, 1, tzinfo=UTC),
+        end_date=datetime.now(UTC),
+    )
+
+    try:
+        cloud_config = CloudTrainingConfig.from_env(placeholder_config)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    print()
+    print("Syncing artifacts to local registry...")
+    try:
+        orchestrator = CloudTrainingOrchestrator(cloud_config, provider)
+        artifact_path = orchestrator.sync_artifacts(job_id)
+        print(f"Artifacts synced to: {artifact_path}")
+        return 0
+    except Exception as exc:
+        print(f"Error: Failed to sync artifacts: {exc}")
+        return 1
+
+
 def _handle_cloud_list(ns: argparse.Namespace) -> int:
-    """List S3 model versions."""
-    parser = argparse.ArgumentParser(description="List model versions in S3")
-    parser.add_argument("symbol", help="Trading symbol (e.g., BTCUSDT)")
+    """List cloud training job outputs stored in S3."""
+    parser = argparse.ArgumentParser(description="List cloud-trained model outputs in S3")
     parser.add_argument(
-        "--model-type",
-        type=str,
-        default="basic",
-        help="Model type (default: basic)",
+        "symbol",
+        nargs="?",
+        default=None,
+        help="Optional trading symbol filter (e.g., BTCUSDT)",
     )
 
     args = parser.parse_args(ns.args or [])
@@ -322,22 +485,83 @@ def _handle_cloud_list(ns: argparse.Namespace) -> int:
 
     try:
         s3_manager = S3ArtifactManager(bucket)
-        versions = s3_manager.list_model_versions(args.symbol.upper(), args.model_type)
+        jobs = s3_manager.list_training_jobs(symbol=args.symbol)
 
-        if not versions:
-            print(f"No model versions found for {args.symbol.upper()}/{args.model_type}")
+        scope = args.symbol.upper() if args.symbol else "all symbols"
+        if not jobs:
+            print(f"No cloud training outputs found for {scope}")
             return 0
 
-        print(f"Model versions for {args.symbol.upper()}/{args.model_type}:")
+        print(f"Cloud training outputs for {scope} (newest first):")
         print()
-        for version in versions:
-            print(f"  - {version}")
+        for job in jobs:
+            print(f"  - {job}")
+        print()
+        print("Sync one into the local registry with:")
+        print("  atb train cloud-status <JOB_NAME> --sync")
 
         return 0
 
     except Exception as exc:
         print(f"Error: {exc}")
         return 1
+
+
+def _handle_cloud_promote(ns: argparse.Namespace) -> int:
+    """Promote a synced cloud model from price/ into another namespace."""
+    parser = argparse.ArgumentParser(
+        description="Promote a cloud-trained model bundle between registry namespaces "
+        "(never touches the target's 'latest' symlink unless --set-latest is passed)",
+    )
+    parser.add_argument("symbol", help="Trading symbol (e.g., BTCUSDT)")
+    parser.add_argument("version", help="Version directory name (e.g., 2026-07-05_10h30m00s_v1)")
+    parser.add_argument(
+        "--from",
+        dest="source_type",
+        type=str,
+        default="price",
+        help="Source namespace (default: price, where cloud syncs land)",
+    )
+    parser.add_argument(
+        "--to",
+        dest="target_type",
+        type=str,
+        default="basic",
+        help="Target namespace (default: basic, loaded by live strategies)",
+    )
+    parser.add_argument(
+        "--set-latest",
+        action="store_true",
+        help="Also point the target namespace's 'latest' symlink at this version. "
+        "For basic/ this changes which model live strategies load.",
+    )
+
+    args = parser.parse_args(ns.args or [])
+
+    from src.ml.cloud.exceptions import ModelPromotionError
+    from src.ml.cloud.promotion import promote_model_version
+
+    try:
+        target = promote_model_version(
+            symbol=args.symbol,
+            version_id=args.version,
+            source_type=args.source_type,
+            target_type=args.target_type,
+            set_latest=args.set_latest,
+        )
+    except ModelPromotionError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    print(f"Promoted {args.symbol.upper()}/{args.source_type}/{args.version}")
+    print(f"  -> {target}")
+    if args.set_latest:
+        print(f"  {args.target_type}/latest now points to {args.version}")
+        if args.target_type == "basic":
+            print("  WARNING: live strategies load basic/latest — verify before deploying.")
+    else:
+        print(f"  {args.target_type}/latest was NOT changed (pass --set-latest to update it)")
+    return 0
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -361,7 +585,15 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     # List versions command
     p_list = subparsers.add_parser(
         "cloud-list",
-        help="List model versions in S3",
+        help="List cloud-trained model outputs in S3",
     )
     p_list.add_argument("args", nargs=argparse.REMAINDER)
     p_list.set_defaults(func=_handle_cloud_list)
+
+    # Promotion command (price/ -> basic/ is always explicit, never automatic)
+    p_promote = subparsers.add_parser(
+        "cloud-promote",
+        help="Promote a synced cloud model bundle (default: price/ -> basic/)",
+    )
+    p_promote.add_argument("args", nargs=argparse.REMAINDER)
+    p_promote.set_defaults(func=_handle_cloud_promote)

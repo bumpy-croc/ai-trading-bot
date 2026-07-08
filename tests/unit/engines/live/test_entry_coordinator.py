@@ -549,3 +549,167 @@ def test_component_path_entry_size_below_cap_unclamped():
 
     coordinator.execute_entry.assert_called_once()
     assert coordinator.execute_entry.call_args.kwargs["size"] == pytest.approx(0.15)
+
+
+# ---------------------------------------------------------------------------
+# ml_predictions logging (#914): signal-metadata prediction context must reach
+# the strategy_executions row instead of the historical always-null value.
+# ---------------------------------------------------------------------------
+
+
+def _ml_signal(metadata: dict, *, confidence: float = 0.42):
+    from src.strategies.components import Signal
+
+    return Signal(
+        direction=SignalDirection.HOLD, strength=0.0, confidence=confidence, metadata=metadata
+    )
+
+
+def _make_runtime_entry_state() -> MagicMock:
+    """Backref for the runtime-strategy path of check_entry_conditions."""
+    state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = False
+    state._is_runtime_strategy.return_value = True
+    state.current_balance = 1000.0
+    state.max_position_size = 0.2
+    state.timeframe = "1h"
+    state.trading_session_id = 7
+    state.db_manager = MagicMock()
+    state.live_position_tracker = MagicMock()
+    state.live_position_tracker.position_count = 0
+    state.risk_manager = MagicMock()
+    state.risk_manager.get_max_concurrent_positions.return_value = 1
+    state.performance_tracker = MagicMock()
+    state.performance_tracker.get_metrics.return_value = MagicMock(peak_balance=1000.0)
+    state.live_entry_handler = MagicMock()
+    no_entry = MagicMock()
+    no_entry.should_enter = False
+    no_entry.side = None
+    state.live_entry_handler.process_runtime_decision.return_value = no_entry
+    state._extract_indicators.return_value = {}
+    state._extract_sentiment_data.return_value = {}
+    state._extract_ml_predictions.return_value = {}
+    state._strategy_name.return_value = "ml_basic"
+    return state
+
+
+def _run_runtime_entry(state: MagicMock, runtime_decision: MagicMock) -> None:
+    import pandas as pd
+
+    coordinator = LiveEntryCoordinator(engine_state=state)
+    coordinator.execute_entry = MagicMock()  # type: ignore[method-assign]
+    df = pd.DataFrame({"close": [50000.0]})
+    coordinator.check_entry_conditions(
+        df=df,
+        current_index=0,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+        runtime_decision=runtime_decision,
+    )
+
+
+def _runtime_decision_with(signal) -> MagicMock:
+    decision = MagicMock()
+    decision.signal = signal
+    decision.regime = None
+    decision.risk_metrics = None
+    decision.metadata = {}
+    return decision
+
+
+def test_runtime_entry_logs_signal_ml_predictions():
+    state = _make_runtime_entry_state()
+    decision = _runtime_decision_with(
+        _ml_signal(
+            {
+                "generator": "ml_basic_signal_generator",
+                "prediction": 50750.0,
+                "current_price": 50000.0,
+                "predicted_return": 0.015,
+                "engine_model_name": "BTCUSDT:1h:basic:v1",
+            }
+        )
+    )
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction"] == 50750.0
+    assert kwargs["ml_predictions"]["predicted_return"] == 0.015
+    assert kwargs["ml_predictions"]["engine_model_name"] == "BTCUSDT:1h:basic:v1"
+
+
+def test_runtime_entry_logs_prediction_failure():
+    state = _make_runtime_entry_state()
+    decision = _runtime_decision_with(
+        _ml_signal(
+            {"generator": "ml_basic_signal_generator", "reason": "prediction_failed", "index": 0},
+            confidence=0.0,
+        )
+    )
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction_failed"] is True
+    assert kwargs["ml_predictions"]["reason"] == "prediction_failed"
+
+
+def test_runtime_entry_merges_signal_over_dataframe_columns():
+    state = _make_runtime_entry_state()
+    state._extract_ml_predictions.return_value = {"onnx_pred": 50700.0}
+    decision = _runtime_decision_with(
+        _ml_signal(
+            {
+                "generator": "ml_basic_signal_generator",
+                "prediction": 50750.0,
+                "predicted_return": 0.015,
+            }
+        )
+    )
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["onnx_pred"] == 50700.0
+    assert kwargs["ml_predictions"]["prediction"] == 50750.0
+
+
+def test_runtime_entry_non_ml_signal_logs_null_ml_predictions():
+    state = _make_runtime_entry_state()
+    decision = _runtime_decision_with(
+        _ml_signal({"generator": "rsi_signal_generator", "reason": "insufficient_history"})
+    )
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"] is None
+
+
+def test_component_entry_logs_signal_ml_predictions():
+    state = _make_component_entry_state(max_position_size=0.2, notional=150.0)
+    # _make_component_entry_state skips DB logging; enable it and provide the
+    # state the logging block reads.
+    state.db_manager = MagicMock()
+    state.live_position_tracker = MagicMock()
+    state.live_position_tracker.position_count = 0
+    state.risk_manager = MagicMock()
+    state.risk_manager.get_max_concurrent_positions.return_value = 1
+    state._strategy_name.return_value = "ml_basic"
+    decision = state.strategy.process_candle.return_value
+    decision.signal = _ml_signal(
+        {
+            "generator": "ml_basic_signal_generator",
+            "prediction": 50750.0,
+            "predicted_return": 0.015,
+            "engine_model_name": "BTCUSDT:1h:basic:v1",
+        }
+    )
+
+    _run_component_entry(state)
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["ml_predictions"]["prediction"] == 50750.0
+    assert kwargs["ml_predictions"]["engine_model_name"] == "BTCUSDT:1h:basic:v1"

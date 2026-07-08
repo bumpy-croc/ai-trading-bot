@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
-from argparse import Namespace
+from datetime import UTC, timedelta
 from pathlib import Path
 
 import pandas as pd
 
-from cli.commands import data as data_commands
 from src.data_providers.feargreed_provider import FearGreedProvider
 from src.ml.training_pipeline.config import TrainingContext
 
@@ -17,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 # SageMaker S3 data channel path
 SAGEMAKER_INPUT_DATA_PATH = Path("/opt/ml/input/data/training")
+
+# Minimum fraction of expected fixed-frequency bars a corpus must contain.
+# Below this the range has real holes (missing rows), not just a late listing date.
+MIN_CORPUS_COVERAGE_RATIO = 0.99
 
 
 def _download_from_s3(s3_uri: str, local_path: Path) -> Path:
@@ -68,13 +71,6 @@ def _download_from_s3(s3_uri: str, local_path: Path) -> Path:
     return local_file
 
 
-def _resolve_latest_file(pattern: str, directory: Path) -> Path:
-    matches = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not matches:
-        raise FileNotFoundError(f"No files matched pattern {pattern} in {directory}")
-    return matches[0]
-
-
 def _validate_data_coverage(df: pd.DataFrame, ctx: TrainingContext, file_path: Path) -> None:
     """Validate that loaded data covers the expected date range.
 
@@ -96,13 +92,22 @@ def _validate_data_coverage(df: pd.DataFrame, ctx: TrainingContext, file_path: P
     expected_start = pd.Timestamp(ctx.config.start_date).tz_localize(None)
     expected_end = pd.Timestamp(ctx.config.end_date).tz_localize(None)
 
-    # Check date range coverage
-    if data_start > expected_start:
+    # A candle's index is its *open* time, and a symbol's first-ever candle can open
+    # hours after midnight on its listing day (e.g. ETHUSDT opens 04:00 on 2017-08-17),
+    # so compare calendar days on the start side; data starting on a later day still
+    # fails. Same day-boundary semantics as _validate_corpus_coverage.
+    if data_start.normalize() > expected_start.normalize():
         raise ValueError(
             f"Data starts at {data_start.date()} but training expects data from "
             f"{expected_start.date()}. Check S3 input channel configuration."
         )
-    if data_end < expected_end:
+    # For --days runs end_date is "now", but the staged channel can only contain bars
+    # up to the most recent closed candle at staging time, so clamp to now and require
+    # coverage through the last bar opening before the end day's midnight. Bar-level
+    # completeness was already enforced at staging time by _validate_corpus_coverage.
+    bar = _timeframe_delta(ctx.config.timeframe)
+    effective_end = min(expected_end, pd.Timestamp.now(tz="UTC").tz_localize(None))
+    if data_end < effective_end.normalize() - bar:
         raise ValueError(
             f"Data ends at {data_end.date()} but training expects data through "
             f"{expected_end.date()}. Check S3 input channel configuration."
@@ -121,6 +126,135 @@ def _validate_data_coverage(df: pd.DataFrame, ctx: TrainingContext, file_path: P
         f"Data validation passed: covers {data_start.date()} to {data_end.date()} "
         f"({len(df)} rows)"
     )
+
+
+def _timeframe_delta(timeframe: str) -> timedelta:
+    """Convert a timeframe string (e.g. ``1h``) to its candle interval.
+
+    Raises:
+        RuntimeError: If the timeframe cannot be parsed (coverage validation
+            would be meaningless with an unknown bar interval).
+    """
+    units = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+    try:
+        unit = timeframe[-1].lower()
+        value = int(timeframe[:-1]) if len(timeframe) > 1 else 1
+        if unit in units and value > 0:
+            return timedelta(**{units[unit]: value})
+    except (ValueError, TypeError, IndexError):
+        pass
+    raise RuntimeError(f"Cannot validate corpus coverage for unknown timeframe: {timeframe!r}")
+
+
+def _corpus_failure(ctx: TrainingContext, reason: str) -> RuntimeError:
+    """Build the loud, actionable error raised when a training corpus is unusable."""
+    return RuntimeError(
+        f"Training corpus for {ctx.config.symbol} {ctx.config.timeframe} "
+        f"({ctx.config.start_date.date()} to {ctx.config.end_date.date()}) "
+        f"could not be loaded: {reason}. Training never falls back to a third-party "
+        "data source (silent source-switching mid-corpus is a data-integrity hazard, "
+        "see #909). Prefill the local cache with "
+        f"`atb data prefill-cache --symbols {ctx.config.symbol} "
+        f"--timeframes {ctx.config.timeframe}`, provide the data explicitly via "
+        "--input-data-s3, or adjust the training date range."
+    )
+
+
+def _validate_corpus_coverage(
+    df: pd.DataFrame,
+    ctx: TrainingContext,
+    query_start: pd.Timestamp,
+    query_end: pd.Timestamp,
+) -> None:
+    """Validate that a corpus covers the requested window without internal gaps.
+
+    Raises:
+        RuntimeError: If the corpus misses the window boundaries or has holes.
+    """
+    if df is None or df.empty:
+        raise _corpus_failure(ctx, "no candles were returned")
+
+    bar = _timeframe_delta(ctx.config.timeframe)
+    data_start = pd.Timestamp(df.index.min())
+    data_end = pd.Timestamp(df.index.max())
+
+    # A candle's index is its *open* time, so the last bar of the window opens up to one
+    # interval before the end boundary. Windows that extend to now (or the future) can
+    # only contain bars up to the most recent closed candle, so clamp before comparing.
+    effective_end = min(query_end, pd.Timestamp.now(tz="UTC"))
+    # The start side only requires the same calendar day: a symbol's first-ever candle can
+    # open hours after midnight on its listing day (e.g. ETHUSDT opens 04:00 on 2017-08-17).
+    # That is market history, not a cache gap; real holes are caught by the ratio check
+    # below, which is computed from the corpus's own span rather than the query window.
+    if data_start.normalize() > query_start.normalize() or data_end < (effective_end - bar):
+        raise _corpus_failure(
+            ctx,
+            f"available data ({data_start} to {data_end}) does not cover "
+            f"the requested window ({query_start} to {query_end})",
+        )
+
+    expected_bars = int((data_end - data_start) / bar) + 1
+    coverage_ratio = len(df) / expected_bars if expected_bars > 0 else 0.0
+    if coverage_ratio < MIN_CORPUS_COVERAGE_RATIO:
+        raise _corpus_failure(
+            ctx,
+            f"only {len(df)} of {expected_bars} expected bars are present "
+            f"({coverage_ratio:.1%} coverage) between {data_start} and {data_end}",
+        )
+
+
+def load_training_corpus(ctx: TrainingContext) -> pd.DataFrame:
+    """Load the OHLCV training corpus via the parquet cache backed by Binance.
+
+    Consults the year-based parquet cache (populated by ``atb data prefill-cache``)
+    before any network fetch; missing years are fetched from Binance and cached, so
+    repeated runs (e.g. multi-entrant model tournaments) see identical rows without
+    re-downloading. There is deliberately no third-party fallback: a training corpus
+    must come from a single source, so failures and coverage gaps raise loudly
+    instead of silently switching providers mid-corpus (#909).
+
+    Args:
+        ctx: Training context with config and paths
+
+    Returns:
+        DataFrame with OHLCV data covering [start_date, end_date], indexed by
+        UTC timestamp
+
+    Raises:
+        RuntimeError: If the corpus cannot be fetched or fails coverage validation
+    """
+    from src.config.paths import get_cache_dir
+    from src.data_providers.binance_provider import BinanceProvider
+    from src.data_providers.cached_data_provider import CachedDataProvider
+
+    provider = CachedDataProvider(BinanceProvider(), cache_dir=str(get_cache_dir()))
+    # End-of-day boundaries (ctx.start_iso/end_iso) so the corpus covers the full
+    # requested last day instead of truncating it at midnight.
+    query_start = pd.Timestamp(ctx.start_iso)
+    query_end = pd.Timestamp(ctx.end_iso)
+    try:
+        df = provider.get_historical_data(
+            ctx.symbol_exchange,
+            ctx.config.timeframe,
+            query_start.to_pydatetime(),
+            query_end.to_pydatetime(),
+        )
+    except (ConnectionError, TimeoutError, ValueError, OSError) as exc:
+        raise _corpus_failure(ctx, f"provider error: {exc}") from exc
+
+    if df is not None and not df.empty and df.index.tz is None:
+        df = df.tz_localize(UTC)
+
+    _validate_corpus_coverage(df, ctx, query_start, query_end)
+    logger.info(
+        "Training corpus for %s %s: %d candles (%s to %s)",
+        ctx.config.symbol,
+        ctx.config.timeframe,
+        len(df),
+        df.index.min(),
+        df.index.max(),
+    )
+    return df[(df.index >= query_start) & (df.index <= query_end)]
 
 
 def download_price_data(ctx: TrainingContext, s3_data_uri: str | None = None) -> pd.DataFrame:
@@ -153,31 +287,8 @@ def download_price_data(ctx: TrainingContext, s3_data_uri: str | None = None) ->
         downloaded_file = _download_from_s3(s3_data_uri, ctx.paths.data_dir)
         return _load_price_data_file(downloaded_file)
 
-    # Priority 3: Download from exchange API
-    ns = Namespace(
-        symbol=ctx.symbol_exchange,
-        timeframe=ctx.config.timeframe,
-        start_date=ctx.start_iso,
-        end_date=ctx.end_iso,
-        output_dir=str(ctx.paths.data_dir),
-        format="csv",
-    )
-    logger.info(
-        "Downloading price data for %s (%s %s-%s)",
-        ctx.config.symbol,
-        ctx.config.timeframe,
-        ctx.config.start_date.date(),
-        ctx.config.end_date.date(),
-    )
-    # Note: Uses internal CLI command directly to avoid subprocess overhead
-    # This is intentional coupling as training pipeline needs programmatic access
-    status = data_commands._download(ns)
-    if status != 0:
-        raise RuntimeError("Price data download failed")
-
-    latest_file = _resolve_latest_file(ctx.price_data_glob, ctx.paths.data_dir)
-    logger.debug("Using price data file %s", latest_file)
-    return _load_price_data_file(latest_file)
+    # Priority 3: prefilled parquet cache backed by Binance (single-source, fail-loud)
+    return load_training_corpus(ctx)
 
 
 def _load_price_data_file(file_path: Path) -> pd.DataFrame:
@@ -194,7 +305,11 @@ def _load_price_data_file(file_path: Path) -> pd.DataFrame:
         df = pd.read_feather(file_path)
     else:
         df = pd.read_csv(file_path, encoding="utf-8")
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # format="mixed": Binance's earliest kline archives mix on-the-hour and sub-second
+    # timestamps within one file (e.g. ETHUSDT 2018-02 has a run offset by ":28:14.8").
+    # A plain pd.to_datetime() infers one fixed format from the first rows and raises
+    # ValueError the moment a later row's format differs.
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", utc=True)
     df = df.set_index("timestamp")
     return df.sort_index()
 

@@ -37,3 +37,9 @@ class ModelInferenceError(PredictionEngineError):
     """Raised when model inference fails"""
 
     pass
+
+
+class ModelInferenceTimeoutError(ModelInferenceError):
+    """Raised when model inference exceeds the live latency budget"""
+
+    pass

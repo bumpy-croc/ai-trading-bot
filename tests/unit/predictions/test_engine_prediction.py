@@ -193,8 +193,13 @@ class TestPredictionEnginePredict:
 
     @patch("src.prediction.engine.PredictionModelRegistry")
     @patch("src.prediction.engine.FeaturePipeline")
-    def test_predict_timeout(self, mock_pipeline, mock_registry):
-        """Test prediction timeout logic"""
+    def test_slow_prediction_is_returned_intact(self, mock_pipeline, mock_registry):
+        """A completed prediction is never substituted because it was slow.
+
+        max_prediction_latency is a latency-ALERTING budget; exceeding it must
+        not zero out a successful prediction (that substitution made backtest
+        results depend on CPU load).
+        """
         config = PredictionConfig()
         config.max_prediction_latency = 0.001
         engine = PredictionEngine(config)
@@ -223,18 +228,15 @@ class TestPredictionEnginePredict:
         data = self.create_test_data()
         result = engine.predict(data)
 
-        assert result.error is not None
-        assert "Prediction timeout" in result.error
-        assert result.inference_time > config.max_prediction_latency
-        assert result.price == 0.0
-        assert result.confidence == 0.0
-        assert result.direction == 0
-        assert result.metadata["error_type"] == "PredictionTimeoutError"
+        assert result.error is None
+        assert result.price == 100.0
+        assert result.confidence == 0.8
+        assert result.direction == 1
 
     @patch("src.prediction.engine.PredictionModelRegistry")
     @patch("src.prediction.engine.FeaturePipeline")
-    def test_predict_timeout_with_original_error(self, mock_pipeline, mock_registry):
-        """Test timeout logic preserves original error when both timeout and exception occur"""
+    def test_slow_failing_prediction_keeps_original_error(self, mock_pipeline, mock_registry):
+        """Errors are reported as-is; latency no longer relabels them as timeouts."""
         config = PredictionConfig()
         config.max_prediction_latency = 0.001
         engine = PredictionEngine(config)
@@ -251,13 +253,196 @@ class TestPredictionEnginePredict:
         result = engine.predict(data)
 
         assert result.error is not None
-        assert "Prediction timeout" in result.error
         assert "Feature extraction failed" in result.error
-        assert result.inference_time > config.max_prediction_latency
+        assert "Prediction timeout" not in result.error
         assert result.price == 0.0
         assert result.confidence == 0.0
         assert result.direction == 0
-        assert result.metadata["error_type"] == "PredictionTimeoutError+FeatureExtractionError"
+        assert result.metadata["error_type"] == "FeatureExtractionError"
+
+
+class TestDeterministicInference:
+    """Backtest/research context: inference must never race a wall clock."""
+
+    def create_test_data(self, num_rows=120):
+        rng = np.random.default_rng(7)
+        return pd.DataFrame(
+            {
+                "open": rng.uniform(100, 110, num_rows),
+                "high": rng.uniform(110, 120, num_rows),
+                "low": rng.uniform(90, 100, num_rows),
+                "close": rng.uniform(100, 110, num_rows),
+                "volume": rng.uniform(1000, 2000, num_rows),
+            }
+        )
+
+    def _make_engine_with_slow_model(self, config: PredictionConfig, sleep_seconds: float):
+        with (
+            patch("src.prediction.engine.PredictionModelRegistry"),
+            patch("src.prediction.engine.FeaturePipeline"),
+        ):
+            engine = PredictionEngine(config)
+
+        engine.feature_pipeline.transform.return_value = np.random.random((1, 10))
+
+        mock_model = Mock()
+
+        def slow_predict(features):
+            import time
+
+            time.sleep(sleep_seconds)
+            return ModelPrediction(
+                price=105.5,
+                confidence=0.85,
+                direction=1,
+                model_name="slow_model",
+                inference_time=sleep_seconds,
+            )
+
+        mock_model.predict.side_effect = slow_predict
+        bundle = _make_bundle(mock_model)
+        engine.model_registry.list_bundles.return_value = [bundle]
+        engine.model_registry.get_default_bundle.return_value = bundle
+        return engine
+
+    def test_slow_inference_never_times_out_in_deterministic_context(self):
+        """Inference slower than every latency budget still yields the real
+        prediction — identically on repeated calls (determinism guarantee)."""
+        config = PredictionConfig()
+        config.max_prediction_latency = 0.001  # tighter than the sleep below
+        config.live_inference_timeout = 0.01  # would abort if (wrongly) applied
+        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.15)
+
+        data = self.create_test_data()
+        first = engine.predict(data)
+        second = engine.predict(data)
+
+        for result in (first, second):
+            assert result.error is None
+            assert result.price == 105.5
+            assert result.direction == 1
+        assert (first.price, first.confidence, first.direction) == (
+            second.price,
+            second.confidence,
+            second.direction,
+        )
+        assert engine.get_performance_stats()["inference_timeouts"] == 0
+
+    def test_deterministic_context_does_not_log_latency_alerts(self, caplog):
+        """Wall-clock noise must not leak into backtest logs as warnings."""
+        import logging
+
+        config = PredictionConfig()
+        config.max_prediction_latency = 0.001
+        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.05)
+
+        with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
+            result = engine.predict(self.create_test_data())
+
+        assert result.error is None
+        assert not [r for r in caplog.records if "latency" in r.message.lower()]
+
+
+class TestLiveInferenceTimeoutAccounting:
+    """Live context: bounded latency budget with loud, attributable accounting."""
+
+    def create_test_data(self, num_rows=120):
+        rng = np.random.default_rng(7)
+        return pd.DataFrame(
+            {
+                "open": rng.uniform(100, 110, num_rows),
+                "high": rng.uniform(110, 120, num_rows),
+                "low": rng.uniform(90, 100, num_rows),
+                "close": rng.uniform(100, 110, num_rows),
+                "volume": rng.uniform(1000, 2000, num_rows),
+            }
+        )
+
+    def _make_engine_with_slow_model(self, config: PredictionConfig, sleep_seconds: float):
+        with (
+            patch("src.prediction.engine.PredictionModelRegistry"),
+            patch("src.prediction.engine.FeaturePipeline"),
+        ):
+            engine = PredictionEngine(config)
+
+        engine.feature_pipeline.transform.return_value = np.random.random((1, 10))
+
+        mock_model = Mock()
+
+        def slow_predict(features):
+            import time
+
+            time.sleep(sleep_seconds)
+            return ModelPrediction(
+                price=105.5,
+                confidence=0.85,
+                direction=1,
+                model_name="slow_model",
+                inference_time=sleep_seconds,
+            )
+
+        mock_model.predict.side_effect = slow_predict
+        bundle = _make_bundle(mock_model)
+        engine.model_registry.list_bundles.return_value = [bundle]
+        engine.model_registry.get_default_bundle.return_value = bundle
+        return engine
+
+    def test_live_timeout_is_loud_and_stamped(self, caplog):
+        import logging
+
+        from src.prediction.inference_context import InferenceContext, set_inference_context
+
+        set_inference_context(InferenceContext.LIVE)
+        config = PredictionConfig()
+        config.live_inference_timeout = 0.05
+        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.5)
+
+        with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
+            result = engine.predict(self.create_test_data())
+
+        assert result.error is not None
+        assert "timeout" in result.error.lower()
+        assert result.metadata["timed_out"] is True
+        assert result.price == 0.0
+        assert result.confidence == 0.0
+        assert result.direction == 0
+        assert engine.get_performance_stats()["inference_timeouts"] == 1
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any("timeout" in m.lower() for m in warning_messages)
+
+    def test_live_fast_prediction_within_budget_succeeds(self):
+        from src.prediction.inference_context import InferenceContext, set_inference_context
+
+        set_inference_context(InferenceContext.LIVE)
+        config = PredictionConfig()
+        config.live_inference_timeout = 5.0
+        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.0)
+
+        result = engine.predict(self.create_test_data())
+
+        assert result.error is None
+        assert result.price == 105.5
+        assert engine.get_performance_stats()["inference_timeouts"] == 0
+
+    def test_live_latency_alert_warns_without_substitution(self, caplog):
+        """Exceeding the alerting budget logs a WARNING but returns the result."""
+        import logging
+
+        from src.prediction.inference_context import InferenceContext, set_inference_context
+
+        set_inference_context(InferenceContext.LIVE)
+        config = PredictionConfig()
+        config.max_prediction_latency = 0.001
+        config.live_inference_timeout = 5.0
+        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.05)
+
+        with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
+            result = engine.predict(self.create_test_data())
+
+        assert result.error is None
+        assert result.price == 105.5
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any("latency" in m.lower() for m in warning_messages)
 
 
 class TestApplyRollingDenormalization:
