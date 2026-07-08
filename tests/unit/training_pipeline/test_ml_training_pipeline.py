@@ -304,7 +304,7 @@ class TestRunTrainingPipeline:
         model = MagicMock()
         model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
         model.predict.return_value = np.random.rand(10, 1)
-        model.evaluate.side_effect = [(0.1, 0.3), (0.2, 0.4)]
+        model.evaluate.side_effect = [{"loss": 0.1, "rmse": 0.3}, {"loss": 0.2, "rmse": 0.4}]
         mock_create_model.return_value = model
 
         # Mock artifacts
@@ -665,3 +665,50 @@ class TestRunTrainingPipeline:
         # Assert - should not fail on timezone mismatch
         # Will fail on other things (like insufficient data), but that's expected
         assert result.success is False
+
+    def test_evaluation_crash_does_not_lose_trained_model(self, tmp_path):
+        """Regression guard for #936: evaluate_model_performance/validate_model_robustness
+        run after model.fit() but before save_artifacts. A crash there previously
+        discarded a fully-trained model with nothing persisted. Diagnostics failures
+        must degrade to a metadata gap instead of aborting the run without saving.
+        """
+        # Arrange
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+        feature_df = price_df.copy()
+        feature_df["close_scaled"] = 0.5
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+            mocks["evaluate_model_performance"].side_effect = ValueError(
+                "too many values to unpack (expected 2)"
+            )
+
+            # Act
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        # Assert - the trained model is still saved despite the diagnostics crash
+        assert result.success is True, result.metadata
+        mocks["save_artifacts"].assert_called_once()
+        assert "error" in result.metadata["evaluation_results"]
+        assert "too many values to unpack" in result.metadata["evaluation_results"]["error"]

@@ -92,13 +92,22 @@ def _validate_data_coverage(df: pd.DataFrame, ctx: TrainingContext, file_path: P
     expected_start = pd.Timestamp(ctx.config.start_date).tz_localize(None)
     expected_end = pd.Timestamp(ctx.config.end_date).tz_localize(None)
 
-    # Check date range coverage
-    if data_start > expected_start:
+    # A candle's index is its *open* time, and a symbol's first-ever candle can open
+    # hours after midnight on its listing day (e.g. ETHUSDT opens 04:00 on 2017-08-17),
+    # so compare calendar days on the start side; data starting on a later day still
+    # fails. Same day-boundary semantics as _validate_corpus_coverage.
+    if data_start.normalize() > expected_start.normalize():
         raise ValueError(
             f"Data starts at {data_start.date()} but training expects data from "
             f"{expected_start.date()}. Check S3 input channel configuration."
         )
-    if data_end < expected_end:
+    # For --days runs end_date is "now", but the staged channel can only contain bars
+    # up to the most recent closed candle at staging time, so clamp to now and require
+    # coverage through the last bar opening before the end day's midnight. Bar-level
+    # completeness was already enforced at staging time by _validate_corpus_coverage.
+    bar = _timeframe_delta(ctx.config.timeframe)
+    effective_end = min(expected_end, pd.Timestamp.now(tz="UTC").tz_localize(None))
+    if data_end < effective_end.normalize() - bar:
         raise ValueError(
             f"Data ends at {data_end.date()} but training expects data through "
             f"{expected_end.date()}. Check S3 input channel configuration."
