@@ -19,6 +19,15 @@ what to grep for.** When you learn a new signature, add it there, not here.
    **Forbidden:** any deploy / restart / redeploy, any feature-flag flip, any order place / cancel,
    any repay / transfer / money move, any merge or git mutation, any config or state edit. If you're
    unsure whether an action mutates, treat it as forbidden.
+   - **`railway domain` is NOT a read.** It's get-or-create with no dry-run — running it "to check
+     a URL" created an unauthorized public domain on the production Trading Bot service
+     (2026-07-08 incident, GH #941). To check whether a service has a public domain, use
+     `railway status --json` and read
+     `.environments.edges[].node.serviceInstances.edges[].node.domains.serviceDomains[]` —
+     never `railway domain`. Full Railway CLI safe/prohibited command list: `.claude/LESSONS.md`
+     §3 (also mirrored in `.claude/agents/live-ops.md`). Before running any `railway` subcommand
+     not already on that safe list, run `railway <subcommand> --help` and confirm it can't
+     create/modify/delete anything — if in doubt, don't run it.
 2. **Verify before you alarm.** Automated / cron / stale context is a *hypothesis*, not a fact.
    Confirm against live state before reporting an incident (see "Verify, don't trust" below).
 3. **One escalation per state, not per tick.** Don't re-page the same condition every cycle.
