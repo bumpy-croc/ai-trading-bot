@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from src.infrastructure.runtime.paths import get_project_root
+from src.infrastructure.runtime.paths import get_model_registry_root, get_project_root
 
 
 @dataclass
@@ -30,12 +30,18 @@ class TrainingPaths:
     def default(cls) -> TrainingPaths:
         """Create default training paths based on project root.
 
+        ``models_dir`` comes from ``get_model_registry_root()``, which
+        honors the ``MODEL_REGISTRY_PATH`` environment variable when set --
+        the same key ``PredictionConfig.model_registry_path`` reads on the
+        backtest/prediction READ side, so one env var redirects both sides
+        consistently (e.g. for acceptance-test hermeticity).
+
         Returns:
             TrainingPaths configured for local development
         """
         root = get_project_root()
         data_dir = root / "data"
-        models_dir = root / "src" / "ml" / "models"
+        models_dir = get_model_registry_root()
         data_dir.mkdir(parents=True, exist_ok=True)
         models_dir.mkdir(parents=True, exist_ok=True)
         return cls(project_root=root, data_dir=data_dir, models_dir=models_dir)

@@ -246,6 +246,15 @@ def create_exam_smoothed_return_strategy(
     incumbent's own regression architecture, so the (d) vs. incumbent
     comparison isolates the target reformulation rather than also varying
     architecture).
+
+    Unlike the other three entrants, this one requires
+    ``ATB_MODEL_VERSION_OVERRIDE`` to be set (i.e. always pin a specific
+    version) -- ``SmoothedReturnExamSignalGenerator`` needs its bundle's
+    ``target_distribution`` metadata, looked up by registry key, and
+    ``PredictionResult.model_name`` (the ONNX file's basename) can never
+    serve as that key when unpinned. Running unpinned raises
+    ``TargetDistributionUnavailableError`` immediately rather than silently
+    producing a zero-trade backtest (PR #950 review item 4).
     """
     signal_generator = SmoothedReturnExamSignalGenerator(
         name="exam_smoothed_return_signal_generator",

@@ -877,12 +877,14 @@ class TestSyncArtifactsUsesMetadataSymbol:
 
         orchestrator.provider.download_artifacts.side_effect = fake_download
 
-        with patch("src.ml.cloud.orchestrator.get_project_root", return_value=tmp_path):
+        # get_model_registry_root() (PR #950 review item 5) returns the
+        # FULL registry root directly -- unlike the old get_project_root(),
+        # nothing appends "src/ml/models" on top of it here anymore.
+        registry_root = tmp_path / "src" / "ml" / "models"
+        with patch("src.ml.cloud.orchestrator.get_model_registry_root", return_value=registry_root):
             result = orchestrator._sync_artifacts("job-1", "s3://bucket/out/model.tar.gz")
 
-        expected = (
-            tmp_path / "src" / "ml" / "models" / "ETHUSDT" / "price" / "2026-07-05_10h00m00s_v1"
-        )
+        expected = registry_root / "ETHUSDT" / "price" / "2026-07-05_10h00m00s_v1"
         assert result == expected
         assert (expected / "model.onnx").exists()
 
@@ -896,10 +898,42 @@ class TestSyncArtifactsUsesMetadataSymbol:
 
         orchestrator.provider.download_artifacts.side_effect = fake_download
 
-        with patch("src.ml.cloud.orchestrator.get_project_root", return_value=tmp_path):
+        registry_root = tmp_path / "src" / "ml" / "models"
+        with patch("src.ml.cloud.orchestrator.get_model_registry_root", return_value=registry_root):
             result = orchestrator._sync_artifacts("job-2", "s3://bucket/out/model.tar.gz")
 
         assert result.parent.parent.name == "BTCUSDT"
+
+    def test_default_registry_honors_model_registry_path_override(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """PR #950 review item 5: without patching get_model_registry_root
+        at all, MODEL_REGISTRY_PATH alone must redirect where _sync_artifacts
+        lands a trained bundle -- this is the FINAL destination every
+        trained model (cloud or local provider) reaches, so it's the one
+        code path that actually determines whether an acceptance test's
+        MODEL_REGISTRY_PATH override keeps artifacts out of the real
+        src/ml/models/ registry."""
+        monkeypatch.setenv("MODEL_REGISTRY_PATH", str(tmp_path / "isolated-registry"))
+        orchestrator = _make_orchestrator(symbol="BTCUSDT")
+
+        def fake_download(job_id: str, temp_dir: Path) -> Path:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            metadata = {
+                "symbol": "BTCUSDT",
+                "model_type": "price",
+                "version_id": "2026-07-05_10h00m00s_v1",
+            }
+            (temp_dir / "metadata.json").write_text(json.dumps(metadata))
+            (temp_dir / "model.onnx").write_text("model-bytes")
+            return temp_dir
+
+        orchestrator.provider.download_artifacts.side_effect = fake_download
+
+        result = orchestrator._sync_artifacts("job-3", "s3://bucket/out/model.tar.gz")
+
+        assert str(result).startswith(str(tmp_path / "isolated-registry"))
+        assert (result / "model.onnx").exists()
 
 
 @pytest.mark.fast

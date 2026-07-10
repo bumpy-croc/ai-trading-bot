@@ -28,6 +28,7 @@ from src.ml.training_pipeline.meta_labels import (
     build_meta_label_features,
     encode_meta_label_feature_row,
     encode_meta_label_features_for_training,
+    resolution_ordered_hit_rate,
     resolve_fired_trade,
     run_primary_signal_forward,
     simulate_fired_trade_profitability,
@@ -419,6 +420,70 @@ class TestResolveFiredTradeEntryPriceValidation:
         expected_raw_return = pnl_percent(100.0, 105.0, Side.LONG)
         round_trip_cost = 2.0 * CostCalculator().fee_rate
         assert resolution.profitable == ((expected_raw_return - round_trip_cost) > 0.0)
+
+
+class TestResolutionOrderedHitRate:
+    """resolution_ordered_hit_rate is the single shared windowing function
+    both build_meta_label_features (training) and
+    MetaLabelExamSignalGenerator._rolling_hit_rate (serving) now call --
+    the fix for the fire-order-vs-resolution-order train/serve skew found
+    in PR #950 review."""
+
+    def test_empty_history_is_nan(self):
+        assert np.isnan(resolution_ordered_hit_rate([], 20))
+
+    def test_windows_by_resolution_order_not_input_order(self):
+        """Passing entries in FIRE order (not resolution order) must not
+        change the result -- the function re-sorts internally."""
+        # fire_index 0 resolves LAST (exit_index=100); fire_index 1 resolves
+        # FIRST (exit_index=10). "Last 1 by resolution order" must be
+        # fire_index 0 (True), not fire_index 1 (False), even though
+        # fire_index 1 comes second in fire/input order.
+        fire_order_input = [(100, 0, True), (10, 1, False)]
+        assert resolution_ordered_hit_rate(fire_order_input, 1) == pytest.approx(1.0)
+
+    def test_ties_on_exit_index_break_by_fire_index(self):
+        """Same-bar resolutions must order by fire_index ascending (matching
+        the online path: _resolve_open_fires iterates still-open fires in
+        their original registration order within one bar)."""
+        tied = [(50, 2, False), (50, 1, True)]
+        # Sorted by (exit_index, fire_index): (50,1,True) then (50,2,False).
+        # Last 1 -> fire_index 2 -> False.
+        assert resolution_ordered_hit_rate(tied, 1) == pytest.approx(0.0)
+
+    def test_overlapping_trades_past_lookback_selects_resolution_ordered_subset(self):
+        """With >20 resolved fires whose fire-order and resolution-order
+        diverge, the correct (resolution-ordered) trailing-20 window must
+        differ from the old, buggy fire-ordered trailing-20 window -- this
+        is the regression this fix closes."""
+        # 25 fires, alternating: even fire_index positions resolve almost
+        # immediately (fast, profitable=True); odd positions resolve much
+        # later (slow, profitable=False) -- classic overlapping-trades
+        # pattern (an early slow fire resolves after several later fast
+        # fires have already resolved).
+        history = []
+        for i in range(25):
+            fire_index = i
+            if i % 2 == 0:
+                exit_index = fire_index + 1  # fast
+                profitable = True
+            else:
+                exit_index = fire_index + 40  # slow, overlaps many fast fires
+                profitable = False
+            history.append((exit_index, fire_index, profitable))
+
+        correct = resolution_ordered_hit_rate(history, 20)
+
+        # The old (buggy) fire-order windowing: sort by fire_index only,
+        # take the last 20 by FIRE order (i.e. fires 5..24).
+        fire_ordered = sorted(history, key=lambda item: item[1])
+        buggy_last_20 = [profitable for _, _, profitable in fire_ordered[-20:]]
+        buggy = float(np.mean(buggy_last_20))
+
+        # The two windowing conventions must select genuinely different
+        # subsets for this scenario (proving the test is a meaningful
+        # regression guard, not a no-op).
+        assert correct != pytest.approx(buggy)
 
 
 class TestBuildMetaLabelFeatures:

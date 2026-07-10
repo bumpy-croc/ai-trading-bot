@@ -207,3 +207,44 @@ class TestRunTrainingThreading:
         assert rc == 1
         fake_pipeline.run_training_pipeline.assert_not_called()
         mock_failure.assert_called_once()
+
+    def test_target_type_mismatch_after_construction_fails_before_training(self) -> None:
+        """PR #950 review item 3: a future bug that silently constructs a
+        TrainingConfig with a different target_type/target_horizon than
+        hyperparameters.json requested (e.g. a copy-paste error in the
+        constructor call, or a key-name desync from orchestrator.py) must
+        be caught HERE -- before run_training_pipeline spends any paid
+        SageMaker GPU time -- not silently train the wrong target."""
+        params = self._base_params(target_type="triple_barrier", target_horizon=6)
+        fake_pipeline = MagicMock()
+
+        class _MismatchedConfig:
+            """Stands in for TrainingConfig but ignores the requested
+            target_type/target_horizon -- simulates the exact drift class
+            this check exists to catch."""
+
+            def __init__(self, **kwargs) -> None:
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+                # Simulate the bug: silently defaults instead of honoring
+                # what was actually requested.
+                self.target_type = "regression"
+                self.target_horizon = 1
+
+        with (
+            patch.dict(sys.modules, {"src.ml.training_pipeline.pipeline": fake_pipeline}),
+            patch(
+                "src.ml.training_pipeline.config.TrainingConfig",
+                _MismatchedConfig,
+            ),
+            patch("src.ml.cloud.entrypoint.write_failure_file") as mock_failure,
+        ):
+            rc = run_training(params)
+
+        assert rc == 1
+        fake_pipeline.run_training_pipeline.assert_not_called()
+        mock_failure.assert_called_once()
+        (failure_message,) = mock_failure.call_args.args
+        assert "mismatch" in failure_message
+        assert "triple_barrier" in failure_message
+        assert "regression" in failure_message

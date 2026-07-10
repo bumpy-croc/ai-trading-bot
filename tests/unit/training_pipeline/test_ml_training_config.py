@@ -62,9 +62,17 @@ class TestTrainingPaths:
         assert paths.models_dir == models_dir
 
     @patch("src.ml.training_pipeline.config.get_project_root")
-    def test_default_factory(self, mock_get_root, tmp_path):
+    def test_default_factory(self, mock_get_root, tmp_path, monkeypatch):
         # Arrange
         mock_get_root.return_value = tmp_path
+        # models_dir is resolved by get_model_registry_root() (shared with
+        # promote_model_version and PredictionConfig.model_registry_path,
+        # PR #950 review item 5) -- it calls its OWN get_project_root()
+        # (src.infrastructure.runtime.paths), unaffected by the patch
+        # above, so it must be patched too for the default (no
+        # MODEL_REGISTRY_PATH override) case to resolve under tmp_path.
+        monkeypatch.setattr("src.infrastructure.runtime.paths.get_project_root", lambda: tmp_path)
+        monkeypatch.delenv("MODEL_REGISTRY_PATH", raising=False)
 
         # Act
         paths = TrainingPaths.default()

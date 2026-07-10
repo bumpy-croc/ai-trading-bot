@@ -14,7 +14,7 @@ import re
 import shutil
 from pathlib import Path
 
-from src.infrastructure.runtime.paths import get_project_root
+from src.infrastructure.runtime.paths import get_model_registry_root
 from src.ml.cloud.artifacts.latest_link import update_latest_symlink
 from src.ml.cloud.exceptions import ModelPromotionError
 
@@ -50,7 +50,8 @@ def promote_model_version(
         target_type: Namespace to copy the bundle into (default: basic)
         set_latest: Also point ``{target_type}/latest`` at the promoted version.
             Without this flag the live-loading symlink is never touched.
-        registry_root: Model registry root (default: ``src/ml/models``)
+        registry_root: Model registry root (default: ``get_model_registry_root()``,
+            i.e. ``src/ml/models`` unless ``MODEL_REGISTRY_PATH`` is set)
 
     Returns:
         Path to the promoted bundle directory
@@ -64,7 +65,7 @@ def promote_model_version(
     source_type = _validate_component(source_type, "source_type")
     target_type = _validate_component(target_type, "target_type")
 
-    root = registry_root or (get_project_root() / "src" / "ml" / "models")
+    root = registry_root or get_model_registry_root()
     source_dir = root / symbol / source_type / version_id
     target_dir = root / symbol / target_type / version_id
 

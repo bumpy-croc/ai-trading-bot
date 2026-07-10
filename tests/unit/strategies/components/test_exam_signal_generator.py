@@ -13,6 +13,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.engines.shared.barrier_touch import BarrierTouchResult
+from src.ml.training_pipeline.meta_labels import (
+    HIT_RATE_LOOKBACK_FIRES,
+    PrimarySignalRecord,
+    TradeResolution,
+    build_meta_label_features,
+)
 from src.prediction import PredictionResult
 from src.prediction.distribution_stats import FrozenDistribution
 from src.prediction.models.onnx_runner import ModelPrediction
@@ -20,6 +27,7 @@ from src.strategies.components.exam_signal_generator import (
     ClassificationExamSignalGenerator,
     MetaLabelExamSignalGenerator,
     SmoothedReturnExamSignalGenerator,
+    TargetDistributionUnavailableError,
 )
 from src.strategies.components.signal_generator import (
     Signal,
@@ -270,7 +278,39 @@ class TestSmoothedReturnExamSignalGenerator:
         assert signal.direction == SignalDirection.BUY
         assert signal.confidence < 1.0
 
+    def test_unresolvable_bundle_raises_instead_of_silent_hold(
+        self, mock_config_class, mock_engine_class
+    ):
+        """PR #950 review item 4: when running UNPINNED (self.model_name is
+        None), lookup falls back to result.model_name -- the ONNX file's
+        basename (e.g. "model.onnx") -- which can never match a registry
+        key, so get_model_info returns {} (nothing resolvable at all). This
+        must fail loud (TargetDistributionUnavailableError), not silently
+        HOLD every bar forever -- a full backtest finishing with zero
+        trades and no error is indistinguishable from "the model
+        legitimately never signals" (the #927 silent-failure pattern)."""
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.price = 0.02
+        mock_result.model_name = "model.onnx"  # unpinned: the ONNX basename
+        mock_engine.predict.return_value = mock_result
+        mock_engine.get_model_info.return_value = {}  # nothing resolvable at all
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        generator = SmoothedReturnExamSignalGenerator(sequence_length=120)  # no model_name pinned
+        df = _make_df(150)
+
+        with pytest.raises(TargetDistributionUnavailableError):
+            generator.generate_signal(df, 130)
+
     def test_missing_target_distribution_holds(self, mock_config_class, mock_engine_class):
+        """Distinct from the unresolvable-bundle case above: a REAL,
+        resolved bundle (get_model_info returns non-empty) that simply
+        predates the target_distribution metadata field is the class's
+        documented, intentional graceful-degrade case (no hardcoded-formula
+        fallback) -- must still HOLD, not raise."""
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
         mock_result.error = None
@@ -569,3 +609,162 @@ class TestMetaLabelExamSignalGenerator:
 
         assert len(generator._resolved_history) == 1
         assert len(generator._open_fires) == 1  # the second fire, still open
+
+
+@patch("src.strategies.components.exam_signal_generator.check_barrier_touch")
+@patch("src.strategies.components.exam_signal_generator.PredictionModelRegistry")
+@patch("src.strategies.components.exam_signal_generator.PredictionConfig")
+class TestMetaLabelHitRateTrainServeParity:
+    """PR #950 review finding: rolling_hit_rate_20 windowed in FIRE order at
+    training time (build_meta_label_features) but RESOLUTION order at
+    serve time (MetaLabelExamSignalGenerator) selected different trailing-20
+    subsets once >20 fires had resolved, silently skewing entrant (a)'s
+    features relative to what it was trained on. Both sites now delegate to
+    the single shared ``resolution_ordered_hit_rate`` -- this test drives
+    BOTH real code paths (training's build_meta_label_features and the
+    serving generator's actual bar-by-bar state machine, real
+    check_barrier_touch calls only stubbed at the OHLC-touch boundary) over
+    an IDENTICAL, deliberately overlapping fire/resolution history (>20
+    resolved fires, fire-order and resolution-order genuinely diverging)
+    and asserts they compute the identical rolling_hit_rate_20 for the same
+    final fire."""
+
+    _N_FIRES = 30
+    _FIRE_SPACING = 2
+    _WARMUP = 60
+    _MAX_HOLDING_BARS = 20
+    _TAKE_PROFIT_PCT = 0.04
+    _STOP_LOSS_PCT = 0.05
+
+    @classmethod
+    def _fire_index(cls, position: int) -> int:
+        return cls._WARMUP + cls._FIRE_SPACING * position
+
+    @classmethod
+    def _is_fast(cls, position: int) -> bool:
+        """Even positions resolve almost immediately (barrier touch, 1 bar
+        after firing); odd positions resolve only after the full
+        max_holding_bars vertical exit -- with fire spacing (2) far smaller
+        than the slow holding period (20), many slow fires stay open
+        concurrently while later fast fires fire AND resolve, producing the
+        overlapping-trades divergence this test targets."""
+        return position % 2 == 0
+
+    @classmethod
+    def _make_df(cls, periods: int = 250) -> pd.DataFrame:
+        # Tiny strictly-increasing drift so every fire's entry price (and
+        # therefore its derived stop-loss/take-profit price pair) is unique
+        # -- lets the check_barrier_touch stub identify which fire a given
+        # call belongs to by its (stop_loss_price, take_profit_price) pair,
+        # without needing real, mutually-interfering OHLC price action for
+        # 25 overlapping trades.
+        closes = 100.0 + np.arange(periods) * 1e-4
+        return pd.DataFrame(
+            {
+                "open": closes,
+                "high": closes,
+                "low": closes,
+                "close": closes,
+                "volume": np.full(periods, 1000.0),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )
+
+    @classmethod
+    def _expected_resolutions(cls) -> list[TradeResolution]:
+        resolutions = []
+        for position in range(cls._N_FIRES):
+            fire_index = cls._fire_index(position)
+            if cls._is_fast(position):
+                resolutions.append(TradeResolution(profitable=True, exit_index=fire_index + 1))
+            else:
+                resolutions.append(
+                    TradeResolution(profitable=False, exit_index=fire_index + cls._MAX_HOLDING_BARS)
+                )
+        return resolutions
+
+    def test_training_and_serving_agree_on_overlapping_trailing_window(
+        self, mock_config_class, mock_registry_class, mock_check_barrier_touch
+    ):
+        df = self._make_df()
+
+        # --- Training side: hand-built fires/resolutions matching exactly
+        # what the (real, unmocked) check_barrier_touch-driven serving path
+        # below will independently produce (verified by construction: fast
+        # fires touch take-profit at fire_index+1 for a net gain of
+        # take_profit_pct minus round-trip fees, well above zero; slow
+        # fires vertical-exit after max_holding_bars at a ~0.002% price
+        # drift, well below round-trip fees) -- see _is_fast's docstring.
+        fires = [
+            PrimarySignalRecord(index=self._fire_index(p), direction=1, predicted_return=0.01)
+            for p in range(self._N_FIRES)
+        ]
+        resolutions = self._expected_resolutions()
+        features = build_meta_label_features(
+            df, fires, resolutions, hit_rate_lookback=HIT_RATE_LOOKBACK_FIRES
+        )
+        training_hit_rate = features["rolling_hit_rate_20"].iloc[-1]
+
+        # Sanity check this scenario is actually a meaningful regression
+        # guard: resolution-order and fire-order windowing must disagree
+        # here, or this test would pass even without the fix.
+        buggy_fire_ordered = [
+            resolutions[i].profitable
+            for i in range(self._N_FIRES - 1)
+            if resolutions[i].exit_index <= fires[-1].index
+        ][-HIT_RATE_LOOKBACK_FIRES:]
+        assert training_hit_rate != pytest.approx(float(np.mean(buggy_fire_ordered)))
+
+        # --- Serving side: drive the REAL MetaLabelExamSignalGenerator
+        # bar-by-bar. Only check_barrier_touch (the OHLC-touch primitive) is
+        # stubbed, keyed by each fire's own (stop_loss_price,
+        # take_profit_price) pair (unique per fire thanks to the drifting
+        # entry prices) -- everything else (fire registration, resolution
+        # bookkeeping, _rolling_hit_rate, encode_meta_label_feature_row) is
+        # the actual production code.
+        fast_signatures: set[tuple[float, float]] = set()
+        for position in range(self._N_FIRES):
+            if not self._is_fast(position):
+                continue
+            entry_price = float(df["close"].iloc[self._fire_index(position)])
+            sl = entry_price * (1.0 - self._STOP_LOSS_PCT)
+            tp = entry_price * (1.0 + self._TAKE_PROFIT_PCT)
+            fast_signatures.add((round(sl, 8), round(tp, 8)))
+
+        def fake_touch(side, candle_high, candle_low, stop_loss_price, take_profit_price):
+            key = (round(stop_loss_price, 8), round(take_profit_price, 8))
+            hit_take_profit = key in fast_signatures
+            return BarrierTouchResult(
+                hit_stop_loss=False,
+                hit_take_profit=hit_take_profit,
+                stop_loss_exit_price=stop_loss_price,
+                take_profit_exit_price=take_profit_price,
+            )
+
+        mock_check_barrier_touch.side_effect = fake_touch
+
+        mock_bundle = MagicMock()
+        mock_bundle.runner.predict.side_effect = [
+            _make_meta_label_prediction(0.9) for _ in range(self._N_FIRES)
+        ]
+        mock_registry = MagicMock()
+        mock_registry.select_bundle.return_value = mock_bundle
+        mock_registry_class.return_value = mock_registry
+
+        fire_at = {self._fire_index(p): (SignalDirection.BUY, 0.01) for p in range(self._N_FIRES)}
+        primary = _CannedPrimarySignalGenerator(fire_at=fire_at, warmup=self._WARMUP)
+        generator = MetaLabelExamSignalGenerator(
+            primary_signal_generator=primary,
+            min_confidence=0.0,
+            take_profit_pct=self._TAKE_PROFIT_PCT,
+            stop_loss_pct=self._STOP_LOSS_PCT,
+            max_holding_bars=self._MAX_HOLDING_BARS,
+        )
+
+        last_fire_index = self._fire_index(self._N_FIRES - 1)
+        for index in range(self._WARMUP, last_fire_index + 1):
+            generator.generate_signal(df, index)
+
+        serving_hit_rate = generator._rolling_hit_rate()
+
+        assert serving_hit_rate == pytest.approx(training_hit_rate)

@@ -408,7 +408,12 @@ def _make_bundle_with_latest_symlink(
 
 
 @pytest.mark.fast
-def test_versioned_bundles_populated_for_every_loaded_version(tmp_path: Path, monkeypatch):
+def test_non_latest_version_indexed_but_not_eagerly_loaded(tmp_path: Path, monkeypatch):
+    """Item 2 fix (PR #950 review): a non-latest version must be
+    DISCOVERABLE (its path indexed) without its ONNX InferenceSession being
+    opened at scan time -- live steady-state memory must stay O(latest),
+    not O(every version ever trained). Only get_bundle_by_key (exam-only,
+    never called on the live trading path) triggers the lazy load."""
     reg_root = tmp_path / "models"
     _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
     _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
@@ -417,8 +422,48 @@ def test_versioned_bundles_populated_for_every_loaded_version(tmp_path: Path, mo
     monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
     reg = PredictionModelRegistry(cfg)
 
-    assert ("BTCUSDT", "1h", "basic", "2025-01-01_1h_v1") in reg._versioned_bundles
+    # latest IS eagerly loaded (unchanged live behavior/cost).
     assert ("BTCUSDT", "1h", "basic", "2025-02-01_1h_v2") in reg._versioned_bundles
+    # The non-latest version is only INDEXED (path recorded), not loaded.
+    assert ("BTCUSDT", "1h", "basic", "2025-01-01_1h_v1") not in reg._versioned_bundles
+    assert ("BTCUSDT", "1h", "basic", "2025-01-01_1h_v1") in reg._versioned_bundle_paths
+
+    # Pinning it via get_bundle_by_key lazily loads and caches it.
+    bundle = reg.get_bundle_by_key("BTCUSDT:1h:basic:2025-01-01_1h_v1")
+    assert bundle is not None
+    assert ("BTCUSDT", "1h", "basic", "2025-01-01_1h_v1") in reg._versioned_bundles
+
+
+@pytest.mark.fast
+def test_no_non_latest_sessions_constructed_when_no_override_set(tmp_path: Path, monkeypatch):
+    """Item 2 fix (PR #950 review), explicit regression guard: constructing
+    the registry with several non-latest versions on disk must not
+    construct an OnnxRunner/InferenceSession for ANY of them -- only the
+    `latest` symlink target gets loaded."""
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2024-01-01_1h_v1")
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2024-06-01_1h_v2")
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2024-11-01_1h_v3")
+    _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v4")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+
+    load_calls: list[str] = []
+    original_load_bundle = PredictionModelRegistry._load_bundle
+
+    def spy_load_bundle(self, symbol, model_type, vdir):
+        load_calls.append(Path(vdir).name)
+        return original_load_bundle(self, symbol, model_type, vdir)
+
+    with patch.object(PredictionModelRegistry, "_load_bundle", spy_load_bundle):
+        reg = PredictionModelRegistry(cfg)
+
+    # Only the `latest` symlink target is ever given an OnnxRunner -- the 3
+    # non-latest versions are indexed by path only.
+    assert load_calls == ["latest"]
+    assert len(reg._versioned_bundles) == 1
+    assert len(reg._versioned_bundle_paths) == 4  # all 4 concrete versions indexed
 
 
 @pytest.mark.fast
@@ -486,10 +531,13 @@ def test_select_bundle_always_resolves_latest_regardless_of_other_versions(
 
 @pytest.mark.fast
 def test_reload_models_closes_versioned_runners_without_double_close(tmp_path: Path, monkeypatch):
-    """reload_models must close every distinct runner across both _bundles
-    and _versioned_bundles exactly once -- ONNX sessions must be cleaned up
-    (CODE.md Resource Management); double-closing or leaking either is a
-    live-crash risk."""
+    """reload_models must close every distinct LOADED runner across both
+    _bundles and _versioned_bundles exactly once -- ONNX sessions must be
+    cleaned up (CODE.md Resource Management); double-closing or leaking
+    either is a live-crash risk. v1 is only loaded here because we pin it
+    via get_bundle_by_key first (the lazy-loading fix, item 2) -- a version
+    nobody ever pins is never opened in the first place, so there is
+    nothing to close for it."""
     reg_root = tmp_path / "models"
     _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
     _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
@@ -497,6 +545,9 @@ def test_reload_models_closes_versioned_runners_without_double_close(tmp_path: P
     cfg = PredictionConfig.from_config_manager()
     monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
     reg = PredictionModelRegistry(cfg)
+
+    pinned = reg.get_bundle_by_key("BTCUSDT:1h:basic:2025-01-01_1h_v1")
+    assert pinned is not None
 
     old_bundle_runner = reg._bundles[("BTCUSDT", "1h", "basic")].runner
     old_v1_runner = reg._versioned_bundles[("BTCUSDT", "1h", "basic", "2025-01-01_1h_v1")].runner

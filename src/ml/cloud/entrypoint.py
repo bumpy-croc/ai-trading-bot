@@ -143,6 +143,39 @@ def run_training(parsed_params: dict) -> int:
             ),
         )
 
+        # Cheap, pre-flight self-consistency check ("closes the pay-then-fail
+        # class", PR #950 review): assert the TrainingConfig actually built
+        # matches what was requested in hyperparameters.json BEFORE any GPU
+        # time is spent inside run_training_pipeline. Guards against a future
+        # refactor of the constructor call above (a copy-paste error wiring
+        # the wrong source field, or a key-name desync between this file's
+        # parse_hyperparameters and orchestrator.py's _build_job_spec)
+        # silently training the WRONG target on a paid instance with no
+        # error -- entrant (d) smoothed_return shares REGRESSION task_type
+        # with the incumbent, so the #947 head-compatibility guard would NOT
+        # catch this class of drift.
+        if (
+            config.target_type != parsed_params["target_type"]
+            or config.target_horizon != parsed_params["target_horizon"]
+        ):
+            error_msg = (
+                "target_type/target_horizon mismatch after TrainingConfig "
+                f"construction: requested target_type={parsed_params['target_type']!r} "
+                f"target_horizon={parsed_params['target_horizon']!r}, but the "
+                f"constructed config has target_type={config.target_type!r} "
+                f"target_horizon={config.target_horizon!r}. Refusing to train "
+                "the wrong target."
+            )
+            logger.error(error_msg)
+            write_failure_file(error_msg)
+            return 1
+        logger.info(
+            "Target confirmed: target_type=%s target_horizon=%s "
+            "(matches hyperparameters.json request)",
+            config.target_type,
+            config.target_horizon,
+        )
+
         # Override paths for SageMaker
         paths = TrainingPaths(
             project_root=Path("/opt/ml/code"),

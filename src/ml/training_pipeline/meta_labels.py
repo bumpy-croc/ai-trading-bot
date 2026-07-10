@@ -268,6 +268,44 @@ def simulate_fired_trade_profitability(
     return resolution.profitable if resolution is not None else None
 
 
+def resolution_ordered_hit_rate(resolved: Sequence[tuple[int, int, bool]], lookback: int) -> float:
+    """Rolling hit-rate over the last ``lookback`` RESOLVED fires.
+
+    Single source of truth for ``rolling_hit_rate_20``, used identically by
+    training (``build_meta_label_features``) and the exam-time consumer
+    (``MetaLabelExamSignalGenerator._rolling_hit_rate``) so the two windowing
+    conventions can never drift apart again.
+
+    A fire's profitability only becomes "known" at its RESOLUTION bar
+    (``exit_index``), not its fire bar -- and fires can resolve
+    out-of-fire-order (a long-held early fire commonly resolves after a
+    later, quickly-resolved one; see the module docstring's causality
+    note). The online exam path naturally builds its history in
+    ``(exit_index, fire_index)`` order: bars are processed in strictly
+    increasing index order, and within a single resolution bar, multiple
+    fires resolve in their original registration (fire) order. Training
+    reconstructs the SAME ordering from a fully-resolved offline corpus by
+    sorting explicitly here -- this function always re-sorts before
+    windowing, so callers may pass an already-ordered or unordered
+    sequence.
+
+    Args:
+        resolved: ``(exit_index, fire_index, profitable)`` tuples for every
+            fire resolved so far, in any order.
+        lookback: Number of most-recent (by the ordering above) resolved
+            fires to average over.
+
+    Returns:
+        Mean of the last ``lookback`` profitability outcomes, or NaN if
+        ``resolved`` is empty.
+    """
+    if not resolved:
+        return float("nan")
+    ordered = sorted(resolved, key=lambda item: (item[0], item[1]))
+    recent = [profitable for _, _, profitable in ordered[-lookback:]]
+    return float(np.mean(recent))
+
+
 def _realized_volatility_series(close: pd.Series, window: int) -> pd.Series:
     """48-bar trailing realized volatility of bar-over-bar returns.
 
@@ -340,17 +378,16 @@ def build_meta_label_features(
         # Only prior fires that had RESOLVED by this fire's own index are
         # "known" information at this point in time -- a prior fire whose
         # trade is still open (exit_index > fire.index) would leak that
-        # fire's own future price path into this feature.
+        # fire's own future price path into this feature. The eligible set
+        # is windowed by resolution_ordered_hit_rate in (exit_index,
+        # fire_index) order -- NOT this loop's fire-order iteration -- to
+        # match MetaLabelExamSignalGenerator's online windowing exactly.
         eligible_prior = [
-            resolutions[i].profitable
+            (resolutions[i].exit_index, fired_signals[i].index, resolutions[i].profitable)
             for i in range(position)
             if resolutions[i].exit_index <= fire.index
         ]
-        if eligible_prior:
-            recent_prior = eligible_prior[-hit_rate_lookback:]
-            rolling_hit_rate = float(np.mean(recent_prior))
-        else:
-            rolling_hit_rate = float("nan")
+        rolling_hit_rate = resolution_ordered_hit_rate(eligible_prior, hit_rate_lookback)
 
         timestamp = df.index[fire.index]
         session_sin, session_cos = _session_cyclical_encoding(pd.Timestamp(timestamp))
@@ -509,6 +546,7 @@ __all__ = [
     "build_meta_label_features",
     "encode_meta_label_feature_row",
     "encode_meta_label_features_for_training",
+    "resolution_ordered_hit_rate",
     "resolve_fired_trade",
     "run_primary_signal_forward",
     "simulate_fired_trade_profitability",

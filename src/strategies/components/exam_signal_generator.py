@@ -25,7 +25,6 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from src.config.constants import (
@@ -40,6 +39,7 @@ from src.ml.training_pipeline.meta_labels import (
     REALIZED_VOL_WINDOW_BARS,
     _session_cyclical_encoding,
     encode_meta_label_feature_row,
+    resolution_ordered_hit_rate,
 )
 from src.performance.metrics import Side, pnl_percent
 from src.prediction import PredictionConfig, PredictionEngine, PredictionResult
@@ -202,6 +202,22 @@ class ClassificationExamSignalGenerator(SignalGenerator):
         return params
 
 
+class TargetDistributionUnavailableError(RuntimeError):
+    """Raised when SmoothedReturnExamSignalGenerator cannot resolve ANY
+    bundle for its configured model_name/result.model_name at all -- fail
+    loud rather than silently HOLDing every bar forever (the #927 pattern:
+    a plumbing bug -- e.g. running unpinned, where PredictionResult.model_name
+    is just the ONNX file's basename and can never match a registry key --
+    reads indistinguishably from "the model legitimately never signals",
+    producing a backtest that finishes with zero trades and no error).
+
+    Deliberately NOT raised when a bundle IS found but simply predates the
+    target_distribution metadata field -- that is the class's documented,
+    intentional graceful-degrade case (a real bundle with no hardcoded-
+    formula fallback), not a plumbing failure.
+    """
+
+
 class SmoothedReturnExamSignalGenerator(SignalGenerator):
     """Entrant (d): regression output, confidence via percentile-rank.
 
@@ -360,7 +376,10 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
 
     def _distribution_for(self, result: PredictionResult) -> FrozenDistribution | None:
         if self.prediction_engine is None:
-            return None
+            raise TargetDistributionUnavailableError(
+                "SmoothedReturnExamSignalGenerator has no prediction_engine -- "
+                "cannot resolve any bundle, let alone its target_distribution."
+            )
         # Prefer this generator's OWN model_name (the registry key a caller
         # pinned, e.g. exam_target_redesign.py's ATB_MODEL_VERSION_OVERRIDE
         # support) over result.model_name -- PredictionResult.model_name is
@@ -372,9 +391,29 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
         # None), matching prior behavior for the registry-default-bundle case.
         lookup_name = self.model_name or result.model_name
         info = self.prediction_engine.get_model_info(lookup_name)
+        if not info:
+            # The bundle itself could not be resolved AT ALL -- e.g. running
+            # unpinned, where result.model_name is just the ONNX basename
+            # and can never match a registry key. This is a plumbing bug,
+            # not "this model has no target_distribution yet": fail loud
+            # (the #927 pattern) rather than silently HOLDing every bar,
+            # which reads identically to "entrant (d) never signals" with no
+            # error anywhere in the run.
+            raise TargetDistributionUnavailableError(
+                f"SmoothedReturnExamSignalGenerator: no bundle resolvable for "
+                f"model_name={lookup_name!r} (self.model_name={self.model_name!r}, "
+                f"result.model_name={result.model_name!r}). If running unpinned, "
+                "set ATB_MODEL_VERSION_OVERRIDE (or pass an explicit model_name) "
+                "so target_distribution is reachable -- result.model_name alone "
+                "(the ONNX file's basename) never matches a registry key."
+            )
         bundle_metadata = info.get("metadata") or {}
         raw = bundle_metadata.get("target_distribution")
         if not raw:
+            # A real, resolved bundle that simply predates this metadata
+            # field -- the class's documented, intentional graceful-degrade
+            # case (no hardcoded-formula fallback). Distinct from the
+            # unresolvable-bundle case above, which raises.
             return None
         try:
             return FrozenDistribution.from_metadata(raw)
@@ -460,7 +499,13 @@ class MetaLabelExamSignalGenerator(SignalGenerator):
         self.stop_loss_pct = stop_loss_pct
         self.max_holding_bars = max_holding_bars
         self._open_fires: list[_OpenFire] = []
-        self._resolved_history: deque[bool] = deque(maxlen=resolved_history_maxlen)
+        # (exit_index, fire_index, profitable) tuples, appended in the order
+        # fires actually resolve (bars processed in increasing index order;
+        # same-bar resolutions append in original fire/registration order).
+        # rolling_hit_rate_20 windows this via resolution_ordered_hit_rate --
+        # the SAME function build_meta_label_features uses at training time --
+        # so the two can never diverge again (see meta_labels.py docstring).
+        self._resolved_history: deque[tuple[int, int, bool]] = deque(maxlen=resolved_history_maxlen)
         self._regime_detector = EnhancedRegimeDetector()
         self._cost_calculator = CostCalculator()
         self._bundle = self._load_bundle()
@@ -534,7 +579,7 @@ class MetaLabelExamSignalGenerator(SignalGenerator):
             raw_pct_return = pnl_percent(fire.entry_price, exit_price, side_enum, fraction=1.0)
             round_trip_cost_pct = 2.0 * self._cost_calculator.fee_rate
             profitable = bool((raw_pct_return - round_trip_cost_pct) > 0.0)
-            self._resolved_history.append(profitable)
+            self._resolved_history.append((index, fire.fire_index, profitable))
 
         self._open_fires = still_open
 
@@ -558,10 +603,7 @@ class MetaLabelExamSignalGenerator(SignalGenerator):
         )
 
     def _rolling_hit_rate(self) -> float:
-        if not self._resolved_history:
-            return float("nan")
-        recent = list(self._resolved_history)[-HIT_RATE_LOOKBACK_FIRES:]
-        return float(np.mean(recent))
+        return resolution_ordered_hit_rate(list(self._resolved_history), HIT_RATE_LOOKBACK_FIRES)
 
     def _realized_volatility(self, df: Any, index: int) -> float:
         """Causal 48-bar trailing realized volatility, ending at `index`."""
