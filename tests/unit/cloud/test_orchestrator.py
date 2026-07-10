@@ -193,6 +193,36 @@ class TestBuildJobSpec:
         assert spec.to_hyperparameters()["target_type"] == "binary_direction"
         assert spec.to_hyperparameters()["target_horizon"] == "6"
 
+    def test_build_job_spec_default_primary_model_type_hyperparameters(
+        self, orchestrator: CloudTrainingOrchestrator
+    ) -> None:
+        """Phase 2b item 3: primary_model_type=None must round-trip through
+        the string-only hyperparameters dict as "" (SageMaker requires
+        string values; entrypoint.py::parse_hyperparameters treats "" as
+        unset)."""
+        spec = orchestrator._build_job_spec()
+        assert spec.hyperparameters["primary_model_type"] == ""
+
+    def test_build_job_spec_custom_primary_model_type_hyperparameters(self) -> None:
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            target_type="meta_label",
+            primary_model_type="basic",
+        )
+        cloud_config = CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+        orchestrator = CloudTrainingOrchestrator(cloud_config, MagicMock())
+
+        spec = orchestrator._build_job_spec()
+
+        assert spec.hyperparameters["target_type"] == "meta_label"
+        assert spec.hyperparameters["primary_model_type"] == "basic"
+
 
 class TestSubmitJob:
     """Tests for submit_job method."""

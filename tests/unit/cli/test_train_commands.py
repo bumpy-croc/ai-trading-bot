@@ -80,3 +80,36 @@ class TestTrainModelMainTargetType:
         ctx = mock_run.call_args.args[0]
         assert ctx.config.target_type == "regression"
         assert ctx.config.target_horizon == 1
+
+    @patch("cli.commands.train_commands.run_training_pipeline")
+    @patch("cli.commands.train_commands._TENSORFLOW_AVAILABLE", True)
+    def test_primary_model_type_reaches_training_config(self, mock_run):
+        """Phase 2b item 3: --primary-model-type must reach TrainingConfig
+        for --target-type meta_label to be trainable at all."""
+        from cli.commands.train_commands import train_model_main
+
+        mock_run.return_value = MagicMock(
+            success=True, duration_seconds=1.0, metadata={"evaluation_results": {}}
+        )
+        args = _base_args(target_type="meta_label", primary_model_type="basic")
+
+        train_model_main(args)
+
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.target_type == "meta_label"
+        assert ctx.config.primary_model_type == "basic"
+
+    @patch("cli.commands.train_commands.run_training_pipeline")
+    @patch("cli.commands.train_commands._TENSORFLOW_AVAILABLE", True)
+    def test_missing_primary_model_type_defaults_to_none(self, mock_run):
+        from cli.commands.train_commands import train_model_main
+
+        mock_run.return_value = MagicMock(
+            success=True, duration_seconds=1.0, metadata={"evaluation_results": {}}
+        )
+        args = _base_args()
+
+        train_model_main(args)
+
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.primary_model_type is None

@@ -354,6 +354,20 @@ class TestModelFactoryIntegration:
 
         assert "tft_ternary" in AVAILABLE_MODELS
 
+    def test_create_model_lightgbm_dispatches_to_directional_classifier(self, input_shape):
+        """lightgbm is reachable from create_model() but raises ImportError
+        at construction time since lightgbm isn't an installed/declared
+        dependency in this repo (documented follow-up, Phase 2b item 3)."""
+        from src.ml.training_pipeline.models import create_model
+
+        with pytest.raises(ImportError, match="lightgbm"):
+            create_model("lightgbm", input_shape, has_sentiment=False)
+
+    def test_available_models_includes_lightgbm(self):
+        from src.ml.training_pipeline.models import AVAILABLE_MODELS
+
+        assert "lightgbm" in AVAILABLE_MODELS
+
     def test_get_model_callbacks_tft_ternary_reuses_tft_callbacks(self):
         """tft_ternary shares tft's backbone, so it reuses tft_callbacks
         rather than needing its own callback set."""

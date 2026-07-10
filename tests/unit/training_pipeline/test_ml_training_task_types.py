@@ -36,6 +36,16 @@ class TestGetModelTaskType:
         accepts it against triple_barrier."""
         assert get_model_task_type("tft_ternary") is TaskType.TERNARY_CLASSIFICATION
 
+    def test_lightgbm_is_binary_classification(self):
+        assert get_model_task_type("lightgbm") is TaskType.BINARY_CLASSIFICATION
+
+    def test_meta_label_logistic_is_binary_classification(self):
+        """The sklearn LogisticRegression classifier entrant (a) actually
+        trains with -- not dispatched via create_model() (a different,
+        non-Keras training path), but still declared here so the #947 guard
+        and metadata conventions apply uniformly."""
+        assert get_model_task_type("meta_label_logistic") is TaskType.BINARY_CLASSIFICATION
+
     def test_case_insensitive(self):
         assert get_model_task_type("TFT") is TaskType.BINARY_CLASSIFICATION
         assert get_model_task_type("CNN_LSTM") is TaskType.REGRESSION

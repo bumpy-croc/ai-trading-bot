@@ -315,11 +315,23 @@ def create_model(
         sequence_length, num_features = input_shape
         return build_price_only_model(sequence_length, num_features)
 
+    # LightGBM directional classifier. Reachable from this factory (per
+    # Phase 2b item 3 -- "models_lightgbm.py's classifier isn't reachable
+    # from create_model or the CLI"), but lightgbm is NOT an installed or
+    # declared dependency in this repo -- _ensure_lightgbm_available() raises
+    # ImportError here, same as it always has. input_shape/variant are
+    # unused (LightGBM is tabular, not sequence-shaped); ONNX export for
+    # this architecture is an explicit follow-up, not built here.
+    elif model_type_lower == "lightgbm":
+        from src.ml.training_pipeline.models_lightgbm import create_directional_classifier
+
+        return create_directional_classifier(**kwargs)
+
     else:
         raise ValueError(
             f"Unknown model_type: {model_type}. "
             f"Supported types: 'cnn_lstm', 'attention_lstm', 'tcn', 'tcn_attention', "
-            f"'tft', 'tft_ternary', 'lstm'"
+            f"'tft', 'tft_ternary', 'lstm', 'lightgbm'"
         )
 
 
@@ -378,6 +390,7 @@ AVAILABLE_MODELS = {
     "tft": "Temporal Fusion Transformer (interpretable, attention-based)",
     "tft_ternary": "TFT with 3-class softmax head (triple-barrier target)",
     "lstm": "Simple LSTM baseline",
+    "lightgbm": "LightGBM directional classifier (requires optional lightgbm dependency)",
 }
 
 # Model variants

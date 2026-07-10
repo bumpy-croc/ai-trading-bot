@@ -348,6 +348,9 @@ class CloudTrainingOrchestrator:
                 "model_variant": tc.model_variant,
                 "target_type": tc.target_type,
                 "target_horizon": str(tc.target_horizon),
+                # SageMaker hyperparameters must be strings; "" round-trips
+                # to None on the parsing side (entrypoint.py::parse_hyperparameters).
+                "primary_model_type": tc.primary_model_type or "",
             },
         )
 

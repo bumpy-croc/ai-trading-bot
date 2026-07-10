@@ -98,10 +98,14 @@ def _handle_model(ns: argparse.Namespace) -> int:
             "tft",
             "tft_ternary",
             "lstm",
+            "lightgbm",
         ],
         help="Model architecture (cnn_lstm, attention_lstm, tcn, tcn_attention, tft, "
-        "tft_ternary, lstm). tft_ternary is the 3-class TARGET-REDESIGN tournament "
-        "entrant (c) head -- pair it with --target-type triple_barrier.",
+        "tft_ternary, lstm, lightgbm). tft_ternary is the 3-class TARGET-REDESIGN "
+        "tournament entrant (c) head -- pair it with --target-type triple_barrier. "
+        "lightgbm requires the optional lightgbm dependency (not installed by default) "
+        "and is unrelated to --target-type meta_label, which always trains a sklearn "
+        "LogisticRegression regardless of --model-type.",
     )
     parser.add_argument(
         "--model-variant",
@@ -114,11 +118,16 @@ def _handle_model(ns: argparse.Namespace) -> int:
         "--target-type",
         type=str,
         default="regression",
-        choices=["regression", "binary_direction", "triple_barrier", "smoothed_return"],
+        choices=[
+            "regression",
+            "binary_direction",
+            "triple_barrier",
+            "smoothed_return",
+            "meta_label",
+        ],
         help="Training target (default: regression, the incumbent next-bar price target). "
         "TARGET-REDESIGN tournament entrants: binary_direction (b), triple_barrier (c), "
-        "smoothed_return (d). meta_label (a) is not selectable here -- it needs a primary "
-        "signal generator to run forward first; see --primary-model-type.",
+        "smoothed_return (d), meta_label (a). meta_label requires --primary-model-type.",
     )
     parser.add_argument(
         "--target-horizon",

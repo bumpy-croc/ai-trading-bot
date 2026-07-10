@@ -77,6 +77,7 @@ def train_model_main(args) -> int:
         model_variant=getattr(args, "model_variant", "default"),
         target_type=getattr(args, "target_type", "regression"),
         target_horizon=getattr(args, "target_horizon", 1),
+        primary_model_type=getattr(args, "primary_model_type", None),
     )
 
     ctx = TrainingContext(config=config)

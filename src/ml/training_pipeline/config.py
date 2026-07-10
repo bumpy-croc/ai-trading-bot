@@ -74,6 +74,13 @@ class TrainingConfig:
     target_type: str = "regression"
     target_horizon: int = 1  # forward bars; used by binary_direction/smoothed_return
 
+    # Registry model_type of the primary signal to run forward when
+    # target_type="meta_label" (entrant (a) -- meta_label's label depends on
+    # simulating an ALREADY-TRAINED primary signal's fired trades, not a
+    # transform of the close-price series). Required when target_type ==
+    # "meta_label" (validated below), ignored otherwise.
+    primary_model_type: str | None = None
+
     # Valid model types and variants for validation
     _VALID_MODEL_TYPES = frozenset(
         {
@@ -86,11 +93,12 @@ class TrainingConfig:
             "tft",
             "tft_ternary",
             "lstm",
+            "lightgbm",
         }
     )
     _VALID_MODEL_VARIANTS = frozenset({"default", "lightweight", "deep"})
     _VALID_TARGET_TYPES = frozenset(
-        {"regression", "binary_direction", "triple_barrier", "smoothed_return"}
+        {"regression", "binary_direction", "triple_barrier", "smoothed_return", "meta_label"}
     )
 
     def __post_init__(self):
@@ -130,6 +138,12 @@ class TrainingConfig:
             )
         if self.target_horizon <= 0:
             raise ValueError(f"target_horizon must be positive, got {self.target_horizon}")
+        if self.target_type == "meta_label" and not self.primary_model_type:
+            raise ValueError(
+                "primary_model_type is required when target_type='meta_label' -- "
+                "it names the registry model_type of the primary signal to run "
+                "forward and meta-label (e.g. 'basic')."
+            )
 
     def days_requested(self) -> int:
         """Calculate number of days in the training date range.

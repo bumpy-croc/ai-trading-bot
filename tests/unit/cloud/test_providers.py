@@ -209,6 +209,59 @@ class TestLocalProvider:
         assert ctx.config.model_variant == "default"
         assert ctx.config.target_type == "regression"
         assert ctx.config.target_horizon == 1
+        assert ctx.config.primary_model_type is None
+
+    def test_run_local_training_threads_primary_model_type(self, provider: LocalProvider) -> None:
+        """Phase 2b item 3: primary_model_type must reach TrainingConfig via
+        the local provider too -- the acceptance test for entrant (a) trains
+        via `atb train cloud --provider local --target-type meta_label
+        --primary-model-type <bundle>`."""
+        from datetime import UTC, datetime
+        from unittest.mock import MagicMock, patch
+
+        from src.ml.cloud.providers.base import TrainingJobStatus
+
+        spec = TrainingJobSpec(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date="2024-01-01T00:00:00",
+            end_date="2024-01-31T00:00:00",
+            epochs=1,
+            batch_size=32,
+            sequence_length=10,
+            instance_type="ml.g4dn.xlarge",
+            use_spot_instances=True,
+            max_runtime_seconds=3600,
+            output_s3_path="s3://test-bucket/models/",
+            hyperparameters={
+                "target_type": "meta_label",
+                "primary_model_type": "basic",
+            },
+        )
+        job_id = "local-test9012"
+        provider._jobs[job_id] = TrainingJobStatus(
+            job_name=job_id,
+            status="InProgress",
+            start_time=datetime.now(UTC),
+            end_time=None,
+            failure_reason=None,
+            output_s3_path=None,
+            metrics={},
+        )
+
+        mock_result = MagicMock(success=True)
+        mock_result.artifact_paths.directory = Path("/tmp/fake-artifacts")
+        mock_result.metadata = {"evaluation_results": {}}
+
+        with patch(
+            "src.ml.training_pipeline.pipeline.run_training_pipeline",
+            return_value=mock_result,
+        ) as mock_run:
+            provider._run_local_training(job_id, spec)
+
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.target_type == "meta_label"
+        assert ctx.config.primary_model_type == "basic"
 
     def test_get_job_status_unknown_job(self, provider: LocalProvider) -> None:
         """Verify get_job_status raises for unknown job."""

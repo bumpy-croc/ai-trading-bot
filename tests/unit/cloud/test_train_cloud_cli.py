@@ -171,6 +171,15 @@ class TestHandleCloudArchitectureSelection:
         training_config = mock_cls.call_args.args[0].training_config
         assert training_config.model_type == "tft_ternary"
 
+    def test_lightgbm_is_accepted(self) -> None:
+        """Reachable from the CLI (Phase 2b item 3), even though it will
+        raise ImportError once create_model() actually dispatches --
+        lightgbm isn't an installed/declared dependency."""
+        mock_cls = self._submit(["BTCUSDT", "--no-wait", "--model-type", "lightgbm"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.model_type == "lightgbm"
+
     def test_unknown_model_type_rejected_by_argparse(self) -> None:
         with pytest.raises(SystemExit):
             _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--model-type", "transformer"]))
@@ -232,6 +241,31 @@ class TestHandleCloudTargetTypeSelection:
     def test_unknown_target_type_rejected_by_argparse(self) -> None:
         with pytest.raises(SystemExit):
             _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--target-type", "not_a_real_target"]))
+
+    def test_meta_label_with_primary_model_type_reaches_training_config(self) -> None:
+        """Phase 2b item 3: --target-type meta_label + --primary-model-type
+        must both reach TrainingConfig -- meta_label raises in
+        TrainingConfig.__post_init__ without a primary_model_type."""
+        mock_cls = self._submit(
+            [
+                "BTCUSDT",
+                "--no-wait",
+                "--target-type",
+                "meta_label",
+                "--primary-model-type",
+                "basic",
+            ]
+        )
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.target_type == "meta_label"
+        assert training_config.primary_model_type == "basic"
+
+    def test_primary_model_type_defaults_to_none(self) -> None:
+        mock_cls = self._submit(["BTCUSDT", "--no-wait"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.primary_model_type is None
 
 
 @pytest.mark.fast

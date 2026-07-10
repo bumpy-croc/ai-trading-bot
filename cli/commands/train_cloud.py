@@ -153,10 +153,13 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
             "tcn_attention",
             "tft",
             "tft_ternary",
+            "lightgbm",
         ],
         help="Model architecture (default: cnn_lstm). tft_ternary is the 3-class "
         "TARGET-REDESIGN tournament entrant (c) head -- pair it with "
-        "--target-type triple_barrier.",
+        "--target-type triple_barrier. lightgbm requires the optional lightgbm "
+        "dependency (not installed by default) and is unrelated to --target-type "
+        "meta_label, which always trains a sklearn LogisticRegression.",
     )
     parser.add_argument(
         "--model-variant",
@@ -169,10 +172,16 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         "--target-type",
         type=str,
         default="regression",
-        choices=["regression", "binary_direction", "triple_barrier", "smoothed_return"],
+        choices=[
+            "regression",
+            "binary_direction",
+            "triple_barrier",
+            "smoothed_return",
+            "meta_label",
+        ],
         help="Training target (default: regression, the incumbent next-bar price target). "
         "TARGET-REDESIGN tournament entrants: binary_direction (b), triple_barrier (c), "
-        "smoothed_return (d).",
+        "smoothed_return (d), meta_label (a). meta_label requires --primary-model-type.",
     )
     parser.add_argument(
         "--target-horizon",
@@ -180,6 +189,14 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         default=1,
         help="Forward horizon in bars for binary_direction/smoothed_return targets "
         "(default: 1; ignored by regression/triple_barrier).",
+    )
+    parser.add_argument(
+        "--primary-model-type",
+        type=str,
+        default=None,
+        help="Registry model_type of the primary signal to run forward when "
+        "--target-type meta_label is used (e.g. 'basic'). Required for meta_label, "
+        "ignored otherwise.",
     )
     parser.add_argument(
         "--instance-type",
@@ -270,6 +287,7 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         model_variant=args.model_variant,
         target_type=args.target_type,
         target_horizon=args.target_horizon,
+        primary_model_type=args.primary_model_type,
         diagnostics=DiagnosticsOptions(
             generate_plots=False,  # Skip plots in cloud (no display)
             evaluate_robustness=True,

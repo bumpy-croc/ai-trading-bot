@@ -42,6 +42,16 @@ MODEL_TASK_TYPES: dict[str, TaskType] = {
     "tcn_attention": TaskType.REGRESSION,
     "tft": TaskType.BINARY_CLASSIFICATION,
     "tft_ternary": TaskType.TERNARY_CLASSIFICATION,
+    # Reachable from create_model() (models.py) but requires the optional
+    # lightgbm dependency, which is not installed/declared in this repo --
+    # raises ImportError at construction time (documented follow-up).
+    "lightgbm": TaskType.BINARY_CLASSIFICATION,
+    # entrant (a)'s actual working classifier (sklearn LogisticRegression) --
+    # NOT dispatched via create_model()/model.fit() like the TF/lightgbm
+    # architectures above (see pipeline.py's _run_meta_label_pipeline, a
+    # separate training path). Declared here so the #947 guard and metadata
+    # conventions (task_type, class_labels) still apply uniformly.
+    "meta_label_logistic": TaskType.BINARY_CLASSIFICATION,
 }
 
 # Every target_type the training pipeline can build a label for, by task

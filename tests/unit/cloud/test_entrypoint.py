@@ -54,6 +54,21 @@ class TestParseHyperparameters:
         assert parsed["target_type"] == "binary_direction"
         assert parsed["target_horizon"] == 6
 
+    def test_primary_model_type_defaults_to_none(self) -> None:
+        parsed = parse_hyperparameters({})
+        assert parsed["primary_model_type"] is None
+
+    def test_primary_model_type_empty_string_parses_to_none(self) -> None:
+        """orchestrator.py's _build_job_spec sends "" for an unset
+        primary_model_type (SageMaker hyperparameters must be strings) --
+        must round-trip back to None, not the literal empty string."""
+        parsed = parse_hyperparameters({"primary_model_type": ""})
+        assert parsed["primary_model_type"] is None
+
+    def test_primary_model_type_is_parsed(self) -> None:
+        parsed = parse_hyperparameters({"primary_model_type": "basic"})
+        assert parsed["primary_model_type"] == "basic"
+
 
 @pytest.mark.fast
 class TestRunTrainingThreading:
@@ -130,6 +145,25 @@ class TestRunTrainingThreading:
         ctx = mock_run.call_args.args[0]
         assert ctx.config.target_type == "regression"
         assert ctx.config.target_horizon == 1
+
+    def test_primary_model_type_reaches_training_config(self) -> None:
+        params = self._base_params(target_type="meta_label", primary_model_type="basic")
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.target_type == "meta_label"
+        assert ctx.config.primary_model_type == "basic"
+
+    def test_primary_model_type_default_reaches_training_config_as_none(self) -> None:
+        params = self._base_params()
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.primary_model_type is None
 
     def test_invalid_model_type_fails_before_training(self) -> None:
         # Arrange - TrainingConfig validation must reject unknown architectures

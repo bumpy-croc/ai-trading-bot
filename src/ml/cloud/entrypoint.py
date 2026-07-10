@@ -80,6 +80,11 @@ def parse_hyperparameters(params: dict) -> dict:
         # submitted by older CLIs keep training the incumbent regression target.
         "target_type": params.get("target_type", "regression"),
         "target_horizon": int(params.get("target_horizon", "1")),
+        # Required only when target_type == "meta_label" (entrant (a));
+        # orchestrator.py sends "" for an unset value (SageMaker
+        # hyperparameters must be strings) -- normalize back to None so
+        # TrainingConfig's own required-when-meta_label check applies.
+        "primary_model_type": params.get("primary_model_type") or None,
     }
 
 
@@ -128,6 +133,7 @@ def run_training(parsed_params: dict) -> int:
             model_variant=parsed_params["model_variant"],
             target_type=parsed_params["target_type"],
             target_horizon=parsed_params["target_horizon"],
+            primary_model_type=parsed_params.get("primary_model_type"),
             diagnostics=DiagnosticsOptions(
                 generate_plots=False,  # No display in container
                 evaluate_robustness=True,

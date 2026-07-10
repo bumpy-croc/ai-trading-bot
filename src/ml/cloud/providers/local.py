@@ -189,6 +189,7 @@ class LocalProvider(CloudTrainingProvider):
                 model_variant=hp.get("model_variant", "default"),
                 target_type=hp.get("target_type", "regression"),
                 target_horizon=int(hp.get("target_horizon", "1")),
+                primary_model_type=hp.get("primary_model_type") or None,
                 # Skip plots and robustness for faster local testing
                 diagnostics=DiagnosticsOptions(
                     generate_plots=False,

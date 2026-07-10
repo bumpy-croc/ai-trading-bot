@@ -247,6 +247,50 @@ class TestTrainingConfig:
         assert config.model_type == "tft"
         assert config.target_type == "regression"
 
+    def test_accepts_lightgbm_model_type(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            model_type="lightgbm",
+        )
+        assert config.model_type == "lightgbm"
+
+    def test_accepts_meta_label_target_type_with_primary_model_type(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            target_type="meta_label",
+            primary_model_type="basic",
+        )
+        assert config.target_type == "meta_label"
+        assert config.primary_model_type == "basic"
+
+    def test_meta_label_without_primary_model_type_raises(self):
+        """meta_label needs a primary signal to run forward first --
+        primary_model_type names its registry model_type. Required, per
+        train.py's --primary-model-type help text."""
+        with pytest.raises(ValueError, match="primary_model_type"):
+            TrainingConfig(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_date=datetime(2024, 1, 1),
+                end_date=datetime(2024, 12, 31),
+                target_type="meta_label",
+            )
+
+    def test_primary_model_type_defaults_to_none(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+        )
+        assert config.primary_model_type is None
+
     def test_days_requested(self):
         # Arrange
         start = datetime(2024, 1, 1)
