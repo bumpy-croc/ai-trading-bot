@@ -22,7 +22,9 @@ import pytest
 
 from src.ml.training_pipeline.meta_labels import (
     PrimarySignalRecord,
+    TradeResolution,
     build_meta_label_features,
+    resolve_fired_trade,
     run_primary_signal_forward,
     simulate_fired_trade_profitability,
 )
@@ -245,6 +247,90 @@ class TestSimulateFiredTradeProfitability:
             )
 
 
+class TestResolveFiredTrade:
+    """resolve_fired_trade() is simulate_fired_trade_profitability()'s
+    superset -- same hand-computed fixture, plus the resolution bar index
+    that build_meta_label_features needs to stay causal."""
+
+    @staticmethod
+    def _fixture_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "close": [100.0, 101.0, 103.0, 106.0, 104.0, 97.0],
+                "high": [100.0, 102.0, 104.0, 107.0, 105.0, 98.0],
+                "low": [99.0, 100.0, 102.0, 105.0, 103.0, 96.0],
+            }
+        )
+
+    def test_exit_index_is_the_barrier_touch_bar(self):
+        df = self._fixture_df()
+        # fire at t=0: resolves at bar3 (TP touch) per the hand-computed
+        # fixture in TestSimulateFiredTradeProfitability.
+        resolution = resolve_fired_trade(
+            df,
+            fire_index=0,
+            direction=1,
+            take_profit_pct=0.05,
+            stop_loss_pct=0.03,
+            max_holding_bars=3,
+        )
+        assert resolution == TradeResolution(profitable=True, exit_index=3)
+
+    def test_exit_index_is_the_vertical_exit_bar_when_no_barrier_touched(self):
+        df = pd.DataFrame(
+            {
+                "close": [100.0, 100.0, 100.0],
+                "high": [100.0, 100.0, 100.0],
+                "low": [100.0, 100.0, 100.0],
+            }
+        )
+        resolution = resolve_fired_trade(
+            df,
+            fire_index=0,
+            direction=1,
+            take_profit_pct=0.5,
+            stop_loss_pct=0.5,
+            max_holding_bars=1,
+        )
+        assert resolution == TradeResolution(profitable=False, exit_index=1)
+
+    def test_unresolved_trade_returns_none(self):
+        df = self._fixture_df()
+        resolution = resolve_fired_trade(
+            df,
+            fire_index=5,
+            direction=1,
+            take_profit_pct=0.05,
+            stop_loss_pct=0.03,
+            max_holding_bars=3,
+        )
+        assert resolution is None
+
+    def test_simulate_fired_trade_profitability_matches_resolve_fired_trade(self):
+        """The thin-wrapper contract: same profitable/None outcome as the
+        richer function, for every hand-computed fixture case."""
+        df = self._fixture_df()
+        for fire_index, direction in [(0, 1), (3, 1), (3, -1), (5, 1)]:
+            resolution = resolve_fired_trade(
+                df,
+                fire_index=fire_index,
+                direction=direction,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
+                max_holding_bars=3,
+            )
+            simple = simulate_fired_trade_profitability(
+                df,
+                fire_index=fire_index,
+                direction=direction,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
+                max_holding_bars=3,
+            )
+            expected = resolution.profitable if resolution is not None else None
+            assert simple == expected
+
+
 class TestBuildMetaLabelFeatures:
     @staticmethod
     def _synthetic_df(periods=300):
@@ -261,6 +347,19 @@ class TestBuildMetaLabelFeatures:
             index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
         )
 
+    @staticmethod
+    def _resolved_next_bar(
+        fires: list[PrimarySignalRecord], labels: list[bool]
+    ) -> list[TradeResolution]:
+        """Resolutions that resolve the bar right after each fire -- the
+        simplest case, used by tests that don't care about resolution
+        timing specifically (every fire here is >=2 bars apart, so "resolved
+        next bar" is always eligible for any later fire's hit-rate)."""
+        return [
+            TradeResolution(profitable=label, exit_index=fire.index + 1)
+            for fire, label in zip(fires, labels, strict=True)
+        ]
+
     def test_returns_one_row_per_fire_with_expected_columns(self):
         df = self._synthetic_df()
         fires = [
@@ -268,9 +367,9 @@ class TestBuildMetaLabelFeatures:
             PrimarySignalRecord(index=120, direction=-1, predicted_return=-0.02),
             PrimarySignalRecord(index=150, direction=1, predicted_return=0.005),
         ]
-        labels = [True, False, True]
+        resolutions = self._resolved_next_bar(fires, [True, False, True])
 
-        features = build_meta_label_features(df, fires, labels)
+        features = build_meta_label_features(df, fires, resolutions)
 
         assert len(features) == 3
         expected_columns = {
@@ -292,32 +391,33 @@ class TestBuildMetaLabelFeatures:
     def test_predicted_return_magnitude_is_absolute_value(self):
         df = self._synthetic_df()
         fires = [PrimarySignalRecord(index=100, direction=-1, predicted_return=-0.03)]
-        features = build_meta_label_features(df, fires, [True])
+        features = build_meta_label_features(df, fires, self._resolved_next_bar(fires, [True]))
         assert features["predicted_return_magnitude"].iloc[0] == pytest.approx(0.03)
 
     def test_cyclical_session_encoding_is_on_unit_circle(self):
         df = self._synthetic_df()
         fires = [PrimarySignalRecord(index=100, direction=1, predicted_return=0.01)]
-        features = build_meta_label_features(df, fires, [True])
+        features = build_meta_label_features(df, fires, self._resolved_next_bar(fires, [True]))
         sin_val = features["session_sin"].iloc[0]
         cos_val = features["session_cos"].iloc[0]
         assert sin_val**2 + cos_val**2 == pytest.approx(1.0, abs=1e-9)
 
     def test_rolling_hit_rate_uses_only_strictly_prior_fires(self):
-        """Leak-boundary test: the rolling hit-rate feature at fire index t
-        must be computable from prior fires ONLY -- mutating a LATER fire's
-        label must not change an EARLIER fire's hit-rate feature."""
+        """A LATER fire's label must never affect an EARLIER fire's
+        hit-rate feature (list-ordering causality -- necessary but not
+        sufficient; see test_rolling_hit_rate_excludes_unresolved_prior_fires
+        below for the resolution-TIME causality this alone does not cover)."""
         df = self._synthetic_df()
         fires = [
             PrimarySignalRecord(index=100, direction=1, predicted_return=0.01),
             PrimarySignalRecord(index=110, direction=1, predicted_return=0.01),
             PrimarySignalRecord(index=120, direction=1, predicted_return=0.01),
         ]
-        labels_a = [True, True, True]
-        labels_b = [True, True, False]  # only the LAST label differs
+        resolutions_a = self._resolved_next_bar(fires, [True, True, True])
+        resolutions_b = self._resolved_next_bar(fires, [True, True, False])  # only LAST differs
 
-        features_a = build_meta_label_features(df, fires, labels_a)
-        features_b = build_meta_label_features(df, fires, labels_b)
+        features_a = build_meta_label_features(df, fires, resolutions_a)
+        features_b = build_meta_label_features(df, fires, resolutions_b)
 
         # First fire has zero prior fires -- hit rate must be NaN in both cases.
         assert np.isnan(features_a["rolling_hit_rate_20"].iloc[0])
@@ -328,19 +428,56 @@ class TestBuildMetaLabelFeatures:
             features_b["rolling_hit_rate_20"].iloc[1]
         )
 
+    def test_rolling_hit_rate_excludes_unresolved_prior_fires(self):
+        """P1 regression test: a prior fire's label must be excluded from a
+        later fire's rolling_hit_rate_20 unless the prior fire had actually
+        RESOLVED (exit_index <= current fire's index) by then. With
+        max_holding_bars=336 and dense fires, a prior fire commonly resolves
+        LONG after a nearby later fire -- using its label anyway leaks that
+        prior fire's own future price path into the earlier bar's feature.
+        This test fails on the pre-fix code (which used ALL strictly-prior
+        fires regardless of resolution time)."""
+        df = self._synthetic_df()
+        fire_a = PrimarySignalRecord(index=50, direction=1, predicted_return=0.01)
+        fire_b = PrimarySignalRecord(
+            index=55, direction=1, predicted_return=0.01
+        )  # fires before A resolves
+        fire_c = PrimarySignalRecord(
+            index=250, direction=1, predicted_return=0.01
+        )  # fires after A resolves
+        fires = [fire_a, fire_b, fire_c]
+
+        resolution_a = TradeResolution(profitable=True, exit_index=200)  # resolves late
+        resolution_b = TradeResolution(profitable=False, exit_index=56)
+        resolution_c = TradeResolution(profitable=False, exit_index=251)
+        resolutions = [resolution_a, resolution_b, resolution_c]
+
+        features = build_meta_label_features(df, fires, resolutions)
+
+        # B fires at index 55, BEFORE A resolves (exit_index=200 > 55) --
+        # A must be excluded. B has no other eligible prior fires -> NaN.
+        assert np.isnan(features["rolling_hit_rate_20"].iloc[1])
+
+        # C fires at index 250, AFTER A resolves (200 <= 250) -- A IS
+        # eligible, and B (exit_index=56 <= 250) is too.
+        # mean([A.profitable=True, B.profitable=False]) = 0.5.
+        assert features["rolling_hit_rate_20"].iloc[2] == pytest.approx(0.5)
+
     def test_rolling_hit_rate_hand_computed(self):
         df = self._synthetic_df()
         fires = [
             PrimarySignalRecord(index=100 + 5 * i, direction=1, predicted_return=0.01)
             for i in range(4)
         ]
-        # Prior-fire labels for fire[3]'s hit-rate: fires[0..2] = [True, True, False]
-        labels = [True, True, False, True]
+        # Prior-fire labels for fire[3]'s hit-rate: fires[0..2] = [True, True, False],
+        # each resolved the bar right after it fires (well before fire[3]'s
+        # own index) -- all three are eligible.
+        resolutions = self._resolved_next_bar(fires, [True, True, False, True])
 
-        features = build_meta_label_features(df, fires, labels)
+        features = build_meta_label_features(df, fires, resolutions)
 
-        # fire[3]'s rolling_hit_rate_20 = hit rate over its (up to 20) prior
-        # fires = mean([True, True, False]) = 2/3.
+        # fire[3]'s rolling_hit_rate_20 = hit rate over its (up to 20)
+        # eligible prior fires = mean([True, True, False]) = 2/3.
         assert features["rolling_hit_rate_20"].iloc[3] == pytest.approx(2.0 / 3.0)
 
     def test_realized_vol_feature_does_not_use_bars_after_fire_index(self):
@@ -351,8 +488,9 @@ class TestBuildMetaLabelFeatures:
         mutated.iloc[105:, mutated.columns.get_loc("close")] = 99999.0
 
         fires = [PrimarySignalRecord(index=100, direction=1, predicted_return=0.01)]
-        features_orig = build_meta_label_features(df, fires, [True])
-        features_mut = build_meta_label_features(mutated, fires, [True])
+        resolutions = self._resolved_next_bar(fires, [True])
+        features_orig = build_meta_label_features(df, fires, resolutions)
+        features_mut = build_meta_label_features(mutated, fires, resolutions)
 
         assert features_orig["realized_vol_48"].iloc[0] == pytest.approx(
             features_mut["realized_vol_48"].iloc[0]
@@ -366,14 +504,18 @@ class TestBuildMetaLabelFeatures:
         df = self._synthetic_df()
         fires = [PrimarySignalRecord(index=150, direction=1, predicted_return=0.01)]
 
-        features = build_meta_label_features(df, fires, [True])
+        features = build_meta_label_features(df, fires, self._resolved_next_bar(fires, [True]))
 
         assert features["regime_trend"].iloc[0] in {t.value for t in TrendLabel}
         assert features["regime_volatility"].iloc[0] in {v.value for v in VolLabel}
         assert 0.0 <= features["regime_confidence"].iloc[0] <= 1.0
 
-    def test_mismatched_fires_and_labels_length_raises(self):
+    def test_mismatched_fires_and_resolutions_length_raises(self):
         df = self._synthetic_df()
         fires = [PrimarySignalRecord(index=100, direction=1, predicted_return=0.01)]
+        resolutions = [
+            TradeResolution(profitable=True, exit_index=101),
+            TradeResolution(profitable=False, exit_index=201),
+        ]
         with pytest.raises(ValueError, match="length"):
-            build_meta_label_features(df, fires, [True, False])
+            build_meta_label_features(df, fires, resolutions)

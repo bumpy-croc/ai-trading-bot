@@ -14,6 +14,15 @@ own magnitude as a standalone confidence channel).
 Separate from ``labels.py`` because meta-labeling needs the primary
 signal's actual fire points (a live ``SignalGenerator`` run forward over the
 corpus), not just a transform of the close-price series.
+
+Causality note on ``rolling_hit_rate_20`` specifically: a prior fire's
+profitability label is only "known" once that fire's own trade has
+resolved (up to ``max_holding_bars`` -- 336 by default, 14 days -- after it
+fired), not at the moment it fired. With dense fires this resolution can
+land well after a LATER fire's own index, so the hit-rate feature only
+includes prior fires whose resolution bar (``TradeResolution.exit_index``)
+is at-or-before the current fire's index -- never a prior fire that hasn't
+resolved yet as of "now."
 """
 
 from __future__ import annotations
@@ -21,7 +30,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
@@ -96,7 +105,26 @@ def run_primary_signal_forward(
     return records
 
 
-def simulate_fired_trade_profitability(
+@dataclass(frozen=True)
+class TradeResolution:
+    """The outcome of a simulated fired trade, AND when it became knowable.
+
+    Attributes:
+        profitable: True if net-profitable after fees, False if not.
+        exit_index: The bar index where the outcome was determined --
+            either the bar a barrier was touched on, or the vertical/time
+            exit bar. Callers building features from PRIOR fires' outcomes
+            (e.g. a rolling hit-rate) must not treat a fire's label as
+            "known" before this bar -- doing so leaks the fire's own
+            forward price path into an earlier bar's feature. See
+            ``build_meta_label_features``'s ``rolling_hit_rate_20``.
+    """
+
+    profitable: bool
+    exit_index: int
+
+
+def resolve_fired_trade(
     df: pd.DataFrame,
     fire_index: int,
     direction: int,
@@ -104,7 +132,7 @@ def simulate_fired_trade_profitability(
     stop_loss_pct: float,
     max_holding_bars: int,
     cost_calculator: CostCalculator | None = None,
-) -> bool | None:
+) -> TradeResolution | None:
     """Simulate a fired trade through the exam harness's exit geometry.
 
     Reuses ``check_barrier_touch`` (the same intrabar high/low logic
@@ -126,9 +154,10 @@ def simulate_fired_trade_profitability(
         cost_calculator: Fee model; defaults to CostCalculator()'s defaults.
 
     Returns:
-        True if net-profitable after fees, False if not, None if the trade
+        A TradeResolution (profitable + exit_index), or None if the trade
         is unresolved (truncated at series end with no forward data) --
-        callers must drop unresolved fire points, never treat None as False.
+        callers must drop unresolved fire points, never treat None as an
+        unprofitable outcome.
 
     Raises:
         ValueError: direction is not 1 or -1.
@@ -154,6 +183,7 @@ def simulate_fired_trade_profitability(
 
     max_bar = min(fire_index + max_holding_bars, n - 1)
     exit_price: float | None = None
+    exit_index: int | None = None
     for bar in range(fire_index + 1, max_bar + 1):
         touch = check_barrier_touch(
             side=side,
@@ -164,9 +194,11 @@ def simulate_fired_trade_profitability(
         )
         if touch.hit_stop_loss:
             exit_price = touch.stop_loss_exit_price
+            exit_index = bar
             break
         if touch.hit_take_profit:
             exit_price = touch.take_profit_exit_price
+            exit_index = bar
             break
 
     if exit_price is None:
@@ -174,10 +206,51 @@ def simulate_fired_trade_profitability(
         if not reached_full_vertical_barrier:
             return None  # truncated at series end -- unresolved
         exit_price = close[max_bar]
+        exit_index = max_bar
 
     raw_pct_return = direction * (exit_price - entry_price) / entry_price
     round_trip_cost_pct = 2.0 * cost_calculator.fee_rate
-    return bool((raw_pct_return - round_trip_cost_pct) > 0.0)
+    profitable = bool((raw_pct_return - round_trip_cost_pct) > 0.0)
+    # cast: exit_index is always set on every path that reaches here (either
+    # inside the touch loop before `break`, or the vertical-exit branch above).
+    return TradeResolution(profitable=profitable, exit_index=cast(int, exit_index))
+
+
+def simulate_fired_trade_profitability(
+    df: pd.DataFrame,
+    fire_index: int,
+    direction: int,
+    take_profit_pct: float,
+    stop_loss_pct: float,
+    max_holding_bars: int,
+    cost_calculator: CostCalculator | None = None,
+) -> bool | None:
+    """Simulate a fired trade, returning only the profitable/not outcome.
+
+    Thin wrapper over ``resolve_fired_trade`` for callers that only need
+    the boolean outcome. Callers building rolling features over PRIOR
+    fires' outcomes (e.g. ``build_meta_label_features``'s
+    ``rolling_hit_rate_20``) need the resolution BAR too (when the outcome
+    became knowable, not just what it was) to stay causal -- use
+    ``resolve_fired_trade`` directly for that.
+
+    Returns:
+        True if net-profitable after fees, False if not, None if the trade
+        is unresolved (truncated at series end) -- never treat None as False.
+
+    Raises:
+        ValueError: direction is not 1 or -1.
+    """
+    resolution = resolve_fired_trade(
+        df,
+        fire_index,
+        direction,
+        take_profit_pct,
+        stop_loss_pct,
+        max_holding_bars,
+        cost_calculator,
+    )
+    return resolution.profitable if resolution is not None else None
 
 
 def _realized_volatility_series(close: pd.Series, window: int) -> pd.Series:
@@ -201,7 +274,7 @@ def _session_cyclical_encoding(timestamp: pd.Timestamp) -> tuple[float, float]:
 def build_meta_label_features(
     df: pd.DataFrame,
     fired_signals: Sequence[PrimarySignalRecord],
-    labels: Sequence[bool],
+    resolutions: Sequence[TradeResolution],
     regime_detector: EnhancedRegimeDetector | None = None,
     realized_vol_window: int = REALIZED_VOL_WINDOW_BARS,
     hit_rate_lookback: int = HIT_RATE_LOOKBACK_FIRES,
@@ -209,21 +282,25 @@ def build_meta_label_features(
     """Build the meta-labeling feature set, per preregistration §2a.
 
     One row per fired signal. Every feature is causal: it reads only bars
-    at-or-before the fire index, and (for rolling_hit_rate_20) only STRICTLY
-    PRIOR fires' labels -- never the fire's own label or any later fire.
+    at-or-before the fire index. ``rolling_hit_rate_20`` additionally only
+    uses PRIOR fires whose trade had actually RESOLVED
+    (``resolution.exit_index <= fire.index``) by the current fire's index --
+    a prior fire that hasn't resolved yet as of "now" is excluded, because
+    its label depends on bars strictly after the current fire (see the
+    module docstring's causality note).
 
     Args:
         df: OHLCV DataFrame the fires were recorded against.
         fired_signals: PrimarySignalRecord list from run_primary_signal_forward,
             in chronological order.
-        labels: Resolved profitability label per fire (same order/length as
-            fired_signals) -- typically simulate_fired_trade_profitability()'s
-            output with unresolved (None) fires already filtered out by the
-            caller.
+        resolutions: TradeResolution per fire (same order/length as
+            fired_signals) -- typically resolve_fired_trade()'s output with
+            unresolved (None) fires already filtered out by the caller.
         regime_detector: Reused EnhancedRegimeDetector instance; a fresh one
             is created if not supplied.
         realized_vol_window: Trailing bars for realized volatility (default 48).
-        hit_rate_lookback: Trailing PRIOR fires for rolling hit-rate (default 20).
+        hit_rate_lookback: Trailing eligible PRIOR fires for rolling hit-rate
+            (default 20).
 
     Returns:
         DataFrame with one row per fire: index, realized_vol_48,
@@ -232,24 +309,30 @@ def build_meta_label_features(
         label.
 
     Raises:
-        ValueError: len(fired_signals) != len(labels).
+        ValueError: len(fired_signals) != len(resolutions).
     """
-    if len(fired_signals) != len(labels):
+    if len(fired_signals) != len(resolutions):
         raise ValueError(
-            f"fired_signals and labels must have the same length, "
-            f"got {len(fired_signals)} and {len(labels)}"
+            f"fired_signals and resolutions must have the same length, "
+            f"got {len(fired_signals)} and {len(resolutions)}"
         )
 
     detector = regime_detector or EnhancedRegimeDetector()
     realized_vol = _realized_volatility_series(df["close"], realized_vol_window)
 
-    label_ints = [1 if bool(label) else 0 for label in labels]
-
     rows: list[dict[str, Any]] = []
     for position, fire in enumerate(fired_signals):
-        prior_labels = label_ints[:position]
-        if prior_labels:
-            recent_prior = prior_labels[-hit_rate_lookback:]
+        # Only prior fires that had RESOLVED by this fire's own index are
+        # "known" information at this point in time -- a prior fire whose
+        # trade is still open (exit_index > fire.index) would leak that
+        # fire's own future price path into this feature.
+        eligible_prior = [
+            resolutions[i].profitable
+            for i in range(position)
+            if resolutions[i].exit_index <= fire.index
+        ]
+        if eligible_prior:
+            recent_prior = eligible_prior[-hit_rate_lookback:]
             rolling_hit_rate = float(np.mean(recent_prior))
         else:
             rolling_hit_rate = float("nan")
@@ -270,7 +353,7 @@ def build_meta_label_features(
                 "regime_volatility": regime.volatility.value,
                 "regime_confidence": float(regime.confidence),
                 "predicted_return_magnitude": abs(fire.predicted_return),
-                "label": label_ints[position],
+                "label": 1 if resolutions[position].profitable else 0,
             }
         )
 
@@ -281,7 +364,9 @@ __all__ = [
     "HIT_RATE_LOOKBACK_FIRES",
     "REALIZED_VOL_WINDOW_BARS",
     "PrimarySignalRecord",
+    "TradeResolution",
     "build_meta_label_features",
+    "resolve_fired_trade",
     "run_primary_signal_forward",
     "simulate_fired_trade_profitability",
 ]

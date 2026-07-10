@@ -10,6 +10,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -28,6 +29,11 @@ from .execution_providers import get_preferred_providers
 
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
+
+# Tolerances for validating a ternary_classification head's raw output looks
+# like softmax probabilities (not raw logits) -- see _process_classification_output.
+_PROBABILITY_RANGE_TOLERANCE = 1e-3  # slack around [0, 1] for float rounding
+_PROBABILITY_SUM_TOLERANCE = 1e-2  # slack around sum == 1.0
 
 # Metadata load timeout (fixed, not configurable - metadata files are small)
 METADATA_LOAD_TIMEOUT = 10.0
@@ -172,7 +178,16 @@ class OnnxRunner:
         Raises:
             TimeoutError: If metadata loading exceeds timeout.
         """
-        metadata_path = self.model_path.replace(".onnx", "_metadata.json")
+        # metadata.json lives alongside model.onnx in the SAME directory --
+        # the convention every writer (save_artifacts) and every other
+        # reader (PredictionModelRegistry, cloud artifact sync) uses. A
+        # prior `{stem}_metadata.json` sidecar-naming convention here never
+        # matched anything any writer produced, so this method always fell
+        # through to the hardcoded defaults in production regardless of what
+        # metadata.json actually contained (root cause of #948's review
+        # finding that OnnxRunner could never see task_type/class_labels/
+        # target_distribution even once pipeline.py started writing them).
+        metadata_path = str(Path(self.model_path).with_name("metadata.json"))
         try:
 
             def _read_metadata():
@@ -580,7 +595,25 @@ class OnnxRunner:
                 )
             if not np.all(np.isfinite(flattened)):
                 raise ValueError(f"Non-finite classification output: {flattened.tolist()}")
-            probabilities = flattened
+            # A ternary head that emits raw logits instead of softmax
+            # probabilities would otherwise pass through silently: argmax
+            # still (coincidentally) picks the right class, but confidence
+            # (P(argmax)) could read outside [0,1] and `probabilities`
+            # wouldn't sum to 1 -- fail loud instead, matching the binary
+            # path's [0,1] clamping guarantee.
+            probability_sum = float(np.sum(flattened))
+            out_of_range = np.any(flattened < -_PROBABILITY_RANGE_TOLERANCE) or np.any(
+                flattened > 1.0 + _PROBABILITY_RANGE_TOLERANCE
+            )
+            sum_off = not math.isclose(probability_sum, 1.0, abs_tol=_PROBABILITY_SUM_TOLERANCE)
+            if out_of_range or sum_off:
+                raise ValueError(
+                    f"ternary_classification output {flattened.tolist()} does not look like "
+                    f"softmax probabilities (sum={probability_sum:.6f}, expected ~1.0, each "
+                    f"value in [0,1]) -- the model head may be emitting raw logits instead of "
+                    f"softmax output."
+                )
+            probabilities = np.clip(flattened, 0.0, 1.0)
         else:
             raise ValueError(f"Unknown classification task_type: {task_type!r}")
 

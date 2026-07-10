@@ -52,7 +52,12 @@ from src.ml.training_pipeline.labels import (
     triple_barrier_labels,
 )
 from src.ml.training_pipeline.models import create_model, get_model_callbacks
-from src.ml.training_pipeline.task_types import validate_target_head_compatibility
+from src.ml.training_pipeline.task_types import (
+    get_model_task_type,
+    get_target_class_labels,
+    validate_target_head_compatibility,
+)
+from src.prediction.distribution_stats import FrozenDistribution
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 
 logger = logging.getLogger(__name__)
@@ -360,6 +365,38 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             robustness_results = {}
             evaluation_results = {"error": str(exc)}
 
+        # Classification/distribution metadata contract (TARGET-REDESIGN
+        # tournament, #933 Phase 2): the producer half of what OnnxRunner
+        # (task_type/class_labels) and SmoothedReturnExamSignalGenerator
+        # (target_distribution) consume. task_type is always written
+        # (get_model_task_type already validated compatible with
+        # ctx.config.target_type by the #947 guard at the top of this
+        # function, so it never raises here). class_labels only applies to
+        # classification target types. target_distribution is computed ONCE
+        # from y_train ONLY (never X_val/y_val) -- the harness-wide rule
+        # that the confidence mapping must never see eval-window data.
+        # Diagnostics-only: a failure here degrades gracefully (same
+        # pattern as the evaluation/robustness block above) rather than
+        # discarding an already-trained model.
+        target_type_metadata: dict[str, Any] = {
+            "task_type": get_model_task_type(ctx.config.model_type).value
+        }
+        class_labels = get_target_class_labels(ctx.config.target_type)
+        if class_labels is not None:
+            target_type_metadata["class_labels"] = class_labels
+        if ctx.config.target_type == "smoothed_return":
+            try:
+                target_type_metadata["target_distribution"] = FrozenDistribution.from_samples(
+                    np.abs(y_train)
+                ).to_metadata()
+            except ValueError as exc:
+                logger.warning(
+                    "Failed to compute target_distribution metadata for smoothed_return: "
+                    "%s. Entrant (d)'s percentile-rank confidence will be unavailable for "
+                    "this model until retrained.",
+                    exc,
+                )
+
         # force_price_only bundles stay in price/ even though they share `atb train
         # price`'s basic/ contract: writing to basic/ here would implicitly repoint
         # basic/latest — the symlink live strategies load. Promotion into basic/ is
@@ -381,6 +418,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
                 "end_date": ctx.config.end_date.isoformat(),
                 "architecture": ctx.config.model_type,  # New: model architecture
                 "architecture_variant": ctx.config.model_variant,  # New: architecture variant
+                "target_type": ctx.config.target_type,
             },
             "evaluation_results": evaluation_results,
             "diagnostics": {
@@ -388,6 +426,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
                 "robustness": ctx.config.diagnostics.evaluate_robustness,
                 "onnx": ctx.config.diagnostics.convert_to_onnx,
             },
+            **target_type_metadata,
         }
 
         output_dir = ctx.paths.models_dir

@@ -13,6 +13,7 @@ from src.ml.training_pipeline.task_types import (
     TARGET_TASK_TYPES,
     TaskType,
     get_model_task_type,
+    get_target_class_labels,
     get_target_task_type,
     validate_target_head_compatibility,
 )
@@ -111,3 +112,33 @@ class TestValidateTargetHeadCompatibility:
         message = str(exc_info.value)
         assert "tft" in message
         assert "regression" in message
+
+
+class TestGetTargetClassLabels:
+    """class_labels ARE the direction values (see onnx_runner.py's
+    _process_classification_output) -- ordered to match the probability
+    vector's class order."""
+
+    def test_binary_direction(self):
+        assert get_target_class_labels("binary_direction") == [-1, 1]
+
+    def test_triple_barrier(self):
+        assert get_target_class_labels("triple_barrier") == [-1, 0, 1]
+
+    def test_regression_has_no_class_labels(self):
+        assert get_target_class_labels("regression") is None
+
+    def test_smoothed_return_has_no_class_labels(self):
+        assert get_target_class_labels("smoothed_return") is None
+
+    def test_every_classification_target_type_has_class_labels(self):
+        for target_type, task_type in TARGET_TASK_TYPES.items():
+            if task_type is TaskType.REGRESSION:
+                continue
+            if target_type == "meta_label":
+                # meta_label's classification output is a profitability gate
+                # on the primary signal's own direction, not a direction
+                # prediction itself -- it has no canonical class_labels
+                # ordering in the direction-value sense this function covers.
+                continue
+            assert get_target_class_labels(target_type) is not None, target_type

@@ -54,6 +54,23 @@ TARGET_TASK_TYPES: dict[str, TaskType] = {
     "meta_label": TaskType.BINARY_CLASSIFICATION,
 }
 
+# Canonical class_labels ordering per classification target_type -- these
+# ARE the direction values (see onnx_runner.py's
+# _process_classification_output: argmax index -> class_labels[index] IS
+# the signal direction, no separate mapping table). Persisted into model
+# metadata at training time so OnnxRunner/exam_signal_generator can
+# interpret a classifier's raw probability vector without guessing the
+# class order.
+#
+# "meta_label" is deliberately absent: its classifier output is a
+# profitability GATE on the primary signal's own direction (P(trade
+# profitable)), not a direction prediction itself -- it has no canonical
+# direction-value class_labels ordering in this sense.
+TARGET_CLASS_LABELS: dict[str, list[int]] = {
+    "binary_direction": [-1, 1],
+    "triple_barrier": [-1, 0, 1],
+}
+
 
 def get_model_task_type(model_type: str) -> TaskType:
     """Return the task type a model_type's compiled head expects.
@@ -84,6 +101,21 @@ def get_target_task_type(target_type: str) -> TaskType:
     return task_type
 
 
+def get_target_class_labels(target_type: str) -> list[int] | None:
+    """Return the canonical class_labels ordering for a target_type.
+
+    Args:
+        target_type: Label type selector (see TARGET_TASK_TYPES).
+
+    Returns:
+        An ordered list of direction values (see TARGET_CLASS_LABELS), or
+        None for a REGRESSION-task target_type (regression/smoothed_return
+        have no class_labels -- their metadata contract needs only
+        task_type, plus target_distribution for smoothed_return).
+    """
+    return TARGET_CLASS_LABELS.get(target_type)
+
+
 def validate_target_head_compatibility(model_type: str, target_type: str) -> None:
     """Refuse loudly when a model_type's head is incompatible with the target.
 
@@ -112,9 +144,11 @@ def validate_target_head_compatibility(model_type: str, target_type: str) -> Non
 
 __all__ = [
     "MODEL_TASK_TYPES",
+    "TARGET_CLASS_LABELS",
     "TARGET_TASK_TYPES",
     "TaskType",
     "get_model_task_type",
+    "get_target_class_labels",
     "get_target_task_type",
     "validate_target_head_compatibility",
 ]

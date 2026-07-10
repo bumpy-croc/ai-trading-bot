@@ -147,6 +147,34 @@ class TestTernaryClassificationOutput:
         with pytest.raises(ValueError, match="class_labels"):
             runner._process_output(np.array([[0.5, 0.5]]))
 
+    def test_raw_logits_instead_of_softmax_fails_loud(self, config):
+        """A ternary head exported emitting raw logits (not softmax
+        probabilities) must be rejected loudly -- argmax alone would
+        silently pick the right class while `confidence` reads outside
+        [0,1] and `probabilities` doesn't sum to 1."""
+        metadata = (
+            '{"sequence_length": 120, "task_type": "ternary_classification", '
+            '"class_labels": [-1, 0, 1]}'
+        )
+        runner = self._make_runner(config, metadata)
+
+        logits = np.array([[2.0, -1.0, 3.0]])  # does not sum to 1, out of [0,1]
+        with pytest.raises(ValueError, match="softmax"):
+            runner._process_output(logits)
+
+    def test_near_one_sum_within_tolerance_is_accepted(self, config):
+        """Floating-point softmax rounding (sum=0.999999...) must not be
+        rejected -- only genuinely non-probability output should be."""
+        metadata = (
+            '{"sequence_length": 120, "task_type": "ternary_classification", '
+            '"class_labels": [-1, 0, 1]}'
+        )
+        runner = self._make_runner(config, metadata)
+
+        almost_one = np.array([[0.1, 0.2, 0.6999999]])  # sums to 0.9999999
+        result = runner._process_output(almost_one)
+        assert result["direction"] == 1
+
 
 class TestRegressionUnaffected:
     """The classification path is purely additive -- every existing

@@ -92,10 +92,12 @@ def binary_direction_labels(close: pd.Series, horizon: int = 1) -> LabelResult:
 
 
 def smoothed_forward_return_labels(close: pd.Series, horizon: int) -> LabelResult:
-    """Smoothed forward return: mean of close-to-close returns over the next N bars.
+    """Smoothed forward return: mean price ratio over the next N bars (FreqAI convention).
 
     Entrant (d) per the preregistration §2d (FreqAI convention):
-    ``y = mean(close[t+1..t+N] returns from close[t])``.
+    ``y = mean(close[t+1..t+N]) / close[t] - 1`` -- the mean of the next N
+    closes expressed as a return relative to ``close[t]`` (not the mean of N
+    separately-computed bar-over-bar returns, though the two are related).
 
     Args:
         close: Close price series.
