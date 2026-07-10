@@ -21,6 +21,7 @@ from src.config.constants import (
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import ActiveTrade, Trade
+from src.engines.shared.barrier_touch import check_barrier_touch
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -587,37 +588,36 @@ class ExitHandler:
         # Convert PositionSide enum to string for comparisons
         side_str = to_side_string(trade.side)
 
-        # Check stop loss
+        # Check stop loss / take profit using the shared OHLC barrier-touch
+        # helper (single source of truth also reused by the training
+        # pipeline's triple-barrier label simulator — see
+        # src/engines/shared/barrier_touch.py).
         hit_stop_loss = False
         sl_exit_price = current_price
-        if self.enable_engine_risk_exits and trade.stop_loss is not None:
-            stop_loss_val = float(trade.stop_loss)
-            if side_str == "long":
-                hit_stop_loss = candle_low <= stop_loss_val
-                if hit_stop_loss:
-                    # When price gaps through the stop, the position could have exited
-                    # anywhere between the stop price and the candle low. Use the worst
-                    # case (candle low) for conservative backtest assumptions.
-                    sl_exit_price = candle_low
-            else:
-                hit_stop_loss = candle_high >= stop_loss_val
-                if hit_stop_loss:
-                    # When price gaps through the stop, the position could have exited
-                    # anywhere between the stop price and the candle high. Use the worst
-                    # case (candle high) for conservative backtest assumptions.
-                    sl_exit_price = candle_high
-
-        # Check take profit
         hit_take_profit = False
         tp_exit_price = current_price
-        if self.enable_engine_risk_exits and trade.take_profit is not None:
-            take_profit_val = float(trade.take_profit)
-            if side_str == "long":
-                hit_take_profit = candle_high >= take_profit_val
-            else:
-                hit_take_profit = candle_low <= take_profit_val
+        if self.enable_engine_risk_exits:
+            barrier_result = check_barrier_touch(
+                side=side_str,
+                candle_high=candle_high,
+                candle_low=candle_low,
+                stop_loss_price=(
+                    float(trade.stop_loss) if trade.stop_loss is not None else None
+                ),
+                take_profit_price=(
+                    float(trade.take_profit) if trade.take_profit is not None else None
+                ),
+            )
+            hit_stop_loss = barrier_result.hit_stop_loss
+            if hit_stop_loss:
+                # When price gaps through the stop, the position could have exited
+                # anywhere between the stop price and the candle extreme. Use the
+                # worst case (candle low for longs, candle high for shorts) for
+                # conservative backtest assumptions.
+                sl_exit_price = barrier_result.stop_loss_exit_price
+            hit_take_profit = barrier_result.hit_take_profit
             if hit_take_profit:
-                tp_exit_price = take_profit_val
+                tp_exit_price = barrier_result.take_profit_exit_price
 
         # Check time limit. Capture the policy-specific reason (e.g.
         # "Max holding period", "Weekend flat", "End of day flat") so it
