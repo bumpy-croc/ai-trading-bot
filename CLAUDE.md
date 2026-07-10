@@ -185,7 +185,12 @@ Project name: **innovative-transformation**. Use Railway MCP server or `railway`
 | staging | `staging` | |
 | main | `main` | **PRODUCTION — never destructive operations** |
 
-See `docs/database.md` for Railway deployment and DB operations.
+See `docs/database.md` for Railway deployment and DB operations. **The `railway` CLI has several
+commands that look read-only but mutate infrastructure with no dry-run** (`railway domain` is
+get-or-create and created an unauthorized public prod domain, 2026-07-08 incident, GH #941).
+Any agent/skill running `railway` commands for monitoring or read-only purposes must use only the
+safe list in `.claude/LESSONS.md` §3 (mirrored in `.claude/agents/live-ops.md`); run
+`railway <subcommand> --help` before anything not on that list.
 
 ## Common Pitfalls
 

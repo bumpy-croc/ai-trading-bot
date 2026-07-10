@@ -119,8 +119,50 @@ rebase onto the fresh base, and force-push; don't wait on or re-trigger phantom 
   `sandbox.enabled:false`). Passing `dangerouslyDisableSandbox:true` then forces a redundant
   "dangerous override" prompt on *every* command. **Don't pass it.** Add recurring tools to
   `permissions.allow` (`railway`, `codex`, `black`, `ruff`, …). Keep live-deploy commands in
-  `permissions.deny` (`railway variables --set`, `railway ssh`, `railway run`, `redeploy`/`up`/
-  `down`/`delete`). Owner's rule: **only ask before deploying something live.**
+  `permissions.deny` (`railway variables --set`, `railway ssh`, `railway run`, `railway domain`,
+  `redeploy`/`up`/`down`/`delete`). Owner's rule: **only ask before deploying something live.**
+  **Known gap (2026-07-09):** `.claude/settings.local.json` is gitignored/per-checkout, so this
+  bullet is a *practice*, not an enforced control — as of the 2026-07-08 `railway domain`
+  incident (GH #941) at least one checkout's `permissions.deny` was empty and separately
+  *allowed* the mutating MCP tools `mcp__Railway__set-variables` / `mcp__Railway__deploy`. Verify
+  your own checkout's `settings.local.json` matches this bullet before relying on it; don't
+  assume it does.
+- **`railway domain` is get-or-create, NOT read-only** — running it with no arguments to "check"
+  whether a service already has a public URL instead *creates* one if none exists, with no
+  dry-run and no confirmation prompt in non-interactive use. This created an unauthorized public
+  domain on the production Trading Bot service on 2026-07-08 (incident
+  `2026-07-08T2015-P2-unauthorized-public-domain`, GH #941) — served unauthenticated `/health`
+  and `/status` for ~14h before the PM removed it via the Railway GraphQL API
+  (`serviceDomainDelete`). No capital/trading impact, but an unapproved new internet-facing
+  surface on a live-capital system. **To check for an existing domain, use `railway status
+  --json`** and read
+  `.environments.edges[].node.serviceInstances.edges[].node.domains.serviceDomains[]` — never
+  `railway domain`.
+  - **Canonical Railway CLI safe/prohibited list** (verified against `railway <cmd> --help`, CLI
+    v4.30.5 — re-verify against a current `--version` before trusting this if the CLI has been
+    upgraded):
+    - **Safe / read-only:** `railway status [--json]`, `railway logs [-n N] [-e ENV] [-s SERVICE]
+      [--json]`, `railway whoami [--json]`, `railway list [--json]`, `railway deployment list
+      [...] [--json]`, `railway variable list` / bare `railway variables` (no `--set`/
+      `--set-from-stdin`), `railway service status`, `railway service logs`, `railway
+      environment config`, `railway project list`.
+    - **Hard-prohibited for read-only/monitoring agents (confirmed mutating, no dry-run):**
+      `railway domain` (any form), `railway up`/`deploy`/`redeploy`/`restart`/`down`/`delete`,
+      `railway service` redeploy/restart/scale/link (or bare `service <NAME>`, a deprecated link
+      form), `railway environment` new/delete/edit (or bare `environment <NAME>`, which links),
+      `railway variable set`/`delete` (or the legacy `--set`/`--set-from-stdin` flags), `railway
+      link`/`unlink`, `railway init`/`add`, `railway connect`/`ssh`/`run`/`shell` (opens a live
+      shell or pulls prod credentials into a local process — treat as mutating-capable regardless
+      of intent), `railway volume`/`functions`/`scale`.
+    - **Rule:** before running any `railway` subcommand not on the safe list, run
+      `railway <subcommand> --help` and confirm from the help text it cannot create, modify, or
+      delete a resource. If in doubt, don't run it — escalate instead. `deploy-prod`,
+      `deploy-staging`, and `kill-switch-drill` skills deliberately use mutating commands
+      (`railway variables --set`, redeploy) as pre-committed, authorized actions within their own
+      playbooks — that's a different, sanctioned use case from an agent reaching for a mutating
+      command during what's supposed to be a read-only pass.
+  - Mirrored in `.claude/agents/live-ops.md` and `.claude/skills/bot-monitor-live/SKILL.md`
+    (the two places most likely to run a Railway command during a "just checking" pass).
 - **`railway logs`:** `--since <N>m` hangs — use `railway logs -n <N>` (bounded). It shows **only
   the current deployment**, so a brand-new deploy's logs replace the old one's. Confirmed
   empirically (2026-07-06, #913 forensics): no `--since` value reaches prior containers, so

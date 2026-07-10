@@ -14,7 +14,10 @@ lessons reach LESSONS.md via `weekly-retro`, not mid-incident edits.
 
 `railway logs` serves ONLY the current deployment, and `railway variables --set` (any flag flip)
 triggers a redeploy — so the act of containing erases the logs of the thing you're containing
-(learned the hard way in the #913 forensics: no `--since` value reaches prior containers).
+(learned the hard way in the #913 forensics: no `--since` value reaches prior containers). Never
+run `railway domain` during evidence-gathering (or any other pass) — it's get-or-create, not a
+read, and created an unauthorized public domain on prod when run "to check a URL" (2026-07-08
+incident, GH #941; full safe/prohibited Railway CLI list: `.claude/LESSONS.md` §3).
 
 ```bash
 railway logs -e production -s "Trading Bot" -n 1000 > /tmp/incident-$(date -u +%Y%m%dT%H%M).log 2>&1
