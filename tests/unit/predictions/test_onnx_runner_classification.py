@@ -6,6 +6,7 @@ every existing regression bundle has no "task_type" key in its metadata, so
 none of this code executes for them -- verified explicitly below.
 """
 
+import logging
 from unittest.mock import Mock, mock_open, patch
 
 import numpy as np
@@ -210,6 +211,72 @@ class TestRegressionUnaffected:
 
         assert result["price"] > 0
         assert result["direction"] == 1
+
+
+class TestRollingMinmaxDenormalizationSkipsWarning:
+    """PR #948 fix-round P2: fixing OnnxRunner._load_metadata to actually
+    read metadata.json (instead of a phantom sidecar file no writer ever
+    produced) means every LIVE model's price_normalization={"method":
+    "rolling_minmax"} metadata now reaches _process_output for real. That
+    scheme is PredictionEngine._apply_rolling_denormalization's job (it
+    uses the input window's own min/max), not OnnxRunner's mean/std-based
+    _denormalize_price -- which has no mean/std for rolling_minmax metadata
+    and would otherwise log a WARNING on every single live prediction
+    (log-spam that would trip the charter §5 log-signature monitors)."""
+
+    def _make_runner(self, config, metadata_json: str) -> OnnxRunner:
+        with (
+            patch("onnxruntime.InferenceSession", return_value=Mock()),
+            patch("builtins.open", mock_open(read_data=metadata_json)),
+        ):
+            return OnnxRunner("/tmp/test_model.onnx", config)
+
+    def test_rolling_minmax_metadata_produces_zero_warning_logs(self, config, caplog):
+        metadata = '{"sequence_length": 120, "price_normalization": {"method": "rolling_minmax"}}'
+        runner = self._make_runner(config, metadata)
+
+        with caplog.at_level(logging.WARNING):
+            result = runner._process_output(np.array([[[0.05]]]))
+
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        # Pass-through unchanged -- this scheme's denormalization is
+        # PredictionEngine's job, not OnnxRunner's.
+        assert result["price"] == pytest.approx(0.05)
+
+    def test_rolling_minmax_denormalize_price_returns_input_unchanged(self, config):
+        metadata = '{"sequence_length": 120, "price_normalization": {"method": "rolling_minmax"}}'
+        runner = self._make_runner(config, metadata)
+
+        assert runner._denormalize_price(0.42) == pytest.approx(0.42)
+
+    def test_non_rolling_minmax_method_with_missing_params_still_warns(self, config, caplog):
+        """The skip is specific to rolling_minmax -- a genuinely different
+        (misconfigured) normalization method must still warn loudly rather
+        than silently swallowing every missing-params case."""
+        metadata = '{"sequence_length": 120, "price_normalization": {"method": "zscore"}}'
+        runner = self._make_runner(config, metadata)
+
+        with caplog.at_level(logging.WARNING):
+            result = runner._process_output(np.array([[[0.05]]]))
+
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert result["price"] == pytest.approx(0.05)
+
+    def test_rolling_minmax_with_mean_std_present_still_skips(self, config, caplog):
+        """Even if a rolling_minmax entry somehow also carried mean/std,
+        the method-based skip takes priority -- that scheme is never
+        mean/std-based, so applying mean/std to it would be wrong."""
+        metadata = (
+            '{"sequence_length": 120, "price_normalization": '
+            '{"method": "rolling_minmax", "mean": 1.0, "std": 2.0}}'
+        )
+        runner = self._make_runner(config, metadata)
+
+        with caplog.at_level(logging.WARNING):
+            result = runner._process_output(np.array([[[0.05]]]))
+
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert result["price"] == pytest.approx(0.05)
 
 
 class TestModelPredictionProbabilitiesField:

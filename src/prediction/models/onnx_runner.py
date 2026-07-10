@@ -633,6 +633,15 @@ class OnnxRunner:
         # Cast: _process_output only calls this after verifying metadata holds price_normalization.
         metadata = cast(dict[str, Any], self.model_metadata)
         price_params = metadata["price_normalization"]
+        # rolling_minmax is PredictionEngine._apply_rolling_denormalization's
+        # scheme (uses the input window's own min/max), not this mean/std-based
+        # method -- every live model's metadata carries this method with no
+        # mean/std, so without this guard the branch below would log a
+        # WARNING on every single prediction (log-spam on the live money
+        # path, see #948 fix-round P2). Silently skip rather than warn: this
+        # is expected, not a misconfiguration.
+        if price_params.get("method") == "rolling_minmax":
+            return pred
         # Validate required normalization parameters exist
         if "std" not in price_params or "mean" not in price_params:
             logging.warning(

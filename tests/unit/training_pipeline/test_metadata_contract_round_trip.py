@@ -157,14 +157,19 @@ class TestPipelineWritesClassificationMetadata:
             targets = np.random.randint(0, 2, 50).astype(np.float32)
             mocks["create_sequences"].return_value = (sequences, targets)
             mocks["split_sequences"].return_value = (
-                sequences[:40], targets[:40], sequences[40:], targets[40:],
+                sequences[:40],
+                targets[:40],
+                sequences[40:],
+                targets[40:],
             )
             mocks["build_tf_datasets"].return_value = (MagicMock(), MagicMock())
             model = MagicMock()
             model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
             mocks["create_model"].return_value = model
             mocks["validate_model_robustness"].return_value = {}
-            mocks["evaluate_model_performance"].return_value = {"error": "diagnostics skipped in test"}
+            mocks["evaluate_model_performance"].return_value = {
+                "error": "diagnostics skipped in test"
+            }
             mocks["create_training_plots"].return_value = None
 
             result = run_training_pipeline(ctx)
@@ -214,14 +219,19 @@ class TestPipelineWritesClassificationMetadata:
             targets = np.random.uniform(-0.05, 0.05, 50).astype(np.float32)
             mocks["create_sequences"].return_value = (sequences, targets)
             mocks["split_sequences"].return_value = (
-                sequences[:40], targets[:40], sequences[40:], targets[40:],
+                sequences[:40],
+                targets[:40],
+                sequences[40:],
+                targets[40:],
             )
             mocks["build_tf_datasets"].return_value = (MagicMock(), MagicMock())
             model = MagicMock()
             model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
             mocks["create_model"].return_value = model
             mocks["validate_model_robustness"].return_value = {}
-            mocks["evaluate_model_performance"].return_value = {"error": "diagnostics skipped in test"}
+            mocks["evaluate_model_performance"].return_value = {
+                "error": "diagnostics skipped in test"
+            }
             mocks["create_training_plots"].return_value = None
 
             result = run_training_pipeline(ctx)
@@ -272,14 +282,19 @@ class TestPipelineWritesClassificationMetadata:
             targets = np.random.rand(50).astype(np.float32)
             mocks["create_sequences"].return_value = (sequences, targets)
             mocks["split_sequences"].return_value = (
-                sequences[:40], targets[:40], sequences[40:], targets[40:],
+                sequences[:40],
+                targets[:40],
+                sequences[40:],
+                targets[40:],
             )
             mocks["build_tf_datasets"].return_value = (MagicMock(), MagicMock())
             model = MagicMock()
             model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
             mocks["create_model"].return_value = model
             mocks["validate_model_robustness"].return_value = {}
-            mocks["evaluate_model_performance"].return_value = {"error": "diagnostics skipped in test"}
+            mocks["evaluate_model_performance"].return_value = {
+                "error": "diagnostics skipped in test"
+            }
             mocks["create_training_plots"].return_value = None
 
             result = run_training_pipeline(ctx)
@@ -406,9 +421,7 @@ class TestExamSignalGeneratorConsumesRealRegistryBundle:
                     "market_features": {"enabled": False},
                     "price_only_features": {"enabled": False},
                 },
-                custom_extractors=[
-                    PriceOnlyFeatureExtractor(normalization_window=sequence_length)
-                ],
+                custom_extractors=[PriceOnlyFeatureExtractor(normalization_window=sequence_length)],
             )
 
             generator = ClassificationExamSignalGenerator(
