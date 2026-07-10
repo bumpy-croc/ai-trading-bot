@@ -129,7 +129,7 @@ how the label is shaped.
   `-stop_loss_pct` — set to **this tournament's exam-harness defaults, `take_profit_pct=0.04`,
   `stop_loss_pct=0.05`** (matching `src/config/constants.py`'s `DEFAULT_TAKE_PROFIT_PCT`/
   `DEFAULT_STOP_LOSS_PCT`, which also match `risk-limits.json`'s `stops.default_take_profit_pct`/
-  `default_stop_loss_pct` — prod-matched, not HyperGrowth's 10%/30%; see §9, Deviation 2), and a
+  `default_stop_loss_pct` — i.e. the Board-ratified risk-limits defaults; the prod HyperGrowth strategy overrides these to 10%/30%, see §9, Deviation 2), and a
   vertical time barrier at `max_holding_hours=336` (`risk-limits.json`
   `operational.max_holding_hours`). Label = {+1, -1, 0} for whichever barrier is hit first, using
   intrabar high/low via `src/engines/shared/` fill logic (reused, not hand-rolled — the research
@@ -137,7 +137,7 @@ how the label is shaped.
 - **Model output**: 3-class softmax probability distribution.
 - **Confidence mechanism**: `argmax` class → direction, `P(argmax class)` → confidence — same
   bounded-by-construction + calibration-correction treatment as (b).
-- **Named risk**: barrier width is fixed a priori from prod-matched risk-limits constants (not
+- **Named risk**: barrier width is fixed a priori from the Board-ratified risk-limits defaults (not
   tuned on training or exam data) — this removes the barrier-width p-hacking risk the research doc
   flags, at the cost of not exploring whether a different (e.g. vol-scaled) barrier would do
   better; that is explicitly out of scope for Round 1.
@@ -298,9 +298,12 @@ directly by `signal.confidence` — two entrants that agree on direction but dif
 WILL produce differently-sized trades under this harness, unlike HyperGrowth. This is the load-bearing
 fix for the #938 finding, applied here explicitly rather than assumed.
 
-**Stop/target geometry for the exam itself**: `stop_loss_pct=0.05`, `take_profit_pct=0.04` (prod-matched
-constants, same values used for entrant (c)'s triple-barrier labels — self-consistent by
-construction, see §9 Deviation 2), `max_holding_hours=336`.
+**Stop/target geometry for the exam itself**: `stop_loss_pct=0.05`, `take_profit_pct=0.04` (the
+system-default constants — `DEFAULT_STOP_LOSS_PCT`/`DEFAULT_TAKE_PROFIT_PCT`, `src/config/constants.py:126,129` —
+i.e. the ml_basic-pattern harness defaults; NOT prod-HyperGrowth's 10%/30%. Same values used for
+entrant (c)'s triple-barrier labels — self-consistent by construction, see §9 Deviation 2),
+`max_holding_hours=336`. *(Provenance corrected at PM review: an earlier draft mislabeled these
+values "prod-matched"; the prod strategy's geometry is 10%/30%.)*
 
 ---
 
@@ -439,7 +442,8 @@ four to be simultaneously ready.
    how the dispatch's constraint 1(a) frames it ("would be a wasted entrant" language implies it's
    being run now, not queued).
 2. **Meta-labeling (a) and triple-barrier (c) labels use this tournament's exam-harness exit
-   geometry (`stop_loss_pct=0.05`, `take_profit_pct=0.04`, prod-matched) rather than HyperGrowth's
+   geometry (`stop_loss_pct=0.05`, `take_profit_pct=0.04`, the system-default/ml_basic-pattern
+   values) rather than HyperGrowth's
    (10%/30%), which is what the research doc's original candidate-1 write-up specified.** The
    research doc predates #938's harness-validity finding. Using HyperGrowth's geometry for the
    LABEL while executing trades through a different harness (§5, mandated by constraint 3) would be
