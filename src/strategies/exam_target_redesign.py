@@ -128,7 +128,21 @@ def create_exam_strategy(
     risk_manager = CoreRiskAdapter(core_risk_manager)
 
     risk_overrides = {
-        "position_sizer": "confidence_weighted",
+        # "fixed_fraction", NOT "confidence_weighted" -- this string selects
+        # the CORE risk manager's OWN, unrelated position-fraction
+        # calculator (src/risk/risk_manager.py::_calculate_raw_fraction),
+        # which for "confidence_weighted" reads a "prediction_confidence"
+        # indicator that NOTHING in this codebase ever populates (it always
+        # defaults to confidence=0.0 -> fraction=0.0). That fraction becomes
+        # risk_amount, which ConfidenceWeightedSizer.calculate_size treats
+        # as a hard veto (risk_amount <= 0 -> position size 0) -- silently
+        # zeroing every trade regardless of signal confidence or direction.
+        # The REAL confidence-weighted sizing happens one layer up, via the
+        # ConfidenceWeightedSizer OBJECT below (position_sizer=...),
+        # unaffected by this string. Matches ml_basic.py's
+        # create_ml_basic_strategy, which this function mirrors and which
+        # correctly uses "fixed_fraction" here.
+        "position_sizer": "fixed_fraction",
         "base_fraction": base_fraction,
         "max_fraction": base_fraction,
         "stop_loss_pct": stop_loss_pct,

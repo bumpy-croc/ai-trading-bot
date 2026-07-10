@@ -305,6 +305,45 @@ class TestSmoothedReturnExamSignalGenerator:
 
         assert signal.direction == SignalDirection.HOLD
 
+    def test_distribution_lookup_uses_own_model_name_not_result_model_name(
+        self, mock_config_class, mock_engine_class
+    ):
+        """Regression guard found via Phase 2b item 6's real end-to-end
+        acceptance run: PredictionResult.model_name is the ONNX file's
+        basename (OnnxRunner.predict() sets it from
+        os.path.basename(self.model_path), e.g. "model.onnx") -- it NEVER
+        matches a registry bundle.key (format
+        "{symbol}:{timeframe}:{model_type}:{version}"), so
+        get_model_info(result.model_name) could never find target_distribution
+        for a PINNED (ATB_MODEL_VERSION_OVERRIDE) bundle in real production
+        code -- only in unit tests whose mocks don't distinguish the two
+        strings. This generator's own self.model_name (set at construction,
+        e.g. by exam_target_redesign.py's _exam_model_name) IS the correct
+        registry key and must be preferred when set."""
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        # Deliberately NOT a valid registry key -- exactly what
+        # OnnxRunner.predict() actually produces in real code.
+        mock_result.model_name = "model.onnx"
+        mock_engine.get_model_info.return_value = {
+            "metadata": {"target_distribution": self._distribution_metadata()}
+        }
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        pinned_key = "BTCUSDT:1h:price:2026-01-01_1h_v1"
+        generator = SmoothedReturnExamSignalGenerator(sequence_length=120, model_name=pinned_key)
+        df = _make_df(150)
+        mock_result.price = 0.05
+        mock_engine.predict.return_value = mock_result
+
+        signal = generator.generate_signal(df, 130)
+
+        mock_engine.get_model_info.assert_called_once_with(pinned_key)
+        assert signal.direction == SignalDirection.BUY
+        assert signal.confidence > 0.0
+
     def test_insufficient_history_holds(self, mock_config_class, mock_engine_class):
         mock_engine = MagicMock()
         mock_engine.health_check.return_value = {"status": "healthy"}

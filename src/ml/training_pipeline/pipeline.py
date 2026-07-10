@@ -312,6 +312,12 @@ def _run_meta_label_pipeline(ctx: TrainingContext) -> TrainingResult:
         metadata = {
             "symbol": ctx.config.symbol,
             "model_type": registry_model_type,
+            # registry.py::_load_bundle reads this TOP-LEVEL key
+            # (md.get("timeframe", ...)) to populate StrategyModel.timeframe
+            # -- without it every bundle registers as timeframe="unknown"
+            # and becomes unfindable by any symbol/timeframe/model_type
+            # lookup (select_bundle, get_bundle_by_key).
+            "timeframe": ctx.config.timeframe,
             "training_date": pd.Timestamp.now(tz="UTC").isoformat(),
             "feature_names": list(META_LABEL_FEATURE_ORDER),
             "sequence_length": 1,  # tabular features, not sequence-shaped
@@ -622,6 +628,14 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         metadata = {
             "symbol": ctx.config.symbol,
             "model_type": "sentiment" if has_sentiment else "price",
+            # registry.py::_load_bundle reads this TOP-LEVEL key
+            # (md.get("timeframe", ...)) to populate StrategyModel.timeframe
+            # -- without it every bundle registers as timeframe="unknown"
+            # and becomes unfindable by any symbol/timeframe/model_type
+            # lookup (select_bundle, get_bundle_by_key, and every
+            # MLBasicSignalGenerator/exam signal generator that depends on
+            # them). Was previously only nested under training_params.
+            "timeframe": ctx.config.timeframe,
             "training_date": pd.Timestamp.now(tz="UTC").isoformat(),
             "feature_names": feature_names,
             "sequence_length": ctx.config.sequence_length,

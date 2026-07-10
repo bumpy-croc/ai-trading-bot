@@ -361,7 +361,17 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
     def _distribution_for(self, result: PredictionResult) -> FrozenDistribution | None:
         if self.prediction_engine is None:
             return None
-        info = self.prediction_engine.get_model_info(result.model_name)
+        # Prefer this generator's OWN model_name (the registry key a caller
+        # pinned, e.g. exam_target_redesign.py's ATB_MODEL_VERSION_OVERRIDE
+        # support) over result.model_name -- PredictionResult.model_name is
+        # the ONNX file's basename (OnnxRunner.predict() sets it from
+        # os.path.basename(self.model_path), e.g. "model.onnx"), which never
+        # matches a registry bundle.key and made target_distribution
+        # permanently unreachable whenever a specific version was pinned.
+        # Falls back to result.model_name when unpinned (self.model_name is
+        # None), matching prior behavior for the registry-default-bundle case.
+        lookup_name = self.model_name or result.model_name
+        info = self.prediction_engine.get_model_info(lookup_name)
         bundle_metadata = info.get("metadata") or {}
         raw = bundle_metadata.get("target_distribution")
         if not raw:
@@ -371,7 +381,7 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
         except (KeyError, ValueError, TypeError):
             logger.warning(
                 "SmoothedReturnExamSignalGenerator: invalid target_distribution metadata for %s",
-                result.model_name,
+                lookup_name,
             )
             return None
 

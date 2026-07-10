@@ -53,6 +53,55 @@ class TestCreateExamStrategy:
         assert strategy.position_sizer is not None
         assert strategy.regime_detector is not None
 
+    def test_risk_overrides_position_sizer_is_fixed_fraction_not_confidence_weighted(self):
+        """Regression guard found via Phase 2b item 6's real end-to-end
+        acceptance run: risk_overrides["position_sizer"] is a STRING key
+        consumed by the CORE risk manager's OWN, unrelated
+        "confidence_weighted" fraction calculator
+        (src/risk/risk_manager.py::_calculate_raw_fraction), which reads a
+        "prediction_confidence" indicator that NOTHING in this codebase ever
+        populates (grep confirms risk_manager.py is the only reference) --
+        it silently returns fraction=0.0 always, which
+        ConfidenceWeightedSizer.calculate_size then treats as a hard veto
+        (risk_amount <= 0 -> position size 0), producing PERMANENT ZERO
+        TRADES regardless of signal confidence or direction. The REAL
+        confidence-weighting happens one layer up, via the
+        ConfidenceWeightedSizer OBJECT assigned to Strategy.position_sizer
+        (unaffected by this string) -- ml_basic.py's create_ml_basic_strategy
+        (which this function mirrors) correctly uses "fixed_fraction" here;
+        this exam scaffolding had drifted from that pattern."""
+        strategy = create_exam_strategy(signal_generator=HoldSignalGenerator())
+
+        overrides = strategy.get_risk_overrides()
+        assert overrides["position_sizer"] == "fixed_fraction"
+
+    def test_risk_manager_actually_sizes_a_confident_signal_nonzero(self):
+        """End-to-end guard for the same bug: calculate_position_size (the
+        risk_amount Stage-1 cap ConfidenceWeightedSizer's veto depends on)
+        must return a positive value for a real, confident signal -- not
+        just check the override string in isolation."""
+        import pandas as pd
+
+        from src.strategies.components.signal_generator import Signal, SignalDirection
+
+        strategy = create_exam_strategy(signal_generator=HoldSignalGenerator())
+        df = pd.DataFrame(
+            {
+                "open": [100.0] * 150,
+                "high": [101.0] * 150,
+                "low": [99.0] * 150,
+                "close": [100.0] * 150,
+                "volume": [1000.0] * 150,
+            }
+        )
+        signal = Signal(direction=SignalDirection.BUY, strength=0.6, confidence=0.6, metadata={})
+
+        risk_amount = strategy.risk_manager.calculate_position_size(
+            signal, 1000.0, None, df=df, index=100, price=100.0
+        )
+
+        assert risk_amount > 0.0
+
     def test_uses_the_supplied_signal_generator(self):
         signal_generator = HoldSignalGenerator()
         strategy = create_exam_strategy(signal_generator=signal_generator)

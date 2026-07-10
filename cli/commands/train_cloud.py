@@ -374,7 +374,16 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
                 print()
                 print("  Metrics:")
                 for key, value in result.metrics.items():
-                    print(f"    {key}: {value:.4f}")
+                    # Metrics can carry a non-numeric diagnostics-error
+                    # placeholder (pipeline.py's evaluation-degradation path,
+                    # e.g. {"error": "..."} when evaluate_model_performance
+                    # itself failed) -- format numerically only when
+                    # possible so a degraded-but-successful training run
+                    # doesn't crash the CLI at the final summary print.
+                    if isinstance(value, int | float) and not isinstance(value, bool):
+                        print(f"    {key}: {value:.4f}")
+                    else:
+                        print(f"    {key}: {value}")
             print("=" * 60)
             return 0
         else:

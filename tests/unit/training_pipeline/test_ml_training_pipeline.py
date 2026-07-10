@@ -375,6 +375,11 @@ class TestRunMetaLabelPipeline:
         assert metadata["class_labels"] == [0, 1]
         assert metadata["primary_model_type"] == "basic"
         assert metadata["feature_names"] == list(META_LABEL_FEATURE_ORDER)
+        # Same top-level "timeframe" regression guard as
+        # TestRunTrainingPipeline::test_successful_training_price_only --
+        # registry.py::_load_bundle reads it at the top level, not nested
+        # under training_params.
+        assert metadata.get("timeframe") == "1h"
 
         latest_link = result.artifact_paths.directory.parent / "latest"
         assert latest_link.is_symlink()
@@ -531,6 +536,16 @@ class TestRunTrainingPipeline:
         assert result.duration_seconds > 0
         assert "symbol" in result.metadata
         assert result.metadata["symbol"] == "BTCUSDT"
+        # Regression guard: found while running Phase 2b item 6's
+        # acceptance tests for real -- registry.py::_load_bundle reads a
+        # TOP-LEVEL "timeframe" key (md.get("timeframe", ...)), but this
+        # metadata dict only ever set it nested under "training_params".
+        # Every bundle trained via this pipeline registered with
+        # StrategyModel.timeframe == "unknown", making it unfindable by any
+        # symbol/timeframe/model_type lookup (select_bundle,
+        # get_bundle_by_key) -- the exact mechanism every exam signal
+        # generator and MLBasicSignalGenerator depend on.
+        assert result.metadata.get("timeframe") == "1h"
 
     def _make_price_df(self, periods=200):
         """Build a deterministic OHLCV frame with varying prices."""

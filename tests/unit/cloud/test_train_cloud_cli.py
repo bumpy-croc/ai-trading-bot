@@ -269,6 +269,61 @@ class TestHandleCloudTargetTypeSelection:
 
 
 @pytest.mark.fast
+class TestHandleCloudWaitCompletionSummary:
+    """Regression guard: found while running the Phase 2b item 6 acceptance
+    tests for real -- a successful `atb train cloud` run (no --no-wait)
+    crashed AFTER training/registry-sync succeeded while printing the final
+    metrics summary, because result.metrics can contain non-numeric values
+    (e.g. {"error": "..."} -- pipeline.py's own diagnostics-failure
+    degradation path, see evaluate_model_performance's KeyError('rmse') for
+    a tft/binary_classification bundle, a real, reproducible case) and the
+    print loop blindly formatted every value with :.4f. A crash here made
+    the CLI process exit non-zero despite training having actually
+    succeeded -- exactly what an acceptance test's `returncode == 0` check
+    would (correctly) flag as a failure."""
+
+    def _run_to_completion(self, metrics: dict) -> tuple[int, object]:
+        from src.ml.cloud.orchestrator import CloudTrainingResult
+
+        provider = MagicMock()
+        provider.is_available.return_value = True
+        provider.provider_name = "local"
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run_training.return_value = CloudTrainingResult(
+            success=True,
+            job_id="local-test",
+            job_status="Completed",
+            provider="local",
+            artifact_path=Path("/tmp/fake-artifacts"),
+            metrics=metrics,
+            duration_seconds=12.3,
+        )
+
+        with (
+            patch.dict("os.environ", {"SAGEMAKER_S3_BUCKET": "test-bucket"}),
+            patch("src.ml.cloud.providers.get_provider", return_value=provider),
+            patch(
+                "src.ml.cloud.orchestrator.CloudTrainingOrchestrator",
+                return_value=mock_orchestrator,
+            ),
+        ):
+            rc = _handle_cloud(_ns(["BTCUSDT", "--provider", "local"]))
+        return rc, mock_orchestrator
+
+    def test_non_numeric_metric_value_does_not_crash(self) -> None:
+        rc, _ = self._run_to_completion({"error": "diagnostics failed: KeyError('rmse')"})
+        assert rc == 0
+
+    def test_numeric_metrics_still_format_as_before(self) -> None:
+        rc, _ = self._run_to_completion({"train_accuracy": 0.512345})
+        assert rc == 0
+
+    def test_mixed_numeric_and_non_numeric_metrics(self) -> None:
+        rc, _ = self._run_to_completion({"train_accuracy": 0.5, "note": "partial"})
+        assert rc == 0
+
+
+@pytest.mark.fast
 class TestHandleCloudPromote:
     """Tests for the cloud-promote CLI handler."""
 
