@@ -121,8 +121,22 @@ def smoothed_forward_return_labels(close: pd.Series, horizon: int) -> LabelResul
         idx = np.arange(n_valid)
         forward_sum = prefix_sum[idx + 1 + horizon] - prefix_sum[idx + 1]
         mean_future_close = forward_sum / horizon
-        values[idx] = mean_future_close / close_arr[idx] - 1.0
-        valid_mask[idx] = True
+
+        # close_arr[idx] (the entry price, close[t]) is the divisor -- a
+        # zero/negative/non-finite entry price must not silently produce
+        # inf/nan written into the label array as if it were a valid,
+        # fully-realized row. Guard BEFORE dividing (not divide-then-
+        # discard) so a corrupted entry price never raises a numpy
+        # RuntimeWarning either. Only the divisor is checked here; a
+        # legitimate (if unusual) zero/negative FUTURE close is not an
+        # error -- that is real market data, not a corrupted read.
+        divisor = close_arr[idx]
+        safe_divisor = np.isfinite(divisor) & (divisor > 0)
+
+        computed = np.full(n_valid, np.nan, dtype=np.float64)
+        computed[safe_divisor] = mean_future_close[safe_divisor] / divisor[safe_divisor] - 1.0
+        values[idx] = computed
+        valid_mask[idx] = safe_divisor
 
     return LabelResult(values=values, valid_mask=valid_mask, horizon_bars=horizon)
 

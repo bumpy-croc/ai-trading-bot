@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.engines.shared.cost_calculator import CostCalculator
 from src.ml.training_pipeline.meta_labels import (
     PrimarySignalRecord,
     TradeResolution,
@@ -329,6 +330,76 @@ class TestResolveFiredTrade:
             )
             expected = resolution.profitable if resolution is not None else None
             assert simple == expected
+
+
+class TestResolveFiredTradeEntryPriceValidation:
+    """PR #948 review finding (claude[bot]): entry_price (close[fire_index],
+    raw market data) was used as a P&L divisor with no zero/positive/finite
+    check -- CODE.md#L133 'Validate entry_price > 0 before any P&L or
+    stop-loss calculation.' A zero/NaN close at fire_index must raise, not
+    silently compute NaN and mislabel the row as unprofitable."""
+
+    def test_zero_entry_price_raises(self):
+        df = pd.DataFrame(
+            {"close": [0.0, 101.0, 103.0], "high": [0.0, 102.0, 104.0], "low": [0.0, 100.0, 102.0]}
+        )
+        with pytest.raises(ValueError, match="entry_price"):
+            resolve_fired_trade(
+                df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+                max_holding_bars=1,
+            )
+
+    def test_negative_entry_price_raises(self):
+        df = pd.DataFrame(
+            {
+                "close": [-5.0, 101.0, 103.0],
+                "high": [-5.0, 102.0, 104.0],
+                "low": [-5.0, 100.0, 102.0],
+            }
+        )
+        with pytest.raises(ValueError, match="entry_price"):
+            resolve_fired_trade(
+                df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+                max_holding_bars=1,
+            )
+
+    def test_nan_entry_price_raises(self):
+        df = pd.DataFrame(
+            {
+                "close": [float("nan"), 101.0, 103.0],
+                "high": [float("nan"), 102.0, 104.0],
+                "low": [float("nan"), 100.0, 102.0],
+            }
+        )
+        with pytest.raises(ValueError, match="entry_price"):
+            resolve_fired_trade(
+                df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+                max_holding_bars=1,
+            )
+
+    def test_pnl_calculation_matches_shared_pnl_percent(self):
+        """The P&L math itself must be src.performance.metrics.pnl_percent,
+        not a hand-rolled duplicate (CODE.md#L331 'never duplicate financial
+        logic') -- verified by cross-checking a hand-computed fixture
+        against pnl_percent's own output directly."""
+        from src.performance.metrics import Side, pnl_percent
+
+        df = pd.DataFrame(
+            {
+                "close": [100.0, 101.0, 103.0, 106.0],
+                "high": [100.0, 102.0, 104.0, 107.0],
+                "low": [99.0, 100.0, 102.0, 105.0],
+            }
+        )
+        resolution = resolve_fired_trade(
+            df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+            max_holding_bars=3,
+        )
+        assert resolution is not None
+        # bar3 high=107 >= entry(100)*1.05=105 -> TP hit, exit_price=105 (exact level).
+        expected_raw_return = pnl_percent(100.0, 105.0, Side.LONG)
+        round_trip_cost = 2.0 * CostCalculator().fee_rate
+        assert resolution.profitable == ((expected_raw_return - round_trip_cost) > 0.0)
 
 
 class TestBuildMetaLabelFeatures:

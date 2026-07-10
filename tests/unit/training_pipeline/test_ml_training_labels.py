@@ -98,6 +98,56 @@ class TestSmoothedForwardReturnLabels:
         assert np.isnan(result.values[1])
         assert np.isnan(result.values[2])
 
+    def test_zero_divisor_marks_row_invalid_not_zero_or_inf(self):
+        """PR #948 review finding (claude[bot]): close_arr[idx]==0 at the
+        divisor must not silently produce inf/nan written into the label
+        array as if it were a valid, fully-realized row -- the row must be
+        marked invalid (valid_mask=False), matching this module's own
+        'unresolved is not the same as zero' convention used everywhere else."""
+        close = pd.Series([0.0, 101.0, 103.0])
+        result = smoothed_forward_return_labels(close, horizon=1)
+        assert result.valid_mask[0] == False  # noqa: E712 -- explicit bool check
+        assert np.isnan(result.values[0])
+
+    def test_negative_divisor_marks_row_invalid(self):
+        close = pd.Series([-5.0, 101.0, 103.0])
+        result = smoothed_forward_return_labels(close, horizon=1)
+        assert result.valid_mask[0] == False  # noqa: E712
+        assert np.isnan(result.values[0])
+
+    def test_nan_divisor_marks_row_invalid(self):
+        close = pd.Series([float("nan"), 101.0, 103.0])
+        result = smoothed_forward_return_labels(close, horizon=1)
+        assert result.valid_mask[0] == False  # noqa: E712
+        assert np.isnan(result.values[0])
+
+    def test_bad_divisor_does_not_affect_other_rows(self):
+        """A single corrupted close must not poison neighboring rows -- only
+        the row whose OWN entry price is the bad divisor is marked invalid."""
+        close = pd.Series([100.0, 0.0, 103.0, 105.0])
+        result = smoothed_forward_return_labels(close, horizon=1)
+        # t=0: divisor is close[0]=100 (fine) -- valid even though the
+        # FUTURE close it reads happens to be zero (a legitimate, if
+        # unusual, forward value -- only the divisor, close[t] itself, is
+        # guarded).
+        assert result.valid_mask[0]
+        # t=1: divisor is close[1]=0.0 -- invalid.
+        assert result.valid_mask[1] == False  # noqa: E712
+        # t=2: divisor is close[2]=103.0 -- valid, unaffected by t=1's bad row.
+        assert result.valid_mask[2]
+        assert result.values[2] == pytest.approx(105.0 / 103.0 - 1.0, abs=1e-9)
+
+    def test_no_runtime_warning_on_zero_divisor(self):
+        """Guards against a numpy RuntimeWarning (divide by zero / invalid
+        value) leaking from the vectorized computation -- the fix must
+        avoid dividing by the bad values at all, not divide-then-discard."""
+        import warnings
+
+        close = pd.Series([0.0, 101.0, 103.0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            smoothed_forward_return_labels(close, horizon=1)
+
 
 class TestTripleBarrierLabels:
     """Hand-computable fixture (per task instructions): a tiny synthetic OHLC

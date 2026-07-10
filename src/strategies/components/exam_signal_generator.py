@@ -235,8 +235,19 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
             )
 
         current_price = df["close"].iloc[index]
-        prediction = result.price
-        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+        # result.price for a smoothed_return-target model IS the predicted
+        # return already (the model was trained on
+        # smoothed_forward_return_labels, a return-scale target -- see
+        # labels.py). It is NOT a price level: smoothed_return metadata
+        # carries no price_normalization, so OnnxRunner never denormalizes
+        # it, and re-deriving (prediction-current_price)/current_price here
+        # would treat a ~0.002-scale return as if it were a ~60000-scale
+        # price, saturating to ~-1.0 (all-SELL, confidence clamped to 1.0)
+        # on virtually every bar. current_price is still validated as a
+        # basic data-sanity check (a non-finite/non-positive close means
+        # something upstream is broken), just no longer used arithmetically.
+        predicted_return = result.price
+        if not (math.isfinite(predicted_return) and math.isfinite(current_price) and current_price > 0):
             return Signal(
                 direction=SignalDirection.HOLD,
                 strength=0.0,
@@ -244,13 +255,11 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
                 metadata={
                     "generator": self.name,
                     "reason": "invalid_prediction_or_price",
-                    "prediction": prediction,
+                    "prediction": predicted_return,
                     "current_price": current_price,
                     "index": index,
                 },
             )
-
-        predicted_return = (prediction - current_price) / current_price
 
         distribution = self._distribution_for(result)
         if distribution is None:
@@ -277,7 +286,7 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
 
         metadata: dict[str, Any] = {
             "generator": self.name,
-            "prediction": prediction,
+            "prediction": predicted_return,
             "current_price": current_price,
             "predicted_return": predicted_return,
             "index": index,
@@ -299,10 +308,10 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
         if result is None or result.error is not None:
             return 0.0
         current_price = df["close"].iloc[index]
-        prediction = result.price
-        if not (math.isfinite(prediction) and math.isfinite(current_price) and current_price > 0):
+        # See generate_signal: result.price IS the predicted return already.
+        predicted_return = result.price
+        if not (math.isfinite(predicted_return) and math.isfinite(current_price) and current_price > 0):
             return 0.0
-        predicted_return = (prediction - current_price) / current_price
         distribution = self._distribution_for(result)
         if distribution is None:
             return 0.0

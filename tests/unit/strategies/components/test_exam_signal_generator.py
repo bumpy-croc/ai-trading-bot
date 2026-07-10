@@ -215,8 +215,10 @@ class TestSmoothedReturnExamSignalGenerator:
 
         generator = SmoothedReturnExamSignalGenerator(sequence_length=120)
         df = _make_df(150)
-        current_price = float(df["close"].iloc[130])
-        mock_result.price = current_price * 1.03  # controlled +3% predicted return
+        # result.price IS the predicted return directly (the model was
+        # trained on smoothed_forward_return_labels, a return-scale target)
+        # -- NOT a price level to re-derive a return from.
+        mock_result.price = 0.03  # controlled +3% predicted return
         mock_engine.predict.return_value = mock_result
 
         signal = generator.generate_signal(df, 130)
@@ -230,11 +232,43 @@ class TestSmoothedReturnExamSignalGenerator:
         assert signal.confidence != pytest.approx(naive_multiplier_confidence)
         assert signal.confidence == pytest.approx(0.6333, abs=0.01)
 
+    def test_units_bug_regression_small_return_does_not_saturate_all_sell(
+        self, mock_config_class, mock_engine_class
+    ):
+        """#948 fix-round bug (flagged by claude[bot] PR review, missed in
+        the first fix round): treating result.price as a PRICE and
+        re-deriving (prediction-current_price)/current_price produced
+        ~-0.9999 on virtually every bar (saturated all-SELL, confidence
+        clamped to 1.0), since a return-scale value (~0.002) is ~4 orders
+        of magnitude smaller than a real price (~60000). A typical small
+        predicted return must produce a typical small predicted_return in
+        the signal metadata, not a near -1.0 value."""
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.model_name = "BTCUSDT:1h:smoothed_return:v1"
+        mock_engine.get_model_info.return_value = {
+            "metadata": {"target_distribution": self._distribution_metadata()}
+        }
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        generator = SmoothedReturnExamSignalGenerator(sequence_length=120)
+        df = _make_df(150)
+        mock_result.price = 0.002  # a typical small smoothed-return prediction
+        mock_engine.predict.return_value = mock_result
+
+        signal = generator.generate_signal(df, 130)
+
+        assert signal.metadata["predicted_return"] == pytest.approx(0.002, abs=1e-9)
+        assert signal.direction == SignalDirection.BUY
+        assert signal.confidence < 1.0
+
     def test_missing_target_distribution_holds(self, mock_config_class, mock_engine_class):
         mock_engine = MagicMock()
         mock_result = Mock(spec=PredictionResult)
         mock_result.error = None
-        mock_result.price = 51000.0
+        mock_result.price = 0.02
         mock_result.model_name = "BTCUSDT:1h:smoothed_return:v1"
         mock_engine.predict.return_value = mock_result
         mock_engine.get_model_info.return_value = {"metadata": {}}
@@ -291,8 +325,7 @@ class TestSmoothedReturnExamSignalGenerator:
 
         generator = SmoothedReturnExamSignalGenerator(sequence_length=120)
         df = _make_df(150)
-        current_price = float(df["close"].iloc[130])
-        mock_result.price = current_price * 1.05  # +5% predicted move
+        mock_result.price = 0.05  # +5% predicted return, consumed directly
         mock_engine.predict.return_value = mock_result
 
         signal = generator.generate_signal(df, 130)
@@ -315,8 +348,7 @@ class TestSmoothedReturnExamSignalGenerator:
 
         generator = SmoothedReturnExamSignalGenerator(sequence_length=120)
         df = _make_df(150)
-        current_price = float(df["close"].iloc[130])
-        mock_result.price = current_price * 0.95  # -5% predicted move
+        mock_result.price = -0.05  # -5% predicted return, consumed directly
         mock_engine.predict.return_value = mock_result
 
         signal = generator.generate_signal(df, 130)

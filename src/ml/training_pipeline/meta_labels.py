@@ -37,6 +37,7 @@ import pandas as pd
 
 from src.engines.shared.barrier_touch import check_barrier_touch
 from src.engines.shared.cost_calculator import CostCalculator
+from src.performance.metrics import Side, pnl_percent
 from src.regime.enhanced_detector import EnhancedRegimeDetector
 from src.strategies.components.signal_generator import SignalDirection
 
@@ -174,6 +175,15 @@ def resolve_fired_trade(
     n = len(close)
 
     entry_price = close[fire_index]
+    # CODE.md#L133: validate entry_price > 0 before any P&L or stop-loss
+    # calculation -- a zero/negative/non-finite close at fire_index (bad
+    # tick, gap-fill, corrupted data) must raise loudly here, not silently
+    # produce NaN barrier levels and mislabel the row downstream.
+    if not math.isfinite(entry_price) or entry_price <= 0:
+        raise ValueError(
+            f"entry_price must be positive and finite, got {entry_price} at "
+            f"fire_index={fire_index}"
+        )
     if direction == 1:
         stop_loss_price = entry_price * (1.0 - stop_loss_pct)
         take_profit_price = entry_price * (1.0 + take_profit_pct)
@@ -208,7 +218,12 @@ def resolve_fired_trade(
         exit_price = close[max_bar]
         exit_index = max_bar
 
-    raw_pct_return = direction * (exit_price - entry_price) / entry_price
+    # Reuse the shared P&L primitive (CODE.md#L331: "never duplicate
+    # financial logic") instead of hand-rolling the calculation -- also
+    # validates exit_price is positive/finite, since it derives from OHLC
+    # data (barrier touch price / vertical exit close) just like entry_price.
+    side_enum = Side.LONG if direction == 1 else Side.SHORT
+    raw_pct_return = pnl_percent(entry_price, exit_price, side_enum, fraction=1.0)
     round_trip_cost_pct = 2.0 * cost_calculator.fee_rate
     profitable = bool((raw_pct_return - round_trip_cost_pct) > 0.0)
     # cast: exit_index is always set on every path that reaches here (either
