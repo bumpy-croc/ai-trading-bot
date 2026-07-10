@@ -6,6 +6,7 @@ This module provides functionality to run ONNX models for prediction.
 
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -51,6 +52,11 @@ class ModelPrediction:
     direction: int  # 1, 0, -1
     model_name: str
     inference_time: float
+    # Ordered class probabilities for classification bundles (task_type=
+    # "binary_classification"/"ternary_classification" in model metadata),
+    # None for every regression bundle -- purely additive, see
+    # OnnxRunner._process_classification_output.
+    probabilities: tuple[float, ...] | None = None
 
 
 class OnnxRunner:
@@ -206,10 +212,15 @@ class OnnxRunner:
     def predict(self, features: np.ndarray) -> ModelPrediction:
         """Run prediction on features with optional caching"""
         start_time = time.time()
+        # Classification bundles are not cached: the cache only stores
+        # price/confidence/direction (_build_cache_config/_cache_result), so
+        # a cache hit would silently drop probabilities -- always run fresh
+        # inference for them instead of caching a lossy result.
+        is_classification = self._is_classification_task()
 
         try:
             # Check cache first if enabled
-            if self.cache_manager and self.config.prediction_cache_enabled:
+            if self.cache_manager and self.config.prediction_cache_enabled and not is_classification:
                 cache_result = self._check_cache(features)
                 if cache_result is not None:
                     # Return cached result
@@ -268,8 +279,8 @@ class OnnxRunner:
 
             inference_time = time.time() - start_time
 
-            # Cache the result if enabled
-            if self.cache_manager and self.config.prediction_cache_enabled:
+            # Cache the result if enabled (classification excluded, see above)
+            if self.cache_manager and self.config.prediction_cache_enabled and not is_classification:
                 self._cache_result(features, prediction)
 
             return ModelPrediction(
@@ -278,10 +289,16 @@ class OnnxRunner:
                 direction=prediction["direction"],
                 model_name=os.path.basename(self.model_path),
                 inference_time=inference_time,
+                probabilities=prediction.get("probabilities"),
             )
 
         except Exception as e:
             raise RuntimeError(f"Prediction failed: {e}") from e
+
+    def _is_classification_task(self) -> bool:
+        """True when model_metadata declares a classification task_type."""
+        task_type = (self.model_metadata or {}).get("task_type", "regression")
+        return task_type in ("binary_classification", "ternary_classification")
 
     def _build_cache_config(self) -> dict[str, Any]:
         """Build the config dict used as part of cache keys."""
@@ -475,6 +492,10 @@ class OnnxRunner:
         if output.size == 0:
             raise ValueError("Model output tensor is empty - cannot extract prediction")
 
+        if self._is_classification_task():
+            task_type = cast(dict[str, Any], self.model_metadata)["task_type"]
+            return self._process_classification_output(output, task_type)
+
         # Extract scalar prediction
         if output.shape == (1, 1, 1):
             pred = output[0][0][0]
@@ -495,6 +516,78 @@ class OnnxRunner:
         direction = self._calculate_direction(pred)
 
         return {"price": float(pred), "confidence": confidence, "direction": direction}
+
+    def _process_classification_output(
+        self, output: np.ndarray, task_type: str
+    ) -> dict[str, Any]:
+        """Process a classification model's raw output into a prediction dict.
+
+        Metadata MUST declare "class_labels": an ordered list of direction
+        values in {-1, 0, 1} matching the probability vector's class order
+        (e.g. a binary "up" classifier: [-1, 1]; ternary triple-barrier:
+        [-1, 0, 1]). class_labels ARE the direction values directly -- no
+        separate mapping table, so there's nowhere for the two to drift
+        apart. Confidence is the raw P(argmax class) -- the harness-wide
+        rule (TARGET-REDESIGN tournament preregistration §2/§4) is that any
+        calibration correction happens upstream (a Platt/isotonic scaling
+        step fit at training time), never a hardcoded conversion constant
+        here.
+
+        price is always NaN for classification predictions -- there is no
+        real price output to report, and NaN (not 0.0) is deliberate: it
+        forces any consumer that doesn't explicitly branch on `probabilities`
+        to fail loud (PredictionEngine's finite-price check) rather than
+        silently treating a placeholder as a real price.
+        """
+        metadata = cast(dict[str, Any], self.model_metadata)
+        class_labels = metadata.get("class_labels")
+        if not class_labels:
+            raise ValueError(
+                f"Model metadata task_type={task_type!r} but no 'class_labels' declared -- "
+                "cannot interpret classification output without an explicit class order."
+            )
+
+        flattened = np.asarray(output).flatten().astype(np.float64)
+        if flattened.size == 0:
+            raise ValueError("Flattened classification output is empty - cannot extract prediction")
+
+        if task_type == "binary_classification":
+            if flattened.size != 1:
+                raise ValueError(
+                    f"binary_classification expects a single sigmoid output value, "
+                    f"got shape {output.shape}"
+                )
+            if len(class_labels) != 2:
+                raise ValueError(
+                    f"binary_classification requires exactly 2 class_labels, got {class_labels}"
+                )
+            p_up = float(flattened[0])
+            if not math.isfinite(p_up):
+                raise ValueError(f"Non-finite classification output: {p_up}")
+            p_up = min(1.0, max(0.0, p_up))
+            probabilities = np.array([1.0 - p_up, p_up], dtype=np.float64)
+        elif task_type == "ternary_classification":
+            if flattened.size != len(class_labels):
+                raise ValueError(
+                    f"ternary_classification output has {flattened.size} values but "
+                    f"{len(class_labels)} class_labels were declared: {class_labels}"
+                )
+            if not np.all(np.isfinite(flattened)):
+                raise ValueError(f"Non-finite classification output: {flattened.tolist()}")
+            probabilities = flattened
+        else:
+            raise ValueError(f"Unknown classification task_type: {task_type!r}")
+
+        argmax_idx = int(np.argmax(probabilities))
+        direction = int(class_labels[argmax_idx])
+        confidence = float(probabilities[argmax_idx])
+
+        return {
+            "price": float("nan"),
+            "confidence": confidence,
+            "direction": direction,
+            "probabilities": tuple(float(p) for p in probabilities),
+        }
 
     def _denormalize_price(self, pred: float) -> float:
         """Denormalize price prediction"""
