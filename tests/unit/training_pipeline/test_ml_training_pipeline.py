@@ -666,6 +666,207 @@ class TestRunTrainingPipeline:
         # Will fail on other things (like insufficient data), but that's expected
         assert result.success is False
 
+    def test_incompatible_target_type_fails_loud_before_download(self, tmp_path):
+        """#947 guard: model_type's head must match target_type's task type.
+        tft (binary_classification head) + target_type=regression (the
+        default) previously trained silently against the wrong target --
+        must now fail loudly, and fast (before any data download)."""
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            model_type="tft",
+            target_type="regression",
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+
+        with patch("src.ml.training_pipeline.pipeline.download_price_data") as mock_download:
+            result = run_training_pipeline(ctx)
+
+        assert result.success is False
+        assert "incompatible" in result.metadata["error"]
+        mock_download.assert_not_called()
+
+    def test_compatible_classification_target_passes_the_guard(self, tmp_path):
+        """tft + binary_direction is the compatible pairing -- must NOT be
+        rejected by the guard (only fails later for unrelated pipeline
+        reasons, since data isn't mocked in this test)."""
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            model_type="tft",
+            target_type="binary_direction",
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+
+        with patch("src.ml.training_pipeline.pipeline.download_price_data") as mock_download:
+            mock_download.side_effect = RuntimeError("stop after the guard, unrelated to it")
+            result = run_training_pipeline(ctx)
+
+        # Guard passed (download was actually attempted); failure is the
+        # unrelated injected error, not an "incompatible" guard rejection.
+        mock_download.assert_called_once()
+        assert result.success is False
+        assert "incompatible" not in result.metadata["error"]
+
+    def test_binary_direction_target_builds_labels_from_raw_close(self, tmp_path):
+        """target_type=binary_direction must override the regression target
+        with binary_direction_labels() output, row-aligned to feature_data,
+        with trailing unresolved rows dropped from BOTH feature and target
+        arrays (never silently zero-filled)."""
+        from src.ml.training_pipeline.labels import binary_direction_labels
+
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+            model_type="tft",
+            target_type="binary_direction",
+            target_horizon=1,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+
+        # create_robust_features mocked to a byte-identical copy of price_df
+        # (plus a feature column) so feature_data's index is the SAME as
+        # merged_df's -- isolates the alt-target alignment/truncation logic
+        # from feature-engineering warmup-row-dropping concerns.
+        feature_df = price_df.copy()
+        feature_df["close_scaled"] = 0.5
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        assert result.success is True, result.metadata
+        feature_array, target_array, seq_len = mocks["create_sequences"].call_args.args
+        assert seq_len == 10
+
+        expected_label = binary_direction_labels(price_df["close"], horizon=1)
+        expected_target = expected_label.values[expected_label.valid_mask].astype(np.float32)
+        expected_rows = int(expected_label.valid_mask.sum())
+
+        assert len(target_array) == expected_rows
+        assert len(feature_array) == expected_rows
+        np.testing.assert_array_equal(target_array, expected_target)
+        # Every value is 0 or 1 -- confirms the classification label (not the
+        # continuous close price) reached create_sequences.
+        assert set(np.unique(target_array)).issubset({0.0, 1.0})
+
+    def test_smoothed_return_target_builds_labels_from_raw_close(self, tmp_path):
+        """target_type=smoothed_return overrides the regression target with
+        smoothed_forward_return_labels() output (still a REGRESSION task
+        type, so a regression-headed model_type is compatible)."""
+        from src.ml.training_pipeline.labels import smoothed_forward_return_labels
+
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+            target_type="smoothed_return",
+            target_horizon=3,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+
+        feature_df = price_df.copy()
+        feature_df["close_scaled"] = 0.5
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        assert result.success is True, result.metadata
+        feature_array, target_array, _ = mocks["create_sequences"].call_args.args
+
+        expected_label = smoothed_forward_return_labels(price_df["close"], horizon=3)
+        expected_target = expected_label.values[expected_label.valid_mask].astype(np.float32)
+
+        assert len(target_array) == len(feature_array)
+        np.testing.assert_allclose(target_array, expected_target, rtol=1e-5)
+
+    def test_regression_target_type_is_byte_identical_to_current_behavior(self, tmp_path):
+        """target_type="regression" (the default) must produce EXACTLY the
+        existing target_array -- no truncation, no row drops."""
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+        feature_df = price_df.copy()
+        feature_df["close_scaled"] = 0.5
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        assert result.success is True, result.metadata
+        _, target_array, _ = mocks["create_sequences"].call_args.args
+        np.testing.assert_allclose(target_array, feature_df["close"].to_numpy(dtype=np.float32))
+        assert len(target_array) == len(feature_df)
+
     def test_evaluation_crash_does_not_lose_trained_model(self, tmp_path):
         """Regression guard for #936: evaluate_model_performance/validate_model_robustness
         run after model.fit() but before save_artifacts. A crash there previously
