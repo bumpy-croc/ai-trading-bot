@@ -63,6 +63,7 @@ class TestLoadStrategy:
             ),
             ("exam_triple_barrier", "cli.commands.backtest.create_exam_triple_barrier_strategy"),
             ("exam_smoothed_return", "cli.commands.backtest.create_exam_smoothed_return_strategy"),
+            ("exam_meta_label", "cli.commands.backtest.create_exam_meta_label_strategy"),
         ],
     )
     def test_loads_exam_target_redesign_strategies(self, strategy_name, patch_target):

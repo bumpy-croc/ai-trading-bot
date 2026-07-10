@@ -15,11 +15,17 @@ import pytest
 
 from src.prediction import PredictionResult
 from src.prediction.distribution_stats import FrozenDistribution
+from src.prediction.models.onnx_runner import ModelPrediction
 from src.strategies.components.exam_signal_generator import (
     ClassificationExamSignalGenerator,
+    MetaLabelExamSignalGenerator,
     SmoothedReturnExamSignalGenerator,
 )
-from src.strategies.components.signal_generator import SignalDirection
+from src.strategies.components.signal_generator import (
+    Signal,
+    SignalDirection,
+    SignalGenerator,
+)
 
 
 def _make_df(length=150):
@@ -355,3 +361,172 @@ class TestSmoothedReturnExamSignalGenerator:
 
         assert signal.direction == SignalDirection.SELL
         assert signal.metadata["enter_short"] is True
+
+
+class _CannedPrimarySignalGenerator(SignalGenerator):
+    """Fires exactly at the configured indices with a fixed direction/
+    predicted_return; HOLD everywhere else."""
+
+    def __init__(self, fire_at: dict[int, tuple[SignalDirection, float]], warmup: int = 5):
+        super().__init__("canned_primary")
+        self._fire_at = fire_at
+        self._warmup = warmup
+
+    def generate_signal(self, df, index, regime=None) -> Signal:
+        if index in self._fire_at:
+            direction, predicted_return = self._fire_at[index]
+            return Signal(
+                direction=direction,
+                strength=0.5,
+                confidence=0.5,
+                metadata={"predicted_return": predicted_return},
+            )
+        return Signal(direction=SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={})
+
+    def get_confidence(self, df, index) -> float:
+        return 0.5
+
+    @property
+    def warmup_period(self) -> int:
+        return self._warmup
+
+
+def _make_meta_label_prediction(p_profitable: float) -> ModelPrediction:
+    """A ModelPrediction shaped like OnnxRunner's binary_classification
+    output for meta_label's class_labels=[0,1] convention: probabilities is
+    (P(not profitable), P(profitable))."""
+    return ModelPrediction(
+        price=float("nan"),
+        confidence=max(p_profitable, 1.0 - p_profitable),
+        direction=1 if p_profitable >= 0.5 else 0,
+        model_name="BTCUSDT:1h:meta_label:v1",
+        inference_time=0.001,
+        probabilities=(1.0 - p_profitable, p_profitable),
+    )
+
+
+@patch("src.strategies.components.exam_signal_generator.PredictionModelRegistry")
+@patch("src.strategies.components.exam_signal_generator.PredictionConfig")
+class TestMetaLabelExamSignalGenerator:
+    """entrant (a): gates a wrapped primary SignalGenerator by P(profitable).
+    STATEFUL and causal -- resolves fires bar-by-bar via check_barrier_touch,
+    never by scanning forward (that would leak future bars into the CURRENT
+    bar's signal, the exact bug class resolve_fired_trade/
+    build_meta_label_features are training-time-only to avoid)."""
+
+    def _mock_bundle(self, mock_registry_class, predictions: list[float]):
+        """predictions: queue of P(profitable) values, consumed in order,
+        one per generate_signal call that reaches meta-label prediction."""
+        mock_bundle = MagicMock()
+        mock_bundle.runner.predict.side_effect = [
+            _make_meta_label_prediction(p) for p in predictions
+        ]
+        mock_registry = MagicMock()
+        mock_registry.select_bundle.return_value = mock_bundle
+        mock_registry_class.return_value = mock_registry
+        return mock_bundle
+
+    def test_hold_when_primary_holds(self, mock_config_class, mock_registry_class):
+        self._mock_bundle(mock_registry_class, [])
+        primary = _CannedPrimarySignalGenerator(fire_at={})
+        generator = MetaLabelExamSignalGenerator(primary_signal_generator=primary)
+        df = _make_df(150)
+
+        signal = generator.generate_signal(df, 100)
+
+        assert signal.direction == SignalDirection.HOLD
+
+    def test_passes_through_primary_direction_when_confident(
+        self, mock_config_class, mock_registry_class
+    ):
+        self._mock_bundle(mock_registry_class, [0.9])
+        primary = _CannedPrimarySignalGenerator(fire_at={100: (SignalDirection.BUY, 0.02)})
+        generator = MetaLabelExamSignalGenerator(
+            primary_signal_generator=primary, min_confidence=0.5
+        )
+        df = _make_df(150)
+
+        signal = generator.generate_signal(df, 100)
+
+        assert signal.direction == SignalDirection.BUY
+        assert signal.confidence == pytest.approx(0.9)
+
+    def test_gates_to_hold_when_not_confident(self, mock_config_class, mock_registry_class):
+        self._mock_bundle(mock_registry_class, [0.2])
+        primary = _CannedPrimarySignalGenerator(fire_at={100: (SignalDirection.BUY, 0.02)})
+        generator = MetaLabelExamSignalGenerator(
+            primary_signal_generator=primary, min_confidence=0.5
+        )
+        df = _make_df(150)
+
+        signal = generator.generate_signal(df, 100)
+
+        assert signal.direction == SignalDirection.HOLD
+        assert signal.metadata["reason"] == "meta_label_gate"
+
+    def test_mutating_a_future_bar_does_not_change_the_current_signal(
+        self, mock_config_class, mock_registry_class
+    ):
+        """The core leak-safety property: generate_signal(df, index) must be
+        identical whether or not bars strictly after `index` are mutated."""
+        self._mock_bundle(mock_registry_class, [0.9, 0.9])
+        primary = _CannedPrimarySignalGenerator(fire_at={100: (SignalDirection.BUY, 0.02)})
+
+        df_orig = _make_df(150)
+        df_mutated = df_orig.copy()
+        df_mutated.loc[df_mutated.index[105:], ["open", "high", "low", "close"]] *= 5.0
+
+        gen_a = MetaLabelExamSignalGenerator(primary_signal_generator=primary, min_confidence=0.5)
+        signal_orig = gen_a.generate_signal(df_orig, 100)
+
+        gen_b = MetaLabelExamSignalGenerator(
+            primary_signal_generator=_CannedPrimarySignalGenerator(
+                fire_at={100: (SignalDirection.BUY, 0.02)}
+            ),
+            min_confidence=0.5,
+        )
+        signal_mutated = gen_b.generate_signal(df_mutated, 100)
+
+        assert signal_orig.direction == signal_mutated.direction
+        assert signal_orig.confidence == pytest.approx(signal_mutated.confidence)
+
+    def test_no_bundle_available_holds(self, mock_config_class, mock_registry_class):
+        mock_registry = MagicMock()
+        mock_registry.select_bundle.side_effect = RuntimeError("no meta_label bundle")
+        mock_registry_class.return_value = mock_registry
+        primary = _CannedPrimarySignalGenerator(fire_at={100: (SignalDirection.BUY, 0.02)})
+
+        generator = MetaLabelExamSignalGenerator(primary_signal_generator=primary)
+        df = _make_df(150)
+
+        signal = generator.generate_signal(df, 100)
+
+        assert signal.direction == SignalDirection.HOLD
+        assert signal.metadata["reason"] == "no_meta_label_bundle"
+
+    def test_open_fire_resolves_and_feeds_rolling_hit_rate(
+        self, mock_config_class, mock_registry_class
+    ):
+        """A fire registered at bar 100 must resolve (via barrier touch or
+        vertical exit) as later bars are processed, and the resolved
+        outcome must feed rolling_hit_rate_20 for a LATER fire's feature
+        row -- never influencing the fire's own decision retroactively."""
+        self._mock_bundle(mock_registry_class, [0.9, 0.9])
+        primary = _CannedPrimarySignalGenerator(
+            fire_at={100: (SignalDirection.BUY, 0.02), 110: (SignalDirection.BUY, 0.01)}
+        )
+        generator = MetaLabelExamSignalGenerator(
+            primary_signal_generator=primary, min_confidence=0.5
+        )
+        df = _make_df(150)
+        # Force a take-profit touch shortly after the first fire so it
+        # resolves well before the second fire at index 110.
+        df.loc[df.index[102], "high"] = df["close"].iloc[100] * 1.10
+
+        generator.generate_signal(df, 100)
+        for i in range(101, 110):
+            generator.generate_signal(df, i)
+        generator.generate_signal(df, 110)
+
+        assert len(generator._resolved_history) == 1
+        assert len(generator._open_fires) == 1  # the second fire, still open

@@ -8,6 +8,8 @@ base_fraction=0.2, min_confidence=0.3)) -- NOT HyperGrowth's FlatRiskManager
 express confidence/magnitude differences at all.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from src.config.constants import (
@@ -26,11 +28,13 @@ from src.strategies.components import (
 )
 from src.strategies.components.exam_signal_generator import (
     ClassificationExamSignalGenerator,
+    MetaLabelExamSignalGenerator,
     SmoothedReturnExamSignalGenerator,
 )
 from src.strategies.exam_target_redesign import (
     _MODEL_VERSION_OVERRIDE_ENV_VAR,
     create_exam_binary_direction_strategy,
+    create_exam_meta_label_strategy,
     create_exam_smoothed_return_strategy,
     create_exam_strategy,
     create_exam_triple_barrier_strategy,
@@ -236,3 +240,57 @@ class TestPerEntrantExamStrategyFactories:
         ):
             assert isinstance(strategy.position_sizer, ConfidenceWeightedSizer)
             assert type(strategy.risk_manager).__name__ != "FlatRiskManager"
+
+
+class TestCreateExamMetaLabelStrategy:
+    """Entrant (a): wraps a live MLBasicSignalGenerator (the primary) with
+    MetaLabelExamSignalGenerator (the profitability gate). Mocks
+    MLBasicSignalGenerator's construction -- it raises hard when no bundle
+    exists for the requested symbol/model_type/timeframe (unlike the other
+    three entrants' generators, which degrade gracefully to a None
+    prediction_engine), so these tests must not depend on the dev
+    registry's live contents."""
+
+    def test_wires_meta_label_signal_generator_wrapping_the_primary(self):
+        with patch("src.strategies.exam_target_redesign.MLBasicSignalGenerator") as mock_primary:
+            mock_primary_instance = mock_primary.return_value
+            strategy = create_exam_meta_label_strategy()
+
+        assert isinstance(strategy, Strategy)
+        assert isinstance(strategy.signal_generator, MetaLabelExamSignalGenerator)
+        assert strategy.signal_generator.primary_signal_generator is mock_primary_instance
+
+    def test_primary_model_type_threaded_to_ml_basic_signal_generator(self):
+        with patch("src.strategies.exam_target_redesign.MLBasicSignalGenerator") as mock_primary:
+            create_exam_meta_label_strategy(
+                symbol="ETHUSDT", timeframe="4h", primary_model_type="sentiment"
+            )
+
+        mock_primary.assert_called_once_with(
+            model_type="sentiment", timeframe="4h", symbol="ETHUSDT"
+        )
+
+    def test_min_confidence_threaded_to_meta_label_gate(self):
+        with patch("src.strategies.exam_target_redesign.MLBasicSignalGenerator"):
+            strategy = create_exam_meta_label_strategy(min_confidence=0.7)
+
+        assert strategy.signal_generator.min_confidence == pytest.approx(0.7)
+
+    def test_pins_model_version_via_env_var(self, monkeypatch):
+        monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
+        with patch("src.strategies.exam_target_redesign.MLBasicSignalGenerator"):
+            strategy = create_exam_meta_label_strategy(symbol="BTCUSDT", timeframe="1h")
+
+        assert strategy.signal_generator.model_name == "BTCUSDT:1h:meta_label:2026-01-01_1h_v1"
+
+    def test_strategy_name(self):
+        with patch("src.strategies.exam_target_redesign.MLBasicSignalGenerator"):
+            strategy = create_exam_meta_label_strategy()
+        assert strategy.name == "EntrantA_MetaLabel"
+
+    def test_uses_confidence_weighted_sizer_not_fixed_fraction(self):
+        with patch("src.strategies.exam_target_redesign.MLBasicSignalGenerator"):
+            strategy = create_exam_meta_label_strategy()
+
+        assert isinstance(strategy.position_sizer, ConfidenceWeightedSizer)
+        assert type(strategy.risk_manager).__name__ != "FlatRiskManager"

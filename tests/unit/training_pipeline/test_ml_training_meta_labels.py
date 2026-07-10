@@ -22,9 +22,12 @@ import pytest
 
 from src.engines.shared.cost_calculator import CostCalculator
 from src.ml.training_pipeline.meta_labels import (
+    META_LABEL_FEATURE_ORDER,
     PrimarySignalRecord,
     TradeResolution,
     build_meta_label_features,
+    encode_meta_label_feature_row,
+    encode_meta_label_features_for_training,
     resolve_fired_trade,
     run_primary_signal_forward,
     simulate_fired_trade_profitability,
@@ -606,3 +609,153 @@ class TestBuildMetaLabelFeatures:
         ]
         with pytest.raises(ValueError, match="length"):
             build_meta_label_features(df, fires, resolutions)
+
+
+class TestEncodeMetaLabelFeaturesForTraining:
+    """encode_meta_label_features_for_training turns build_meta_label_features'
+    DataFrame (with string regime enum columns) into numeric (X, y) arrays a
+    sklearn LogisticRegression can fit on."""
+
+    @staticmethod
+    def _synthetic_df(periods=300):
+        rng = np.random.default_rng(11)
+        closes = 100.0 + np.cumsum(rng.normal(0, 0.3, periods))
+        return pd.DataFrame(
+            {
+                "open": closes - 0.1,
+                "high": closes + 0.5,
+                "low": closes - 0.5,
+                "close": closes,
+                "volume": 1000.0 + rng.uniform(0, 50, periods),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )
+
+    def test_shape_matches_feature_order(self):
+        df = self._synthetic_df()
+        fires = [
+            PrimarySignalRecord(index=100, direction=1, predicted_return=0.01),
+            PrimarySignalRecord(index=120, direction=-1, predicted_return=-0.02),
+        ]
+        resolutions = [
+            TradeResolution(profitable=True, exit_index=101),
+            TradeResolution(profitable=False, exit_index=121),
+        ]
+        features_df = build_meta_label_features(df, fires, resolutions)
+
+        X, y = encode_meta_label_features_for_training(features_df)
+
+        assert X.shape == (2, len(META_LABEL_FEATURE_ORDER))
+        assert y.shape == (2,)
+        assert X.dtype == np.float32
+        assert list(y) == [1, 0]
+
+    def test_nan_rolling_hit_rate_filled_with_neutral_prior(self):
+        """The first fire has no eligible prior resolved fires -- its
+        rolling_hit_rate_20 is NaN in build_meta_label_features' output and
+        must be filled with a documented neutral prior (0.5), not left as
+        NaN (sklearn cannot fit on NaN)."""
+        df = self._synthetic_df()
+        fires = [PrimarySignalRecord(index=100, direction=1, predicted_return=0.01)]
+        resolutions = [TradeResolution(profitable=True, exit_index=101)]
+        features_df = build_meta_label_features(df, fires, resolutions)
+        assert np.isnan(features_df["rolling_hit_rate_20"].iloc[0])  # sanity check
+
+        X, _y = encode_meta_label_features_for_training(features_df)
+
+        assert np.all(np.isfinite(X))
+        hit_rate_idx = META_LABEL_FEATURE_ORDER.index("rolling_hit_rate_20")
+        assert X[0, hit_rate_idx] == pytest.approx(0.5)
+
+    def test_regime_columns_are_numeric_encoded(self):
+        df = self._synthetic_df()
+        fires = [PrimarySignalRecord(index=150, direction=1, predicted_return=0.01)]
+        resolutions = [TradeResolution(profitable=True, exit_index=151)]
+        features_df = build_meta_label_features(df, fires, resolutions)
+
+        X, _y = encode_meta_label_features_for_training(features_df)
+
+        # Every value must be finite and numeric -- no string enum values leaked through.
+        assert np.all(np.isfinite(X))
+
+    def test_empty_features_raises(self):
+        with pytest.raises(ValueError, match="empty"):
+            encode_meta_label_features_for_training(pd.DataFrame())
+
+
+class TestEncodeMetaLabelFeatureRow:
+    """encode_meta_label_feature_row is the INFERENCE-time counterpart --
+    one row at a time (the exam signal generator computes features
+    incrementally, not as a batch DataFrame) -- sharing the exact same
+    encoding as encode_meta_label_features_for_training so training and
+    inference can never drift apart."""
+
+    def test_returns_array_in_feature_order(self):
+        row = encode_meta_label_feature_row(
+            realized_vol_48=0.01,
+            rolling_hit_rate_20=0.6,
+            session_sin=0.5,
+            session_cos=0.86,
+            regime_trend="trend_up",
+            regime_volatility="high_vol",
+            regime_confidence=0.7,
+            predicted_return_magnitude=0.02,
+        )
+
+        assert row.shape == (len(META_LABEL_FEATURE_ORDER),)
+        assert row.dtype == np.float32
+        assert np.all(np.isfinite(row))
+
+    def test_nan_rolling_hit_rate_filled_with_neutral_prior(self):
+        row = encode_meta_label_feature_row(
+            realized_vol_48=0.01,
+            rolling_hit_rate_20=float("nan"),
+            session_sin=0.5,
+            session_cos=0.86,
+            regime_trend="range",
+            regime_volatility="low_vol",
+            regime_confidence=0.5,
+            predicted_return_magnitude=0.01,
+        )
+
+        hit_rate_idx = META_LABEL_FEATURE_ORDER.index("rolling_hit_rate_20")
+        assert row[hit_rate_idx] == pytest.approx(0.5)
+
+    def test_matches_batch_encoding_for_the_same_logical_row(self):
+        """Training-time (batch) and inference-time (row) encoders must
+        agree bit-for-bit on the same input -- this is the leak/drift guard
+        the whole split exists to prevent."""
+        df = self._synthetic_df_helper()
+        fires = [PrimarySignalRecord(index=150, direction=1, predicted_return=0.02)]
+        resolutions = [TradeResolution(profitable=True, exit_index=151)]
+        features_df = build_meta_label_features(df, fires, resolutions)
+        batch_X, _y = encode_meta_label_features_for_training(features_df)
+
+        row = features_df.iloc[0]
+        row_X = encode_meta_label_feature_row(
+            realized_vol_48=row["realized_vol_48"],
+            rolling_hit_rate_20=row["rolling_hit_rate_20"],
+            session_sin=row["session_sin"],
+            session_cos=row["session_cos"],
+            regime_trend=row["regime_trend"],
+            regime_volatility=row["regime_volatility"],
+            regime_confidence=row["regime_confidence"],
+            predicted_return_magnitude=row["predicted_return_magnitude"],
+        )
+
+        np.testing.assert_allclose(batch_X[0], row_X)
+
+    @staticmethod
+    def _synthetic_df_helper(periods=300):
+        rng = np.random.default_rng(13)
+        closes = 100.0 + np.cumsum(rng.normal(0, 0.3, periods))
+        return pd.DataFrame(
+            {
+                "open": closes - 0.1,
+                "high": closes + 0.5,
+                "low": closes - 0.5,
+                "close": closes,
+                "volume": 1000.0 + rng.uniform(0, 50, periods),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )

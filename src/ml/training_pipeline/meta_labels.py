@@ -375,12 +375,140 @@ def build_meta_label_features(
     return pd.DataFrame(rows)
 
 
+# Fixed feature order for the sklearn LogisticRegression classifier --
+# single source of truth for BOTH training (encode_meta_label_features_for_
+# training) and inference (encode_meta_label_feature_row) so the two can
+# never drift out of sync. Also documents the ONNX graph's expected input
+# column order (sklearn_onnx_export.py has no column names of its own).
+META_LABEL_FEATURE_ORDER: tuple[str, ...] = (
+    "realized_vol_48",
+    "rolling_hit_rate_20",
+    "session_sin",
+    "session_cos",
+    "regime_trend_encoded",
+    "regime_volatility_encoded",
+    "regime_confidence",
+    "predicted_return_magnitude",
+)
+
+# Fixed numeric codes for the string regime enums (TrendLabel/VolLabel) --
+# sklearn needs numeric input. -1/0/1 for trend mirrors down/range/up
+# ordering; 0/1 for volatility is a plain low/high indicator.
+_TREND_ENCODING: dict[str, float] = {"trend_down": -1.0, "range": 0.0, "trend_up": 1.0}
+_VOLATILITY_ENCODING: dict[str, float] = {"low_vol": 0.0, "high_vol": 1.0}
+
+# rolling_hit_rate_20 is NaN for a fire with no eligible prior resolved
+# fires yet (see build_meta_label_features docstring) -- fill with a
+# neutral prior (neither a good nor bad track record) rather than 0.0
+# (which would read as "100% of trailing fires unprofitable", actively
+# misleading the classifier for the earliest fires in any training corpus).
+_NEUTRAL_HIT_RATE_PRIOR = 0.5
+
+
+def encode_meta_label_feature_row(
+    *,
+    realized_vol_48: float,
+    rolling_hit_rate_20: float,
+    session_sin: float,
+    session_cos: float,
+    regime_trend: str,
+    regime_volatility: str,
+    regime_confidence: float,
+    predicted_return_magnitude: float,
+) -> np.ndarray:
+    """Encode ONE meta-label feature row into META_LABEL_FEATURE_ORDER.
+
+    The inference-time counterpart to
+    ``encode_meta_label_features_for_training`` -- used by the exam
+    harness's stateful ``MetaLabelExamSignalGenerator``, which computes
+    features incrementally (one fire at a time) rather than as a batch
+    DataFrame. Must encode identically to the training-time batch encoder
+    for the same logical values (verified directly by a regression test).
+
+    Args:
+        realized_vol_48: 48-bar trailing realized volatility.
+        rolling_hit_rate_20: Rolling hit-rate of prior RESOLVED fires, or
+            NaN if none are eligible yet (filled with a neutral 0.5 prior).
+        session_sin: sin(2*pi*hour/24) cyclical encoding.
+        session_cos: cos(2*pi*hour/24) cyclical encoding.
+        regime_trend: EnhancedRegimeDetector's TrendLabel.value string.
+        regime_volatility: EnhancedRegimeDetector's VolLabel.value string.
+        regime_confidence: EnhancedRegimeDetector's regime confidence, [0,1].
+        predicted_return_magnitude: abs() of the primary signal's own
+            predicted_return at the fire point.
+
+    Returns:
+        float32 array of shape (len(META_LABEL_FEATURE_ORDER),).
+
+    Raises:
+        KeyError: regime_trend/regime_volatility is not a recognized enum value.
+    """
+    hit_rate = (
+        _NEUTRAL_HIT_RATE_PRIOR
+        if rolling_hit_rate_20 is None or math.isnan(rolling_hit_rate_20)
+        else float(rolling_hit_rate_20)
+    )
+    values = {
+        "realized_vol_48": float(realized_vol_48),
+        "rolling_hit_rate_20": hit_rate,
+        "session_sin": float(session_sin),
+        "session_cos": float(session_cos),
+        "regime_trend_encoded": _TREND_ENCODING[regime_trend],
+        "regime_volatility_encoded": _VOLATILITY_ENCODING[regime_volatility],
+        "regime_confidence": float(regime_confidence),
+        "predicted_return_magnitude": float(predicted_return_magnitude),
+    }
+    return np.array([values[name] for name in META_LABEL_FEATURE_ORDER], dtype=np.float32)
+
+
+def encode_meta_label_features_for_training(
+    features_df: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode build_meta_label_features()'s output into (X, y) training arrays.
+
+    One row per fire, columns in META_LABEL_FEATURE_ORDER -- ready for
+    ``sklearn.linear_model.LogisticRegression.fit(X, y)``.
+
+    Args:
+        features_df: Output of ``build_meta_label_features``.
+
+    Returns:
+        (X, y): X is float32 shape (n_fires, len(META_LABEL_FEATURE_ORDER)),
+        y is the "label" column, shape (n_fires,).
+
+    Raises:
+        ValueError: features_df is empty.
+    """
+    if features_df.empty:
+        raise ValueError("features_df is empty -- no fired signals to train on")
+
+    rows = [
+        encode_meta_label_feature_row(
+            realized_vol_48=row["realized_vol_48"],
+            rolling_hit_rate_20=row["rolling_hit_rate_20"],
+            session_sin=row["session_sin"],
+            session_cos=row["session_cos"],
+            regime_trend=row["regime_trend"],
+            regime_volatility=row["regime_volatility"],
+            regime_confidence=row["regime_confidence"],
+            predicted_return_magnitude=row["predicted_return_magnitude"],
+        )
+        for _, row in features_df.iterrows()
+    ]
+    X = np.stack(rows).astype(np.float32)
+    y = features_df["label"].to_numpy(dtype=np.float32)
+    return X, y
+
+
 __all__ = [
     "HIT_RATE_LOOKBACK_FIRES",
+    "META_LABEL_FEATURE_ORDER",
     "REALIZED_VOL_WINDOW_BARS",
     "PrimarySignalRecord",
     "TradeResolution",
     "build_meta_label_features",
+    "encode_meta_label_feature_row",
+    "encode_meta_label_features_for_training",
     "resolve_fired_trade",
     "run_primary_signal_forward",
     "simulate_fired_trade_profitability",

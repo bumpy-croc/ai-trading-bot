@@ -45,8 +45,10 @@ from src.strategies.components import (
 )
 from src.strategies.components.exam_signal_generator import (
     ClassificationExamSignalGenerator,
+    MetaLabelExamSignalGenerator,
     SmoothedReturnExamSignalGenerator,
 )
+from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
 
 DEFAULT_EXAM_STRATEGY_NAME = "TargetRedesignExam"
 
@@ -233,9 +235,45 @@ def create_exam_smoothed_return_strategy(
     return create_exam_strategy(signal_generator, name="EntrantD_SmoothedReturn", **strategy_kwargs)
 
 
+def create_exam_meta_label_strategy(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    primary_model_type: str = "basic",
+    min_confidence: float = 0.5,
+    **strategy_kwargs: Any,
+) -> Strategy:
+    """Entrant (a): meta-labeling secondary classifier.
+
+    Wraps a live ``MLBasicSignalGenerator`` (pointed at
+    ``primary_model_type``, e.g. "basic" -- an ALREADY-TRAINED primary
+    bundle) with ``MetaLabelExamSignalGenerator``, which gates the
+    primary's direction by P(profitable) from the meta_label classifier
+    (see ``pipeline.py::_run_meta_label_pipeline`` for how that classifier
+    is trained). ``min_confidence`` here is the meta-label gate's own
+    threshold (P(profitable) >= min_confidence to act) -- NOT
+    create_exam_strategy's ConfidenceWeightedSizer min_confidence (still
+    applied on top via **strategy_kwargs, unrelated stage).
+    """
+    primary_signal_generator = MLBasicSignalGenerator(
+        model_type=primary_model_type,
+        timeframe=timeframe,
+        symbol=symbol,
+    )
+    signal_generator = MetaLabelExamSignalGenerator(
+        primary_signal_generator=primary_signal_generator,
+        name="exam_meta_label_signal_generator",
+        model_name=_exam_model_name(symbol, timeframe, "meta_label"),
+        symbol=symbol,
+        timeframe=timeframe,
+        min_confidence=min_confidence,
+    )
+    return create_exam_strategy(signal_generator, name="EntrantA_MetaLabel", **strategy_kwargs)
+
+
 __all__ = [
     "DEFAULT_EXAM_STRATEGY_NAME",
     "create_exam_binary_direction_strategy",
+    "create_exam_meta_label_strategy",
     "create_exam_smoothed_return_strategy",
     "create_exam_strategy",
     "create_exam_triple_barrier_strategy",

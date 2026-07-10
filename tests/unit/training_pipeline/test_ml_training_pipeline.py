@@ -1,5 +1,6 @@
 """Unit tests for ML training pipeline orchestration module."""
 
+import json
 from datetime import datetime
 from importlib.util import find_spec
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,7 @@ _TENSORFLOW_AVAILABLE = find_spec("tensorflow") is not None
 
 from src.ml.training_pipeline.config import TrainingConfig, TrainingContext, TrainingPaths
 from src.ml.training_pipeline.labels import LabelResult
+from src.ml.training_pipeline.meta_labels import META_LABEL_FEATURE_ORDER
 from src.ml.training_pipeline.pipeline import (
     TrainingResult,
     _build_alt_target,
@@ -273,6 +275,146 @@ class TestBuildAltTarget:
             )
 
         assert list(valid_mask) == [True, True, False]
+
+
+@pytest.mark.fast
+class TestRunMetaLabelPipeline:
+    """entrant (a): the sklearn-only training path (target_type="meta_label"),
+    which run_training_pipeline dispatches to BEFORE the TensorFlow
+    availability check and BEFORE validate_target_head_compatibility (model_type
+    is irrelevant for meta_label -- it always trains a LogisticRegression
+    regardless of --model-type, see train.py's help text)."""
+
+    @staticmethod
+    def _synthetic_price_df(periods=400):
+        rng = np.random.default_rng(21)
+        closes = 100.0 + np.cumsum(rng.normal(0, 0.3, periods))
+        return pd.DataFrame(
+            {
+                "open": closes - 0.1,
+                "high": closes + 0.5,
+                "low": closes - 0.5,
+                "close": closes,
+                "volume": 1000.0 + rng.uniform(0, 50, periods),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )
+
+    class _StubPrimarySignalGenerator:
+        """Fires a deterministic long/short pattern with predicted_return
+        metadata -- mirrors MLBasicSignalGenerator's generate_signal
+        contract without needing a real ONNX bundle."""
+
+        warmup_period = 60
+
+        def generate_signal(self, df, index, regime=None):
+            from src.strategies.components.signal_generator import Signal, SignalDirection
+
+            if index % 15 != 0:
+                return Signal(
+                    direction=SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={}
+                )
+            direction = SignalDirection.BUY if (index // 15) % 2 == 0 else SignalDirection.SELL
+            return Signal(
+                direction=direction,
+                strength=0.5,
+                confidence=0.5,
+                metadata={"predicted_return": 0.01 if direction == SignalDirection.BUY else -0.01},
+            )
+
+    def _make_ctx(self, tmp_path, **overrides):
+        defaults = dict(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            target_type="meta_label",
+            primary_model_type="basic",
+        )
+        defaults.update(overrides)
+        config = TrainingConfig(**defaults)
+        paths = TrainingPaths(
+            project_root=tmp_path, data_dir=tmp_path / "data", models_dir=tmp_path / "models"
+        )
+        return TrainingContext(config=config, paths=paths)
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_dispatches_before_tensorflow_check(self, mock_download, mock_signal_cls, tmp_path):
+        """Must not raise ImportError even when _TENSORFLOW_AVAILABLE is
+        False -- meta_label training is sklearn-only."""
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path)
+
+        with patch("src.ml.training_pipeline.pipeline._TENSORFLOW_AVAILABLE", False):
+            result = run_training_pipeline(ctx)
+
+        assert result.success is True
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_successful_training_writes_artifacts(self, mock_download, mock_signal_cls, tmp_path):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is True
+        assert result.artifact_paths is not None
+        assert result.artifact_paths.directory.exists()
+        onnx_path = result.artifact_paths.directory / "model.onnx"
+        assert onnx_path.exists()
+        metadata_path = result.artifact_paths.directory / "metadata.json"
+        assert metadata_path.exists()
+
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        assert metadata["task_type"] == "binary_classification"
+        assert metadata["class_labels"] == [0, 1]
+        assert metadata["primary_model_type"] == "basic"
+        assert metadata["feature_names"] == list(META_LABEL_FEATURE_ORDER)
+
+        latest_link = result.artifact_paths.directory.parent / "latest"
+        assert latest_link.is_symlink()
+        assert latest_link.resolve() == result.artifact_paths.directory.resolve()
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_primary_signal_generator_constructed_with_config_fields(
+        self, mock_download, mock_signal_cls, tmp_path
+    ):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(
+            tmp_path, symbol="ETHUSDT", timeframe="4h", primary_model_type="sentiment"
+        )
+
+        run_training_pipeline(ctx)
+
+        mock_signal_cls.assert_called_once_with(
+            model_type="sentiment", timeframe="4h", symbol="ETHUSDT"
+        )
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_zero_fires_fails_gracefully(self, mock_download, mock_signal_cls, tmp_path):
+        from src.strategies.components.signal_generator import Signal, SignalDirection
+
+        mock_download.return_value = self._synthetic_price_df()
+        always_hold = MagicMock()
+        always_hold.warmup_period = 5
+        always_hold.generate_signal.return_value = Signal(
+            direction=SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={}
+        )
+        mock_signal_cls.return_value = always_hold
+        ctx = self._make_ctx(tmp_path)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is False
+        assert "fire" in result.metadata.get("error", "").lower()
 
 
 @pytest.mark.fast

@@ -34,6 +34,7 @@ from src.strategies import (
 from src.strategies.components import Strategy
 from src.strategies.exam_target_redesign import (
     create_exam_binary_direction_strategy,
+    create_exam_meta_label_strategy,
     create_exam_smoothed_return_strategy,
     create_exam_triple_barrier_strategy,
 )
@@ -69,6 +70,7 @@ def _load_strategy(strategy_name: str, symbol: str | None = None):
         "exam_binary_direction": create_exam_binary_direction_strategy,
         "exam_triple_barrier": create_exam_triple_barrier_strategy,
         "exam_smoothed_return": create_exam_smoothed_return_strategy,
+        "exam_meta_label": create_exam_meta_label_strategy,
     }
 
     try:
