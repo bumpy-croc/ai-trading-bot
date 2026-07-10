@@ -106,6 +106,10 @@ class TestTrainingConfig:
         assert config.force_price_only is False
         assert config.mixed_precision is True
         assert isinstance(config.diagnostics, DiagnosticsOptions)
+        # New fields (TARGET-REDESIGN scaffolding): default preserves the
+        # incumbent next-bar price-regression behavior exactly.
+        assert config.target_type == "regression"
+        assert config.target_horizon == 1
 
     def test_custom_values(self):
         # Arrange
@@ -173,6 +177,62 @@ class TestTrainingConfig:
                 end_date=datetime(2024, 12, 31),
                 model_variant="huge",
             )
+
+    def test_accepts_target_type_and_horizon(self):
+        # Arrange & Act
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            target_type="triple_barrier",
+            target_horizon=6,
+        )
+
+        # Assert
+        assert config.target_type == "triple_barrier"
+        assert config.target_horizon == 6
+
+    def test_rejects_unknown_target_type(self):
+        # Act & Assert
+        with pytest.raises(ValueError, match="target_type"):
+            TrainingConfig(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_date=datetime(2024, 1, 1),
+                end_date=datetime(2024, 12, 31),
+                target_type="not_a_real_target",
+            )
+
+    def test_rejects_non_positive_target_horizon(self):
+        # Act & Assert
+        with pytest.raises(ValueError, match="target_horizon"):
+            TrainingConfig(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_date=datetime(2024, 1, 1),
+                end_date=datetime(2024, 12, 31),
+                target_horizon=0,
+            )
+
+    def test_config_construction_does_not_cross_validate_model_vs_target(self):
+        """TrainingConfig construction only validates each field is a known
+        value -- it does NOT cross-validate model_type against target_type.
+        That cross-check (the #947 guard) runs at run_training_pipeline()
+        entry instead, so config objects remain freely constructible/mutable
+        before a run, and CLI callers that don't yet expose --target-type
+        (e.g. `atb train cloud --model-type tft`) are unaffected."""
+        # tft (binary_classification head) + default target_type=regression
+        # would fail the cross-check, but must NOT fail here.
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            model_type="tft",
+        )
+        assert config.model_type == "tft"
+        assert config.target_type == "regression"
 
     def test_days_requested(self):
         # Arrange

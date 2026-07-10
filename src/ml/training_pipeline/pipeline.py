@@ -24,6 +24,11 @@ except ImportError:
     if not TYPE_CHECKING:
         tf = None
 
+from src.config.constants import (
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
+)
 from src.ml.training_pipeline import TrainingContext
 from src.ml.training_pipeline.artifacts import (
     ArtifactPaths,
@@ -40,7 +45,19 @@ from src.ml.training_pipeline.features import (
 )
 from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.ingestion import download_price_data, load_sentiment_data
+from src.ml.training_pipeline.labels import (
+    LabelResult,
+    binary_direction_labels,
+    smoothed_forward_return_labels,
+    triple_barrier_labels,
+)
 from src.ml.training_pipeline.models import create_model, get_model_callbacks
+from src.ml.training_pipeline.task_types import (
+    get_model_task_type,
+    get_target_class_labels,
+    validate_target_head_compatibility,
+)
+from src.prediction.distribution_stats import FrozenDistribution
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 
 logger = logging.getLogger(__name__)
@@ -125,6 +142,66 @@ def enable_mixed_precision(enabled: bool) -> None:
         logger.debug("Full exception trace:", exc_info=True)
 
 
+def _build_alt_target(
+    target_type: str,
+    target_horizon: int,
+    merged_df: pd.DataFrame,
+    feature_data: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute an alternative-target label array aligned to feature_data's rows.
+
+    Labels are computed on the full ``merged_df`` timeline (the raw OHLCV
+    data, before feature-engineering warmup rows are dropped) so forward-
+    horizon lookups see genuinely future bars, then reindexed onto
+    ``feature_data``'s row index -- feature engineering may have dropped
+    leading rows for rolling-window warmup, and the target array must stay
+    row-aligned with the feature array `create_sequences` will pair it with.
+
+    Args:
+        target_type: One of "binary_direction", "smoothed_return",
+            "triple_barrier" (never "regression" -- callers keep the
+            existing unconditional close-price target for that case).
+        target_horizon: Forward horizon in bars (binary_direction /
+            smoothed_return only; triple_barrier uses the ratified
+            risk-limits.json stop/take-profit/max-holding-hours defaults
+            instead, per the TARGET-REDESIGN tournament preregistration §2c).
+        merged_df: Raw OHLCV DataFrame (pre-feature-engineering).
+        feature_data: Post-feature-engineering DataFrame to align labels to.
+
+    Returns:
+        Tuple of (target_array, valid_mask), both aligned to feature_data's
+        row order. valid_mask is False for any row without a fully-realized
+        forward label (trailing rows, or rows feature engineering added that
+        merged_df never had) -- callers must drop those rows from BOTH the
+        feature and target arrays before training, never zero-fill them.
+    """
+    label: LabelResult
+    if target_type == "binary_direction":
+        label = binary_direction_labels(merged_df["close"], horizon=target_horizon)
+    elif target_type == "smoothed_return":
+        label = smoothed_forward_return_labels(merged_df["close"], horizon=target_horizon)
+    elif target_type == "triple_barrier":
+        label = triple_barrier_labels(
+            merged_df,
+            take_profit_pct=DEFAULT_TAKE_PROFIT_PCT,
+            stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
+            # max_holding_bars assumes 1 bar == 1 hour (the tournament's
+            # fixed 1h timeframe); a genuine bars-per-hour conversion for
+            # other timeframes is out of scope for this scaffolding.
+            max_holding_bars=DEFAULT_MAX_HOLDING_HOURS,
+        )
+    else:
+        raise ValueError(f"No label generator wired for target_type={target_type!r}")
+
+    label_values = pd.Series(label.values, index=merged_df.index)
+    label_valid = pd.Series(label.valid_mask, index=merged_df.index)
+
+    aligned_values = label_values.reindex(feature_data.index).to_numpy(dtype=np.float32)
+    aligned_valid = label_valid.reindex(feature_data.index).fillna(False).to_numpy(dtype=bool)
+
+    return aligned_values, aligned_valid
+
+
 def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
     """Run the training pipeline."""
     if not _TENSORFLOW_AVAILABLE:
@@ -141,6 +218,12 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
     else:
         logger.info("[CPU] Training will use CPU")
     try:
+        # #947 guard: refuse loudly, before any download/GPU work is spent,
+        # when model_type's compiled head is incompatible with target_type
+        # (e.g. tft's binary sigmoid/BCE head trained against the regression
+        # close target -- previously silent, garbage-model failure).
+        validate_target_head_compatibility(ctx.config.model_type, ctx.config.target_type)
+
         price_df = download_price_data(ctx)
         sentiment_df = load_sentiment_data(ctx)
         if sentiment_df is None or sentiment_df.empty:
@@ -196,6 +279,21 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
                 merged_df.copy(), sentiment_assessment, ctx.config.sequence_length
             )
             target_array = feature_data["close"].to_numpy(dtype=np.float32)
+
+        # Alternative training targets (TARGET-REDESIGN tournament, #933
+        # Phase 2): derive the label from merged_df's raw OHLCV data instead
+        # of the incumbent regression close target, then drop rows without a
+        # fully-realized forward label from BOTH arrays before sequencing.
+        if ctx.config.target_type != "regression":
+            target_array, valid_mask = _build_alt_target(
+                ctx.config.target_type,
+                ctx.config.target_horizon,
+                merged_df,
+                feature_data,
+            )
+            feature_data = feature_data[valid_mask]
+            target_array = target_array[valid_mask]
+
         feature_array = feature_data[feature_names].to_numpy(dtype=np.float32)
         sequences, targets = create_sequences(
             feature_array,
@@ -267,6 +365,38 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             robustness_results = {}
             evaluation_results = {"error": str(exc)}
 
+        # Classification/distribution metadata contract (TARGET-REDESIGN
+        # tournament, #933 Phase 2): the producer half of what OnnxRunner
+        # (task_type/class_labels) and SmoothedReturnExamSignalGenerator
+        # (target_distribution) consume. task_type is always written
+        # (get_model_task_type already validated compatible with
+        # ctx.config.target_type by the #947 guard at the top of this
+        # function, so it never raises here). class_labels only applies to
+        # classification target types. target_distribution is computed ONCE
+        # from y_train ONLY (never X_val/y_val) -- the harness-wide rule
+        # that the confidence mapping must never see eval-window data.
+        # Diagnostics-only: a failure here degrades gracefully (same
+        # pattern as the evaluation/robustness block above) rather than
+        # discarding an already-trained model.
+        target_type_metadata: dict[str, Any] = {
+            "task_type": get_model_task_type(ctx.config.model_type).value
+        }
+        class_labels = get_target_class_labels(ctx.config.target_type)
+        if class_labels is not None:
+            target_type_metadata["class_labels"] = class_labels
+        if ctx.config.target_type == "smoothed_return":
+            try:
+                target_type_metadata["target_distribution"] = FrozenDistribution.from_samples(
+                    np.abs(y_train)
+                ).to_metadata()
+            except ValueError as exc:
+                logger.warning(
+                    "Failed to compute target_distribution metadata for smoothed_return: "
+                    "%s. Entrant (d)'s percentile-rank confidence will be unavailable for "
+                    "this model until retrained.",
+                    exc,
+                )
+
         # force_price_only bundles stay in price/ even though they share `atb train
         # price`'s basic/ contract: writing to basic/ here would implicitly repoint
         # basic/latest — the symlink live strategies load. Promotion into basic/ is
@@ -288,6 +418,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
                 "end_date": ctx.config.end_date.isoformat(),
                 "architecture": ctx.config.model_type,  # New: model architecture
                 "architecture_variant": ctx.config.model_variant,  # New: architecture variant
+                "target_type": ctx.config.target_type,
             },
             "evaluation_results": evaluation_results,
             "diagnostics": {
@@ -295,6 +426,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
                 "robustness": ctx.config.diagnostics.evaluate_robustness,
                 "onnx": ctx.config.diagnostics.convert_to_onnx,
             },
+            **target_type_metadata,
         }
 
         output_dir = ctx.paths.models_dir

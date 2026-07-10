@@ -6,9 +6,11 @@ This module provides functionality to run ONNX models for prediction.
 
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -27,6 +29,11 @@ from .execution_providers import get_preferred_providers
 
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
+
+# Tolerances for validating a ternary_classification head's raw output looks
+# like softmax probabilities (not raw logits) -- see _process_classification_output.
+_PROBABILITY_RANGE_TOLERANCE = 1e-3  # slack around [0, 1] for float rounding
+_PROBABILITY_SUM_TOLERANCE = 1e-2  # slack around sum == 1.0
 
 # Metadata load timeout (fixed, not configurable - metadata files are small)
 METADATA_LOAD_TIMEOUT = 10.0
@@ -51,6 +58,11 @@ class ModelPrediction:
     direction: int  # 1, 0, -1
     model_name: str
     inference_time: float
+    # Ordered class probabilities for classification bundles (task_type=
+    # "binary_classification"/"ternary_classification" in model metadata),
+    # None for every regression bundle -- purely additive, see
+    # OnnxRunner._process_classification_output.
+    probabilities: tuple[float, ...] | None = None
 
 
 class OnnxRunner:
@@ -166,7 +178,16 @@ class OnnxRunner:
         Raises:
             TimeoutError: If metadata loading exceeds timeout.
         """
-        metadata_path = self.model_path.replace(".onnx", "_metadata.json")
+        # metadata.json lives alongside model.onnx in the SAME directory --
+        # the convention every writer (save_artifacts) and every other
+        # reader (PredictionModelRegistry, cloud artifact sync) uses. A
+        # prior `{stem}_metadata.json` sidecar-naming convention here never
+        # matched anything any writer produced, so this method always fell
+        # through to the hardcoded defaults in production regardless of what
+        # metadata.json actually contained (root cause of #948's review
+        # finding that OnnxRunner could never see task_type/class_labels/
+        # target_distribution even once pipeline.py started writing them).
+        metadata_path = str(Path(self.model_path).with_name("metadata.json"))
         try:
 
             def _read_metadata():
@@ -206,10 +227,19 @@ class OnnxRunner:
     def predict(self, features: np.ndarray) -> ModelPrediction:
         """Run prediction on features with optional caching"""
         start_time = time.time()
+        # Classification bundles are not cached: the cache only stores
+        # price/confidence/direction (_build_cache_config/_cache_result), so
+        # a cache hit would silently drop probabilities -- always run fresh
+        # inference for them instead of caching a lossy result.
+        is_classification = self._is_classification_task()
 
         try:
             # Check cache first if enabled
-            if self.cache_manager and self.config.prediction_cache_enabled:
+            if (
+                self.cache_manager
+                and self.config.prediction_cache_enabled
+                and not is_classification
+            ):
                 cache_result = self._check_cache(features)
                 if cache_result is not None:
                     # Return cached result
@@ -268,8 +298,12 @@ class OnnxRunner:
 
             inference_time = time.time() - start_time
 
-            # Cache the result if enabled
-            if self.cache_manager and self.config.prediction_cache_enabled:
+            # Cache the result if enabled (classification excluded, see above)
+            if (
+                self.cache_manager
+                and self.config.prediction_cache_enabled
+                and not is_classification
+            ):
                 self._cache_result(features, prediction)
 
             return ModelPrediction(
@@ -278,10 +312,16 @@ class OnnxRunner:
                 direction=prediction["direction"],
                 model_name=os.path.basename(self.model_path),
                 inference_time=inference_time,
+                probabilities=prediction.get("probabilities"),
             )
 
         except Exception as e:
             raise RuntimeError(f"Prediction failed: {e}") from e
+
+    def _is_classification_task(self) -> bool:
+        """True when model_metadata declares a classification task_type."""
+        task_type = (self.model_metadata or {}).get("task_type", "regression")
+        return task_type in ("binary_classification", "ternary_classification")
 
     def _build_cache_config(self) -> dict[str, Any]:
         """Build the config dict used as part of cache keys."""
@@ -475,6 +515,10 @@ class OnnxRunner:
         if output.size == 0:
             raise ValueError("Model output tensor is empty - cannot extract prediction")
 
+        if self._is_classification_task():
+            task_type = cast(dict[str, Any], self.model_metadata)["task_type"]
+            return self._process_classification_output(output, task_type)
+
         # Extract scalar prediction
         if output.shape == (1, 1, 1):
             pred = output[0][0][0]
@@ -496,11 +540,108 @@ class OnnxRunner:
 
         return {"price": float(pred), "confidence": confidence, "direction": direction}
 
+    def _process_classification_output(self, output: np.ndarray, task_type: str) -> dict[str, Any]:
+        """Process a classification model's raw output into a prediction dict.
+
+        Metadata MUST declare "class_labels": an ordered list of direction
+        values in {-1, 0, 1} matching the probability vector's class order
+        (e.g. a binary "up" classifier: [-1, 1]; ternary triple-barrier:
+        [-1, 0, 1]). class_labels ARE the direction values directly -- no
+        separate mapping table, so there's nowhere for the two to drift
+        apart. Confidence is the raw P(argmax class) -- the harness-wide
+        rule (TARGET-REDESIGN tournament preregistration §2/§4) is that any
+        calibration correction happens upstream (a Platt/isotonic scaling
+        step fit at training time), never a hardcoded conversion constant
+        here.
+
+        price is always NaN for classification predictions -- there is no
+        real price output to report, and NaN (not 0.0) is deliberate: it
+        forces any consumer that doesn't explicitly branch on `probabilities`
+        to fail loud (PredictionEngine's finite-price check) rather than
+        silently treating a placeholder as a real price.
+        """
+        metadata = cast(dict[str, Any], self.model_metadata)
+        class_labels = metadata.get("class_labels")
+        if not class_labels:
+            raise ValueError(
+                f"Model metadata task_type={task_type!r} but no 'class_labels' declared -- "
+                "cannot interpret classification output without an explicit class order."
+            )
+
+        flattened = np.asarray(output).flatten().astype(np.float64)
+        if flattened.size == 0:
+            raise ValueError("Flattened classification output is empty - cannot extract prediction")
+
+        if task_type == "binary_classification":
+            if flattened.size != 1:
+                raise ValueError(
+                    f"binary_classification expects a single sigmoid output value, "
+                    f"got shape {output.shape}"
+                )
+            if len(class_labels) != 2:
+                raise ValueError(
+                    f"binary_classification requires exactly 2 class_labels, got {class_labels}"
+                )
+            p_up = float(flattened[0])
+            if not math.isfinite(p_up):
+                raise ValueError(f"Non-finite classification output: {p_up}")
+            p_up = min(1.0, max(0.0, p_up))
+            probabilities = np.array([1.0 - p_up, p_up], dtype=np.float64)
+        elif task_type == "ternary_classification":
+            if flattened.size != len(class_labels):
+                raise ValueError(
+                    f"ternary_classification output has {flattened.size} values but "
+                    f"{len(class_labels)} class_labels were declared: {class_labels}"
+                )
+            if not np.all(np.isfinite(flattened)):
+                raise ValueError(f"Non-finite classification output: {flattened.tolist()}")
+            # A ternary head that emits raw logits instead of softmax
+            # probabilities would otherwise pass through silently: argmax
+            # still (coincidentally) picks the right class, but confidence
+            # (P(argmax)) could read outside [0,1] and `probabilities`
+            # wouldn't sum to 1 -- fail loud instead, matching the binary
+            # path's [0,1] clamping guarantee.
+            probability_sum = float(np.sum(flattened))
+            out_of_range = np.any(flattened < -_PROBABILITY_RANGE_TOLERANCE) or np.any(
+                flattened > 1.0 + _PROBABILITY_RANGE_TOLERANCE
+            )
+            sum_off = not math.isclose(probability_sum, 1.0, abs_tol=_PROBABILITY_SUM_TOLERANCE)
+            if out_of_range or sum_off:
+                raise ValueError(
+                    f"ternary_classification output {flattened.tolist()} does not look like "
+                    f"softmax probabilities (sum={probability_sum:.6f}, expected ~1.0, each "
+                    f"value in [0,1]) -- the model head may be emitting raw logits instead of "
+                    f"softmax output."
+                )
+            probabilities = np.clip(flattened, 0.0, 1.0)
+        else:
+            raise ValueError(f"Unknown classification task_type: {task_type!r}")
+
+        argmax_idx = int(np.argmax(probabilities))
+        direction = int(class_labels[argmax_idx])
+        confidence = float(probabilities[argmax_idx])
+
+        return {
+            "price": float("nan"),
+            "confidence": confidence,
+            "direction": direction,
+            "probabilities": tuple(float(p) for p in probabilities),
+        }
+
     def _denormalize_price(self, pred: float) -> float:
         """Denormalize price prediction"""
         # Cast: _process_output only calls this after verifying metadata holds price_normalization.
         metadata = cast(dict[str, Any], self.model_metadata)
         price_params = metadata["price_normalization"]
+        # rolling_minmax is PredictionEngine._apply_rolling_denormalization's
+        # scheme (uses the input window's own min/max), not this mean/std-based
+        # method -- every live model's metadata carries this method with no
+        # mean/std, so without this guard the branch below would log a
+        # WARNING on every single prediction (log-spam on the live money
+        # path, see #948 fix-round P2). Silently skip rather than warn: this
+        # is expected, not a misconfiguration.
+        if price_params.get("method") == "rolling_minmax":
+            return pred
         # Validate required normalization parameters exist
         if "std" not in price_params or "mean" not in price_params:
             logging.warning(

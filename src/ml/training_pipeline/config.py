@@ -62,11 +62,26 @@ class TrainingConfig:
     model_type: str = "cnn_lstm"  # cnn_lstm, attention_lstm, tcn, tcn_attention, lstm
     model_variant: str = "default"  # default, lightweight, deep
 
+    # Training target selection (TARGET-REDESIGN tournament, GH #933 Phase 2).
+    # "regression" preserves the incumbent next-bar price-regression target
+    # exactly. Cross-validating model_type against target_type (the #947
+    # guard) happens at run_training_pipeline() entry, NOT here -- see
+    # validate_target_head_compatibility() in task_types.py. Keeping that
+    # check out of __post_init__ means a TrainingConfig stays freely
+    # constructible (e.g. `atb train cloud --model-type tft`, which has no
+    # --target-type flag yet) and only fails when a run is actually
+    # attempted with an incompatible pairing.
+    target_type: str = "regression"
+    target_horizon: int = 1  # forward bars; used by binary_direction/smoothed_return
+
     # Valid model types and variants for validation
     _VALID_MODEL_TYPES = frozenset(
         {"cnn_lstm", "adaptive", "default", "attention_lstm", "tcn", "tcn_attention", "tft", "lstm"}
     )
     _VALID_MODEL_VARIANTS = frozenset({"default", "lightweight", "deep"})
+    _VALID_TARGET_TYPES = frozenset(
+        {"regression", "binary_direction", "triple_barrier", "smoothed_return"}
+    )
 
     def __post_init__(self):
         """Validate training configuration parameters for fail-fast behavior."""
@@ -96,6 +111,15 @@ class TrainingConfig:
                 f"model_variant must be one of {sorted(self._VALID_MODEL_VARIANTS)}, "
                 f"got '{self.model_variant}'"
             )
+        # Validate target_type (membership only -- model_type/target_type
+        # cross-compatibility is checked at run_training_pipeline() entry)
+        if self.target_type not in self._VALID_TARGET_TYPES:
+            raise ValueError(
+                f"target_type must be one of {sorted(self._VALID_TARGET_TYPES)}, "
+                f"got '{self.target_type}'"
+            )
+        if self.target_horizon <= 0:
+            raise ValueError(f"target_horizon must be positive, got {self.target_horizon}")
 
     def days_requested(self) -> int:
         """Calculate number of days in the training date range.
