@@ -194,21 +194,21 @@ class TestPerEntrantExamStrategyFactories:
 
         strategy = create_exam_binary_direction_strategy(symbol="ETHUSDT", timeframe="4h")
 
-        assert strategy.signal_generator.model_name == "ETHUSDT:4h:tft:2026-01-01_1h_v1"
+        assert strategy.signal_generator.model_name == "ETHUSDT:4h:price:2026-01-01_1h_v1"
 
     def test_triple_barrier_pins_model_version_via_env_var(self, monkeypatch):
         monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
 
         strategy = create_exam_triple_barrier_strategy(symbol="BTCUSDT", timeframe="1h")
 
-        assert strategy.signal_generator.model_name == "BTCUSDT:1h:tft_ternary:2026-01-01_1h_v1"
+        assert strategy.signal_generator.model_name == "BTCUSDT:1h:price:2026-01-01_1h_v1"
 
     def test_smoothed_return_pins_model_version_via_env_var(self, monkeypatch):
         monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
 
         strategy = create_exam_smoothed_return_strategy(symbol="BTCUSDT", timeframe="1h")
 
-        assert strategy.signal_generator.model_name == "BTCUSDT:1h:cnn_lstm:2026-01-01_1h_v1"
+        assert strategy.signal_generator.model_name == "BTCUSDT:1h:price:2026-01-01_1h_v1"
 
     def test_env_var_unset_leaves_model_name_none(self, monkeypatch):
         monkeypatch.delenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, raising=False)
@@ -225,8 +225,10 @@ class TestPerEntrantExamStrategyFactories:
         }
         assert len(names) == 3
 
-    def test_model_type_and_sequence_length_are_overridable(self):
-        strategy = create_exam_binary_direction_strategy(model_type="tft", sequence_length=60)
+    def test_registry_model_type_and_sequence_length_are_overridable(self):
+        strategy = create_exam_binary_direction_strategy(
+            registry_model_type="sentiment", sequence_length=60
+        )
 
         assert strategy.signal_generator.sequence_length == 60
 

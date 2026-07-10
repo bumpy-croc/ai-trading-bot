@@ -282,6 +282,25 @@ class TestTrainingConfig:
                 target_type="meta_label",
             )
 
+    def test_use_mock_data_defaults_to_false(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+        )
+        assert config.use_mock_data is False
+
+    def test_use_mock_data_is_settable(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            use_mock_data=True,
+        )
+        assert config.use_mock_data is True
+
     def test_primary_model_type_defaults_to_none(self):
         config = TrainingConfig(
             symbol="BTCUSDT",

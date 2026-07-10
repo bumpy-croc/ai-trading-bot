@@ -351,6 +351,7 @@ class CloudTrainingOrchestrator:
                 # SageMaker hyperparameters must be strings; "" round-trips
                 # to None on the parsing side (entrypoint.py::parse_hyperparameters).
                 "primary_model_type": tc.primary_model_type or "",
+                "use_mock_data": str(tc.use_mock_data).lower(),
             },
         )
 

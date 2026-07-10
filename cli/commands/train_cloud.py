@@ -199,6 +199,13 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         "ignored otherwise.",
     )
     parser.add_argument(
+        "--mock-data",
+        action="store_true",
+        help="Use deterministic synthetic OHLCV data instead of the real "
+        "Binance-backed corpus (mirrors `atb live --mock-data`). Test/CI use "
+        "only -- never set for a real training run.",
+    )
+    parser.add_argument(
         "--instance-type",
         type=str,
         default="ml.g4dn.xlarge",
@@ -288,6 +295,7 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         target_type=args.target_type,
         target_horizon=args.target_horizon,
         primary_model_type=args.primary_model_type,
+        use_mock_data=args.mock_data,
         diagnostics=DiagnosticsOptions(
             generate_plots=False,  # Skip plots in cloud (no display)
             evaluate_robustness=True,

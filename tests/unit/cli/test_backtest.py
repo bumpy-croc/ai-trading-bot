@@ -185,6 +185,7 @@ class TestHandleBacktest:
             cache_ttl=24,
             log_to_db=False,
             provider="binance",
+            mock_data=False,
         )
 
     @pytest.fixture
@@ -381,6 +382,39 @@ class TestHandleBacktest:
             # Assert
             assert result == 0
             mock_create_provider.assert_called_once_with(provider_type="coinbase")
+
+    def test_backtest_with_mock_data_bypasses_real_providers_entirely(
+        self, default_args, mock_backtester
+    ):
+        """--mock-data (mirrors `atb live --mock-data`) must never construct
+        a real network-backed provider or the disk cache -- this is what
+        acceptance/integration tests rely on to exercise the REAL backtest
+        CLI path with zero network dependency (Phase 2b item 6)."""
+        default_args.mock_data = True
+
+        with (
+            patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
+            patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
+            patch("cli.commands.backtest.configure_logging"),
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
+            patch(
+                "src.data_providers.cached_data_provider.CachedDataProvider"
+            ) as mock_cached_provider,
+            patch("cli.commands.backtest.SymbolFactory.to_exchange_symbol", return_value="BTCUSDT"),
+            patch("builtins.open", create=True),
+            patch("cli.commands.backtest.PROJECT_ROOT", Path("/tmp/test")),
+        ):
+            mock_strategy = Mock(name="ml_basic")
+            mock_strategy.get_trading_pair.return_value = "BTCUSDT"
+            mock_load_strategy.return_value = mock_strategy
+
+            result = _handle(default_args)
+
+            assert result == 0
+            mock_create_provider.assert_not_called()
+            mock_cached_provider.assert_not_called()
 
     def test_returns_error_on_invalid_strategy(self, default_args):
         """Test that error is returned when strategy loading fails."""

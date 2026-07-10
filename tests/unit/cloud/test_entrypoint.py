@@ -69,6 +69,14 @@ class TestParseHyperparameters:
         parsed = parse_hyperparameters({"primary_model_type": "basic"})
         assert parsed["primary_model_type"] == "basic"
 
+    def test_use_mock_data_defaults_to_false(self) -> None:
+        parsed = parse_hyperparameters({})
+        assert parsed["use_mock_data"] is False
+
+    def test_use_mock_data_is_parsed(self) -> None:
+        parsed = parse_hyperparameters({"use_mock_data": "true"})
+        assert parsed["use_mock_data"] is True
+
 
 @pytest.mark.fast
 class TestRunTrainingThreading:
@@ -164,6 +172,24 @@ class TestRunTrainingThreading:
         assert rc == 0
         ctx = mock_run.call_args.args[0]
         assert ctx.config.primary_model_type is None
+
+    def test_use_mock_data_reaches_training_config(self) -> None:
+        params = self._base_params(use_mock_data=True)
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.use_mock_data is True
+
+    def test_use_mock_data_default_reaches_training_config_as_false(self) -> None:
+        params = self._base_params()
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.use_mock_data is False
 
     def test_invalid_model_type_fails_before_training(self) -> None:
         # Arrange - TrainingConfig validation must reject unknown architectures

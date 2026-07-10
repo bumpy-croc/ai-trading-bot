@@ -81,6 +81,14 @@ class TrainingConfig:
     # "meta_label" (validated below), ignored otherwise.
     primary_model_type: str | None = None
 
+    # Test-only escape hatch: routes load_training_corpus (ingestion.py) to
+    # MockDataProvider (deterministic synthetic OHLCV, no network) instead of
+    # the real Binance-backed cache. Mirrors `atb live --mock-data`'s
+    # existing pattern (src/engines/live/runner.py). Never set in production
+    # training -- exists so acceptance/integration tests can exercise the
+    # REAL training pipeline end-to-end without a network dependency.
+    use_mock_data: bool = False
+
     # Valid model types and variants for validation
     _VALID_MODEL_TYPES = frozenset(
         {

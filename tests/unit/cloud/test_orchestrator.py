@@ -223,6 +223,30 @@ class TestBuildJobSpec:
         assert spec.hyperparameters["target_type"] == "meta_label"
         assert spec.hyperparameters["primary_model_type"] == "basic"
 
+    def test_build_job_spec_default_use_mock_data_hyperparameters(
+        self, orchestrator: CloudTrainingOrchestrator
+    ) -> None:
+        spec = orchestrator._build_job_spec()
+        assert spec.hyperparameters["use_mock_data"] == "false"
+
+    def test_build_job_spec_custom_use_mock_data_hyperparameters(self) -> None:
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            use_mock_data=True,
+        )
+        cloud_config = CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+        orchestrator = CloudTrainingOrchestrator(cloud_config, MagicMock())
+
+        spec = orchestrator._build_job_spec()
+
+        assert spec.hyperparameters["use_mock_data"] == "true"
+
 
 class TestSubmitJob:
     """Tests for submit_job method."""

@@ -166,20 +166,26 @@ def create_exam_strategy(
 def create_exam_binary_direction_strategy(
     symbol: str = "BTCUSDT",
     timeframe: str = "1h",
-    model_type: str = "tft",
+    registry_model_type: str = "price",
     sequence_length: int = 120,
     **strategy_kwargs: Any,
 ) -> Strategy:
     """Entrant (b): binary fixed-horizon direction classification.
 
-    ``model_type`` defaults to "tft" -- the only binary-classification
-    architecture (sigmoid/BCE head) in this codebase (see
-    task_types.MODEL_TASK_TYPES).
+    ``registry_model_type`` is the REGISTRY namespace a trained bundle
+    lives under -- ``pipeline.py``'s ``run_training_pipeline`` writes
+    "price" or "sentiment" depending on ``has_sentiment``
+    (``--force-price-only`` -> "price"), NOT the ``--model-type``
+    architecture selector (tft/cnn_lstm/...) used to train it. Defaults to
+    "price" -- the namespace a ``--force-price-only`` training run (the
+    exam harness's own convention, see the preregistration) writes to. The
+    architecture itself is irrelevant at backtest time: the ONNX bundle is
+    self-describing via its metadata (task_type/class_labels).
     """
     signal_generator = ClassificationExamSignalGenerator(
         name="exam_binary_direction_signal_generator",
         sequence_length=sequence_length,
-        model_name=_exam_model_name(symbol, timeframe, model_type),
+        model_name=_exam_model_name(symbol, timeframe, registry_model_type),
     )
     return create_exam_strategy(
         signal_generator, name="EntrantB_BinaryDirection", **strategy_kwargs
@@ -189,21 +195,22 @@ def create_exam_binary_direction_strategy(
 def create_exam_triple_barrier_strategy(
     symbol: str = "BTCUSDT",
     timeframe: str = "1h",
-    model_type: str = "tft_ternary",
+    registry_model_type: str = "price",
     sequence_length: int = 120,
     **strategy_kwargs: Any,
 ) -> Strategy:
     """Entrant (c): triple-barrier ternary classification.
 
-    ``model_type`` defaults to "tft_ternary" -- the 3-class softmax sibling
-    of "tft" (see models_tft.py::create_tft_ternary_model). Same consuming
+    ``registry_model_type`` is the REGISTRY namespace (see
+    create_exam_binary_direction_strategy's docstring) -- NOT the
+    ``--model-type tft_ternary`` architecture selector. Same consuming
     SignalGenerator as entrant (b): both read a classifier bundle's
     probabilities directly via ``result.probabilities``/``result.direction``.
     """
     signal_generator = ClassificationExamSignalGenerator(
         name="exam_triple_barrier_signal_generator",
         sequence_length=sequence_length,
-        model_name=_exam_model_name(symbol, timeframe, model_type),
+        model_name=_exam_model_name(symbol, timeframe, registry_model_type),
     )
     return create_exam_strategy(signal_generator, name="EntrantC_TripleBarrier", **strategy_kwargs)
 
@@ -211,7 +218,7 @@ def create_exam_triple_barrier_strategy(
 def create_exam_smoothed_return_strategy(
     symbol: str = "BTCUSDT",
     timeframe: str = "1h",
-    model_type: str = "cnn_lstm",
+    registry_model_type: str = "price",
     sequence_length: int = 120,
     long_entry_threshold: float = 0.0,
     short_entry_threshold: float = 0.0,
@@ -219,16 +226,17 @@ def create_exam_smoothed_return_strategy(
 ) -> Strategy:
     """Entrant (d): smoothed forward return (Board directive).
 
-    ``model_type`` defaults to "cnn_lstm" -- the incumbent's own regression
-    architecture, so the (d) vs. incumbent comparison isolates the target
-    reformulation (label semantics) rather than also varying architecture
-    (preregistration principle: same architecture, different target where
-    the target's task type allows it).
+    ``registry_model_type`` is the REGISTRY namespace (see
+    create_exam_binary_direction_strategy's docstring) -- NOT the
+    ``--model-type`` architecture selector (defaults to "cnn_lstm", the
+    incumbent's own regression architecture, so the (d) vs. incumbent
+    comparison isolates the target reformulation rather than also varying
+    architecture).
     """
     signal_generator = SmoothedReturnExamSignalGenerator(
         name="exam_smoothed_return_signal_generator",
         sequence_length=sequence_length,
-        model_name=_exam_model_name(symbol, timeframe, model_type),
+        model_name=_exam_model_name(symbol, timeframe, registry_model_type),
         long_entry_threshold=long_entry_threshold,
         short_entry_threshold=short_entry_threshold,
     )

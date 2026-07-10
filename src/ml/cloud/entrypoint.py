@@ -85,6 +85,7 @@ def parse_hyperparameters(params: dict) -> dict:
         # hyperparameters must be strings) -- normalize back to None so
         # TrainingConfig's own required-when-meta_label check applies.
         "primary_model_type": params.get("primary_model_type") or None,
+        "use_mock_data": params.get("use_mock_data", "false").lower() == "true",
     }
 
 
@@ -134,6 +135,7 @@ def run_training(parsed_params: dict) -> int:
             target_type=parsed_params["target_type"],
             target_horizon=parsed_params["target_horizon"],
             primary_model_type=parsed_params.get("primary_model_type"),
+            use_mock_data=parsed_params.get("use_mock_data", False),
             diagnostics=DiagnosticsOptions(
                 generate_plots=False,  # No display in container
                 evaluate_robustness=True,
