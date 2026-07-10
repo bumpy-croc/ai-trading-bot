@@ -107,13 +107,12 @@ class TestPercentileRankConfidence:
     def test_no_hardcoded_multiplier_used(self, dist):
         """Doubling the input must NOT double the confidence -- this is the
         entire point of using a frozen percentile table instead of the
-        prohibited `confidence = |x| * constant` formula."""
-        c1 = percentile_rank_confidence(20.0, dist)
-        c2 = percentile_rank_confidence(40.0, dist)
-        # A linear-multiplier formula would give c2 == 2 * c1; the
-        # percentile-rank formula need not (and here, given this fixture's
-        # linear grid, DOES happen to double -- so assert it holds for a
-        # genuinely nonlinear distribution instead).
+        prohibited `confidence = |x| * constant` formula.
+
+        A linear-multiplier formula always gives confidence(2x) == 2 *
+        confidence(x); the percentile-rank formula need not (and on this
+        fixture's linear grid it happens to coincide -- so assert the
+        property on a genuinely nonlinear distribution instead)."""
         skewed = FrozenDistribution(
             values=(0.0, 1.0, 2.0, 100.0),
             percentiles=(0.0, 90.0, 95.0, 100.0),

@@ -136,7 +136,11 @@ class TestSimulateFiredTradeProfitability:
         # exit_price=105. raw_pct_return = (105-100)/100 = 0.05. Fee-rate
         # default 0.001 round-trip 0.002 -- still net profitable.
         result = simulate_fired_trade_profitability(
-            df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+            df,
+            fire_index=0,
+            direction=1,
+            take_profit_pct=0.05,
+            stop_loss_pct=0.03,
             max_holding_bars=3,
         )
         assert result is True
@@ -146,7 +150,11 @@ class TestSimulateFiredTradeProfitability:
         # fire at t=3, entry=106, TP=111.3, SL=102.82: bars 4,5 (truncated
         # window, only 2 bars) -> bar5 low=96<=102.82 -> SL hit.
         result = simulate_fired_trade_profitability(
-            df, fire_index=3, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+            df,
+            fire_index=3,
+            direction=1,
+            take_profit_pct=0.05,
+            stop_loss_pct=0.03,
             max_holding_bars=3,
         )
         assert result is False
@@ -158,7 +166,11 @@ class TestSimulateFiredTradeProfitability:
         # touch. bar5: high=98,low=96 -> TP (low<=100.7) -> exit=100.7.
         # raw_pct_return = direction(-1) * (100.7-106)/106 = 0.05 -> profitable.
         result = simulate_fired_trade_profitability(
-            df, fire_index=3, direction=-1, take_profit_pct=0.05, stop_loss_pct=0.03,
+            df,
+            fire_index=3,
+            direction=-1,
+            take_profit_pct=0.05,
+            stop_loss_pct=0.03,
             max_holding_bars=3,
         )
         assert result is True
@@ -173,7 +185,11 @@ class TestSimulateFiredTradeProfitability:
             }
         )
         result = simulate_fired_trade_profitability(
-            df, fire_index=0, direction=1, take_profit_pct=0.5, stop_loss_pct=0.5,
+            df,
+            fire_index=0,
+            direction=1,
+            take_profit_pct=0.5,
+            stop_loss_pct=0.5,
             max_holding_bars=1,
         )
         # raw_pct_return = 0 (flat), minus fees -> unprofitable.
@@ -184,7 +200,11 @@ class TestSimulateFiredTradeProfitability:
         trade -- must return None (unresolved), never False or True."""
         df = self._fixture_df()
         result = simulate_fired_trade_profitability(
-            df, fire_index=5, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+            df,
+            fire_index=5,
+            direction=1,
+            take_profit_pct=0.05,
+            stop_loss_pct=0.03,
             max_holding_bars=3,
         )
         assert result is None
@@ -203,7 +223,11 @@ class TestSimulateFiredTradeProfitability:
             }
         )
         result = simulate_fired_trade_profitability(
-            df, fire_index=0, direction=1, take_profit_pct=0.5, stop_loss_pct=0.5,
+            df,
+            fire_index=0,
+            direction=1,
+            take_profit_pct=0.5,
+            stop_loss_pct=0.5,
             max_holding_bars=1,
         )
         assert result is False
@@ -212,7 +236,11 @@ class TestSimulateFiredTradeProfitability:
         df = self._fixture_df()
         with pytest.raises(ValueError, match="direction"):
             simulate_fired_trade_profitability(
-                df, fire_index=0, direction=0, take_profit_pct=0.05, stop_loss_pct=0.03,
+                df,
+                fire_index=0,
+                direction=0,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
                 max_holding_bars=3,
             )
 

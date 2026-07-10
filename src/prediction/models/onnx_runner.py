@@ -220,7 +220,11 @@ class OnnxRunner:
 
         try:
             # Check cache first if enabled
-            if self.cache_manager and self.config.prediction_cache_enabled and not is_classification:
+            if (
+                self.cache_manager
+                and self.config.prediction_cache_enabled
+                and not is_classification
+            ):
                 cache_result = self._check_cache(features)
                 if cache_result is not None:
                     # Return cached result
@@ -280,7 +284,11 @@ class OnnxRunner:
             inference_time = time.time() - start_time
 
             # Cache the result if enabled (classification excluded, see above)
-            if self.cache_manager and self.config.prediction_cache_enabled and not is_classification:
+            if (
+                self.cache_manager
+                and self.config.prediction_cache_enabled
+                and not is_classification
+            ):
                 self._cache_result(features, prediction)
 
             return ModelPrediction(
@@ -517,9 +525,7 @@ class OnnxRunner:
 
         return {"price": float(pred), "confidence": confidence, "direction": direction}
 
-    def _process_classification_output(
-        self, output: np.ndarray, task_type: str
-    ) -> dict[str, Any]:
+    def _process_classification_output(self, output: np.ndarray, task_type: str) -> dict[str, Any]:
         """Process a classification model's raw output into a prediction dict.
 
         Metadata MUST declare "class_labels": an ordered list of direction

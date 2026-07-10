@@ -89,9 +89,7 @@ class ClassificationExamSignalGenerator(SignalGenerator):
         self.model_name = model_name
         self.prediction_engine = _build_price_only_prediction_engine(sequence_length)
 
-    def generate_signal(
-        self, df: Any, index: int, regime: RegimeContext | None = None
-    ) -> Signal:
+    def generate_signal(self, df: Any, index: int, regime: RegimeContext | None = None) -> Signal:
         self.validate_inputs(df, index)
 
         if index < self.sequence_length:
@@ -211,9 +209,7 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
         self.short_entry_threshold = short_entry_threshold
         self.prediction_engine = _build_price_only_prediction_engine(sequence_length)
 
-    def generate_signal(
-        self, df: Any, index: int, regime: RegimeContext | None = None
-    ) -> Signal:
+    def generate_signal(self, df: Any, index: int, regime: RegimeContext | None = None) -> Signal:
         self.validate_inputs(df, index)
 
         if index < self.sequence_length:

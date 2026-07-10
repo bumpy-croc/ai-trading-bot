@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -245,7 +245,7 @@ def build_meta_label_features(
 
     label_ints = [1 if bool(label) else 0 for label in labels]
 
-    rows: list[dict[str, float | int]] = []
+    rows: list[dict[str, Any]] = []
     for position, fire in enumerate(fired_signals):
         prior_labels = label_ints[:position]
         if prior_labels:

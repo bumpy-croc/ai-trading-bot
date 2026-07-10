@@ -136,9 +136,7 @@ class TestTripleBarrierLabels:
         # t=4: entry=104, TP=109.2, SL=100.88. bar 5 only -> low=99<=100.88 -> SL (-1), valid
         # t=5: last bar, no forward data at all -> invalid
         np.testing.assert_array_equal(result.values[:5], [1, 1, -1, -1, -1])
-        np.testing.assert_array_equal(
-            result.valid_mask, [True, True, True, True, True, False]
-        )
+        np.testing.assert_array_equal(result.valid_mask, [True, True, True, True, True, False])
 
     def test_vertical_barrier_when_neither_touched(self):
         """Flat price path within the full window -> label 0 (vertical/time barrier)."""

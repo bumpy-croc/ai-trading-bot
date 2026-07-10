@@ -64,8 +64,7 @@ def get_model_task_type(model_type: str) -> TaskType:
     task_type = MODEL_TASK_TYPES.get(model_type.lower())
     if task_type is None:
         raise ValueError(
-            f"Unknown model_type: {model_type!r}. "
-            f"Known model types: {sorted(MODEL_TASK_TYPES)}"
+            f"Unknown model_type: {model_type!r}. " f"Known model types: {sorted(MODEL_TASK_TYPES)}"
         )
     return task_type
 

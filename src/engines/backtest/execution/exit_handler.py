@@ -601,9 +601,7 @@ class ExitHandler:
                 side=side_str,
                 candle_high=candle_high,
                 candle_low=candle_low,
-                stop_loss_price=(
-                    float(trade.stop_loss) if trade.stop_loss is not None else None
-                ),
+                stop_loss_price=(float(trade.stop_loss) if trade.stop_loss is not None else None),
                 take_profit_price=(
                     float(trade.take_profit) if trade.take_profit is not None else None
                 ),
