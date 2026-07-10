@@ -280,7 +280,7 @@ def test_reload_models_clears_cache_on_success(tmp_path: Path, monkeypatch):
     # Patch _scan_registry to return a valid bundle so reload doesn't early-return
     fake_bundle = _make_fake_bundle("BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
     fake_bundles = {("BTCUSDT", "1h", "basic"): fake_bundle}
-    with patch.object(reg, "_scan_registry", return_value=(fake_bundles, {})):
+    with patch.object(reg, "_scan_registry", return_value=(fake_bundles, {}, {})):
         # Act
         reg.reload_models()
 
@@ -310,7 +310,7 @@ def test_reload_models_warns_when_no_cache_manager(tmp_path: Path, monkeypatch, 
 
     with (
         caplog.at_level(logging.WARNING),
-        patch.object(reg, "_scan_registry", return_value=(fake_bundles, {})),
+        patch.object(reg, "_scan_registry", return_value=(fake_bundles, {}, {})),
     ):
         reg.reload_models()
 
@@ -345,7 +345,7 @@ def test_reload_models_handles_cache_clear_exception(tmp_path: Path, monkeypatch
 
     with (
         caplog.at_level(logging.WARNING),
-        patch.object(reg, "_scan_registry", return_value=(fake_bundles, {})),
+        patch.object(reg, "_scan_registry", return_value=(fake_bundles, {}, {})),
     ):
         reg.reload_models()
 
@@ -375,9 +375,136 @@ def test_reload_models_cache_clear_returns_none(tmp_path: Path, monkeypatch):
     fake_bundle = _make_fake_bundle("BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
     fake_bundles = {("BTCUSDT", "1h", "basic"): fake_bundle}
 
-    with patch.object(reg, "_scan_registry", return_value=(fake_bundles, {})):
+    with patch.object(reg, "_scan_registry", return_value=(fake_bundles, {}, {})):
         # Act -- should not raise despite None return value
         reg.reload_models()
 
     # Assert
     mock_cache_manager.clear.assert_called_once()
+
+
+# ---- Model-version pinning tests (Phase 2b item 4) ----
+#
+# The exam harness fold-runner needs to pin a SPECIFIC model version per
+# fold; select_bundle()/list_bundles() always resolve "latest" with no way
+# to override it, and select_bundle() is ALSO called unconditionally on the
+# live trading path (ml_signal_generator.py) -- so pinning must not touch
+# it. get_bundle_by_key() is the opt-in escape hatch instead: it searches
+# every loaded version, not just "latest", and only activates when a caller
+# explicitly passes a full bundle key (PredictionEngine._resolve_bundle's
+# model_name fallback) -- never on select_bundle()'s live-trading callers.
+
+
+def _make_bundle_with_latest_symlink(
+    tmpdir: Path, symbol: str, model_type: str, timeframe: str, version: str
+) -> Path:
+    """Like _make_bundle, but also points a `latest` symlink at the version."""
+    base = _make_bundle(tmpdir, symbol, model_type, timeframe, version)
+    latest = base.parent / "latest"
+    if latest.exists() or latest.is_symlink():
+        latest.unlink()
+    latest.symlink_to(base, target_is_directory=True)
+    return base
+
+
+@pytest.mark.fast
+def test_versioned_bundles_populated_for_every_loaded_version(tmp_path: Path, monkeypatch):
+    reg_root = tmp_path / "models"
+    _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+    reg = PredictionModelRegistry(cfg)
+
+    assert ("BTCUSDT", "1h", "basic", "2025-01-01_1h_v1") in reg._versioned_bundles
+    assert ("BTCUSDT", "1h", "basic", "2025-02-01_1h_v2") in reg._versioned_bundles
+
+
+@pytest.mark.fast
+def test_get_bundle_by_key_finds_non_latest_version(tmp_path: Path, monkeypatch):
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+    _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+    reg = PredictionModelRegistry(cfg)
+
+    bundle = reg.get_bundle_by_key("BTCUSDT:1h:basic:2025-01-01_1h_v1")
+
+    assert bundle is not None
+    assert bundle.version_id == "2025-01-01_1h_v1"
+
+
+@pytest.mark.fast
+def test_get_bundle_by_key_also_finds_latest_version(tmp_path: Path, monkeypatch):
+    reg_root = tmp_path / "models"
+    _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+    reg = PredictionModelRegistry(cfg)
+
+    bundle = reg.get_bundle_by_key("BTCUSDT:1h:basic:2025-02-01_1h_v2")
+
+    assert bundle is not None
+    assert bundle.version_id == "2025-02-01_1h_v2"
+
+
+@pytest.mark.fast
+def test_get_bundle_by_key_returns_none_for_unknown_key(tmp_path: Path, monkeypatch):
+    reg_root = tmp_path / "models"
+    _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+    reg = PredictionModelRegistry(cfg)
+
+    assert reg.get_bundle_by_key("BTCUSDT:1h:basic:does-not-exist_1h_v9") is None
+
+
+@pytest.mark.fast
+def test_select_bundle_always_resolves_latest_regardless_of_other_versions(
+    tmp_path: Path, monkeypatch
+):
+    """select_bundle() is also called unconditionally on the live trading
+    path (ml_signal_generator.py) -- it must always resolve latest, with no
+    pinning mechanism reachable through it."""
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+    _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+    reg = PredictionModelRegistry(cfg)
+
+    bundle = reg.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+
+    assert bundle.version_id == "2025-02-01_1h_v2"
+
+
+@pytest.mark.fast
+def test_reload_models_closes_versioned_runners_without_double_close(tmp_path: Path, monkeypatch):
+    """reload_models must close every distinct runner across both _bundles
+    and _versioned_bundles exactly once -- ONNX sessions must be cleaned up
+    (CODE.md Resource Management); double-closing or leaking either is a
+    live-crash risk."""
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+    _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+    reg = PredictionModelRegistry(cfg)
+
+    old_bundle_runner = reg._bundles[("BTCUSDT", "1h", "basic")].runner
+    old_v1_runner = reg._versioned_bundles[("BTCUSDT", "1h", "basic", "2025-01-01_1h_v1")].runner
+    close_calls = {"bundle": 0, "v1": 0}
+    old_bundle_runner.close = lambda: close_calls.__setitem__("bundle", close_calls["bundle"] + 1)
+    old_v1_runner.close = lambda: close_calls.__setitem__("v1", close_calls["v1"] + 1)
+
+    reg.reload_models()
+
+    assert close_calls["bundle"] == 1
+    assert close_calls["v1"] == 1

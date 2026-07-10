@@ -54,6 +54,44 @@ class TestLoadStrategy:
             with pytest.raises(Exception, match="Model not found"):
                 _load_strategy("ml_basic")
 
+    @pytest.mark.parametrize(
+        ("strategy_name", "patch_target"),
+        [
+            (
+                "exam_binary_direction",
+                "cli.commands.backtest.create_exam_binary_direction_strategy",
+            ),
+            ("exam_triple_barrier", "cli.commands.backtest.create_exam_triple_barrier_strategy"),
+            ("exam_smoothed_return", "cli.commands.backtest.create_exam_smoothed_return_strategy"),
+        ],
+    )
+    def test_loads_exam_target_redesign_strategies(self, strategy_name, patch_target):
+        """TARGET-REDESIGN tournament exam-only strategies (Phase 2b item 4)
+        must be selectable via the backtest CLI -- this is the fold-runner's
+        only entry point for entrants (b)/(c)/(d)."""
+        with patch(patch_target) as mock_create:
+            mock_strategy = Mock(name=strategy_name)
+            mock_create.return_value = mock_strategy
+
+            result = _load_strategy(strategy_name)
+
+            assert result == mock_strategy
+            mock_create.assert_called_once()
+
+    def test_exam_target_redesign_strategies_are_not_selectable_by_live_runner(self):
+        """Arch-review requirement: the exam harness (ConfidenceWeightedSizer
+        + ratified risk-limits defaults, deliberately different from
+        HyperGrowth's live wiring) must never be reachable from a live/paper
+        trading session. src/engines/live/runner.py's strategy dict must not
+        import or reference any exam_target_redesign factory."""
+        import inspect
+
+        from src.engines.live import runner as live_runner
+
+        source = inspect.getsource(live_runner)
+        assert "exam_target_redesign" not in source
+        assert "create_exam_" not in source
+
 
 class TestGetDateRange:
     """Tests for the _get_date_range function."""

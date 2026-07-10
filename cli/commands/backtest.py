@@ -32,6 +32,11 @@ from src.strategies import (
     create_momentum_leverage_strategy,
 )
 from src.strategies.components import Strategy
+from src.strategies.exam_target_redesign import (
+    create_exam_binary_direction_strategy,
+    create_exam_smoothed_return_strategy,
+    create_exam_triple_barrier_strategy,
+)
 from src.trading.symbols.factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")
@@ -54,6 +59,16 @@ def _load_strategy(strategy_name: str, symbol: str | None = None):
         "kelly_momentum": create_kelly_momentum_strategy,
         "leveraged_regime": create_leveraged_regime_strategy,
         "hyper_growth": create_hyper_growth_strategy,
+        # TARGET-REDESIGN tournament exam-only strategies (GH #933, Phase 2b
+        # item 4). EXAM-ONLY BY DESIGN -- backtest CLI is the ONLY place
+        # these are registered. Do NOT add these to src/strategies/__init__
+        # .py's general exports or src/engines/live/runner.py's strategy
+        # dict; the tournament's research harness (ConfidenceWeightedSizer
+        # + ratified risk-limits defaults) is deliberately separate from
+        # anything a live/paper trading session could select.
+        "exam_binary_direction": create_exam_binary_direction_strategy,
+        "exam_triple_barrier": create_exam_triple_barrier_strategy,
+        "exam_smoothed_return": create_exam_smoothed_return_strategy,
     }
 
     try:

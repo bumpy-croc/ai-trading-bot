@@ -74,9 +74,15 @@ class PredictionModelRegistry:
         self.config = config
         self.cache_manager = cache_manager
         # Structured bundles keyed by (symbol, timeframe, model_type) -> StrategyModel
+        # ("latest wins" -- see _scan_registry)
         self._bundles: dict[tuple[str, str, str], StrategyModel] = {}
         # Optional production selections: (symbol, timeframe, model_type) -> version_id
         self._production_index: dict[tuple[str, str, str], str] = {}
+        # Every loaded bundle, keyed by its EXACT version_id --
+        # (symbol, timeframe, model_type, version_id) -> StrategyModel. Lets
+        # get_bundle_by_key() find a specific non-latest version by its full
+        # key, unlike select_bundle()/list_bundles() (latest-wins).
+        self._versioned_bundles: dict[tuple[str, str, str, str], StrategyModel] = {}
         # RLock for thread-safe atomic swaps during reload. RLock (re-entrant) is used
         # rather than Lock because _load and reload_models share traversal logic, and a
         # future refactoring to consolidate them could call locked methods internally.
@@ -86,17 +92,22 @@ class PredictionModelRegistry:
 
     def _scan_registry(
         self,
-    ) -> tuple[dict[tuple[str, str, str], StrategyModel], dict[tuple[str, str, str], str]]:
+    ) -> tuple[
+        dict[tuple[str, str, str], StrategyModel],
+        dict[tuple[str, str, str], str],
+        dict[tuple[str, str, str, str], StrategyModel],
+    ]:
         """Scan the registry directory and load all bundles.
 
         Returns:
-            Tuple of (bundles dict, production index dict).
+            Tuple of (bundles dict, production index dict, versioned bundles dict).
         """
         bundles: dict[tuple[str, str, str], StrategyModel] = {}
         production_index: dict[tuple[str, str, str], str] = {}
+        versioned_bundles: dict[tuple[str, str, str, str], StrategyModel] = {}
         base = Path(self.config.model_registry_path)
         if not base.exists():
-            return bundles, production_index
+            return bundles, production_index, versioned_bundles
         # Expect structure: base/{symbol}/{model_type}/{version_id}/model.onnx
         for symbol_dir in base.iterdir():
             if not symbol_dir.is_dir():
@@ -116,6 +127,7 @@ class PredictionModelRegistry:
                         bundle = self._load_bundle(symbol, model_type, vdir)
                         key = (bundle.symbol, bundle.timeframe, bundle.model_type)
                         bundles[key] = bundle
+                        versioned_bundles[(*key, bundle.version_id)] = bundle
                     except Exception as e:  # pragma: no cover - aggregated logging
                         logger.error("Failed to load bundle at %s: %s", vdir, e)
                 if latest.exists():
@@ -124,13 +136,14 @@ class PredictionModelRegistry:
                         key = (bundle.symbol, bundle.timeframe, bundle.model_type)
                         bundles[key] = bundle
                         production_index[key] = bundle.version_id
+                        versioned_bundles[(*key, bundle.version_id)] = bundle
                     except Exception as e:  # pragma: no cover - aggregated logging
                         logger.error("Failed to load bundle at %s: %s", latest, e)
-        return bundles, production_index
+        return bundles, production_index, versioned_bundles
 
     def _load(self) -> None:
         """Load structured bundles from the configured registry path."""
-        self._bundles, self._production_index = self._scan_registry()
+        self._bundles, self._production_index, self._versioned_bundles = self._scan_registry()
 
     def _load_bundle(self, symbol: str, model_type: str, vdir: Path) -> StrategyModel:
         """Load a single bundle directory into a ModelBundle."""
@@ -279,6 +292,14 @@ class PredictionModelRegistry:
 
         If stage is provided and a production index exists, use it. Otherwise, use the
         most recently loaded bundle for that key (latest symlink is preferred by _load()).
+
+        Deliberately NOT version-pinnable: this method is also called
+        unconditionally on the LIVE trading path (ml_signal_generator.py),
+        so it always resolves "latest" with no override. Version pinning
+        (e.g. the exam harness pinning a specific fold's model) goes
+        through ``get_bundle_by_key`` instead, which only activates when a
+        caller explicitly passes a full bundle key -- exam-only code never
+        imported by the live runner.
         """
         with self._lock:
             key = (symbol, timeframe, model_type)
@@ -289,6 +310,27 @@ class PredictionModelRegistry:
                 )
             # Stage currently informational; production_index ensures latest symlink dominance
             return bundle
+
+    def get_bundle_by_key(self, key: str) -> StrategyModel | None:
+        """Look up any loaded bundle -- including a non-latest version -- by
+        its exact ``StrategyModel.key`` string.
+
+        Unlike ``select_bundle``/``list_bundles`` (latest-wins, one entry
+        per symbol/timeframe/model_type), this searches every version ever
+        loaded (``_versioned_bundles``). Used by
+        ``PredictionEngine._resolve_bundle`` as a fallback when a
+        ``model_name`` doesn't match any currently-latest bundle -- e.g. the
+        TARGET-REDESIGN exam harness's fold-runner pinning a specific
+        version via ``f"{symbol}:{timeframe}:{model_type}:{version_id}"``.
+
+        Thread-safe: Acquires lock so the result is from the current
+        generation.
+        """
+        with self._lock:
+            for bundle in self._versioned_bundles.values():
+                if bundle.key == key:
+                    return bundle
+            return None
 
     def select_many(
         self,
@@ -345,13 +387,14 @@ class PredictionModelRegistry:
         predictions continue working with the previous model versions.
         """
         # Load new bundles in background (outside lock to avoid blocking)
-        new_bundles, new_production_index = self._scan_registry()
+        new_bundles, new_production_index, new_versioned_bundles = self._scan_registry()
 
         # Preserve existing bundles when reload produces empty results (e.g., transient
         # filesystem issue, NFS timeout, Docker volume unmount). This prevents a full
         # prediction outage from a temporary registry path unavailability.
         with self._lock:
             old_bundles = self._bundles
+            old_versioned_bundles = self._versioned_bundles
             if not new_bundles and old_bundles:
                 logger.warning(
                     "reload_models produced 0 bundles (had %d) — keeping existing bundles. "
@@ -362,6 +405,7 @@ class PredictionModelRegistry:
                 return
             self._bundles = new_bundles
             self._production_index = new_production_index
+            self._versioned_bundles = new_versioned_bundles
 
         # Invalidate prediction caches after model swap to prevent stale
         # features from being served with the new model weights.
@@ -380,8 +424,20 @@ class PredictionModelRegistry:
                 "after model reload to avoid stale predictions"
             )
 
-        # Close old runners outside lock to avoid blocking other threads
-        for bundle in old_bundles.values():
+        # Close old runners outside lock to avoid blocking other threads.
+        # old_versioned_bundles holds strictly more StrategyModel instances
+        # than old_bundles (every concrete version, not just "latest") --
+        # the latest-resolved bundle is the SAME object in both dicts, so
+        # dedup by identity to close each distinct runner exactly once
+        # (never double-close, never leak a version-pinned session).
+        seen_ids: set[int] = set()
+        old_all_bundles: list[StrategyModel] = []
+        for bundle in (*old_bundles.values(), *old_versioned_bundles.values()):
+            if id(bundle) not in seen_ids:
+                seen_ids.add(id(bundle))
+                old_all_bundles.append(bundle)
+
+        for bundle in old_all_bundles:
             if hasattr(bundle.runner, "close"):
                 try:
                     bundle.runner.close()

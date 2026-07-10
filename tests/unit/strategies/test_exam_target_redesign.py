@@ -24,7 +24,17 @@ from src.strategies.components import (
     HoldSignalGenerator,
     Strategy,
 )
-from src.strategies.exam_target_redesign import create_exam_strategy
+from src.strategies.components.exam_signal_generator import (
+    ClassificationExamSignalGenerator,
+    SmoothedReturnExamSignalGenerator,
+)
+from src.strategies.exam_target_redesign import (
+    _MODEL_VERSION_OVERRIDE_ENV_VAR,
+    create_exam_binary_direction_strategy,
+    create_exam_smoothed_return_strategy,
+    create_exam_strategy,
+    create_exam_triple_barrier_strategy,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -144,3 +154,85 @@ class TestCreateExamStrategy:
     def test_default_name(self):
         strategy = create_exam_strategy(signal_generator=HoldSignalGenerator())
         assert strategy.name
+
+
+class TestPerEntrantExamStrategyFactories:
+    """Per-entrant factory functions -- CLI-selectable via backtest.py's
+    exam-only strategy registration (Phase 2b item 4). Each wires the
+    entrant's SignalGenerator into create_exam_strategy's shared harness
+    wiring, and each supports pinning to a SPECIFIC (non-latest) model
+    version per fold via ATB_MODEL_VERSION_OVERRIDE -- exam-only, read
+    inside this module rather than the shared registry, so it can never
+    affect live trading (PredictionModelRegistry.select_bundle always
+    resolves latest regardless)."""
+
+    def test_binary_direction_uses_classification_signal_generator(self):
+        strategy = create_exam_binary_direction_strategy()
+
+        assert isinstance(strategy, Strategy)
+        assert isinstance(strategy.signal_generator, ClassificationExamSignalGenerator)
+        assert strategy.signal_generator.model_name is None
+
+    def test_triple_barrier_uses_classification_signal_generator(self):
+        strategy = create_exam_triple_barrier_strategy()
+
+        assert isinstance(strategy.signal_generator, ClassificationExamSignalGenerator)
+        assert strategy.signal_generator.model_name is None
+
+    def test_smoothed_return_uses_smoothed_return_signal_generator(self):
+        strategy = create_exam_smoothed_return_strategy()
+
+        assert isinstance(strategy.signal_generator, SmoothedReturnExamSignalGenerator)
+        assert strategy.signal_generator.model_name is None
+
+    def test_binary_direction_pins_model_version_via_env_var(self, monkeypatch):
+        monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
+
+        strategy = create_exam_binary_direction_strategy(symbol="ETHUSDT", timeframe="4h")
+
+        assert strategy.signal_generator.model_name == "ETHUSDT:4h:tft:2026-01-01_1h_v1"
+
+    def test_triple_barrier_pins_model_version_via_env_var(self, monkeypatch):
+        monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
+
+        strategy = create_exam_triple_barrier_strategy(symbol="BTCUSDT", timeframe="1h")
+
+        assert strategy.signal_generator.model_name == "BTCUSDT:1h:tft_ternary:2026-01-01_1h_v1"
+
+    def test_smoothed_return_pins_model_version_via_env_var(self, monkeypatch):
+        monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
+
+        strategy = create_exam_smoothed_return_strategy(symbol="BTCUSDT", timeframe="1h")
+
+        assert strategy.signal_generator.model_name == "BTCUSDT:1h:cnn_lstm:2026-01-01_1h_v1"
+
+    def test_env_var_unset_leaves_model_name_none(self, monkeypatch):
+        monkeypatch.delenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, raising=False)
+
+        strategy = create_exam_binary_direction_strategy()
+
+        assert strategy.signal_generator.model_name is None
+
+    def test_each_entrant_gets_a_distinct_strategy_name(self):
+        names = {
+            create_exam_binary_direction_strategy().name,
+            create_exam_triple_barrier_strategy().name,
+            create_exam_smoothed_return_strategy().name,
+        }
+        assert len(names) == 3
+
+    def test_model_type_and_sequence_length_are_overridable(self):
+        strategy = create_exam_binary_direction_strategy(model_type="tft", sequence_length=60)
+
+        assert strategy.signal_generator.sequence_length == 60
+
+    def test_uses_confidence_weighted_sizer_not_fixed_fraction(self):
+        """Same #938 requirement as create_exam_strategy -- verified end-to-
+        end through the per-entrant factories, not just the shared helper."""
+        for strategy in (
+            create_exam_binary_direction_strategy(),
+            create_exam_triple_barrier_strategy(),
+            create_exam_smoothed_return_strategy(),
+        ):
+            assert isinstance(strategy.position_sizer, ConfidenceWeightedSizer)
+            assert type(strategy.risk_manager).__name__ != "FlatRiskManager"

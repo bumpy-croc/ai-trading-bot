@@ -24,6 +24,9 @@ four TARGET-REDESIGN entrants: ``ClassificationExamSignalGenerator`` for
 
 from __future__ import annotations
 
+import os
+from typing import Any
+
 from src.config.constants import (
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_STOP_LOSS_PCT,
@@ -40,8 +43,39 @@ from src.strategies.components import (
     SignalGenerator,
     Strategy,
 )
+from src.strategies.components.exam_signal_generator import (
+    ClassificationExamSignalGenerator,
+    SmoothedReturnExamSignalGenerator,
+)
 
 DEFAULT_EXAM_STRATEGY_NAME = "TargetRedesignExam"
+
+# Escape hatch letting the exam harness's fold-runner pin a SPECIFIC
+# (non-latest) model version per fold -- PredictionModelRegistry's
+# select_bundle()/list_bundles() always resolve "latest", with no override
+# (deliberately: select_bundle is also called unconditionally on the LIVE
+# trading path in ml_signal_generator.py, so it must never be pinnable via
+# ambient env var). This module is exam-only and never imported by the live
+# runner, so reading the override here has zero live blast radius. Resolved
+# into a full StrategyModel.key string
+# (f"{symbol}:{timeframe}:{model_type}:{version}"), which
+# PredictionEngine._resolve_bundle finds via PredictionModelRegistry.
+# get_bundle_by_key -- the one place a non-latest version is reachable by
+# exact key.
+_MODEL_VERSION_OVERRIDE_ENV_VAR = "ATB_MODEL_VERSION_OVERRIDE"
+
+
+def _exam_model_name(symbol: str, timeframe: str, model_type: str) -> str | None:
+    """Resolve the model_name to pass an exam SignalGenerator.
+
+    Returns a full bundle key (pinning to a specific version) when
+    ``_MODEL_VERSION_OVERRIDE_ENV_VAR`` is set, else None (registry
+    default: latest).
+    """
+    version = os.environ.get(_MODEL_VERSION_OVERRIDE_ENV_VAR)
+    if not version:
+        return None
+    return f"{symbol}:{timeframe}:{model_type}:{version}"
 
 
 def create_exam_strategy(
@@ -127,4 +161,82 @@ def create_exam_strategy(
     return strategy
 
 
-__all__ = ["DEFAULT_EXAM_STRATEGY_NAME", "create_exam_strategy"]
+def create_exam_binary_direction_strategy(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    model_type: str = "tft",
+    sequence_length: int = 120,
+    **strategy_kwargs: Any,
+) -> Strategy:
+    """Entrant (b): binary fixed-horizon direction classification.
+
+    ``model_type`` defaults to "tft" -- the only binary-classification
+    architecture (sigmoid/BCE head) in this codebase (see
+    task_types.MODEL_TASK_TYPES).
+    """
+    signal_generator = ClassificationExamSignalGenerator(
+        name="exam_binary_direction_signal_generator",
+        sequence_length=sequence_length,
+        model_name=_exam_model_name(symbol, timeframe, model_type),
+    )
+    return create_exam_strategy(
+        signal_generator, name="EntrantB_BinaryDirection", **strategy_kwargs
+    )
+
+
+def create_exam_triple_barrier_strategy(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    model_type: str = "tft_ternary",
+    sequence_length: int = 120,
+    **strategy_kwargs: Any,
+) -> Strategy:
+    """Entrant (c): triple-barrier ternary classification.
+
+    ``model_type`` defaults to "tft_ternary" -- the 3-class softmax sibling
+    of "tft" (see models_tft.py::create_tft_ternary_model). Same consuming
+    SignalGenerator as entrant (b): both read a classifier bundle's
+    probabilities directly via ``result.probabilities``/``result.direction``.
+    """
+    signal_generator = ClassificationExamSignalGenerator(
+        name="exam_triple_barrier_signal_generator",
+        sequence_length=sequence_length,
+        model_name=_exam_model_name(symbol, timeframe, model_type),
+    )
+    return create_exam_strategy(signal_generator, name="EntrantC_TripleBarrier", **strategy_kwargs)
+
+
+def create_exam_smoothed_return_strategy(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    model_type: str = "cnn_lstm",
+    sequence_length: int = 120,
+    long_entry_threshold: float = 0.0,
+    short_entry_threshold: float = 0.0,
+    **strategy_kwargs: Any,
+) -> Strategy:
+    """Entrant (d): smoothed forward return (Board directive).
+
+    ``model_type`` defaults to "cnn_lstm" -- the incumbent's own regression
+    architecture, so the (d) vs. incumbent comparison isolates the target
+    reformulation (label semantics) rather than also varying architecture
+    (preregistration principle: same architecture, different target where
+    the target's task type allows it).
+    """
+    signal_generator = SmoothedReturnExamSignalGenerator(
+        name="exam_smoothed_return_signal_generator",
+        sequence_length=sequence_length,
+        model_name=_exam_model_name(symbol, timeframe, model_type),
+        long_entry_threshold=long_entry_threshold,
+        short_entry_threshold=short_entry_threshold,
+    )
+    return create_exam_strategy(signal_generator, name="EntrantD_SmoothedReturn", **strategy_kwargs)
+
+
+__all__ = [
+    "DEFAULT_EXAM_STRATEGY_NAME",
+    "create_exam_binary_direction_strategy",
+    "create_exam_smoothed_return_strategy",
+    "create_exam_strategy",
+    "create_exam_triple_barrier_strategy",
+]
