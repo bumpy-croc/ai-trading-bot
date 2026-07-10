@@ -345,7 +345,11 @@ class TestResolveFiredTradeEntryPriceValidation:
         )
         with pytest.raises(ValueError, match="entry_price"):
             resolve_fired_trade(
-                df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+                df,
+                fire_index=0,
+                direction=1,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
                 max_holding_bars=1,
             )
 
@@ -359,7 +363,11 @@ class TestResolveFiredTradeEntryPriceValidation:
         )
         with pytest.raises(ValueError, match="entry_price"):
             resolve_fired_trade(
-                df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+                df,
+                fire_index=0,
+                direction=1,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
                 max_holding_bars=1,
             )
 
@@ -373,7 +381,11 @@ class TestResolveFiredTradeEntryPriceValidation:
         )
         with pytest.raises(ValueError, match="entry_price"):
             resolve_fired_trade(
-                df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+                df,
+                fire_index=0,
+                direction=1,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
                 max_holding_bars=1,
             )
 
@@ -392,7 +404,11 @@ class TestResolveFiredTradeEntryPriceValidation:
             }
         )
         resolution = resolve_fired_trade(
-            df, fire_index=0, direction=1, take_profit_pct=0.05, stop_loss_pct=0.03,
+            df,
+            fire_index=0,
+            direction=1,
+            take_profit_pct=0.05,
+            stop_loss_pct=0.03,
             max_holding_bars=3,
         )
         assert resolution is not None

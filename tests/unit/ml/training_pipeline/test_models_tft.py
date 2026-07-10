@@ -246,6 +246,62 @@ class TestCreateTFTModel:
         assert model.loss is not None
 
 
+class TestCreateTFTTernaryModel:
+    """Tests for the ternary (3-class) TFT variant -- entrant (c) architecture
+    (TARGET-REDESIGN tournament, triple-barrier {-1,0,1} labels). Reuses the
+    same VSN/LSTM/attention backbone as create_tft_model with a 3-class
+    softmax head instead of the binary sigmoid head, since tft was already
+    the only classification-capable architecture in this codebase."""
+
+    def test_default_params(self, input_shape):
+        from src.ml.training_pipeline.models_tft import create_tft_ternary_model
+
+        model = create_tft_ternary_model(input_shape)
+        assert model is not None
+        assert model.name == "tft_ternary"
+
+    def test_forward_pass_output_shape(self, input_shape, sample_input):
+        from src.ml.training_pipeline.models_tft import create_tft_ternary_model
+
+        model = create_tft_ternary_model(input_shape)
+        output = model.predict(sample_input, verbose=0)
+
+        # Output: (batch_size, 3) -- one probability per class {-1, 0, 1}.
+        assert output.shape == (4, 3)
+
+    def test_output_is_a_probability_distribution(self, input_shape, sample_input):
+        """Softmax output: each row sums to ~1, every value in [0, 1]."""
+        from src.ml.training_pipeline.models_tft import create_tft_ternary_model
+
+        model = create_tft_ternary_model(input_shape)
+        output = model.predict(sample_input, verbose=0)
+
+        assert np.all(output >= 0.0)
+        assert np.all(output <= 1.0)
+        np.testing.assert_allclose(output.sum(axis=1), 1.0, atol=1e-5)
+
+    def test_model_is_compiled_with_categorical_loss(self, input_shape):
+        from src.ml.training_pipeline.models_tft import create_tft_ternary_model
+
+        model = create_tft_ternary_model(input_shape)
+        assert model.optimizer is not None
+        assert "categorical_crossentropy" in str(model.loss).lower()
+
+    def test_invalid_n_features_raises(self):
+        from src.ml.training_pipeline.models_tft import create_tft_ternary_model
+
+        with pytest.raises(ValueError, match="n_features must be positive"):
+            create_tft_ternary_model((30, 0))
+
+    def test_custom_params(self):
+        from src.ml.training_pipeline.models_tft import create_tft_ternary_model
+
+        model = create_tft_ternary_model(
+            input_shape=(20, 8), n_heads=2, hidden_size=32, dropout=0.2, num_lstm_layers=2
+        )
+        assert model is not None
+
+
 class TestModelFactoryIntegration:
     """Test TFT integration with the model factory."""
 
@@ -275,6 +331,35 @@ class TestModelFactoryIntegration:
         from src.ml.training_pipeline.models import get_model_callbacks
 
         cbs = get_model_callbacks("tft", patience=15)
+        assert len(cbs) == 2  # EarlyStopping + ReduceLROnPlateau
+
+    def test_create_model_tft_ternary(self, input_shape):
+        """tft_ternary (entrant (c)'s 3-class head) is accessible through
+        create_model factory, same as tft."""
+        from src.ml.training_pipeline.models import create_model
+
+        model = create_model("tft_ternary", input_shape)
+        assert model is not None
+        assert model.name == "tft_ternary"
+        assert model.output_shape == (None, 3)
+
+    def test_create_model_tft_ternary_case_insensitive(self, input_shape):
+        from src.ml.training_pipeline.models import create_model
+
+        model = create_model("TFT_TERNARY", input_shape)
+        assert model is not None
+
+    def test_available_models_includes_tft_ternary(self):
+        from src.ml.training_pipeline.models import AVAILABLE_MODELS
+
+        assert "tft_ternary" in AVAILABLE_MODELS
+
+    def test_get_model_callbacks_tft_ternary_reuses_tft_callbacks(self):
+        """tft_ternary shares tft's backbone, so it reuses tft_callbacks
+        rather than needing its own callback set."""
+        from src.ml.training_pipeline.models import get_model_callbacks
+
+        cbs = get_model_callbacks("tft_ternary", patience=15)
         assert len(cbs) == 2  # EarlyStopping + ReduceLROnPlateau
 
 

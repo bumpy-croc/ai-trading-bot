@@ -30,6 +30,12 @@ class TestGetModelTaskType:
     def test_tft_is_binary_classification(self):
         assert get_model_task_type("tft") is TaskType.BINARY_CLASSIFICATION
 
+    def test_tft_ternary_is_ternary_classification(self):
+        """tft_ternary (entrant (c)'s 3-class softmax sibling to tft) must
+        declare TERNARY_CLASSIFICATION so validate_target_head_compatibility
+        accepts it against triple_barrier."""
+        assert get_model_task_type("tft_ternary") is TaskType.TERNARY_CLASSIFICATION
+
     def test_case_insensitive(self):
         assert get_model_task_type("TFT") is TaskType.BINARY_CLASSIFICATION
         assert get_model_task_type("CNN_LSTM") is TaskType.REGRESSION
@@ -93,10 +99,17 @@ class TestValidateTargetHeadCompatibility:
             validate_target_head_compatibility("lstm", "triple_barrier")
 
     def test_tft_with_triple_barrier_raises(self):
-        """tft is a binary head; ternary triple-barrier needs a 3-class head
-        that doesn't exist among the current architectures yet."""
+        """tft is a binary head; triple_barrier needs a 3-class head, which
+        is tft_ternary, not tft."""
         with pytest.raises(ValueError, match="incompatible"):
             validate_target_head_compatibility("tft", "triple_barrier")
+
+    def test_tft_ternary_with_triple_barrier_is_compatible(self):
+        validate_target_head_compatibility("tft_ternary", "triple_barrier")  # no raise
+
+    def test_tft_ternary_with_regression_raises(self):
+        with pytest.raises(ValueError, match="incompatible"):
+            validate_target_head_compatibility("tft_ternary", "regression")
 
     def test_unknown_model_type_raises(self):
         with pytest.raises(ValueError, match="model_type"):

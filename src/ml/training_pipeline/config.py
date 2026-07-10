@@ -76,7 +76,17 @@ class TrainingConfig:
 
     # Valid model types and variants for validation
     _VALID_MODEL_TYPES = frozenset(
-        {"cnn_lstm", "adaptive", "default", "attention_lstm", "tcn", "tcn_attention", "tft", "lstm"}
+        {
+            "cnn_lstm",
+            "adaptive",
+            "default",
+            "attention_lstm",
+            "tcn",
+            "tcn_attention",
+            "tft",
+            "tft_ternary",
+            "lstm",
+        }
     )
     _VALID_MODEL_VARIANTS = frozenset({"default", "lightweight", "deep"})
     _VALID_TARGET_TYPES = frozenset(

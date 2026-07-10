@@ -163,6 +163,14 @@ class TestHandleCloudArchitectureSelection:
         training_config = mock_cls.call_args.args[0].training_config
         assert training_config.model_type == "tft"
 
+    def test_tft_ternary_is_accepted(self) -> None:
+        """entrant (c)'s 3-class head must be CLI-selectable on the cloud
+        train path (used by --provider local for its acceptance test)."""
+        mock_cls = self._submit(["BTCUSDT", "--no-wait", "--model-type", "tft_ternary"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.model_type == "tft_ternary"
+
     def test_unknown_model_type_rejected_by_argparse(self) -> None:
         with pytest.raises(SystemExit):
             _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--model-type", "transformer"]))

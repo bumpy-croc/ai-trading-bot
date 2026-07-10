@@ -11,8 +11,10 @@ import pytest
 _TENSORFLOW_AVAILABLE = find_spec("tensorflow") is not None
 
 from src.ml.training_pipeline.config import TrainingConfig, TrainingContext, TrainingPaths
+from src.ml.training_pipeline.labels import LabelResult
 from src.ml.training_pipeline.pipeline import (
     TrainingResult,
+    _build_alt_target,
     _generate_version_id,
     enable_mixed_precision,
     run_training_pipeline,
@@ -205,6 +207,72 @@ class TestEnableMixedPrecision:
         enable_mixed_precision(enabled=True)
 
         # Assert - no exception should be raised
+
+
+@pytest.mark.fast
+class TestBuildAltTarget:
+    """_build_alt_target's triple_barrier branch must emit class INDICES
+    {0, 1, 2} for sparse_categorical_crossentropy, not the raw direction
+    values {-1, 0, 1} triple_barrier_labels() returns -- an #838-class units
+    bug (raw values fed straight into a loss that requires indices in
+    [0, num_classes) would crash or silently corrupt every tft_ternary
+    training run). class_labels=[-1, 0, 1] (task_types.py) is the single
+    source of truth for both this training-side encoding and OnnxRunner's
+    inference-side decoding -- they must never drift apart.
+    """
+
+    def test_triple_barrier_values_are_class_indices_not_raw_directions(self):
+        idx = pd.date_range("2024-01-01", periods=5, freq="1h")
+        merged_df = pd.DataFrame(
+            {"close": [100.0] * 5, "high": [100.0] * 5, "low": [100.0] * 5}, index=idx
+        )
+        feature_data = pd.DataFrame({"dummy": [0.0] * 5}, index=idx)
+
+        raw_label = LabelResult(
+            values=np.array([-1, 0, 1, -1, 1], dtype=np.int64),
+            valid_mask=np.array([True, True, True, True, True]),
+            horizon_bars=336,
+        )
+
+        with patch(
+            "src.ml.training_pipeline.pipeline.triple_barrier_labels",
+            return_value=raw_label,
+        ):
+            target_array, valid_mask = _build_alt_target(
+                "triple_barrier", 1, merged_df, feature_data
+            )
+
+        # class_labels = [-1, 0, 1] -> index 0 is direction -1, index 1 is
+        # direction 0, index 2 is direction 1.
+        assert list(target_array) == [0.0, 1.0, 2.0, 0.0, 2.0]
+        assert list(valid_mask) == [True, True, True, True, True]
+
+    def test_triple_barrier_invalid_rows_stay_masked_out(self):
+        """Invalid (unresolved) rows carry the LabelResult placeholder value
+        0 (see LabelResult docstring); they must remain excluded via
+        valid_mask regardless of how the placeholder maps through the
+        class_labels encoding."""
+        idx = pd.date_range("2024-01-01", periods=3, freq="1h")
+        merged_df = pd.DataFrame(
+            {"close": [100.0] * 3, "high": [100.0] * 3, "low": [100.0] * 3}, index=idx
+        )
+        feature_data = pd.DataFrame({"dummy": [0.0] * 3}, index=idx)
+
+        raw_label = LabelResult(
+            values=np.array([1, 0, 0], dtype=np.int64),
+            valid_mask=np.array([True, True, False]),
+            horizon_bars=336,
+        )
+
+        with patch(
+            "src.ml.training_pipeline.pipeline.triple_barrier_labels",
+            return_value=raw_label,
+        ):
+            _target_array, valid_mask = _build_alt_target(
+                "triple_barrier", 1, merged_df, feature_data
+            )
+
+        assert list(valid_mask) == [True, True, False]
 
 
 @pytest.mark.fast

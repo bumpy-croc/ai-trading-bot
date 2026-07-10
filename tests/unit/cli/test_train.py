@@ -107,3 +107,34 @@ class TestTrainModelCommand:
         with patch("cli.commands.train._TRAINING_AVAILABLE", True):
             with pytest.raises(SystemExit):
                 _handle_model(args)
+
+    def test_model_type_accepts_tft(self):
+        """--model-type was missing 'tft' entirely (pre-existing gap found
+        while wiring entrant (c)); tft must be selectable via the local
+        (non-cloud) train CLI same as cloud's."""
+        args = argparse.Namespace(args=["BTCUSDT", "--model-type", "tft"])
+
+        with (
+            patch("cli.commands.train._TRAINING_AVAILABLE", True),
+            patch("cli.commands.train.train_model_main") as mock_train,
+        ):
+            mock_train.return_value = 0
+            _handle_model(args)
+
+            parsed_args = mock_train.call_args.args[0]
+            assert parsed_args.model_type == "tft"
+
+    def test_model_type_accepts_tft_ternary(self):
+        """tft_ternary (entrant (c)'s 3-class head) must be selectable via
+        the local train CLI, not just train cloud."""
+        args = argparse.Namespace(args=["BTCUSDT", "--model-type", "tft_ternary"])
+
+        with (
+            patch("cli.commands.train._TRAINING_AVAILABLE", True),
+            patch("cli.commands.train.train_model_main") as mock_train,
+        ):
+            mock_train.return_value = 0
+            _handle_model(args)
+
+            parsed_args = mock_train.call_args.args[0]
+            assert parsed_args.model_type == "tft_ternary"

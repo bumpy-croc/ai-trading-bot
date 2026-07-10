@@ -90,8 +90,18 @@ def _handle_model(ns: argparse.Namespace) -> int:
         "--model-type",
         type=str,
         default="cnn_lstm",
-        choices=["cnn_lstm", "attention_lstm", "tcn", "tcn_attention", "lstm"],
-        help="Model architecture (cnn_lstm, attention_lstm, tcn, tcn_attention, lstm)",
+        choices=[
+            "cnn_lstm",
+            "attention_lstm",
+            "tcn",
+            "tcn_attention",
+            "tft",
+            "tft_ternary",
+            "lstm",
+        ],
+        help="Model architecture (cnn_lstm, attention_lstm, tcn, tcn_attention, tft, "
+        "tft_ternary, lstm). tft_ternary is the 3-class TARGET-REDESIGN tournament "
+        "entrant (c) head -- pair it with --target-type triple_barrier.",
     )
     parser.add_argument(
         "--model-variant",

@@ -156,6 +156,19 @@ class TestTrainingConfig:
         # Assert
         assert config.model_type == "tft"
 
+    def test_accepts_tft_ternary_model_type(self):
+        # Arrange & Act
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            model_type="tft_ternary",
+        )
+
+        # Assert
+        assert config.model_type == "tft_ternary"
+
     def test_rejects_unknown_model_type(self):
         # Act & Assert
         with pytest.raises(ValueError, match="model_type"):

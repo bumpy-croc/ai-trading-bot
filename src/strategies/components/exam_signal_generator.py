@@ -247,7 +247,9 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
         # basic data-sanity check (a non-finite/non-positive close means
         # something upstream is broken), just no longer used arithmetically.
         predicted_return = result.price
-        if not (math.isfinite(predicted_return) and math.isfinite(current_price) and current_price > 0):
+        if not (
+            math.isfinite(predicted_return) and math.isfinite(current_price) and current_price > 0
+        ):
             return Signal(
                 direction=SignalDirection.HOLD,
                 strength=0.0,
@@ -310,7 +312,9 @@ class SmoothedReturnExamSignalGenerator(SignalGenerator):
         current_price = df["close"].iloc[index]
         # See generate_signal: result.price IS the predicted return already.
         predicted_return = result.price
-        if not (math.isfinite(predicted_return) and math.isfinite(current_price) and current_price > 0):
+        if not (
+            math.isfinite(predicted_return) and math.isfinite(current_price) and current_price > 0
+        ):
             return 0.0
         distribution = self._distribution_for(result)
         if distribution is None:

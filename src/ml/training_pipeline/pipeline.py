@@ -190,6 +190,23 @@ def _build_alt_target(
             # other timeframes is out of scope for this scaffolding.
             max_holding_bars=DEFAULT_MAX_HOLDING_HOURS,
         )
+        # triple_barrier_labels() returns raw direction values {-1, 0, 1}
+        # (the same convention get_target_class_labels("triple_barrier")
+        # documents for INFERENCE-time decoding: argmax index -> class_labels
+        # [index] is the direction). sparse_categorical_crossentropy, which
+        # tft_ternary is compiled with, requires integer class INDICES in
+        # [0, num_classes) instead -- feeding raw -1 would be an invalid
+        # class index. Remap through the same class_labels list used at
+        # inference time so training encoding and inference decoding can
+        # never drift apart.
+        class_labels = get_target_class_labels(target_type)
+        assert class_labels is not None  # triple_barrier always has class_labels
+        label_to_index = {direction: index for index, direction in enumerate(class_labels)}
+        label = LabelResult(
+            values=np.array([label_to_index[int(v)] for v in label.values], dtype=np.int64),
+            valid_mask=label.valid_mask,
+            horizon_bars=label.horizon_bars,
+        )
     else:
         raise ValueError(f"No label generator wired for target_type={target_type!r}")
 

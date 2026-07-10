@@ -145,8 +145,18 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         "--model-type",
         type=str,
         default="cnn_lstm",
-        choices=["lstm", "cnn_lstm", "attention_lstm", "tcn", "tcn_attention", "tft"],
-        help="Model architecture (default: cnn_lstm)",
+        choices=[
+            "lstm",
+            "cnn_lstm",
+            "attention_lstm",
+            "tcn",
+            "tcn_attention",
+            "tft",
+            "tft_ternary",
+        ],
+        help="Model architecture (default: cnn_lstm). tft_ternary is the 3-class "
+        "TARGET-REDESIGN tournament entrant (c) head -- pair it with "
+        "--target-type triple_barrier.",
     )
     parser.add_argument(
         "--model-variant",

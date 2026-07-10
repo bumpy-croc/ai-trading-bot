@@ -8,7 +8,6 @@ run_training_pipeline, not just be accepted by argparse.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest

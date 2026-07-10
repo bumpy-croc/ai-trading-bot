@@ -1,9 +1,11 @@
 """Model/target task-type declarations and the #947 compatibility guard.
 
 `create_model()` (`models.py`) dispatches to architectures with fixed,
-already-compiled heads: every family except `tft` compiles a regression head
-(`loss="mse"`, an `rmse` metric); `tft` compiles a binary-classification head
-(`loss="binary_crossentropy"`, sigmoid output). Before this module existed,
+already-compiled heads: every family except `tft`/`tft_ternary` compiles a
+regression head (`loss="mse"`, an `rmse` metric); `tft` compiles a
+binary-classification head (`loss="binary_crossentropy"`, sigmoid output);
+`tft_ternary` compiles a 3-class head (`loss="sparse_categorical_crossentropy"`,
+softmax output). Before this module existed,
 `pipeline.py` built the regression close/close_normalized target
 unconditionally regardless of `model_type` — training `tft` silently fit a
 classification head against a continuous price target: no crash, no
@@ -39,6 +41,7 @@ MODEL_TASK_TYPES: dict[str, TaskType] = {
     "tcn": TaskType.REGRESSION,
     "tcn_attention": TaskType.REGRESSION,
     "tft": TaskType.BINARY_CLASSIFICATION,
+    "tft_ternary": TaskType.TERNARY_CLASSIFICATION,
 }
 
 # Every target_type the training pipeline can build a label for, by task
