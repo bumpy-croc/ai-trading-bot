@@ -24,6 +24,9 @@ four TARGET-REDESIGN entrants: ``ClassificationExamSignalGenerator`` for
 
 from __future__ import annotations
 
+import os
+from typing import Any
+
 from src.config.constants import (
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_STOP_LOSS_PCT,
@@ -40,8 +43,41 @@ from src.strategies.components import (
     SignalGenerator,
     Strategy,
 )
+from src.strategies.components.exam_signal_generator import (
+    ClassificationExamSignalGenerator,
+    MetaLabelExamSignalGenerator,
+    SmoothedReturnExamSignalGenerator,
+)
+from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
 
 DEFAULT_EXAM_STRATEGY_NAME = "TargetRedesignExam"
+
+# Escape hatch letting the exam harness's fold-runner pin a SPECIFIC
+# (non-latest) model version per fold -- PredictionModelRegistry's
+# select_bundle()/list_bundles() always resolve "latest", with no override
+# (deliberately: select_bundle is also called unconditionally on the LIVE
+# trading path in ml_signal_generator.py, so it must never be pinnable via
+# ambient env var). This module is exam-only and never imported by the live
+# runner, so reading the override here has zero live blast radius. Resolved
+# into a full StrategyModel.key string
+# (f"{symbol}:{timeframe}:{model_type}:{version}"), which
+# PredictionEngine._resolve_bundle finds via PredictionModelRegistry.
+# get_bundle_by_key -- the one place a non-latest version is reachable by
+# exact key.
+_MODEL_VERSION_OVERRIDE_ENV_VAR = "ATB_MODEL_VERSION_OVERRIDE"
+
+
+def _exam_model_name(symbol: str, timeframe: str, model_type: str) -> str | None:
+    """Resolve the model_name to pass an exam SignalGenerator.
+
+    Returns a full bundle key (pinning to a specific version) when
+    ``_MODEL_VERSION_OVERRIDE_ENV_VAR`` is set, else None (registry
+    default: latest).
+    """
+    version = os.environ.get(_MODEL_VERSION_OVERRIDE_ENV_VAR)
+    if not version:
+        return None
+    return f"{symbol}:{timeframe}:{model_type}:{version}"
 
 
 def create_exam_strategy(
@@ -92,7 +128,21 @@ def create_exam_strategy(
     risk_manager = CoreRiskAdapter(core_risk_manager)
 
     risk_overrides = {
-        "position_sizer": "confidence_weighted",
+        # "fixed_fraction", NOT "confidence_weighted" -- this string selects
+        # the CORE risk manager's OWN, unrelated position-fraction
+        # calculator (src/risk/risk_manager.py::_calculate_raw_fraction),
+        # which for "confidence_weighted" reads a "prediction_confidence"
+        # indicator that NOTHING in this codebase ever populates (it always
+        # defaults to confidence=0.0 -> fraction=0.0). That fraction becomes
+        # risk_amount, which ConfidenceWeightedSizer.calculate_size treats
+        # as a hard veto (risk_amount <= 0 -> position size 0) -- silently
+        # zeroing every trade regardless of signal confidence or direction.
+        # The REAL confidence-weighted sizing happens one layer up, via the
+        # ConfidenceWeightedSizer OBJECT below (position_sizer=...),
+        # unaffected by this string. Matches ml_basic.py's
+        # create_ml_basic_strategy, which this function mirrors and which
+        # correctly uses "fixed_fraction" here.
+        "position_sizer": "fixed_fraction",
         "base_fraction": base_fraction,
         "max_fraction": base_fraction,
         "stop_loss_pct": stop_loss_pct,
@@ -127,4 +177,135 @@ def create_exam_strategy(
     return strategy
 
 
-__all__ = ["DEFAULT_EXAM_STRATEGY_NAME", "create_exam_strategy"]
+def create_exam_binary_direction_strategy(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    registry_model_type: str = "price",
+    sequence_length: int = 120,
+    **strategy_kwargs: Any,
+) -> Strategy:
+    """Entrant (b): binary fixed-horizon direction classification.
+
+    ``registry_model_type`` is the REGISTRY namespace a trained bundle
+    lives under -- ``pipeline.py``'s ``run_training_pipeline`` writes
+    "price" or "sentiment" depending on ``has_sentiment``
+    (``--force-price-only`` -> "price"), NOT the ``--model-type``
+    architecture selector (tft/cnn_lstm/...) used to train it. Defaults to
+    "price" -- the namespace a ``--force-price-only`` training run (the
+    exam harness's own convention, see the preregistration) writes to. The
+    architecture itself is irrelevant at backtest time: the ONNX bundle is
+    self-describing via its metadata (task_type/class_labels).
+    """
+    signal_generator = ClassificationExamSignalGenerator(
+        name="exam_binary_direction_signal_generator",
+        sequence_length=sequence_length,
+        model_name=_exam_model_name(symbol, timeframe, registry_model_type),
+    )
+    return create_exam_strategy(
+        signal_generator, name="EntrantB_BinaryDirection", **strategy_kwargs
+    )
+
+
+def create_exam_triple_barrier_strategy(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    registry_model_type: str = "price",
+    sequence_length: int = 120,
+    **strategy_kwargs: Any,
+) -> Strategy:
+    """Entrant (c): triple-barrier ternary classification.
+
+    ``registry_model_type`` is the REGISTRY namespace (see
+    create_exam_binary_direction_strategy's docstring) -- NOT the
+    ``--model-type tft_ternary`` architecture selector. Same consuming
+    SignalGenerator as entrant (b): both read a classifier bundle's
+    probabilities directly via ``result.probabilities``/``result.direction``.
+    """
+    signal_generator = ClassificationExamSignalGenerator(
+        name="exam_triple_barrier_signal_generator",
+        sequence_length=sequence_length,
+        model_name=_exam_model_name(symbol, timeframe, registry_model_type),
+    )
+    return create_exam_strategy(signal_generator, name="EntrantC_TripleBarrier", **strategy_kwargs)
+
+
+def create_exam_smoothed_return_strategy(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    registry_model_type: str = "price",
+    sequence_length: int = 120,
+    long_entry_threshold: float = 0.0,
+    short_entry_threshold: float = 0.0,
+    **strategy_kwargs: Any,
+) -> Strategy:
+    """Entrant (d): smoothed forward return (Board directive).
+
+    ``registry_model_type`` is the REGISTRY namespace (see
+    create_exam_binary_direction_strategy's docstring) -- NOT the
+    ``--model-type`` architecture selector (defaults to "cnn_lstm", the
+    incumbent's own regression architecture, so the (d) vs. incumbent
+    comparison isolates the target reformulation rather than also varying
+    architecture).
+
+    Unlike the other three entrants, this one requires
+    ``ATB_MODEL_VERSION_OVERRIDE`` to be set (i.e. always pin a specific
+    version) -- ``SmoothedReturnExamSignalGenerator`` needs its bundle's
+    ``target_distribution`` metadata, looked up by registry key, and
+    ``PredictionResult.model_name`` (the ONNX file's basename) can never
+    serve as that key when unpinned. Running unpinned raises
+    ``TargetDistributionUnavailableError`` immediately rather than silently
+    producing a zero-trade backtest (PR #950 review item 4).
+    """
+    signal_generator = SmoothedReturnExamSignalGenerator(
+        name="exam_smoothed_return_signal_generator",
+        sequence_length=sequence_length,
+        model_name=_exam_model_name(symbol, timeframe, registry_model_type),
+        long_entry_threshold=long_entry_threshold,
+        short_entry_threshold=short_entry_threshold,
+    )
+    return create_exam_strategy(signal_generator, name="EntrantD_SmoothedReturn", **strategy_kwargs)
+
+
+def create_exam_meta_label_strategy(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    primary_model_type: str = "basic",
+    min_confidence: float = 0.5,
+    **strategy_kwargs: Any,
+) -> Strategy:
+    """Entrant (a): meta-labeling secondary classifier.
+
+    Wraps a live ``MLBasicSignalGenerator`` (pointed at
+    ``primary_model_type``, e.g. "basic" -- an ALREADY-TRAINED primary
+    bundle) with ``MetaLabelExamSignalGenerator``, which gates the
+    primary's direction by P(profitable) from the meta_label classifier
+    (see ``pipeline.py::_run_meta_label_pipeline`` for how that classifier
+    is trained). ``min_confidence`` here is the meta-label gate's own
+    threshold (P(profitable) >= min_confidence to act) -- NOT
+    create_exam_strategy's ConfidenceWeightedSizer min_confidence (still
+    applied on top via **strategy_kwargs, unrelated stage).
+    """
+    primary_signal_generator = MLBasicSignalGenerator(
+        model_type=primary_model_type,
+        timeframe=timeframe,
+        symbol=symbol,
+    )
+    signal_generator = MetaLabelExamSignalGenerator(
+        primary_signal_generator=primary_signal_generator,
+        name="exam_meta_label_signal_generator",
+        model_name=_exam_model_name(symbol, timeframe, "meta_label"),
+        symbol=symbol,
+        timeframe=timeframe,
+        min_confidence=min_confidence,
+    )
+    return create_exam_strategy(signal_generator, name="EntrantA_MetaLabel", **strategy_kwargs)
+
+
+__all__ = [
+    "DEFAULT_EXAM_STRATEGY_NAME",
+    "create_exam_binary_direction_strategy",
+    "create_exam_meta_label_strategy",
+    "create_exam_smoothed_return_strategy",
+    "create_exam_strategy",
+    "create_exam_triple_barrier_strategy",
+]

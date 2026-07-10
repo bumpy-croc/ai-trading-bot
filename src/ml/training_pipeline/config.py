@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from src.infrastructure.runtime.paths import get_project_root
+from src.infrastructure.runtime.paths import get_model_registry_root, get_project_root
 
 
 @dataclass
@@ -30,12 +30,18 @@ class TrainingPaths:
     def default(cls) -> TrainingPaths:
         """Create default training paths based on project root.
 
+        ``models_dir`` comes from ``get_model_registry_root()``, which
+        honors the ``MODEL_REGISTRY_PATH`` environment variable when set --
+        the same key ``PredictionConfig.model_registry_path`` reads on the
+        backtest/prediction READ side, so one env var redirects both sides
+        consistently (e.g. for acceptance-test hermeticity).
+
         Returns:
             TrainingPaths configured for local development
         """
         root = get_project_root()
         data_dir = root / "data"
-        models_dir = root / "src" / "ml" / "models"
+        models_dir = get_model_registry_root()
         data_dir.mkdir(parents=True, exist_ok=True)
         models_dir.mkdir(parents=True, exist_ok=True)
         return cls(project_root=root, data_dir=data_dir, models_dir=models_dir)
@@ -74,13 +80,39 @@ class TrainingConfig:
     target_type: str = "regression"
     target_horizon: int = 1  # forward bars; used by binary_direction/smoothed_return
 
+    # Registry model_type of the primary signal to run forward when
+    # target_type="meta_label" (entrant (a) -- meta_label's label depends on
+    # simulating an ALREADY-TRAINED primary signal's fired trades, not a
+    # transform of the close-price series). Required when target_type ==
+    # "meta_label" (validated below), ignored otherwise.
+    primary_model_type: str | None = None
+
+    # Test-only escape hatch: routes load_training_corpus (ingestion.py) to
+    # MockDataProvider (deterministic synthetic OHLCV, no network) instead of
+    # the real Binance-backed cache. Mirrors `atb live --mock-data`'s
+    # existing pattern (src/engines/live/runner.py). Never set in production
+    # training -- exists so acceptance/integration tests can exercise the
+    # REAL training pipeline end-to-end without a network dependency.
+    use_mock_data: bool = False
+
     # Valid model types and variants for validation
     _VALID_MODEL_TYPES = frozenset(
-        {"cnn_lstm", "adaptive", "default", "attention_lstm", "tcn", "tcn_attention", "tft", "lstm"}
+        {
+            "cnn_lstm",
+            "adaptive",
+            "default",
+            "attention_lstm",
+            "tcn",
+            "tcn_attention",
+            "tft",
+            "tft_ternary",
+            "lstm",
+            "lightgbm",
+        }
     )
     _VALID_MODEL_VARIANTS = frozenset({"default", "lightweight", "deep"})
     _VALID_TARGET_TYPES = frozenset(
-        {"regression", "binary_direction", "triple_barrier", "smoothed_return"}
+        {"regression", "binary_direction", "triple_barrier", "smoothed_return", "meta_label"}
     )
 
     def __post_init__(self):
@@ -120,6 +152,12 @@ class TrainingConfig:
             )
         if self.target_horizon <= 0:
             raise ValueError(f"target_horizon must be positive, got {self.target_horizon}")
+        if self.target_type == "meta_label" and not self.primary_model_type:
+            raise ValueError(
+                "primary_model_type is required when target_type='meta_label' -- "
+                "it names the registry model_type of the primary signal to run "
+                "forward and meta-label (e.g. 'basic')."
+            )
 
     def days_requested(self) -> int:
         """Calculate number of days in the training date range.

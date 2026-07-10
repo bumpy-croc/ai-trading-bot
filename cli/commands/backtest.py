@@ -32,6 +32,12 @@ from src.strategies import (
     create_momentum_leverage_strategy,
 )
 from src.strategies.components import Strategy
+from src.strategies.exam_target_redesign import (
+    create_exam_binary_direction_strategy,
+    create_exam_meta_label_strategy,
+    create_exam_smoothed_return_strategy,
+    create_exam_triple_barrier_strategy,
+)
 from src.trading.symbols.factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")
@@ -54,6 +60,17 @@ def _load_strategy(strategy_name: str, symbol: str | None = None):
         "kelly_momentum": create_kelly_momentum_strategy,
         "leveraged_regime": create_leveraged_regime_strategy,
         "hyper_growth": create_hyper_growth_strategy,
+        # TARGET-REDESIGN tournament exam-only strategies (GH #933, Phase 2b
+        # item 4). EXAM-ONLY BY DESIGN -- backtest CLI is the ONLY place
+        # these are registered. Do NOT add these to src/strategies/__init__
+        # .py's general exports or src/engines/live/runner.py's strategy
+        # dict; the tournament's research harness (ConfidenceWeightedSizer
+        # + ratified risk-limits defaults) is deliberately separate from
+        # anything a live/paper trading session could select.
+        "exam_binary_direction": create_exam_binary_direction_strategy,
+        "exam_triple_barrier": create_exam_triple_barrier_strategy,
+        "exam_smoothed_return": create_exam_smoothed_return_strategy,
+        "exam_meta_label": create_exam_meta_label_strategy,
     }
 
     try:
@@ -98,34 +115,46 @@ def _handle(ns: argparse.Namespace) -> int:
         strategy = _load_strategy(ns.strategy, symbol=ns.symbol)
         logger.info(f"Loaded strategy: {strategy.name}")
 
-        # Provider - use factory for automatic failover support
-        from src.data_providers.provider_factory import create_data_provider
+        if getattr(ns, "mock_data", False):
+            # Test-only escape hatch (mirrors `atb live --mock-data`,
+            # src/engines/live/runner.py): deterministic synthetic OHLCV,
+            # zero network, zero disk cache -- never a real provider or
+            # create_data_provider() dispatch. Never set for a real backtest.
+            from src.data_providers.data_provider import DataProvider
+            from src.data_providers.mock_data_provider import MockDataProvider
 
-        provider = create_data_provider(provider_type=ns.provider)
-        if ns.no_cache:
-            data_provider = provider
-            logger.info("Data caching disabled")
+            data_provider: DataProvider = MockDataProvider(seed=42)
+            logger.info("Using MockDataProvider (--mock-data): no network, no cache")
         else:
-            from src.data_providers.cached_data_provider import CachedDataProvider
+            # Provider - use factory for automatic failover support
+            from src.data_providers.provider_factory import create_data_provider
 
-            # Determine appropriate cache TTL based on provider state
-            from src.infrastructure.runtime.cache import (
-                DataProviderProtocol,
-                get_cache_ttl_for_provider,
-            )
+            provider = create_data_provider(provider_type=ns.provider)
+            if ns.no_cache:
+                data_provider = provider
+                logger.info("Data caching disabled")
+            else:
+                from src.data_providers.cached_data_provider import CachedDataProvider
 
-            # cast: get_cache_ttl_for_provider only reads _client behind a hasattr guard,
-            # so any provider instance is safe even if it lacks the attribute
-            cache_ttl = get_cache_ttl_for_provider(
-                cast(DataProviderProtocol, provider), ns.cache_ttl
-            )
-            cached_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)
-            data_provider = cached_provider
-            logger.info(f"Using cached data provider (TTL: {cache_ttl} hours)")
-            cache_info = cached_provider.get_cache_info()
-            logger.info(
-                f"Cache info: {cache_info['total_files']} files, {cache_info['total_size_mb']} MB"
-            )
+                # Determine appropriate cache TTL based on provider state
+                from src.infrastructure.runtime.cache import (
+                    DataProviderProtocol,
+                    get_cache_ttl_for_provider,
+                )
+
+                # cast: get_cache_ttl_for_provider only reads _client behind a hasattr guard,
+                # so any provider instance is safe even if it lacks the attribute
+                cache_ttl = get_cache_ttl_for_provider(
+                    cast(DataProviderProtocol, provider), ns.cache_ttl
+                )
+                cached_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)
+                data_provider = cached_provider
+                logger.info(f"Using cached data provider (TTL: {cache_ttl} hours)")
+                cache_info = cached_provider.get_cache_info()
+                logger.info(
+                    f"Cache info: {cache_info['total_files']} files, "
+                    f"{cache_info['total_size_mb']} MB"
+                )
 
         sentiment_provider = None
         if ns.use_sentiment:
@@ -225,9 +254,9 @@ def _handle(ns: argparse.Namespace) -> int:
                 print(f"{year:<8} {results['yearly_returns'][year]:>12.2f}")
             print("=" * 50)
 
-        if not ns.no_cache:
+        if not ns.no_cache and not getattr(ns, "mock_data", False):
             # cached_provider is always bound here: it is assigned on the same
-            # `not ns.no_cache` branch above.
+            # `not ns.no_cache and not mock_data` branch above.
             final_cache_info = cached_provider.get_cache_info()
             logger.info(
                 f"Final cache info: {final_cache_info['total_files']} files, {final_cache_info['total_size_mb']} MB"
@@ -327,6 +356,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         choices=["auto", "binance", "coinbase", "coingecko"],
         default="auto",
         help="Data provider: auto=Binance→CoinGecko failover (recommended), binance=Binance only, coinbase=Coinbase only, coingecko=CoinGecko only - default: auto",
+    )
+    p.add_argument(
+        "--mock-data",
+        action="store_true",
+        help="Use deterministic synthetic OHLCV data instead of a real "
+        "provider (mirrors `atb live --mock-data`). Test/CI use only -- "
+        "never set for a real backtest.",
     )
     p.add_argument(
         "--max-drawdown",

@@ -20,10 +20,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.engines.shared.cost_calculator import CostCalculator
 from src.ml.training_pipeline.meta_labels import (
+    META_LABEL_FEATURE_ORDER,
     PrimarySignalRecord,
     TradeResolution,
     build_meta_label_features,
+    encode_meta_label_feature_row,
+    encode_meta_label_features_for_training,
+    resolution_ordered_hit_rate,
     resolve_fired_trade,
     run_primary_signal_forward,
     simulate_fired_trade_profitability,
@@ -331,6 +336,156 @@ class TestResolveFiredTrade:
             assert simple == expected
 
 
+class TestResolveFiredTradeEntryPriceValidation:
+    """PR #948 review finding (claude[bot]): entry_price (close[fire_index],
+    raw market data) was used as a P&L divisor with no zero/positive/finite
+    check -- CODE.md#L133 'Validate entry_price > 0 before any P&L or
+    stop-loss calculation.' A zero/NaN close at fire_index must raise, not
+    silently compute NaN and mislabel the row as unprofitable."""
+
+    def test_zero_entry_price_raises(self):
+        df = pd.DataFrame(
+            {"close": [0.0, 101.0, 103.0], "high": [0.0, 102.0, 104.0], "low": [0.0, 100.0, 102.0]}
+        )
+        with pytest.raises(ValueError, match="entry_price"):
+            resolve_fired_trade(
+                df,
+                fire_index=0,
+                direction=1,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
+                max_holding_bars=1,
+            )
+
+    def test_negative_entry_price_raises(self):
+        df = pd.DataFrame(
+            {
+                "close": [-5.0, 101.0, 103.0],
+                "high": [-5.0, 102.0, 104.0],
+                "low": [-5.0, 100.0, 102.0],
+            }
+        )
+        with pytest.raises(ValueError, match="entry_price"):
+            resolve_fired_trade(
+                df,
+                fire_index=0,
+                direction=1,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
+                max_holding_bars=1,
+            )
+
+    def test_nan_entry_price_raises(self):
+        df = pd.DataFrame(
+            {
+                "close": [float("nan"), 101.0, 103.0],
+                "high": [float("nan"), 102.0, 104.0],
+                "low": [float("nan"), 100.0, 102.0],
+            }
+        )
+        with pytest.raises(ValueError, match="entry_price"):
+            resolve_fired_trade(
+                df,
+                fire_index=0,
+                direction=1,
+                take_profit_pct=0.05,
+                stop_loss_pct=0.03,
+                max_holding_bars=1,
+            )
+
+    def test_pnl_calculation_matches_shared_pnl_percent(self):
+        """The P&L math itself must be src.performance.metrics.pnl_percent,
+        not a hand-rolled duplicate (CODE.md#L331 'never duplicate financial
+        logic') -- verified by cross-checking a hand-computed fixture
+        against pnl_percent's own output directly."""
+        from src.performance.metrics import Side, pnl_percent
+
+        df = pd.DataFrame(
+            {
+                "close": [100.0, 101.0, 103.0, 106.0],
+                "high": [100.0, 102.0, 104.0, 107.0],
+                "low": [99.0, 100.0, 102.0, 105.0],
+            }
+        )
+        resolution = resolve_fired_trade(
+            df,
+            fire_index=0,
+            direction=1,
+            take_profit_pct=0.05,
+            stop_loss_pct=0.03,
+            max_holding_bars=3,
+        )
+        assert resolution is not None
+        # bar3 high=107 >= entry(100)*1.05=105 -> TP hit, exit_price=105 (exact level).
+        expected_raw_return = pnl_percent(100.0, 105.0, Side.LONG)
+        round_trip_cost = 2.0 * CostCalculator().fee_rate
+        assert resolution.profitable == ((expected_raw_return - round_trip_cost) > 0.0)
+
+
+class TestResolutionOrderedHitRate:
+    """resolution_ordered_hit_rate is the single shared windowing function
+    both build_meta_label_features (training) and
+    MetaLabelExamSignalGenerator._rolling_hit_rate (serving) now call --
+    the fix for the fire-order-vs-resolution-order train/serve skew found
+    in PR #950 review."""
+
+    def test_empty_history_is_nan(self):
+        assert np.isnan(resolution_ordered_hit_rate([], 20))
+
+    def test_windows_by_resolution_order_not_input_order(self):
+        """Passing entries in FIRE order (not resolution order) must not
+        change the result -- the function re-sorts internally."""
+        # fire_index 0 resolves LAST (exit_index=100); fire_index 1 resolves
+        # FIRST (exit_index=10). "Last 1 by resolution order" must be
+        # fire_index 0 (True), not fire_index 1 (False), even though
+        # fire_index 1 comes second in fire/input order.
+        fire_order_input = [(100, 0, True), (10, 1, False)]
+        assert resolution_ordered_hit_rate(fire_order_input, 1) == pytest.approx(1.0)
+
+    def test_ties_on_exit_index_break_by_fire_index(self):
+        """Same-bar resolutions must order by fire_index ascending (matching
+        the online path: _resolve_open_fires iterates still-open fires in
+        their original registration order within one bar)."""
+        tied = [(50, 2, False), (50, 1, True)]
+        # Sorted by (exit_index, fire_index): (50,1,True) then (50,2,False).
+        # Last 1 -> fire_index 2 -> False.
+        assert resolution_ordered_hit_rate(tied, 1) == pytest.approx(0.0)
+
+    def test_overlapping_trades_past_lookback_selects_resolution_ordered_subset(self):
+        """With >20 resolved fires whose fire-order and resolution-order
+        diverge, the correct (resolution-ordered) trailing-20 window must
+        differ from the old, buggy fire-ordered trailing-20 window -- this
+        is the regression this fix closes."""
+        # 25 fires, alternating: even fire_index positions resolve almost
+        # immediately (fast, profitable=True); odd positions resolve much
+        # later (slow, profitable=False) -- classic overlapping-trades
+        # pattern (an early slow fire resolves after several later fast
+        # fires have already resolved).
+        history = []
+        for i in range(25):
+            fire_index = i
+            if i % 2 == 0:
+                exit_index = fire_index + 1  # fast
+                profitable = True
+            else:
+                exit_index = fire_index + 40  # slow, overlaps many fast fires
+                profitable = False
+            history.append((exit_index, fire_index, profitable))
+
+        correct = resolution_ordered_hit_rate(history, 20)
+
+        # The old (buggy) fire-order windowing: sort by fire_index only,
+        # take the last 20 by FIRE order (i.e. fires 5..24).
+        fire_ordered = sorted(history, key=lambda item: item[1])
+        buggy_last_20 = [profitable for _, _, profitable in fire_ordered[-20:]]
+        buggy = float(np.mean(buggy_last_20))
+
+        # The two windowing conventions must select genuinely different
+        # subsets for this scenario (proving the test is a meaningful
+        # regression guard, not a no-op).
+        assert correct != pytest.approx(buggy)
+
+
 class TestBuildMetaLabelFeatures:
     @staticmethod
     def _synthetic_df(periods=300):
@@ -519,3 +674,153 @@ class TestBuildMetaLabelFeatures:
         ]
         with pytest.raises(ValueError, match="length"):
             build_meta_label_features(df, fires, resolutions)
+
+
+class TestEncodeMetaLabelFeaturesForTraining:
+    """encode_meta_label_features_for_training turns build_meta_label_features'
+    DataFrame (with string regime enum columns) into numeric (X, y) arrays a
+    sklearn LogisticRegression can fit on."""
+
+    @staticmethod
+    def _synthetic_df(periods=300):
+        rng = np.random.default_rng(11)
+        closes = 100.0 + np.cumsum(rng.normal(0, 0.3, periods))
+        return pd.DataFrame(
+            {
+                "open": closes - 0.1,
+                "high": closes + 0.5,
+                "low": closes - 0.5,
+                "close": closes,
+                "volume": 1000.0 + rng.uniform(0, 50, periods),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )
+
+    def test_shape_matches_feature_order(self):
+        df = self._synthetic_df()
+        fires = [
+            PrimarySignalRecord(index=100, direction=1, predicted_return=0.01),
+            PrimarySignalRecord(index=120, direction=-1, predicted_return=-0.02),
+        ]
+        resolutions = [
+            TradeResolution(profitable=True, exit_index=101),
+            TradeResolution(profitable=False, exit_index=121),
+        ]
+        features_df = build_meta_label_features(df, fires, resolutions)
+
+        X, y = encode_meta_label_features_for_training(features_df)
+
+        assert X.shape == (2, len(META_LABEL_FEATURE_ORDER))
+        assert y.shape == (2,)
+        assert X.dtype == np.float32
+        assert list(y) == [1, 0]
+
+    def test_nan_rolling_hit_rate_filled_with_neutral_prior(self):
+        """The first fire has no eligible prior resolved fires -- its
+        rolling_hit_rate_20 is NaN in build_meta_label_features' output and
+        must be filled with a documented neutral prior (0.5), not left as
+        NaN (sklearn cannot fit on NaN)."""
+        df = self._synthetic_df()
+        fires = [PrimarySignalRecord(index=100, direction=1, predicted_return=0.01)]
+        resolutions = [TradeResolution(profitable=True, exit_index=101)]
+        features_df = build_meta_label_features(df, fires, resolutions)
+        assert np.isnan(features_df["rolling_hit_rate_20"].iloc[0])  # sanity check
+
+        X, _y = encode_meta_label_features_for_training(features_df)
+
+        assert np.all(np.isfinite(X))
+        hit_rate_idx = META_LABEL_FEATURE_ORDER.index("rolling_hit_rate_20")
+        assert X[0, hit_rate_idx] == pytest.approx(0.5)
+
+    def test_regime_columns_are_numeric_encoded(self):
+        df = self._synthetic_df()
+        fires = [PrimarySignalRecord(index=150, direction=1, predicted_return=0.01)]
+        resolutions = [TradeResolution(profitable=True, exit_index=151)]
+        features_df = build_meta_label_features(df, fires, resolutions)
+
+        X, _y = encode_meta_label_features_for_training(features_df)
+
+        # Every value must be finite and numeric -- no string enum values leaked through.
+        assert np.all(np.isfinite(X))
+
+    def test_empty_features_raises(self):
+        with pytest.raises(ValueError, match="empty"):
+            encode_meta_label_features_for_training(pd.DataFrame())
+
+
+class TestEncodeMetaLabelFeatureRow:
+    """encode_meta_label_feature_row is the INFERENCE-time counterpart --
+    one row at a time (the exam signal generator computes features
+    incrementally, not as a batch DataFrame) -- sharing the exact same
+    encoding as encode_meta_label_features_for_training so training and
+    inference can never drift apart."""
+
+    def test_returns_array_in_feature_order(self):
+        row = encode_meta_label_feature_row(
+            realized_vol_48=0.01,
+            rolling_hit_rate_20=0.6,
+            session_sin=0.5,
+            session_cos=0.86,
+            regime_trend="trend_up",
+            regime_volatility="high_vol",
+            regime_confidence=0.7,
+            predicted_return_magnitude=0.02,
+        )
+
+        assert row.shape == (len(META_LABEL_FEATURE_ORDER),)
+        assert row.dtype == np.float32
+        assert np.all(np.isfinite(row))
+
+    def test_nan_rolling_hit_rate_filled_with_neutral_prior(self):
+        row = encode_meta_label_feature_row(
+            realized_vol_48=0.01,
+            rolling_hit_rate_20=float("nan"),
+            session_sin=0.5,
+            session_cos=0.86,
+            regime_trend="range",
+            regime_volatility="low_vol",
+            regime_confidence=0.5,
+            predicted_return_magnitude=0.01,
+        )
+
+        hit_rate_idx = META_LABEL_FEATURE_ORDER.index("rolling_hit_rate_20")
+        assert row[hit_rate_idx] == pytest.approx(0.5)
+
+    def test_matches_batch_encoding_for_the_same_logical_row(self):
+        """Training-time (batch) and inference-time (row) encoders must
+        agree bit-for-bit on the same input -- this is the leak/drift guard
+        the whole split exists to prevent."""
+        df = self._synthetic_df_helper()
+        fires = [PrimarySignalRecord(index=150, direction=1, predicted_return=0.02)]
+        resolutions = [TradeResolution(profitable=True, exit_index=151)]
+        features_df = build_meta_label_features(df, fires, resolutions)
+        batch_X, _y = encode_meta_label_features_for_training(features_df)
+
+        row = features_df.iloc[0]
+        row_X = encode_meta_label_feature_row(
+            realized_vol_48=row["realized_vol_48"],
+            rolling_hit_rate_20=row["rolling_hit_rate_20"],
+            session_sin=row["session_sin"],
+            session_cos=row["session_cos"],
+            regime_trend=row["regime_trend"],
+            regime_volatility=row["regime_volatility"],
+            regime_confidence=row["regime_confidence"],
+            predicted_return_magnitude=row["predicted_return_magnitude"],
+        )
+
+        np.testing.assert_allclose(batch_X[0], row_X)
+
+    @staticmethod
+    def _synthetic_df_helper(periods=300):
+        rng = np.random.default_rng(13)
+        closes = 100.0 + np.cumsum(rng.normal(0, 0.3, periods))
+        return pd.DataFrame(
+            {
+                "open": closes - 0.1,
+                "high": closes + 0.5,
+                "low": closes - 0.5,
+                "close": closes,
+                "volume": 1000.0 + rng.uniform(0, 50, periods),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )

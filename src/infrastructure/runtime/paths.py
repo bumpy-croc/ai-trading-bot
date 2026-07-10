@@ -68,3 +68,33 @@ def get_project_root() -> Path:
     Uses lru_cache for thread-safe lazy initialization.
     """
     return find_project_root()
+
+
+def get_model_registry_root() -> Path:
+    """Resolve the model registry root directory.
+
+    Honors the ``MODEL_REGISTRY_PATH`` environment variable when set -- the
+    same key ``PredictionConfig.model_registry_path`` reads (via
+    ConfigManager) for the READ side (``PredictionModelRegistry``/backtest
+    bundle lookups). Reusing it here for the WRITE side
+    (``TrainingPaths.default()``'s ``models_dir``,
+    ``promote_model_version``'s default ``registry_root``) lets a single env
+    var redirect both sides consistently -- e.g. for acceptance-test
+    hermeticity, so trained/promoted artifacts never touch the real
+    ``src/ml/models/`` registry.
+
+    An absolute override replaces the path outright; a relative one
+    resolves against ``get_project_root()``. Unset (the common case)
+    preserves the existing default: ``{project_root}/src/ml/models``.
+
+    Deliberately NOT cached (unlike ``get_project_root``) -- reading a plain
+    env var is cheap, and caching would make it impossible for a
+    within-process caller (e.g. a test using ``monkeypatch.setenv``) to
+    change the override after the first call.
+    """
+    override = os.getenv("MODEL_REGISTRY_PATH")
+    root = get_project_root()
+    if not override:
+        return root / "src" / "ml" / "models"
+    override_path = Path(override)
+    return override_path if override_path.is_absolute() else root / override_path

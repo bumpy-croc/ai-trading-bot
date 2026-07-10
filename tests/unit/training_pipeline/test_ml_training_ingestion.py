@@ -209,6 +209,39 @@ class TestLoadTrainingCorpus:
         assert result.index.tz is not None
         assert len(result) == len(df)
 
+    def test_use_mock_data_bypasses_binance_entirely(self, tmp_path):
+        """Test-only escape hatch (mirrors `atb live --mock-data`): when
+        ctx.config.use_mock_data is set, BinanceProvider must never be
+        constructed at all -- acceptance/integration tests rely on this to
+        exercise the real training pipeline with zero network dependency."""
+        ctx = _make_ctx(tmp_path)
+        ctx.config.use_mock_data = True
+
+        with (
+            patch("src.data_providers.binance_provider.BinanceProvider") as binance_cls,
+            patch("src.data_providers.cached_data_provider.CachedDataProvider") as cached_cls,
+        ):
+            result = load_training_corpus(ctx)
+
+        binance_cls.assert_not_called()
+        cached_cls.assert_not_called()
+        assert not result.empty
+        assert result.index.min() >= pd.Timestamp(ctx.start_iso)
+        assert result.index.max() <= pd.Timestamp(ctx.end_iso)
+
+    def test_use_mock_data_produces_deterministic_dense_coverage(self, tmp_path):
+        """MockDataProvider must produce a corpus that passes the SAME
+        coverage validation a real Binance-backed corpus would (dense,
+        fixed-frequency, no gaps) -- otherwise use_mock_data would fail the
+        exact guard it's meant to route around."""
+        ctx = _make_ctx(tmp_path, start=datetime(2024, 1, 1), end=datetime(2024, 1, 5))
+        ctx.config.use_mock_data = True
+
+        result = load_training_corpus(ctx)
+
+        expected_bars = len(pd.date_range(ctx.start_iso, ctx.end_iso, freq="1h", tz="UTC"))
+        assert len(result) == pytest.approx(expected_bars, abs=1)
+
 
 @pytest.mark.fast
 class TestValidateDataCoverage:

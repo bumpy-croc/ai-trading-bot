@@ -163,6 +163,23 @@ class TestHandleCloudArchitectureSelection:
         training_config = mock_cls.call_args.args[0].training_config
         assert training_config.model_type == "tft"
 
+    def test_tft_ternary_is_accepted(self) -> None:
+        """entrant (c)'s 3-class head must be CLI-selectable on the cloud
+        train path (used by --provider local for its acceptance test)."""
+        mock_cls = self._submit(["BTCUSDT", "--no-wait", "--model-type", "tft_ternary"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.model_type == "tft_ternary"
+
+    def test_lightgbm_is_accepted(self) -> None:
+        """Reachable from the CLI (Phase 2b item 3), even though it will
+        raise ImportError once create_model() actually dispatches --
+        lightgbm isn't an installed/declared dependency."""
+        mock_cls = self._submit(["BTCUSDT", "--no-wait", "--model-type", "lightgbm"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.model_type == "lightgbm"
+
     def test_unknown_model_type_rejected_by_argparse(self) -> None:
         with pytest.raises(SystemExit):
             _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--model-type", "transformer"]))
@@ -170,6 +187,140 @@ class TestHandleCloudArchitectureSelection:
     def test_unknown_model_variant_rejected_by_argparse(self) -> None:
         with pytest.raises(SystemExit):
             _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--model-variant", "huge"]))
+
+
+@pytest.mark.fast
+class TestHandleCloudTargetTypeSelection:
+    """Phase 2b item 1: --target-type/--target-horizon threading on `atb train cloud`."""
+
+    def _submit(self, cli_args: list[str]) -> MagicMock:
+        provider = MagicMock()
+        provider.is_available.return_value = True
+        provider.provider_name = "sagemaker"
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.submit_job.return_value = "job-1"
+
+        with (
+            patch.dict("os.environ", {"SAGEMAKER_S3_BUCKET": "test-bucket"}),
+            patch("src.ml.cloud.providers.get_provider", return_value=provider),
+            patch(
+                "src.ml.cloud.orchestrator.CloudTrainingOrchestrator",
+                return_value=mock_orchestrator,
+            ) as mock_cls,
+        ):
+            rc = _handle_cloud(_ns(cli_args))
+
+        assert rc == 0
+        return mock_cls
+
+    def test_target_type_and_horizon_reach_training_config(self) -> None:
+        mock_cls = self._submit(
+            [
+                "BTCUSDT",
+                "--no-wait",
+                "--model-type",
+                "tft",
+                "--target-type",
+                "binary_direction",
+                "--target-horizon",
+                "6",
+            ]
+        )
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.target_type == "binary_direction"
+        assert training_config.target_horizon == 6
+
+    def test_defaults_preserve_current_behavior(self) -> None:
+        mock_cls = self._submit(["BTCUSDT", "--no-wait"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.target_type == "regression"
+        assert training_config.target_horizon == 1
+
+    def test_unknown_target_type_rejected_by_argparse(self) -> None:
+        with pytest.raises(SystemExit):
+            _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--target-type", "not_a_real_target"]))
+
+    def test_meta_label_with_primary_model_type_reaches_training_config(self) -> None:
+        """Phase 2b item 3: --target-type meta_label + --primary-model-type
+        must both reach TrainingConfig -- meta_label raises in
+        TrainingConfig.__post_init__ without a primary_model_type."""
+        mock_cls = self._submit(
+            [
+                "BTCUSDT",
+                "--no-wait",
+                "--target-type",
+                "meta_label",
+                "--primary-model-type",
+                "basic",
+            ]
+        )
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.target_type == "meta_label"
+        assert training_config.primary_model_type == "basic"
+
+    def test_primary_model_type_defaults_to_none(self) -> None:
+        mock_cls = self._submit(["BTCUSDT", "--no-wait"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.primary_model_type is None
+
+
+@pytest.mark.fast
+class TestHandleCloudWaitCompletionSummary:
+    """Regression guard: found while running the Phase 2b item 6 acceptance
+    tests for real -- a successful `atb train cloud` run (no --no-wait)
+    crashed AFTER training/registry-sync succeeded while printing the final
+    metrics summary, because result.metrics can contain non-numeric values
+    (e.g. {"error": "..."} -- pipeline.py's own diagnostics-failure
+    degradation path, see evaluate_model_performance's KeyError('rmse') for
+    a tft/binary_classification bundle, a real, reproducible case) and the
+    print loop blindly formatted every value with :.4f. A crash here made
+    the CLI process exit non-zero despite training having actually
+    succeeded -- exactly what an acceptance test's `returncode == 0` check
+    would (correctly) flag as a failure."""
+
+    def _run_to_completion(self, metrics: dict) -> tuple[int, object]:
+        from src.ml.cloud.orchestrator import CloudTrainingResult
+
+        provider = MagicMock()
+        provider.is_available.return_value = True
+        provider.provider_name = "local"
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run_training.return_value = CloudTrainingResult(
+            success=True,
+            job_id="local-test",
+            job_status="Completed",
+            provider="local",
+            artifact_path=Path("/tmp/fake-artifacts"),
+            metrics=metrics,
+            duration_seconds=12.3,
+        )
+
+        with (
+            patch.dict("os.environ", {"SAGEMAKER_S3_BUCKET": "test-bucket"}),
+            patch("src.ml.cloud.providers.get_provider", return_value=provider),
+            patch(
+                "src.ml.cloud.orchestrator.CloudTrainingOrchestrator",
+                return_value=mock_orchestrator,
+            ),
+        ):
+            rc = _handle_cloud(_ns(["BTCUSDT", "--provider", "local"]))
+        return rc, mock_orchestrator
+
+    def test_non_numeric_metric_value_does_not_crash(self) -> None:
+        rc, _ = self._run_to_completion({"error": "diagnostics failed: KeyError('rmse')"})
+        assert rc == 0
+
+    def test_numeric_metrics_still_format_as_before(self) -> None:
+        rc, _ = self._run_to_completion({"train_accuracy": 0.512345})
+        assert rc == 0
+
+    def test_mixed_numeric_and_non_numeric_metrics(self) -> None:
+        rc, _ = self._run_to_completion({"train_accuracy": 0.5, "note": "partial"})
+        assert rc == 0
 
 
 @pytest.mark.fast

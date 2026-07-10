@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -51,14 +52,24 @@ from src.ml.training_pipeline.labels import (
     smoothed_forward_return_labels,
     triple_barrier_labels,
 )
+from src.ml.training_pipeline.meta_labels import (
+    META_LABEL_FEATURE_ORDER,
+    build_meta_label_features,
+    encode_meta_label_features_for_training,
+    resolve_fired_trade,
+    run_primary_signal_forward,
+)
 from src.ml.training_pipeline.models import create_model, get_model_callbacks
+from src.ml.training_pipeline.sklearn_onnx_export import export_logistic_regression_to_onnx
 from src.ml.training_pipeline.task_types import (
+    TaskType,
     get_model_task_type,
     get_target_class_labels,
     validate_target_head_compatibility,
 )
 from src.prediction.distribution_stats import FrozenDistribution
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
+from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +201,23 @@ def _build_alt_target(
             # other timeframes is out of scope for this scaffolding.
             max_holding_bars=DEFAULT_MAX_HOLDING_HOURS,
         )
+        # triple_barrier_labels() returns raw direction values {-1, 0, 1}
+        # (the same convention get_target_class_labels("triple_barrier")
+        # documents for INFERENCE-time decoding: argmax index -> class_labels
+        # [index] is the direction). sparse_categorical_crossentropy, which
+        # tft_ternary is compiled with, requires integer class INDICES in
+        # [0, num_classes) instead -- feeding raw -1 would be an invalid
+        # class index. Remap through the same class_labels list used at
+        # inference time so training encoding and inference decoding can
+        # never drift apart.
+        class_labels = get_target_class_labels(target_type)
+        assert class_labels is not None  # triple_barrier always has class_labels
+        label_to_index = {direction: index for index, direction in enumerate(class_labels)}
+        label = LabelResult(
+            values=np.array([label_to_index[int(v)] for v in label.values], dtype=np.int64),
+            valid_mask=label.valid_mask,
+            horizon_bars=label.horizon_bars,
+        )
     else:
         raise ValueError(f"No label generator wired for target_type={target_type!r}")
 
@@ -202,8 +230,204 @@ def _build_alt_target(
     return aligned_values, aligned_valid
 
 
+def _run_meta_label_pipeline(ctx: TrainingContext) -> TrainingResult:
+    """Train entrant (a)'s meta-labeling classifier (TARGET-REDESIGN
+    tournament preregistration §2a).
+
+    A separate, sklearn-only data/training flow from the TF architectures
+    above -- ``ctx.config.model_type`` is irrelevant here (always trains a
+    ``sklearn.linear_model.LogisticRegression`` regardless of --model-type;
+    see train.py's --model-type help text). Steps: (1) download price data,
+    (2) run the ALREADY-TRAINED primary signal (``primary_model_type``)
+    forward to find its fire points, (3) resolve each fire's trade outcome
+    through the exam-harness exit geometry, (4) build + encode the
+    meta-label feature set, (5) fit LogisticRegression, (6) hand-roll an
+    ONNX export (sklearn_onnx_export.py), (7) save artifacts under
+    ``{symbol}/meta_label/{version}/`` with an atomic ``latest`` symlink,
+    mirroring artifacts.py's save_artifacts pattern.
+    """
+    start_time = perf_counter()
+    try:
+        price_df = download_price_data(ctx)
+
+        primary_signal_generator = MLBasicSignalGenerator(
+            model_type=ctx.config.primary_model_type,
+            timeframe=ctx.config.timeframe,
+            symbol=ctx.config.symbol,
+        )
+
+        fired = run_primary_signal_forward(primary_signal_generator, price_df)
+        if not fired:
+            raise ValueError(
+                f"Primary signal (model_type={ctx.config.primary_model_type!r}) produced "
+                f"zero fires over {ctx.config.start_date} to {ctx.config.end_date} -- "
+                f"nothing to meta-label. Try a longer window or a different primary model."
+            )
+
+        resolved_fires = []
+        resolutions = []
+        for fire in fired:
+            resolution = resolve_fired_trade(
+                price_df,
+                fire.index,
+                fire.direction,
+                take_profit_pct=DEFAULT_TAKE_PROFIT_PCT,
+                stop_loss_pct=DEFAULT_STOP_LOSS_PCT,
+                max_holding_bars=DEFAULT_MAX_HOLDING_HOURS,
+            )
+            # Unresolved (truncated at series end) fires are dropped, never
+            # treated as unprofitable -- see resolve_fired_trade's contract.
+            if resolution is not None:
+                resolved_fires.append(fire)
+                resolutions.append(resolution)
+
+        if not resolved_fires:
+            raise ValueError(
+                f"{len(fired)} primary signal fire(s) found, but none resolved within "
+                f"the training window (all truncated at series end) -- nothing to "
+                f"meta-label. Try a longer window."
+            )
+
+        features_df = build_meta_label_features(price_df, resolved_fires, resolutions)
+        X, y = encode_meta_label_features_for_training(features_df)
+
+        if len(np.unique(y)) < 2:
+            raise ValueError(
+                f"Meta-label training data has only one class present across "
+                f"{len(resolved_fires)} resolved fire(s) (all profitable or all "
+                f"unprofitable) -- LogisticRegression cannot fit a decision boundary. "
+                f"Try a longer/different training window."
+            )
+
+        from sklearn.linear_model import LogisticRegression
+
+        model = LogisticRegression(max_iter=1000)
+        model.fit(X, y)
+        train_accuracy = float(model.score(X, y))
+
+        # meta_label_logistic is the model_type task_types.py declares for
+        # this classifier (see its docstring: not create_model()-dispatched,
+        # but still declared for #947-guard/metadata-convention uniformity).
+        registry_model_type = "meta_label"
+        metadata = {
+            "symbol": ctx.config.symbol,
+            "model_type": registry_model_type,
+            # registry.py::_load_bundle reads this TOP-LEVEL key
+            # (md.get("timeframe", ...)) to populate StrategyModel.timeframe
+            # -- without it every bundle registers as timeframe="unknown"
+            # and becomes unfindable by any symbol/timeframe/model_type
+            # lookup (select_bundle, get_bundle_by_key).
+            "timeframe": ctx.config.timeframe,
+            "training_date": pd.Timestamp.now(tz="UTC").isoformat(),
+            "feature_names": list(META_LABEL_FEATURE_ORDER),
+            "sequence_length": 1,  # tabular features, not sequence-shaped
+            "task_type": TaskType.BINARY_CLASSIFICATION.value,
+            # meta_label's classifier output is P(primary signal's fired
+            # trade profitable), NOT a direction prediction -- class_labels=
+            # [0, 1] here means "not profitable"/"profitable". Consumers
+            # must read probabilities[1] (P(profitable)) directly, never
+            # `direction`/`confidence` the way direction-value classifiers
+            # (binary_direction/triple_barrier) are interpreted -- see
+            # task_types.py's TARGET_CLASS_LABELS docstring and
+            # MetaLabelExamSignalGenerator.
+            "class_labels": [0, 1],
+            "primary_model_type": ctx.config.primary_model_type,
+            "training_params": {
+                "target_type": "meta_label",
+                "timeframe": ctx.config.timeframe,
+                "start_date": ctx.config.start_date.isoformat(),
+                "end_date": ctx.config.end_date.isoformat(),
+                "primary_model_type": ctx.config.primary_model_type,
+                "n_fires": len(fired),
+                "n_resolved": len(resolved_fires),
+            },
+            "evaluation_results": {"train_accuracy": train_accuracy},
+        }
+
+        output_dir = ctx.paths.models_dir
+        version_id = _generate_version_id(output_dir, ctx.config.symbol, registry_model_type)
+        metadata["version_id"] = version_id
+
+        type_dir = output_dir / ctx.config.symbol.upper() / registry_model_type
+        version_dir = type_dir / version_id
+        version_dir.mkdir(parents=True, exist_ok=True)
+
+        model_path = version_dir / "model.pkl"
+        import joblib
+
+        joblib.dump(model, model_path)
+
+        onnx_path = version_dir / "model.onnx"
+        export_logistic_regression_to_onnx(
+            model, n_features=len(META_LABEL_FEATURE_ORDER), output_path=onnx_path
+        )
+
+        metadata_path = version_dir / "metadata.json"
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, default=str)
+
+        feature_schema = {
+            "sequence_length": 1,
+            "features": [{"name": name, "required": True} for name in META_LABEL_FEATURE_ORDER],
+        }
+        feature_schema_path = version_dir / "feature_schema.json"
+        with open(feature_schema_path, "w", encoding="utf-8") as f:
+            json.dump(feature_schema, f, indent=2)
+
+        # Atomic latest symlink update -- mirrors save_artifacts' TOCTOU-safe
+        # temp-symlink-then-replace pattern.
+        latest_link = type_dir / "latest"
+        temp_link = type_dir / f".latest.{version_dir.name}.tmp"
+        try:
+            if temp_link.exists() or temp_link.is_symlink():
+                temp_link.unlink()
+            temp_link.symlink_to(version_dir.name)
+            temp_link.replace(latest_link)
+        except OSError as e:
+            logger.warning("Failed to update latest symlink for meta_label bundle: %s", e)
+
+        artifact_paths = ArtifactPaths(
+            directory=version_dir,
+            keras_path=model_path,  # native (non-ONNX) artifact; sklearn, not Keras
+            onnx_path=onnx_path,
+            metadata_path=metadata_path,
+            plot_path=None,
+        )
+
+        duration = perf_counter() - start_time
+        logger.info(
+            "Meta-label training complete: %d fires, %d resolved, train_accuracy=%.3f",
+            len(fired),
+            len(resolved_fires),
+            train_accuracy,
+        )
+        return TrainingResult(
+            success=True,
+            metadata=metadata,
+            artifact_paths=artifact_paths,
+            duration_seconds=duration,
+        )
+
+    except Exception as exc:
+        duration = perf_counter() - start_time
+        logger.error("Meta-label training failed: %s", exc, exc_info=True)
+        return TrainingResult(
+            success=False,
+            metadata={"error": str(exc)},
+            artifact_paths=None,
+            duration_seconds=duration,
+        )
+
+
 def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
     """Run the training pipeline."""
+    if ctx.config.target_type == "meta_label":
+        # Sklearn-only path -- dispatched BEFORE the TensorFlow availability
+        # check (meta_label needs no TF at all) and BEFORE
+        # validate_target_head_compatibility (ctx.config.model_type is
+        # irrelevant for meta_label; the #947 guard's model_type/target_type
+        # cross-check doesn't apply to this separate training flow).
+        return _run_meta_label_pipeline(ctx)
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(
             "tensorflow is required for model training but is not installed. "
@@ -404,6 +628,14 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         metadata = {
             "symbol": ctx.config.symbol,
             "model_type": "sentiment" if has_sentiment else "price",
+            # registry.py::_load_bundle reads this TOP-LEVEL key
+            # (md.get("timeframe", ...)) to populate StrategyModel.timeframe
+            # -- without it every bundle registers as timeframe="unknown"
+            # and becomes unfindable by any symbol/timeframe/model_type
+            # lookup (select_bundle, get_bundle_by_key, and every
+            # MLBasicSignalGenerator/exam signal generator that depends on
+            # them). Was previously only nested under training_params.
+            "timeframe": ctx.config.timeframe,
             "training_date": pd.Timestamp.now(tz="UTC").isoformat(),
             "feature_names": feature_names,
             "sequence_length": ctx.config.sequence_length,

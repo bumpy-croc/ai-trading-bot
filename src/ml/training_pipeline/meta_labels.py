@@ -37,6 +37,7 @@ import pandas as pd
 
 from src.engines.shared.barrier_touch import check_barrier_touch
 from src.engines.shared.cost_calculator import CostCalculator
+from src.performance.metrics import Side, pnl_percent
 from src.regime.enhanced_detector import EnhancedRegimeDetector
 from src.strategies.components.signal_generator import SignalDirection
 
@@ -174,6 +175,15 @@ def resolve_fired_trade(
     n = len(close)
 
     entry_price = close[fire_index]
+    # CODE.md#L133: validate entry_price > 0 before any P&L or stop-loss
+    # calculation -- a zero/negative/non-finite close at fire_index (bad
+    # tick, gap-fill, corrupted data) must raise loudly here, not silently
+    # produce NaN barrier levels and mislabel the row downstream.
+    if not math.isfinite(entry_price) or entry_price <= 0:
+        raise ValueError(
+            f"entry_price must be positive and finite, got {entry_price} at "
+            f"fire_index={fire_index}"
+        )
     if direction == 1:
         stop_loss_price = entry_price * (1.0 - stop_loss_pct)
         take_profit_price = entry_price * (1.0 + take_profit_pct)
@@ -208,7 +218,12 @@ def resolve_fired_trade(
         exit_price = close[max_bar]
         exit_index = max_bar
 
-    raw_pct_return = direction * (exit_price - entry_price) / entry_price
+    # Reuse the shared P&L primitive (CODE.md#L331: "never duplicate
+    # financial logic") instead of hand-rolling the calculation -- also
+    # validates exit_price is positive/finite, since it derives from OHLC
+    # data (barrier touch price / vertical exit close) just like entry_price.
+    side_enum = Side.LONG if direction == 1 else Side.SHORT
+    raw_pct_return = pnl_percent(entry_price, exit_price, side_enum, fraction=1.0)
     round_trip_cost_pct = 2.0 * cost_calculator.fee_rate
     profitable = bool((raw_pct_return - round_trip_cost_pct) > 0.0)
     # cast: exit_index is always set on every path that reaches here (either
@@ -251,6 +266,44 @@ def simulate_fired_trade_profitability(
         cost_calculator,
     )
     return resolution.profitable if resolution is not None else None
+
+
+def resolution_ordered_hit_rate(resolved: Sequence[tuple[int, int, bool]], lookback: int) -> float:
+    """Rolling hit-rate over the last ``lookback`` RESOLVED fires.
+
+    Single source of truth for ``rolling_hit_rate_20``, used identically by
+    training (``build_meta_label_features``) and the exam-time consumer
+    (``MetaLabelExamSignalGenerator._rolling_hit_rate``) so the two windowing
+    conventions can never drift apart again.
+
+    A fire's profitability only becomes "known" at its RESOLUTION bar
+    (``exit_index``), not its fire bar -- and fires can resolve
+    out-of-fire-order (a long-held early fire commonly resolves after a
+    later, quickly-resolved one; see the module docstring's causality
+    note). The online exam path naturally builds its history in
+    ``(exit_index, fire_index)`` order: bars are processed in strictly
+    increasing index order, and within a single resolution bar, multiple
+    fires resolve in their original registration (fire) order. Training
+    reconstructs the SAME ordering from a fully-resolved offline corpus by
+    sorting explicitly here -- this function always re-sorts before
+    windowing, so callers may pass an already-ordered or unordered
+    sequence.
+
+    Args:
+        resolved: ``(exit_index, fire_index, profitable)`` tuples for every
+            fire resolved so far, in any order.
+        lookback: Number of most-recent (by the ordering above) resolved
+            fires to average over.
+
+    Returns:
+        Mean of the last ``lookback`` profitability outcomes, or NaN if
+        ``resolved`` is empty.
+    """
+    if not resolved:
+        return float("nan")
+    ordered = sorted(resolved, key=lambda item: (item[0], item[1]))
+    recent = [profitable for _, _, profitable in ordered[-lookback:]]
+    return float(np.mean(recent))
 
 
 def _realized_volatility_series(close: pd.Series, window: int) -> pd.Series:
@@ -325,17 +378,16 @@ def build_meta_label_features(
         # Only prior fires that had RESOLVED by this fire's own index are
         # "known" information at this point in time -- a prior fire whose
         # trade is still open (exit_index > fire.index) would leak that
-        # fire's own future price path into this feature.
+        # fire's own future price path into this feature. The eligible set
+        # is windowed by resolution_ordered_hit_rate in (exit_index,
+        # fire_index) order -- NOT this loop's fire-order iteration -- to
+        # match MetaLabelExamSignalGenerator's online windowing exactly.
         eligible_prior = [
-            resolutions[i].profitable
+            (resolutions[i].exit_index, fired_signals[i].index, resolutions[i].profitable)
             for i in range(position)
             if resolutions[i].exit_index <= fire.index
         ]
-        if eligible_prior:
-            recent_prior = eligible_prior[-hit_rate_lookback:]
-            rolling_hit_rate = float(np.mean(recent_prior))
-        else:
-            rolling_hit_rate = float("nan")
+        rolling_hit_rate = resolution_ordered_hit_rate(eligible_prior, hit_rate_lookback)
 
         timestamp = df.index[fire.index]
         session_sin, session_cos = _session_cyclical_encoding(pd.Timestamp(timestamp))
@@ -360,12 +412,141 @@ def build_meta_label_features(
     return pd.DataFrame(rows)
 
 
+# Fixed feature order for the sklearn LogisticRegression classifier --
+# single source of truth for BOTH training (encode_meta_label_features_for_
+# training) and inference (encode_meta_label_feature_row) so the two can
+# never drift out of sync. Also documents the ONNX graph's expected input
+# column order (sklearn_onnx_export.py has no column names of its own).
+META_LABEL_FEATURE_ORDER: tuple[str, ...] = (
+    "realized_vol_48",
+    "rolling_hit_rate_20",
+    "session_sin",
+    "session_cos",
+    "regime_trend_encoded",
+    "regime_volatility_encoded",
+    "regime_confidence",
+    "predicted_return_magnitude",
+)
+
+# Fixed numeric codes for the string regime enums (TrendLabel/VolLabel) --
+# sklearn needs numeric input. -1/0/1 for trend mirrors down/range/up
+# ordering; 0/1 for volatility is a plain low/high indicator.
+_TREND_ENCODING: dict[str, float] = {"trend_down": -1.0, "range": 0.0, "trend_up": 1.0}
+_VOLATILITY_ENCODING: dict[str, float] = {"low_vol": 0.0, "high_vol": 1.0}
+
+# rolling_hit_rate_20 is NaN for a fire with no eligible prior resolved
+# fires yet (see build_meta_label_features docstring) -- fill with a
+# neutral prior (neither a good nor bad track record) rather than 0.0
+# (which would read as "100% of trailing fires unprofitable", actively
+# misleading the classifier for the earliest fires in any training corpus).
+_NEUTRAL_HIT_RATE_PRIOR = 0.5
+
+
+def encode_meta_label_feature_row(
+    *,
+    realized_vol_48: float,
+    rolling_hit_rate_20: float,
+    session_sin: float,
+    session_cos: float,
+    regime_trend: str,
+    regime_volatility: str,
+    regime_confidence: float,
+    predicted_return_magnitude: float,
+) -> np.ndarray:
+    """Encode ONE meta-label feature row into META_LABEL_FEATURE_ORDER.
+
+    The inference-time counterpart to
+    ``encode_meta_label_features_for_training`` -- used by the exam
+    harness's stateful ``MetaLabelExamSignalGenerator``, which computes
+    features incrementally (one fire at a time) rather than as a batch
+    DataFrame. Must encode identically to the training-time batch encoder
+    for the same logical values (verified directly by a regression test).
+
+    Args:
+        realized_vol_48: 48-bar trailing realized volatility.
+        rolling_hit_rate_20: Rolling hit-rate of prior RESOLVED fires, or
+            NaN if none are eligible yet (filled with a neutral 0.5 prior).
+        session_sin: sin(2*pi*hour/24) cyclical encoding.
+        session_cos: cos(2*pi*hour/24) cyclical encoding.
+        regime_trend: EnhancedRegimeDetector's TrendLabel.value string.
+        regime_volatility: EnhancedRegimeDetector's VolLabel.value string.
+        regime_confidence: EnhancedRegimeDetector's regime confidence, [0,1].
+        predicted_return_magnitude: abs() of the primary signal's own
+            predicted_return at the fire point.
+
+    Returns:
+        float32 array of shape (len(META_LABEL_FEATURE_ORDER),).
+
+    Raises:
+        KeyError: regime_trend/regime_volatility is not a recognized enum value.
+    """
+    hit_rate = (
+        _NEUTRAL_HIT_RATE_PRIOR
+        if rolling_hit_rate_20 is None or math.isnan(rolling_hit_rate_20)
+        else float(rolling_hit_rate_20)
+    )
+    values = {
+        "realized_vol_48": float(realized_vol_48),
+        "rolling_hit_rate_20": hit_rate,
+        "session_sin": float(session_sin),
+        "session_cos": float(session_cos),
+        "regime_trend_encoded": _TREND_ENCODING[regime_trend],
+        "regime_volatility_encoded": _VOLATILITY_ENCODING[regime_volatility],
+        "regime_confidence": float(regime_confidence),
+        "predicted_return_magnitude": float(predicted_return_magnitude),
+    }
+    return np.array([values[name] for name in META_LABEL_FEATURE_ORDER], dtype=np.float32)
+
+
+def encode_meta_label_features_for_training(
+    features_df: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode build_meta_label_features()'s output into (X, y) training arrays.
+
+    One row per fire, columns in META_LABEL_FEATURE_ORDER -- ready for
+    ``sklearn.linear_model.LogisticRegression.fit(X, y)``.
+
+    Args:
+        features_df: Output of ``build_meta_label_features``.
+
+    Returns:
+        (X, y): X is float32 shape (n_fires, len(META_LABEL_FEATURE_ORDER)),
+        y is the "label" column, shape (n_fires,).
+
+    Raises:
+        ValueError: features_df is empty.
+    """
+    if features_df.empty:
+        raise ValueError("features_df is empty -- no fired signals to train on")
+
+    rows = [
+        encode_meta_label_feature_row(
+            realized_vol_48=row["realized_vol_48"],
+            rolling_hit_rate_20=row["rolling_hit_rate_20"],
+            session_sin=row["session_sin"],
+            session_cos=row["session_cos"],
+            regime_trend=row["regime_trend"],
+            regime_volatility=row["regime_volatility"],
+            regime_confidence=row["regime_confidence"],
+            predicted_return_magnitude=row["predicted_return_magnitude"],
+        )
+        for _, row in features_df.iterrows()
+    ]
+    X = np.stack(rows).astype(np.float32)
+    y = features_df["label"].to_numpy(dtype=np.float32)
+    return X, y
+
+
 __all__ = [
     "HIT_RATE_LOOKBACK_FIRES",
+    "META_LABEL_FEATURE_ORDER",
     "REALIZED_VOL_WINDOW_BARS",
     "PrimarySignalRecord",
     "TradeResolution",
     "build_meta_label_features",
+    "encode_meta_label_feature_row",
+    "encode_meta_label_features_for_training",
+    "resolution_ordered_hit_rate",
     "resolve_fired_trade",
     "run_primary_signal_forward",
     "simulate_fired_trade_profitability",

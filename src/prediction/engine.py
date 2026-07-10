@@ -700,6 +700,20 @@ class PredictionEngine:
                     "loaded": True,
                     "inference_time_avg": self._get_model_avg_inference_time(bundle.key),
                 }
+        # list_bundles() only exposes "latest" per (symbol, timeframe,
+        # model_type) -- a caller pinning to a SPECIFIC, non-latest version
+        # (e.g. the TARGET-REDESIGN exam harness's fold-runner) passes that
+        # version's exact bundle.key, which won't appear above. Mirrors
+        # _resolve_bundle's identical fallback.
+        versioned_bundle = self.model_registry.get_bundle_by_key(model_name)
+        if versioned_bundle is not None:
+            return {
+                "name": versioned_bundle.key,
+                "path": getattr(versioned_bundle.runner, "model_path", None),
+                "metadata": versioned_bundle.metadata,
+                "loaded": True,
+                "inference_time_avg": self._get_model_avg_inference_time(versioned_bundle.key),
+            }
         return {}
 
     def get_performance_stats(self) -> dict[str, Any]:
@@ -1017,6 +1031,14 @@ class PredictionEngine:
             for bundle in bundles:
                 if bundle.key == model_name:
                     return bundle
+            # list_bundles() only exposes "latest" per (symbol, timeframe,
+            # model_type) -- a caller pinning to a SPECIFIC, non-latest
+            # version (e.g. the TARGET-REDESIGN exam harness's fold-runner)
+            # passes that version's exact bundle.key, which won't appear
+            # above. get_bundle_by_key searches every loaded version.
+            versioned_bundle = self.model_registry.get_bundle_by_key(model_name)
+            if versioned_bundle is not None:
+                return versioned_bundle
             raise ModelNotFoundError(f"Model '{model_name}' not found")
 
         if bundles:

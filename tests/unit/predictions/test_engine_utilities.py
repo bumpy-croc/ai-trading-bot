@@ -77,9 +77,44 @@ class TestPredictionEngineUtilities:
         """Test getting info for non-existent model"""
         engine = PredictionEngine()
         engine.model_registry.list_bundles.return_value = []
+        # Also miss on the versioned-bundle fallback (see
+        # test_get_model_info_finds_pinned_non_latest_version) -- otherwise
+        # the mocked registry's auto-generated Mock return would be treated
+        # as a real bundle.
+        engine.model_registry.get_bundle_by_key.return_value = None
 
         info = engine.get_model_info("nonexistent")
         assert info == {}
+
+    @patch("src.prediction.engine.PredictionModelRegistry")
+    @patch("src.prediction.engine.FeaturePipeline")
+    def test_get_model_info_finds_pinned_non_latest_version(self, mock_pipeline, mock_registry):
+        """A model_name that doesn't match any currently-latest bundle
+        (list_bundles()) but does match a specific, non-latest version's
+        exact key must still resolve -- mirrors _resolve_bundle's fallback
+        (Phase 2b item 4/6): the exam harness's fold-runner pins a specific
+        version this way, and SmoothedReturnExamSignalGenerator._distribution_for
+        depends on get_model_info finding a pinned version to read
+        target_distribution metadata from."""
+        engine = PredictionEngine()
+
+        mock_runner = Mock()
+        mock_runner.model_path = "/path/to/model.onnx"
+        latest_bundle = _make_bundle(Mock(), version="v2")
+        pinned_bundle = _make_bundle(
+            mock_runner, version="v1", metadata={"target_distribution": {"foo": "bar"}}
+        )
+        engine.model_registry.list_bundles.return_value = [latest_bundle]
+        # list_bundles() only exposes "latest" (v2); the pinned version (v1)
+        # is only reachable through get_bundle_by_key.
+        engine.model_registry.get_bundle_by_key.return_value = pinned_bundle
+
+        info = engine.get_model_info(pinned_bundle.key)
+
+        engine.model_registry.get_bundle_by_key.assert_called_once_with(pinned_bundle.key)
+        assert info["name"] == pinned_bundle.key
+        assert info["metadata"] == {"target_distribution": {"foo": "bar"}}
+        assert info["loaded"] is True
 
     def test_get_performance_stats(self):
         """Test getting performance statistics"""

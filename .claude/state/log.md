@@ -403,3 +403,10 @@ Ref: GH #933, PR #946 (docs/target-tournament-prereg)
 
 ---
 
+## 2026-07-10 · track-record · ml-engineer
+TARGET-REDESIGN tournament (GH #933) · event: wired (Phase 2b — not a training run or promotion)
+An execution agent found PR #948's Phase 2 scaffolding was unit-tested but not reachable end-to-end via any CLI entry point. This round closed that gap across 6 items: (1) `--target-type`/`--target-horizon` threaded through both `atb train` and `atb train cloud` (incl. SageMaker container-side plumbing); (2) `tft_ternary` architecture added (3-class softmax), unblocking entrant (c) triple-barrier; (3) meta-labeling training driver + hand-rolled sklearn->ONNX export + causal exam consumer wired end-to-end, unblocking entrant (a); (4) exam-only strategies registered in `backtest.py`'s CLI loader (never added to the live runner) + `PredictionModelRegistry.get_bundle_by_key()`/`ATB_MODEL_VERSION_OVERRIDE` pinning so exam folds can pin a specific non-latest version; (5) disposed all 3 outstanding claude[bot] PR #948 review comments plus 5 more bugs found only by actually running the real path (most consequential: `exam_target_redesign.py` used the CORE risk manager's `"confidence_weighted"` sizer-type string, which reads a `"prediction_confidence"` indicator nothing in the codebase populates — silently zeroed every trade for all four entrants regardless of signal; fixed to `"fixed_fraction"`, matching `ml_basic.py`); (6) one real, non-mocked, subprocess-based end-to-end acceptance test per entrant (`tests/integration/tournament/test_entrant_dry_runs.py`) — synthetic OHLCV -> train via the real CLI -> correctly-registered+timeframed artifact -> exam backtest via the real CLI with version pinning -> >=1 real trade.
+Metrics: N/A — no training run or model promotion occurred this round. All 4 entrants confirmed running end-to-end (individually and together, 406s combined, clean teardown); quality gate and full unit suite (4273 passed) green. Ref: issue #949, PR (feat/target-tournament-wiring -> develop, not yet opened/merged at time of this entry)
+
+---
+
