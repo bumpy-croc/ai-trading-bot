@@ -159,6 +159,40 @@ class TestBuildJobSpec:
         assert spec.to_hyperparameters()["model_type"] == "tcn_attention"
         assert spec.to_hyperparameters()["model_variant"] == "deep"
 
+    def test_build_job_spec_default_target_type_hyperparameters(
+        self, orchestrator: CloudTrainingOrchestrator
+    ) -> None:
+        """Phase 2b item 1: default target_type/target_horizon must reach
+        the job hyperparameters too (regression/1, preserving current
+        behavior for every job submitted before --target-type existed)."""
+        spec = orchestrator._build_job_spec()
+        assert spec.hyperparameters["target_type"] == "regression"
+        assert spec.hyperparameters["target_horizon"] == "1"
+
+    def test_build_job_spec_custom_target_type_hyperparameters(self) -> None:
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            model_type="tft",
+            target_type="binary_direction",
+            target_horizon=6,
+        )
+        cloud_config = CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+        orchestrator = CloudTrainingOrchestrator(cloud_config, MagicMock())
+
+        spec = orchestrator._build_job_spec()
+
+        assert spec.hyperparameters["target_type"] == "binary_direction"
+        assert spec.hyperparameters["target_horizon"] == "6"
+        # SageMaker requires string hyperparameter values end-to-end
+        assert spec.to_hyperparameters()["target_type"] == "binary_direction"
+        assert spec.to_hyperparameters()["target_horizon"] == "6"
+
 
 class TestSubmitJob:
     """Tests for submit_job method."""

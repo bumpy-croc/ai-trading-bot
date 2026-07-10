@@ -173,6 +173,60 @@ class TestHandleCloudArchitectureSelection:
 
 
 @pytest.mark.fast
+class TestHandleCloudTargetTypeSelection:
+    """Phase 2b item 1: --target-type/--target-horizon threading on `atb train cloud`."""
+
+    def _submit(self, cli_args: list[str]) -> MagicMock:
+        provider = MagicMock()
+        provider.is_available.return_value = True
+        provider.provider_name = "sagemaker"
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.submit_job.return_value = "job-1"
+
+        with (
+            patch.dict("os.environ", {"SAGEMAKER_S3_BUCKET": "test-bucket"}),
+            patch("src.ml.cloud.providers.get_provider", return_value=provider),
+            patch(
+                "src.ml.cloud.orchestrator.CloudTrainingOrchestrator",
+                return_value=mock_orchestrator,
+            ) as mock_cls,
+        ):
+            rc = _handle_cloud(_ns(cli_args))
+
+        assert rc == 0
+        return mock_cls
+
+    def test_target_type_and_horizon_reach_training_config(self) -> None:
+        mock_cls = self._submit(
+            [
+                "BTCUSDT",
+                "--no-wait",
+                "--model-type",
+                "tft",
+                "--target-type",
+                "binary_direction",
+                "--target-horizon",
+                "6",
+            ]
+        )
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.target_type == "binary_direction"
+        assert training_config.target_horizon == 6
+
+    def test_defaults_preserve_current_behavior(self) -> None:
+        mock_cls = self._submit(["BTCUSDT", "--no-wait"])
+
+        training_config = mock_cls.call_args.args[0].training_config
+        assert training_config.target_type == "regression"
+        assert training_config.target_horizon == 1
+
+    def test_unknown_target_type_rejected_by_argparse(self) -> None:
+        with pytest.raises(SystemExit):
+            _handle_cloud(_ns(["BTCUSDT", "--no-wait", "--target-type", "not_a_real_target"]))
+
+
+@pytest.mark.fast
 class TestHandleCloudPromote:
     """Tests for the cloud-promote CLI handler."""
 

@@ -91,6 +91,125 @@ class TestLocalProvider:
         assert status.start_time is not None
         assert status.end_time is None
 
+    def test_run_local_training_threads_hyperparameters_into_training_config(
+        self, provider: LocalProvider
+    ) -> None:
+        """Phase 2b item 1 regression guard: _run_local_training previously
+        built TrainingConfig straight from TrainingJobSpec's typed fields
+        and NEVER read model_type/model_variant/target_type/target_horizon/
+        force_sentiment/force_price_only/mixed_precision from
+        spec.hyperparameters at all -- `atb train cloud --provider local`
+        silently trained cnn_lstm/regression regardless of what CLI flags
+        were passed. Every hyperparameter must actually reach
+        TrainingConfig."""
+        from datetime import UTC, datetime
+        from unittest.mock import MagicMock, patch
+
+        from src.ml.cloud.providers.base import TrainingJobStatus
+
+        spec = TrainingJobSpec(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date="2024-01-01T00:00:00",
+            end_date="2024-01-31T00:00:00",
+            epochs=1,
+            batch_size=32,
+            sequence_length=10,
+            instance_type="ml.g4dn.xlarge",
+            use_spot_instances=True,
+            max_runtime_seconds=3600,
+            output_s3_path="s3://test-bucket/models/",
+            hyperparameters={
+                "model_type": "tft",
+                "model_variant": "lightweight",
+                "target_type": "binary_direction",
+                "target_horizon": "6",
+                "force_sentiment": "false",
+                "force_price_only": "true",
+                "mixed_precision": "false",
+            },
+        )
+        job_id = "local-test1234"
+        provider._jobs[job_id] = TrainingJobStatus(
+            job_name=job_id,
+            status="InProgress",
+            start_time=datetime.now(UTC),
+            end_time=None,
+            failure_reason=None,
+            output_s3_path=None,
+            metrics={},
+        )
+
+        mock_result = MagicMock(success=True)
+        mock_result.artifact_paths.directory = Path("/tmp/fake-artifacts")
+        mock_result.metadata = {"evaluation_results": {}}
+
+        with patch(
+            "src.ml.training_pipeline.pipeline.run_training_pipeline",
+            return_value=mock_result,
+        ) as mock_run:
+            provider._run_local_training(job_id, spec)
+
+        assert mock_run.call_args is not None, "run_training_pipeline was never called"
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.model_type == "tft"
+        assert ctx.config.model_variant == "lightweight"
+        assert ctx.config.target_type == "binary_direction"
+        assert ctx.config.target_horizon == 6
+        assert ctx.config.force_sentiment is False
+        assert ctx.config.force_price_only is True
+        assert ctx.config.mixed_precision is False
+
+    def test_run_local_training_defaults_preserve_current_behavior(
+        self, provider: LocalProvider
+    ) -> None:
+        """No hyperparameters set (e.g. an older orchestrator) must still
+        default to cnn_lstm/regression -- byte-identical to before this fix."""
+        from datetime import UTC, datetime
+        from unittest.mock import MagicMock, patch
+
+        from src.ml.cloud.providers.base import TrainingJobStatus
+
+        spec = TrainingJobSpec(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date="2024-01-01T00:00:00",
+            end_date="2024-01-31T00:00:00",
+            epochs=1,
+            batch_size=32,
+            sequence_length=10,
+            instance_type="ml.g4dn.xlarge",
+            use_spot_instances=True,
+            max_runtime_seconds=3600,
+            output_s3_path="s3://test-bucket/models/",
+        )
+        job_id = "local-test5678"
+        provider._jobs[job_id] = TrainingJobStatus(
+            job_name=job_id,
+            status="InProgress",
+            start_time=datetime.now(UTC),
+            end_time=None,
+            failure_reason=None,
+            output_s3_path=None,
+            metrics={},
+        )
+
+        mock_result = MagicMock(success=True)
+        mock_result.artifact_paths.directory = Path("/tmp/fake-artifacts")
+        mock_result.metadata = {"evaluation_results": {}}
+
+        with patch(
+            "src.ml.training_pipeline.pipeline.run_training_pipeline",
+            return_value=mock_result,
+        ) as mock_run:
+            provider._run_local_training(job_id, spec)
+
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.model_type == "cnn_lstm"
+        assert ctx.config.model_variant == "default"
+        assert ctx.config.target_type == "regression"
+        assert ctx.config.target_horizon == 1
+
     def test_get_job_status_unknown_job(self, provider: LocalProvider) -> None:
         """Verify get_job_status raises for unknown job."""
         with pytest.raises(ValueError, match="Job not found"):

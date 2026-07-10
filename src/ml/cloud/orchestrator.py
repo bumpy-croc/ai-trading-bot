@@ -346,6 +346,8 @@ class CloudTrainingOrchestrator:
                 "mixed_precision": str(tc.mixed_precision).lower(),
                 "model_type": tc.model_type,
                 "model_variant": tc.model_variant,
+                "target_type": tc.target_type,
+                "target_horizon": str(tc.target_horizon),
             },
         )
 

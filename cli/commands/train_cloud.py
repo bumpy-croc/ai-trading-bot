@@ -156,6 +156,22 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         help="Architecture variant (default: default)",
     )
     parser.add_argument(
+        "--target-type",
+        type=str,
+        default="regression",
+        choices=["regression", "binary_direction", "triple_barrier", "smoothed_return"],
+        help="Training target (default: regression, the incumbent next-bar price target). "
+        "TARGET-REDESIGN tournament entrants: binary_direction (b), triple_barrier (c), "
+        "smoothed_return (d).",
+    )
+    parser.add_argument(
+        "--target-horizon",
+        type=int,
+        default=1,
+        help="Forward horizon in bars for binary_direction/smoothed_return targets "
+        "(default: 1; ignored by regression/triple_barrier).",
+    )
+    parser.add_argument(
         "--instance-type",
         type=str,
         default="ml.g4dn.xlarge",
@@ -242,6 +258,8 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         force_price_only=args.force_price_only,
         model_type=args.model_type,
         model_variant=args.model_variant,
+        target_type=args.target_type,
+        target_horizon=args.target_horizon,
         diagnostics=DiagnosticsOptions(
             generate_plots=False,  # Skip plots in cloud (no display)
             evaluate_robustness=True,
@@ -275,6 +293,7 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
     print(f"  Batch Size:      {args.batch_size}")
     print(f"  Sequence Length: {args.sequence_length}")
     print(f"  Architecture:    {args.model_type} ({args.model_variant})")
+    print(f"  Target:          {args.target_type} (horizon={args.target_horizon})")
     print()
     print(f"  Provider:        {provider.provider_name}")
     print(f"  Instance:        {args.instance_type}")

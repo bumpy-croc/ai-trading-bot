@@ -44,6 +44,16 @@ class TestParseHyperparameters:
         assert parsed["epochs"] == 50
         assert parsed["batch_size"] == 64
 
+    def test_target_type_defaults_preserve_current_behavior(self) -> None:
+        parsed = parse_hyperparameters({})
+        assert parsed["target_type"] == "regression"
+        assert parsed["target_horizon"] == 1
+
+    def test_target_type_and_horizon_are_parsed(self) -> None:
+        parsed = parse_hyperparameters({"target_type": "binary_direction", "target_horizon": "6"})
+        assert parsed["target_type"] == "binary_direction"
+        assert parsed["target_horizon"] == 6
+
 
 @pytest.mark.fast
 class TestRunTrainingThreading:
@@ -95,6 +105,31 @@ class TestRunTrainingThreading:
         ctx = mock_run.call_args.args[0]
         assert ctx.config.model_type == "cnn_lstm"
         assert ctx.config.model_variant == "default"
+
+    def test_target_type_and_horizon_reach_training_config(self) -> None:
+        # Arrange
+        params = self._base_params(
+            model_type="tft", target_type="binary_direction", target_horizon=6
+        )
+
+        # Act
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        # Assert
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.target_type == "binary_direction"
+        assert ctx.config.target_horizon == 6
+
+    def test_target_type_defaults_reach_training_config(self) -> None:
+        params = self._base_params()
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.target_type == "regression"
+        assert ctx.config.target_horizon == 1
 
     def test_invalid_model_type_fails_before_training(self) -> None:
         # Arrange - TrainingConfig validation must reject unknown architectures

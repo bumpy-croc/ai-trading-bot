@@ -100,6 +100,31 @@ def _handle_model(ns: argparse.Namespace) -> int:
         choices=["default", "lightweight", "deep"],
         help="Model variant (default, lightweight, deep)",
     )
+    parser.add_argument(
+        "--target-type",
+        type=str,
+        default="regression",
+        choices=["regression", "binary_direction", "triple_barrier", "smoothed_return"],
+        help="Training target (default: regression, the incumbent next-bar price target). "
+        "TARGET-REDESIGN tournament entrants: binary_direction (b), triple_barrier (c), "
+        "smoothed_return (d). meta_label (a) is not selectable here -- it needs a primary "
+        "signal generator to run forward first; see --primary-model-type.",
+    )
+    parser.add_argument(
+        "--target-horizon",
+        type=int,
+        default=1,
+        help="Forward horizon in bars for binary_direction/smoothed_return targets "
+        "(default: 1; ignored by regression/triple_barrier).",
+    )
+    parser.add_argument(
+        "--primary-model-type",
+        type=str,
+        default=None,
+        help="Registry model_type of the primary signal to run forward when "
+        "--target-type meta_label is used (e.g. 'basic'). Required for meta_label, "
+        "ignored otherwise.",
+    )
 
     # Parse the arguments from ns.args
     args = parser.parse_args(ns.args or [])

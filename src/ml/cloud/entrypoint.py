@@ -76,6 +76,10 @@ def parse_hyperparameters(params: dict) -> dict:
         # older CLIs keep training the incumbent cnn_lstm architecture.
         "model_type": params.get("model_type", "cnn_lstm"),
         "model_variant": params.get("model_variant", "default"),
+        # Training target selection; defaults match TrainingConfig so jobs
+        # submitted by older CLIs keep training the incumbent regression target.
+        "target_type": params.get("target_type", "regression"),
+        "target_horizon": int(params.get("target_horizon", "1")),
     }
 
 
@@ -122,6 +126,8 @@ def run_training(parsed_params: dict) -> int:
             mixed_precision=parsed_params["mixed_precision"],
             model_type=parsed_params["model_type"],
             model_variant=parsed_params["model_variant"],
+            target_type=parsed_params["target_type"],
+            target_horizon=parsed_params["target_horizon"],
             diagnostics=DiagnosticsOptions(
                 generate_plots=False,  # No display in container
                 evaluate_robustness=True,
@@ -142,6 +148,7 @@ def run_training(parsed_params: dict) -> int:
         logger.info(f"Data range: {start_date} to {end_date}")
         logger.info(f"Epochs: {config.epochs}, Batch size: {config.batch_size}")
         logger.info(f"Architecture: {config.model_type} (variant: {config.model_variant})")
+        logger.info(f"Target: {config.target_type} (horizon: {config.target_horizon})")
 
         # Run training
         result = run_training_pipeline(ctx)

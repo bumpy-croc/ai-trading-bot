@@ -75,6 +75,8 @@ def train_model_main(args) -> int:
         diagnostics=_diagnostics_from_args(args),
         model_type=getattr(args, "model_type", "cnn_lstm"),
         model_variant=getattr(args, "model_variant", "default"),
+        target_type=getattr(args, "target_type", "regression"),
+        target_horizon=getattr(args, "target_horizon", 1),
     )
 
     ctx = TrainingContext(config=config)
