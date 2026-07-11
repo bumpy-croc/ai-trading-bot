@@ -457,3 +457,40 @@ result existed, pre-data and validity-strengthening, not results-driven. The sup
 named explicitly in the amendment text as inheriting the same wrong premise, not as an independent
 error.
 Ref: GH #933, docs/research/experiments/2026-07-10_target-redesign-tournament-prereg.md (Amendment 2)
+
+## 2026-07-11 19:15 · track-record · ml-engineer
+TARGET-REDESIGN tournament (GH #933) · event: evaluated|reported (final)
+Full results published: docs/research/experiments/2026-07-10_target-redesign-tournament-results.md.
+Training matrix COMPLETE: 19 SageMaker jobs (entrants (b)/(c)/incumbent-control x4 folds each,
+entrant (d) x7 attempts incl. 3 uniform-policy retries on F2/F3/F4 -- F2's retry succeeded, F3 and
+F4 both collapsed again and are final trained-but-degenerate) + entrant (a) trained locally x3
+folds (chunked/checkpointed, ~200 bars/sec once measured correctly, working around a confirmed
+hard ~60min background-task lifetime cap -- GH #953/#955 filed for the underlying platform/
+scaffolding gaps found). Two prereg amendments during execution, both pre-data: Amendment 1 (PR
+#951, fold-matched primary signal for entrant (a), fixes an F1/F2 lookahead contamination in the
+literal S2a text) and Amendment 2 (PR #956, corrects a factual error in the prereg's own F3
+incumbent-control claim -- direct artifact inspection found the live model's real training cutoff
+contaminates F3, superseding a same-day PM ruling that inherited the same wrong premise).
+Headline finding: a unifying degeneracy mechanism across THREE of four entrants -- (a) meta_label
+and (b) binary_direction both converge to predicting their training-period class base rate as a
+near-constant probability (confirmed via direct ONNX input-probing + exact-tie-with-dummy L1
+accuracy on every fold, including F4 where the regime flipped and the frozen collapse actively
+underperformed); (d) smoothed_return shows the MSE/regression-to-the-mean analogue (4 of 6 total
+training attempts collapsed to literal constant output); (c) triple_barrier is genuinely
+fold-dependent (2 of 4 folds collapsed identically, 1 fold -- F2 -- shows real, non-degenerate
+signal, though even there the confidence signal is not well-calibrated per the accuracy-vs-coverage
+curves). Money-exam gate fails universally: every entrant's profit factor sits at 0.31-0.58 across
+every fold, net-lossy after fees, with no exception. Per S7's decision table applied literally:
+entrant (c) numerically clears the L1 primary-quality bar (Bonferroni-significant vs naive AND
+incumbent, every fold) but fails the money-exam gate -- S4's pre-committed "quality win, not yet
+exam-actionable" language applies. NO ENTRANT PROCEEDS TO L3A STAGING. Converges with the window
+tournament (#898) and architecture tournament (#939) as a THIRD independent line of evidence,
+now with a mechanistic explanation, that the price-only 1h feature set is the binding constraint,
+not the model, window, or target shape -- a linear baseline on the identical feature contract
+matches the incumbent's own accuracy almost bar-for-bar, corroborating this directly.
+Metrics: full L1 (accuracy/Brier/dummy-baseline/coverage-curves) and L2 (return/PF/MaxDD/trades)
+tables per entrant per fold in the report; aggregate stats corrected to prereg S4's per-fold-
+averaged method (not pooled, per PM catch) with per-fold Bonferroni significance.
+Ref: issue #933, PR (docs/target-redesign-tournament-results -> develop, opening now), Amendment 1
+(PR #951), Amendment 2 (PR #956), GH #953/#955 (scaffolding/platform gaps filed), GH #954 (upstream
+target_distribution fix, merged, bridge-patched in this tournament's own worktree instead).
