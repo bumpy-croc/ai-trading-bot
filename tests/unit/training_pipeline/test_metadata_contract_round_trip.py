@@ -227,6 +227,13 @@ class TestPipelineWritesClassificationMetadata:
             mocks["build_tf_datasets"].return_value = (MagicMock(), MagicMock())
             model = MagicMock()
             model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
+            # A weak-signal regression model predicts on a much smaller scale
+            # than its labels (targets above span +/-0.05); the persisted
+            # distribution must be seeded from THESE predictions.
+            train_predictions = (
+                np.random.default_rng(3).normal(0.0, 0.002, (40, 1)).astype(np.float32)
+            )
+            model.predict.return_value = train_predictions
             mocks["create_model"].return_value = model
             mocks["validate_model_robustness"].return_value = {}
             mocks["evaluate_model_performance"].return_value = {
@@ -243,6 +250,10 @@ class TestPipelineWritesClassificationMetadata:
         assert "class_labels" not in on_disk
         assert "target_distribution" in on_disk
         dist = FrozenDistribution.from_metadata(on_disk["target_distribution"])
+        # Seeded from the model's |predictions| on the training split, not
+        # the |labels|: every table value must sit within the prediction
+        # range, far below the ~0.05 label scale.
+        assert max(dist.values) <= float(np.abs(train_predictions).max()) + 1e-9
         # Round-trips into a usable distribution (doesn't raise, produces a
         # bounded confidence for a representative value).
         confidence = percentile_rank_confidence(0.02, dist)
@@ -304,6 +315,140 @@ class TestPipelineWritesClassificationMetadata:
         assert on_disk["task_type"] == "regression"
         assert "class_labels" not in on_disk
         assert "target_distribution" not in on_disk
+
+
+class TestTargetDistributionSeededFromModelPredictions:
+    """The persisted target_distribution must be on the scale of the MODEL'S
+    |predictions| on the training split -- what
+    SmoothedReturnExamSignalGenerator percentile-ranks at inference time
+    (exam_signal_generator.py, distribution_stats.py docstring) -- NOT the
+    scale of the |labels|. A regression model's predictions are far smaller
+    in magnitude than its labels (regression to the mean), so a label-seeded
+    table pins percentile-rank confidence near zero on every window,
+    in-sample included, and the entrant can never clear the sizer's
+    confidence gate.
+
+    Trains a REAL (tiny) keras model through the real pipeline (real
+    model.fit, real build_tf_datasets, real save_artifacts) so the persisted
+    distribution can be checked against |predictions| recomputed from the
+    saved model.keras artifact."""
+
+    def test_distribution_scale_matches_saved_model_predictions(self, tmp_path):
+        import tensorflow as tf
+
+        tf.keras.utils.set_random_seed(7)
+        rng = np.random.default_rng(7)
+
+        sequence_length, num_features, num_sequences = 10, 1, 50
+        sequences = rng.normal(0.0, 1.0, (num_sequences, sequence_length, num_features)).astype(
+            np.float32
+        )
+        # Labels: large-magnitude, near-zero-mean; features are pure noise.
+        # A briefly-trained zero-initialized regression head therefore
+        # predicts near the label mean (~0), guaranteeing
+        # median|label| >> median|prediction| -- the gap that lets this test
+        # discriminate a prediction-seeded table from a label-seeded one.
+        magnitudes = rng.uniform(0.5, 1.0, num_sequences)
+        signs = rng.choice([-1.0, 1.0], num_sequences)
+        targets = (magnitudes * signs).astype(np.float32)
+
+        X_train, y_train = sequences[:40], targets[:40]
+
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=2,
+            sequence_length=sequence_length,
+            target_type="smoothed_return",
+            target_horizon=3,
+            diagnostics=DiagnosticsOptions(
+                generate_plots=False, evaluate_robustness=False, convert_to_onnx=False
+            ),
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path, data_dir=tmp_path / "data", models_dir=tmp_path / "models"
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+
+        inputs = tf.keras.Input(shape=(sequence_length, num_features))
+        outputs = tf.keras.layers.Dense(1, kernel_initializer="zeros", bias_initializer="zeros")(
+            tf.keras.layers.Flatten()(inputs)
+        )
+        tiny_model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        tiny_model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), loss="mse")
+
+        # Same producer-half setup as TestPipelineWritesClassificationMetadata,
+        # except build_tf_datasets/save_artifacts run for real and create_model
+        # returns a real trainable model instead of a MagicMock.
+        names = [
+            "configure_gpu",
+            "download_price_data",
+            "load_sentiment_data",
+            "create_robust_features",
+            "create_sequences",
+            "split_sequences",
+            "create_model",
+            "validate_model_robustness",
+            "evaluate_model_performance",
+            "create_training_plots",
+            "enable_mixed_precision",
+        ]
+        with ExitStack() as stack:
+            mocks = {
+                name: stack.enter_context(patch(f"src.ml.training_pipeline.pipeline.{name}"))
+                for name in names
+            }
+            mocks["configure_gpu"].return_value = None
+            price_df = _make_ohlcv_df()
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            feature_df = price_df.copy()
+            feature_df["close_scaled"] = 0.5
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+            mocks["create_sequences"].return_value = (sequences, targets)
+            mocks["split_sequences"].return_value = (
+                X_train,
+                y_train,
+                sequences[40:],
+                targets[40:],
+            )
+            mocks["create_model"].return_value = tiny_model
+            mocks["validate_model_robustness"].return_value = {}
+            mocks["evaluate_model_performance"].return_value = {
+                "error": "diagnostics skipped in test"
+            }
+            mocks["create_training_plots"].return_value = None
+
+            result = run_training_pipeline(ctx)
+
+        assert result.success is True, result.metadata
+        on_disk = json.loads(result.artifact_paths.metadata_path.read_text())
+        assert "target_distribution" in on_disk
+        dist = FrozenDistribution.from_metadata(on_disk["target_distribution"])
+
+        saved_model = tf.keras.models.load_model(result.artifact_paths.keras_path)
+        abs_predictions = np.abs(
+            np.asarray(saved_model.predict(X_train, verbose=0), dtype=np.float64).reshape(-1)
+        )
+        median_abs_prediction = float(np.median(abs_predictions))
+        median_abs_label = float(np.median(np.abs(np.asarray(y_train, dtype=np.float64))))
+        distribution_median = float(np.interp(50.0, dist.percentiles, dist.values))
+
+        # Setup validity: the discriminating gap must actually exist, or this
+        # test has lost its power to tell the two seedings apart.
+        assert median_abs_prediction > 0.0
+        assert median_abs_label > 10.0 * median_abs_prediction
+
+        # The contract under test: the persisted table's median must sit on
+        # the model's own |prediction| scale. A label-seeded table lands an
+        # order of magnitude higher and fails the upper bound.
+        assert 0.2 * median_abs_prediction <= distribution_median <= 5.0 * median_abs_prediction
 
 
 class TestRealRegistryLoadedOnnxRunnerConsumesMetadata:

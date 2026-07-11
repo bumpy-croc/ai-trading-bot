@@ -576,6 +576,9 @@ class TestRunTrainingPipeline:
         mocks["build_tf_datasets"].return_value = (MagicMock(), MagicMock())
         model = MagicMock()
         model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
+        # smoothed_return seeds target_distribution from model.predict on the
+        # training split -- a bare MagicMock isn't array-convertible there.
+        model.predict.return_value = np.full((40, 1), 0.001, dtype=np.float32)
         mocks["create_model"].return_value = model
         mocks["validate_model_robustness"].return_value = {}
         mocks["evaluate_model_performance"].return_value = {"test_rmse": 0.1}
