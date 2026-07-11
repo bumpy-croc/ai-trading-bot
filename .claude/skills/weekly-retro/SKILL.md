@@ -14,6 +14,12 @@ checklist line, a new tripwire.
 
 ## Inputs (all layer 2 + working state)
 
+0. **AGENDA.md (this skill's directory) — read FIRST.** The running agenda any agent or the PM
+   appends to during the week the moment something retro-worthy happens. Every item must be
+   actioned (LESSONS append, skill amendment, or GH issue) or given an explicit written
+   disposition in the retro PR — never silently dropped. After actioning, **clear the file back
+   to its header template in the same PR**. An empty agenda is not a skipped step: still sweep
+   inputs 1–7 below; the agenda supplements the sweep, it does not replace it.
 1. **log.md** — the week's entries end to end, not just the tail.
 2. **Incidents + corrections** — anything opened/closed/corrected. Corrections are retro gold:
    the phantom-peak withdrawal (2026-07-04 13:55) became LESSONS §5.6 (the distinct-count check)
