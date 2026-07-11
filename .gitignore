@@ -49,3 +49,4 @@ cache/*
 .claude/claudeclaw/
 .claude/statusline.cjs
 .gemini-reviews/
+.agent-active

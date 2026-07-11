@@ -227,5 +227,6 @@ safe list in `.claude/LESSONS.md` §3 (mirrored in `.claude/agents/live-ops.md`)
 | `docs/changelog.md` | After each feature/fix |
 | `docs/project_status.md` | Start/end of sessions |
 | `docs/architecture.md` | After architectural changes |
+| `.claude/skills/weekly-retro/AGENDA.md` | The moment any process failure, near-miss, correction, or codify-worthy pattern is noticed — append it as a retro item instead of carrying it in memory. The weekly retro actions every item and clears the file back to its header. |
 
 Use `/update-docs` to refresh. Full docs index: `docs/README.md`.
