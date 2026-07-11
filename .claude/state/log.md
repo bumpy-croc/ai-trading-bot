@@ -410,3 +410,23 @@ Metrics: N/A — no training run or model promotion occurred this round. All 4 e
 
 ---
 
+
+## 2026-07-11 07:45 · track-record · ml-engineer
+TARGET-REDESIGN tournament (GH #933) · event: preregistration amended (Amendment 1, pre-data)
+During Phase 3 execution (determinism guard passed clean for entrant (b)/F1 — 659 trades,
+byte-for-byte identical across 2 runs; wave 1 submitted for entrant (c)/F1 and entrant (d)/F1), a
+validity bug was found in the LOCKED prereg's §2a before any entrant-(a) job was submitted: as
+literally written, entrant (a) (meta-labeling)'s primary signal is "the currently-deployed
+incumbent" (training cutoff 2025-12-31) for every fold, including F1 (eval 2023-01-03→2023-06-30)
+and F2 (eval 2024-01-03→2024-06-30) — both entirely inside that training window, i.e. lookahead
+contamination of exactly the class this tournament's purged/embargoed fold design exists to
+eliminate. Flagged to PM rather than resolved unilaterally (not one of §3/4/6/7's frozen
+sections, but changes what entrant (a)'s result would mean). PM ruling: fold-matched — entrant
+(a)'s primary signal per fold is that fold's own incumbent-control retrain (already in the
+training matrix for the baseline row; F3 reuses the existing live artifact, matching how the
+incumbent-control baseline itself treats F3). Zero additional training cost. Sequencing
+consequence: each fold's incumbent-control job must complete before that fold's entrant-(a) run.
+Recorded as "Amendment 1" appended to the prereg doc (original §2a text left unedited per the
+append-only convention) — decided and logged BEFORE any entrant-(a) training job existed,
+pre-data and validity-strengthening, not results-driven.
+Ref: GH #933, docs/research/experiments/2026-07-10_target-redesign-tournament-prereg.md (Amendment 1)
