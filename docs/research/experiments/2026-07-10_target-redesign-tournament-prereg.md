@@ -506,3 +506,54 @@ change beyond this file until PM reviews and signs off.** On approval, Phase 2 s
 be sequenced explicitly — recommend starting with the shared triple-barrier label-generation module
 and the classification-native signal path (the highest-risk, most-reused pieces, needed by 3 of 4
 entrants) before the per-entrant model-factory work.
+
+---
+
+## Amendment 1 (2026-07-11, PM ruling — pre-data, validity-strengthening)
+
+**Status**: Decided and recorded BEFORE any entrant-(a) training run or result existed. No
+entrant-(a) job had been submitted, and no entrant-(a) number of any kind (L1, L2, or otherwise)
+had been observed, at the time this amendment was written. This is not a post-hoc adjustment to a
+result — it is a fix to a validity bug in the original §2a text, caught during Phase 3 execution
+before it could contaminate anything.
+
+**What §2a originally specified**: entrant (a) (meta-labeling)'s primary signal is "the
+currently-deployed incumbent... Meta-labeling is tested against the CURRENT primary signal, not
+against one of entrants (b)/(c)/(d)." Taken literally, this means the SAME currently-deployed
+incumbent model (training cutoff 2025-12-31) would generate fire-points and features for entrant
+(a)'s training AND evaluation on every fold, including F1 (eval 2023-01-03→2023-06-30) and F2
+(eval 2024-01-03→2024-06-30).
+
+**The bug this amendment fixes**: a primary signal trained through 2025-12-31, used to generate
+fires/features on an eval window that its OWN training data covers (F1/F2 both fall entirely
+within that training window), is lookahead contamination — of exactly the kind this tournament's
+entire purge/embargo fold design (§3) exists to eliminate. Running entrant (a) as originally
+written would produce a number that would have to be disbelieved and re-run anyway, wasting the
+entrant's comparison-budget slot (§7's multiple-comparison accounting) for nothing. This is
+distinct from §2a's already-named risk ("if the primary signal has ~zero real directional edge,
+meta-labeling has nothing real to filter") — this is a contamination-of-the-eval-window risk, not
+an edge-existence risk, and it was not named in the original §2a text or the §10 risk list.
+
+**Ruling**: for each fold, entrant (a)'s primary signal is **that fold's own incumbent-control
+model** (the same fold-matched incumbent retrain already required for the incumbent-control
+baseline at F1/F2 per §2's baselines section — F3 reuses the existing live artifact per that same
+section, so F3's entrant (a) primary signal is that existing artifact, consistent with how the
+incumbent-control baseline itself treats F3). This costs **zero additional training jobs**: the
+incumbent-control retrains are already in the training matrix for the baseline row, and entrant
+(a) now simply consumes the same fold-matched artifact as its primary signal instead of the
+current live incumbent.
+
+**Sequencing consequence**: each fold's incumbent-control training job must complete (and be
+synced to the local registry) BEFORE that fold's entrant-(a) fire-point/feature generation and
+training can begin. Entrant (a) is therefore ordered strictly after the incumbent-control row per
+fold in the execution schedule, not run in parallel with it.
+
+**Everything else in §2a stands unchanged** (feature set, label definition via this tournament's
+own exam-harness exit geometry, model output, confidence mechanism, named edge-existence risk).
+This amendment changes only which trained artifact plays the role of "primary signal" per fold.
+
+**Scope**: this is a correction within the discretion already granted by the original §2a
+("Meta-labeling is tested against the CURRENT primary signal" is one clause of §2, not part of
+§3/§4/§6/§7's frozen run-book sections), decided by the PM before any entrant-(a) data existed.
+The original §2a text above is left unedited per the append-only amendment convention — this
+section is the authoritative statement of what entrant (a) actually runs against, going forward.
