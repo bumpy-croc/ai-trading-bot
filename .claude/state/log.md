@@ -430,3 +430,30 @@ Recorded as "Amendment 1" appended to the prereg doc (original §2a text left un
 append-only convention) — decided and logged BEFORE any entrant-(a) training job existed,
 pre-data and validity-strengthening, not results-driven.
 Ref: GH #933, docs/research/experiments/2026-07-10_target-redesign-tournament-prereg.md (Amendment 1)
+
+## 2026-07-11 12:25 · track-record · ml-engineer
+TARGET-REDESIGN tournament (GH #933) · event: preregistration amended (Amendment 2, pre-data,
+corrects a factual error inherited by an earlier PM ruling)
+While preparing entrant (a)/F3 (which the prereg's own baseline text, and a same-day PM ruling
+built on it, said should reuse the live artifact basic/2026-07-04_22h_v1 rather than retrain),
+checked that artifact's actual training_params.end_date directly instead of trusting the prereg's
+prose claim of a 2025-12-31 cutoff. The real cutoff is 2026-07-04 — the live artifact's training
+data entirely covers F3's eval window (2025-01-03→2025-06-30) and extends over a year beyond it.
+This is the identical lookahead-contamination class Amendment 1 fixed for entrant (a) at F1/F2,
+here applying to BOTH the F3 incumbent-control baseline itself and entrant (a)/F3's intended
+primary signal. Flagged to PM rather than proceeding on the earlier ruling (which had just been
+made that same day, based on the same unverified premise) — paused entrant (a)/F3 entirely rather
+than running it against either artifact until this was resolved.
+PM ruling (reversing the earlier same-day one): the fold-matched F3 incumbent-control retrain
+already trained this session (price/2026-07-11_11h17m33s_v1, cutoff 2024-12-31, exactly matching
+F3's fold definition) is the authoritative F3 baseline for its L1 row, L2 exam, and as entrant
+(a)/F3's primary signal. The live artifact is excluded from F3 entirely — not even as a
+supplementary cross-check. Zero additional training cost: this retrain was already logged earlier
+as an "unnecessary" accidental job (a minor budget deviation from the since-corrected assumption);
+that characterization now reverses -- it was the correct call all along, and its prior existence
+is why this correction is free. Recorded as "Amendment 2" appended to the prereg doc (original
+text and Amendment 1 both left unedited) — decided and logged before any F3-control-dependent
+result existed, pre-data and validity-strengthening, not results-driven. The superseded ruling is
+named explicitly in the amendment text as inheriting the same wrong premise, not as an independent
+error.
+Ref: GH #933, docs/research/experiments/2026-07-10_target-redesign-tournament-prereg.md (Amendment 2)

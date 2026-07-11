@@ -557,3 +557,58 @@ This amendment changes only which trained artifact plays the role of "primary si
 §3/§4/§6/§7's frozen run-book sections), decided by the PM before any entrant-(a) data existed.
 The original §2a text above is left unedited per the append-only amendment convention — this
 section is the authoritative statement of what entrant (a) actually runs against, going forward.
+
+---
+
+## Amendment 2 (2026-07-11, PM ruling — pre-data, corrects a factual error in the original baseline description)
+
+**Status**: Decided and recorded before any F3-control-dependent evaluation had run. At the time
+this amendment was written, F3's incumbent-control L2 exam had not been executed and entrant
+(a)/F3's training had not been executed — no result of any kind existed for either. Pre-data,
+validity-strengthening, not results-driven.
+
+**What the original baselines section (§2, "Incumbent control") claimed**: "Because this
+tournament's primary fold set (§3) is entirely pre-2026, and the incumbent's actual training
+cutoff is 2025-12-31, the incumbent's own already-trained artifact can be reused directly as the
+fold-3 control without retraining (its training window predates every fold's eval start by
+construction)." This same claim was the basis for a PM ruling on 2026-07-11 ("control_F3
+confirmed: basic/2026-07-04_22h_v1 is the authoritative F3 incumbent-control baseline") made
+earlier the same day, and for an instruction to use that same artifact as entrant (a)/F3's primary
+signal.
+
+**The error this amendment corrects**: neither the prereg's claim nor the PM ruling built on it
+was verified against the artifact's own metadata before being acted on. Direct inspection of
+`ETHUSDT/basic/2026-07-04_22h_v1/metadata.json`'s `training_params.end_date` shows the actual
+training cutoff is **2026-07-04**, not 2025-12-31. F3's eval window is 2025-01-03→2025-06-30 — the
+live artifact's real training data entirely covers that window and extends more than a year
+beyond it. This is the identical lookahead-contamination pattern Amendment 1 was written to
+eliminate for entrant (a) at F1/F2, and it applies with equal force here to (a) the F3
+incumbent-control baseline itself, and (b) entrant (a)/F3's intended primary signal, both of which
+were about to consume the contaminated artifact under the pre-correction ruling.
+
+**Ruling**: the fold-matched F3 incumbent-control retrain trained earlier in Phase 3 execution
+(registry version `price/2026-07-11_11h17m33s_v1`, training cutoff 2024-12-31 — exactly matching
+F3's own fold definition, the same treatment already given to F1 and F2's incumbent-control rows)
+is the **authoritative F3 incumbent-control baseline**, for its L1 row, its L2 exam, and as
+entrant (a)/F3's primary signal. The live artifact (`basic/2026-07-04_22h_v1`) is **excluded from
+F3 entirely** — not retained even as a supplementary cross-check, since a contaminated
+cross-check figure sitting next to the authoritative one invites exactly the kind of accidental
+anchoring a tournament report should avoid.
+
+**Superseded ruling, named explicitly**: the PM's earlier same-day ruling endorsing the live
+artifact for F3 is superseded by this amendment. It is not being treated as a separate error in
+its own right — it inherited the same unverified factual premise this amendment corrects, and
+falls with it.
+
+**Note on process, stated for the record**: the F3 incumbent-control retrain now ruled
+authoritative was originally logged, at the time it was trained, as an "unnecessary" job — a
+minor accidental budget deviation from a design that (per the since-corrected assumption) called
+for reusing the live artifact instead. That characterization is now reversed: this was the
+correct call all along, and its existence is why this correction costs zero additional training
+jobs. Logged here for an honest record of how the tournament actually arrived at a valid F3
+baseline.
+
+**Everything else in the prereg, including Amendment 1, stands unchanged.** This amendment is
+scoped narrowly to which trained artifact is authoritative for fold F3's incumbent-control role
+(baseline and entrant-(a)-primary-signal alike) — no other fold, entrant specification, metric,
+or decision-table entry is affected.
