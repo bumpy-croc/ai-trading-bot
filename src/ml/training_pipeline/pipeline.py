@@ -597,8 +597,14 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         # ctx.config.target_type by the #947 guard at the top of this
         # function, so it never raises here). class_labels only applies to
         # classification target types. target_distribution is computed ONCE
-        # from y_train ONLY (never X_val/y_val) -- the harness-wide rule
-        # that the confidence mapping must never see eval-window data.
+        # from the model's PREDICTIONS on the training split ONLY (never
+        # X_val/y_val) -- the harness-wide rule that the confidence mapping
+        # must never see eval-window data. Predictions, not labels: the
+        # consumer (SmoothedReturnExamSignalGenerator) percentile-ranks
+        # |predicted_return| against this table, and a regression model's
+        # predictions run far smaller in magnitude than its labels
+        # (regression to the mean), so a label-seeded table pins confidence
+        # near zero on every window and the entrant can never trade.
         # Diagnostics-only: a failure here degrades gracefully (same
         # pattern as the evaluation/robustness block above) rather than
         # discarding an already-trained model.
@@ -610,10 +616,13 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             target_type_metadata["class_labels"] = class_labels
         if ctx.config.target_type == "smoothed_return":
             try:
+                train_predictions = np.asarray(
+                    model.predict(X_train, verbose=0), dtype=np.float64
+                ).reshape(-1)
                 target_type_metadata["target_distribution"] = FrozenDistribution.from_samples(
-                    np.abs(y_train)
+                    np.abs(train_predictions)
                 ).to_metadata()
-            except ValueError as exc:
+            except (ValueError, RuntimeError, TypeError) as exc:
                 logger.warning(
                     "Failed to compute target_distribution metadata for smoothed_return: "
                     "%s. Entrant (d)'s percentile-rank confidence will be unavailable for "
