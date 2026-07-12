@@ -183,6 +183,13 @@ def create_hyper_growth_strategy(
     take_profit_pct: float = 0.30,
     stop_loss_pct: float = 0.10,
     symbol: str | None = None,
+    enable_trailing_stop: bool = True,
+    trailing_activation_threshold: float = 0.03,
+    trailing_distance_pct: float = 0.015,
+    breakeven_threshold: float | None = 0.05,
+    breakeven_buffer: float = 0.008,
+    early_cut_mfe_threshold_pct: float | None = None,
+    early_cut_evaluation_window_hours: float | None = None,
 ) -> Strategy:
     """Create hyper-growth strategy targeting high annual returns.
 
@@ -213,10 +220,36 @@ def create_hyper_growth_strategy(
         symbol: Trading symbol threaded to the ML signal generator for model
             registry selection. Runners must pass the symbol they trade;
             None keeps the generator default (BTCUSDT).
+        enable_trailing_stop: When False the trailing-stop/breakeven override
+            is declared disabled — build_trailing_stop_policy returns None
+            instead of falling back to RiskParameters defaults.
+        trailing_activation_threshold: Position gain (decimal) at which the
+            trailing stop activates.
+        trailing_distance_pct: Trailing distance as a fraction of price.
+        breakeven_threshold: Position gain (decimal) at which the stop moves
+            to breakeven; None disables the breakeven move.
+        breakeven_buffer: Buffer above entry (long) / below entry (short)
+            for the breakeven stop.
+        early_cut_mfe_threshold_pct: MFE-conditioned early-cut: raw price MFE
+            (decimal) the position must reach inside the evaluation window,
+            else it is flattened. Default None = early cut OFF. Must be set
+            together with ``early_cut_evaluation_window_hours``.
+        early_cut_evaluation_window_hours: Early-cut evaluation window in
+            hours from entry. Must be set together with
+            ``early_cut_mfe_threshold_pct``.
 
     Returns:
         Configured Strategy instance.
+
+    Raises:
+        ValueError: If exactly one of the two early-cut kwargs is provided.
     """
+    if (early_cut_mfe_threshold_pct is None) != (early_cut_evaluation_window_hours is None):
+        raise ValueError(
+            "early_cut_mfe_threshold_pct and early_cut_evaluation_window_hours "
+            "must be provided together (both set to enable the early cut, "
+            "both None to disable it)"
+        )
     # #805: hyper_growth targets high returns via leverage/aggressive sizing and
     # is NOT recommended in a bear/high-vol regime, where exposure is the primary
     # risk. Prefer ml_adaptive with the exposure governor (#802) + vol-targeted
@@ -294,42 +327,59 @@ def create_hyper_growth_strategy(
     # Without this, positions are exited after 1 bar with 0.03% P&L.
     strategy._extra_metadata = {"ignore_signal_reversal": True}
 
-    # Engine-level risk overrides
-    strategy.set_risk_overrides(
-        {
-            "position_sizer": "leveraged_fixed_fraction",
-            "base_fraction": base_fraction,
-            "min_fraction": 0.01,
-            "max_fraction": min(base_fraction * max_leverage, 0.50),
-            "stop_loss_pct": stop_loss_pct,
-            "take_profit_pct": take_profit_pct,
-            "leverage": {
-                "enabled": True,
-                "max_leverage": max_leverage,
-                "decay_rate": leverage_decay_rate,
-                "min_regime_bars": min_regime_bars,
-            },
-            "dynamic_risk": {
-                "enabled": True,
-                # Wider drawdown tolerance for hyper-growth target
-                "drawdown_thresholds": [0.15, 0.30, 0.45],
-                "risk_reduction_factors": [0.8, 0.5, 0.2],
-                "recovery_thresholds": [0.08, 0.15],
-            },
-            "partial_operations": {
-                "exit_targets": [0.08, 0.15, 0.30],
-                "exit_sizes": [0.20, 0.30, 0.50],
-                "scale_in_thresholds": [0.015, 0.03],
-                "scale_in_sizes": [0.40, 0.25],
-                "max_scale_ins": 2,
-            },
-            "trailing_stop": {
-                "activation_threshold": 0.03,
-                "trailing_distance_pct": 0.015,
-                "breakeven_threshold": 0.05,
-                "breakeven_buffer": 0.008,
-            },
+    # Trailing/breakeven config: defaults keep the exact pre-#971 dict shape
+    # (key-presence matters — build_trailing_stop_policy falls back to
+    # RiskParameters for absent keys, so adding keys would change behavior).
+    trailing_stop_config: dict[str, Any]
+    if enable_trailing_stop:
+        trailing_stop_config = {
+            "activation_threshold": trailing_activation_threshold,
+            "trailing_distance_pct": trailing_distance_pct,
+            "breakeven_threshold": breakeven_threshold,
+            "breakeven_buffer": breakeven_buffer,
         }
-    )
+    else:
+        trailing_stop_config = {"enabled": False}
+
+    # Engine-level risk overrides
+    risk_overrides: dict[str, Any] = {
+        "position_sizer": "leveraged_fixed_fraction",
+        "base_fraction": base_fraction,
+        "min_fraction": 0.01,
+        "max_fraction": min(base_fraction * max_leverage, 0.50),
+        "stop_loss_pct": stop_loss_pct,
+        "take_profit_pct": take_profit_pct,
+        "leverage": {
+            "enabled": True,
+            "max_leverage": max_leverage,
+            "decay_rate": leverage_decay_rate,
+            "min_regime_bars": min_regime_bars,
+        },
+        "dynamic_risk": {
+            "enabled": True,
+            # Wider drawdown tolerance for hyper-growth target
+            "drawdown_thresholds": [0.15, 0.30, 0.45],
+            "risk_reduction_factors": [0.8, 0.5, 0.2],
+            "recovery_thresholds": [0.08, 0.15],
+        },
+        "partial_operations": {
+            "exit_targets": [0.08, 0.15, 0.30],
+            "exit_sizes": [0.20, 0.30, 0.50],
+            "scale_in_thresholds": [0.015, 0.03],
+            "scale_in_sizes": [0.40, 0.25],
+            "max_scale_ins": 2,
+        },
+        "trailing_stop": trailing_stop_config,
+    }
+
+    # MFE early-cut (default OFF): the key is only present when configured,
+    # so existing configs hydrate no policy (build_early_cut_policy).
+    if early_cut_mfe_threshold_pct is not None:
+        risk_overrides["early_cut"] = {
+            "mfe_threshold_pct": early_cut_mfe_threshold_pct,
+            "evaluation_window_hours": early_cut_evaluation_window_hours,
+        }
+
+    strategy.set_risk_overrides(risk_overrides)
 
     return strategy

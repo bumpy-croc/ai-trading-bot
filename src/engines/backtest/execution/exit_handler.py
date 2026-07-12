@@ -43,6 +43,7 @@ from src.performance.metrics import Side, pnl_percent
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
     from src.engines.backtest.execution.position_tracker import PositionTracker
+    from src.position_management.early_cut import EarlyCutPolicy
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
@@ -80,7 +81,12 @@ class ExitCheckResult:
     is_stop_loss: bool = False
     is_take_profit: bool = False
     is_time_limit: bool = False
+    is_early_cut: bool = False
     is_signal: bool = False
+    # Window MFE observed by the early-cut policy (raw price fraction), when
+    # it evaluated this bar. Persisted to Trade.metadata on an early-cut exit
+    # so exam output carries the MFE-capture metric (#976 review).
+    early_cut_window_mfe_pct: float | None = None
 
 
 @dataclass
@@ -112,6 +118,7 @@ class ExitHandler:
         execution_model: ExecutionModel,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
+        early_cut_policy: EarlyCutPolicy | None = None,
         partial_manager: PartialOperationsManager | None = None,
         enable_engine_risk_exits: bool = True,
         use_high_low_for_stops: bool = True,
@@ -127,6 +134,7 @@ class ExitHandler:
             execution_model: Execution model for fill decisions.
             trailing_stop_policy: Policy for trailing stops.
             time_exit_policy: Policy for time-based exits.
+            early_cut_policy: MFE-conditioned early-cut policy (default OFF).
             partial_manager: Unified partial operations manager.
             enable_engine_risk_exits: Enable SL/TP checks.
             use_high_low_for_stops: Use high/low for SL/TP detection.
@@ -152,6 +160,7 @@ class ExitHandler:
         self.execution_model = execution_model
         self.trailing_stop_policy = trailing_stop_policy
         self.time_exit_policy = time_exit_policy
+        self.early_cut_policy = early_cut_policy
         self.partial_manager = partial_manager
         self.enable_engine_risk_exits = enable_engine_risk_exits
         self.use_high_low_for_stops = use_high_low_for_stops
@@ -539,6 +548,7 @@ class ExitHandler:
         current_price: float,
         symbol: str,
         component_strategy: Any | None = None,
+        df: pd.DataFrame | None = None,
     ) -> ExitCheckResult:
         """Check all exit conditions for the current position.
 
@@ -547,6 +557,7 @@ class ExitHandler:
         2. Stop loss (using high/low)
         3. Take profit (using high/low)
         4. Time limit exit
+        5. MFE early-cut (only when a policy and candle history are provided)
 
         Args:
             runtime_decision: Current runtime decision from strategy.
@@ -554,6 +565,8 @@ class ExitHandler:
             current_price: Current close price.
             symbol: Trading symbol.
             component_strategy: Strategy for exit signal checks.
+            df: OHLCV history covering the position's entry; required for the
+                MFE early-cut check (the check holds without it).
 
         Returns:
             ExitCheckResult with exit decision and details.
@@ -637,10 +650,34 @@ class ExitHandler:
             except (TypeError, ValueError, AttributeError) as e:
                 logger.warning("Time exit check failed: %s", e)
 
-        # Determine final exit decision
-        should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_limit
+        # Check MFE early-cut (shared policy — identical logic in live).
+        hit_early_cut = False
+        early_cut_reason: str | None = None
+        early_cut_window_mfe: float | None = None
+        if self.early_cut_policy is not None and df is not None:
+            try:
+                current_time = candle.name if hasattr(candle, "name") else datetime.now(UTC)
+                if hasattr(current_time, "tzinfo") and current_time.tzinfo is None:
+                    current_time = current_time.replace(tzinfo=UTC)
+                early_cut_decision = self.early_cut_policy.check_early_cut_conditions(
+                    side=side_str,
+                    entry_price=float(trade.entry_price),
+                    entry_time=trade.entry_time,
+                    now_time=current_time,
+                    df=df,
+                )
+                hit_early_cut = early_cut_decision.should_exit
+                early_cut_reason = early_cut_decision.reason
+                early_cut_window_mfe = early_cut_decision.window_mfe_pct
+            except (TypeError, ValueError, AttributeError) as e:
+                logger.warning("Early-cut check failed: %s", e)
 
-        # Determine exit reason and price (priority: SL > TP > Time/Signal)
+        # Determine final exit decision
+        should_exit = (
+            exit_signal or hit_stop_loss or hit_take_profit or hit_time_limit or hit_early_cut
+        )
+
+        # Determine exit reason and price (priority: SL > TP > Time > Early cut > Signal)
         if hit_stop_loss:
             exit_reason = "Stop loss"
             exit_price = sl_exit_price
@@ -651,6 +688,9 @@ class ExitHandler:
             # Use the policy-specific reason for parity with the live engine.
             # Default fallback string also matches live ("Time exit").
             exit_reason = time_reason or "Time exit"
+            exit_price = current_price
+        elif hit_early_cut:
+            exit_reason = early_cut_reason or "Early cut"
             exit_price = current_price
         elif exit_signal:
             exit_reason = runtime_reason
@@ -666,7 +706,10 @@ class ExitHandler:
             is_stop_loss=hit_stop_loss,
             is_take_profit=hit_take_profit,
             is_time_limit=hit_time_limit,
-            is_signal=exit_signal and not (hit_stop_loss or hit_take_profit or hit_time_limit),
+            is_early_cut=hit_early_cut and not (hit_stop_loss or hit_take_profit or hit_time_limit),
+            is_signal=exit_signal
+            and not (hit_stop_loss or hit_take_profit or hit_time_limit or hit_early_cut),
+            early_cut_window_mfe_pct=early_cut_window_mfe,
         )
 
     def _check_runtime_exit(

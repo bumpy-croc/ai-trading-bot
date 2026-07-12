@@ -98,6 +98,7 @@ from src.engines.shared.models import (
 )
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.risk_configuration import (
+    build_early_cut_policy,
     build_partial_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
@@ -108,6 +109,7 @@ from src.infrastructure.logging.events import (
 )
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.early_cut import EarlyCutPolicy
 from src.position_management.macro_events import MacroEventGuard
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
@@ -219,6 +221,7 @@ class LiveTradingEngine:
         dynamic_risk_config: DynamicRiskConfig | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
+        early_cut_policy: EarlyCutPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = True,  # Enable by default for better profit capture
         # Execution realism parameters (parity with backtest engine)
@@ -347,6 +350,13 @@ class LiveTradingEngine:
         self.error_cooldown = DEFAULT_ERROR_COOLDOWN
 
         self._init_time_exit_policy(time_exit_policy)
+
+        # MFE early-cut policy (#971): default OFF unless configured via
+        # strategy overrides or RiskParameters.early_cut. Shared builder for
+        # parity with the backtest engine.
+        self.early_cut_policy = early_cut_policy or build_early_cut_policy(
+            self.strategy, self.risk_manager
+        )
 
         # Threading
         self.main_thread: threading.Thread | None = None
@@ -989,6 +999,7 @@ class LiveTradingEngine:
             trailing_stop_policy=self.trailing_stop_policy,
             partial_manager=partial_ops_manager,
             time_exit_policy=self.time_exit_policy,
+            early_cut_policy=self.early_cut_policy,
             use_high_low_for_stops=self.use_high_low_for_stops,
             max_position_size=self.max_position_size,
             max_filled_price_deviation=self.max_filled_price_deviation,
@@ -1233,6 +1244,12 @@ class LiveTradingEngine:
         Delegated to LiveStartupSequencer; the capital-critical bootstrap ordering
         lives there (#486).
         """
+        # Fail fast on a mis-sized early-cut window (#976 review F1/F2):
+        # refuse to start rather than trade with a policy that can never
+        # evaluate (window <= bar) or diverges from backtest (non-aligned).
+        if self.early_cut_policy is not None:
+            self.early_cut_policy.validate_for_timeframe(timeframe)
+
         self.startup_sequencer.run(
             symbol,
             timeframe=timeframe,
