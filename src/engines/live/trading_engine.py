@@ -2193,7 +2193,7 @@ class LiveTradingEngine:
                 total += prediction_engine.inference_timeout_count
                 consecutive += prediction_engine.consecutive_inference_timeouts
         except Exception as e:
-            logger.debug("inference timeout totals unavailable: %s", e)
+            logger.warning("inference timeout totals unavailable: %s", e)
             return (0, 0)
         return (total, consecutive)
 
