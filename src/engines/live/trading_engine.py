@@ -930,6 +930,12 @@ class LiveTradingEngine:
         )
         # Wire db_manager for order journaling (session_id set during start())
         self.live_execution_engine.db_manager = self.db_manager
+        # Open-position snapshot for short-guard rejection events; the
+        # positions property returns a lock-guarded copy, so this read is
+        # safe from the entry path.
+        self.live_execution_engine.position_snapshot_provider = lambda: list(
+            self.live_position_tracker.positions.values()
+        )
 
     def _init_entry_handler(self, entry_handler: LiveEntryHandler | None) -> ExposureGovernor:
         """Build the entry handler and its exposure/macro/circuit-breaker gates."""
