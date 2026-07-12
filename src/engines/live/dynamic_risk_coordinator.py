@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
     from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
     from src.position_management.dynamic_risk import DynamicRiskManager
-    from src.trading.performance import PerformanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +33,10 @@ class LiveDynamicRiskEngineState(Protocol):
     initial_balance: float
     trading_session_id: int | None
     dynamic_risk_manager: DynamicRiskManager | None
-    performance_tracker: PerformanceTracker
     db_manager: DatabaseManager
     _dynamic_risk_handler: DynamicRiskHandler
+
+    def _durable_peak_balance(self) -> float: ...
 
 
 class LiveDynamicRiskCoordinator:
@@ -61,19 +61,18 @@ class LiveDynamicRiskCoordinator:
             return original_size
 
         try:
-            perf_metrics = state.performance_tracker.get_metrics()
-
             # Guard against zero/None balances to prevent division by zero in drawdown calc
             balance = (
                 float(state.current_balance)
                 if state.current_balance is not None and state.current_balance > 0
                 else float(state.initial_balance)
             )
-            peak = (
-                float(perf_metrics.peak_balance)
-                if perf_metrics.peak_balance is not None and perf_metrics.peak_balance > 0
-                else balance
-            )
+            # Durable session peak — the same baseline the max-drawdown hard
+            # cap enforces from. The in-memory tracker peak re-anchors to the
+            # depressed balance on restart and disarmed the throttle exactly
+            # when it should bind (#845 peak-reset class).
+            durable_peak = float(state._durable_peak_balance())
+            peak = durable_peak if durable_peak > 0 else balance
             # Peak should never be less than current balance
             peak_balance = max(peak, balance)
 

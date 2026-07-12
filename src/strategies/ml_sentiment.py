@@ -48,6 +48,7 @@ def create_ml_sentiment_strategy(
     model_type: str | None = None,
     timeframe: str | None = None,
     *,
+    symbol: str | None = None,
     long_entry_threshold: float | None = None,
     short_entry_threshold: float | None = None,
     confidence_multiplier: float | None = None,
@@ -69,6 +70,8 @@ def create_ml_sentiment_strategy(
         model_name: Model name for prediction engine
         model_type: Model type (e.g., "sentiment")
         timeframe: Model timeframe (e.g., "1h")
+        symbol: Trading symbol threaded to the ML signal generator (None
+            keeps the generator default BTCUSDT).
         long_entry_threshold: Minimum predicted return for long entry.
         short_entry_threshold: Maximum predicted return for short entry.
         confidence_multiplier: Scales |predicted_return| → confidence.
@@ -90,6 +93,7 @@ def create_ml_sentiment_strategy(
         name=f"{name}_signals",
         sequence_length=sequence_length,
         model_name=model_name,
+        symbol=symbol,
         long_entry_threshold=long_entry_threshold,
         short_entry_threshold=short_entry_threshold,
         confidence_multiplier=confidence_multiplier,

@@ -304,8 +304,10 @@ class BaseTrade:
         exit_reason: Reason for exiting the trade.
         stop_loss: Stop loss price that was set.
         take_profit: Take profit price that was set.
-        mfe: Maximum favorable excursion (peak unrealized profit %).
-        mae: Maximum adverse excursion (max drawdown during trade %).
+        mfe: Maximum favorable excursion — raw unsized price move from entry
+            (decimal fraction, e.g. 0.05 = +5%); consistent with mfe_price.
+        mae: Maximum adverse excursion — raw unsized price move from entry
+            (decimal fraction, <= 0); consistent with mae_price.
         mfe_price: Price at which MFE occurred.
         mae_price: Price at which MAE occurred.
         mfe_time: Timestamp of MFE.

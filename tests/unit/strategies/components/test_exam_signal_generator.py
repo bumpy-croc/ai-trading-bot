@@ -16,13 +16,16 @@ import pytest
 from src.engines.shared.barrier_touch import BarrierTouchResult
 from src.ml.training_pipeline.meta_labels import (
     HIT_RATE_LOOKBACK_FIRES,
+    META_LABEL_FEATURE_ORDER,
     PrimarySignalRecord,
     TradeResolution,
     build_meta_label_features,
+    encode_meta_label_features_for_training,
 )
 from src.prediction import PredictionResult
 from src.prediction.distribution_stats import FrozenDistribution
 from src.prediction.models.onnx_runner import ModelPrediction
+from src.regime.detector import RegimeDetector
 from src.strategies.components.exam_signal_generator import (
     ClassificationExamSignalGenerator,
     MetaLabelExamSignalGenerator,
@@ -768,3 +771,104 @@ class TestMetaLabelHitRateTrainServeParity:
         serving_hit_rate = generator._rolling_hit_rate()
 
         assert serving_hit_rate == pytest.approx(training_hit_rate)
+
+
+@patch("src.strategies.components.exam_signal_generator.PredictionModelRegistry")
+@patch("src.strategies.components.exam_signal_generator.PredictionConfig")
+class TestMetaLabelRegimeTrainServeParity:
+    """PR #981 arch-review finding: training annotates the regime frame ONCE
+    with fresh detector state, while serving re-annotated the FULL frame on
+    every fired bar through a stateful reused detector -- per-fire O(n_bars)
+    at serve time, plus a skew channel (warm hysteresis state can relabel
+    early bars, drifting serve-time regime features away from what the
+    classifier was trained on). Serving now shares training's seam: the
+    frame is annotated once per frame object with fresh detector state and
+    detect_regime reads the precomputed columns. Mirrors the #950
+    rolling_hit_rate parity-test pattern: drive BOTH real code paths over
+    the same corpus and fires, assert identical regime feature values."""
+
+    _WARMUP = 60
+    _FIRE_INDICES = (80, 140, 220, 300, 380)
+
+    @staticmethod
+    def _make_regime_df(periods=400):
+        rng = np.random.default_rng(17)
+        closes = 100.0 + np.cumsum(rng.normal(0, 0.5, periods))
+        return pd.DataFrame(
+            {
+                "open": closes - 0.1,
+                "high": closes + 0.5,
+                "low": closes - 0.5,
+                "close": closes,
+                "volume": 1000.0 + rng.uniform(0, 50, periods),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )
+
+    def _drive_serving(self, mock_registry_class, df) -> list[np.ndarray]:
+        """Run the REAL MetaLabelExamSignalGenerator bar-by-bar; capture the
+        encoded feature row each fired bar sends to the classifier."""
+        captured_rows: list[np.ndarray] = []
+
+        def capture_predict(row):
+            captured_rows.append(np.array(row, copy=True))
+            return _make_meta_label_prediction(0.9)
+
+        mock_bundle = MagicMock()
+        mock_bundle.runner.predict.side_effect = capture_predict
+        mock_registry = MagicMock()
+        mock_registry.select_bundle.return_value = mock_bundle
+        mock_registry_class.return_value = mock_registry
+
+        fire_at = {index: (SignalDirection.BUY, 0.01) for index in self._FIRE_INDICES}
+        generator = MetaLabelExamSignalGenerator(
+            primary_signal_generator=_CannedPrimarySignalGenerator(
+                fire_at=fire_at, warmup=self._WARMUP
+            ),
+            min_confidence=0.0,
+        )
+        for index in range(self._WARMUP, len(df)):
+            generator.generate_signal(df, index)
+        return captured_rows
+
+    def test_serving_annotates_regime_once_per_frame(self, mock_config_class, mock_registry_class):
+        df = self._make_regime_df()
+
+        annotate_calls: list[int] = []
+        original_annotate = RegimeDetector.annotate
+
+        def counting_annotate(detector_self, frame):
+            annotate_calls.append(len(frame))
+            return original_annotate(detector_self, frame)
+
+        with patch.object(RegimeDetector, "annotate", counting_annotate):
+            captured_rows = self._drive_serving(mock_registry_class, df)
+
+        assert len(captured_rows) == len(self._FIRE_INDICES)  # every fire reached prediction
+        assert len(annotate_calls) == 1
+
+    def test_training_and_serving_agree_on_regime_features(
+        self, mock_config_class, mock_registry_class
+    ):
+        df = self._make_regime_df()
+        serving_rows = self._drive_serving(mock_registry_class, df)
+        assert len(serving_rows) == len(self._FIRE_INDICES)
+
+        fires = [
+            PrimarySignalRecord(index=index, direction=1, predicted_return=0.01)
+            for index in self._FIRE_INDICES
+        ]
+        # Regime features are independent of resolutions -- trivial next-bar
+        # resolutions keep build_meta_label_features' input well-formed.
+        resolutions = [
+            TradeResolution(profitable=True, exit_index=index + 1) for index in self._FIRE_INDICES
+        ]
+        features_df = build_meta_label_features(df, fires, resolutions)
+        training_X, _y = encode_meta_label_features_for_training(features_df)
+
+        regime_slots = [
+            META_LABEL_FEATURE_ORDER.index(column)
+            for column in ("regime_trend_encoded", "regime_volatility_encoded", "regime_confidence")
+        ]
+        serving_X = np.stack(serving_rows)
+        np.testing.assert_array_equal(serving_X[:, regime_slots], training_X[:, regime_slots])

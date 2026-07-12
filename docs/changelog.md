@@ -11,7 +11,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Point-in-time model pinning for the backtest harness** (#988): new
+  `atb backtest` flags `--model-version` (pin an exact registry version) and
+  `--model-as-of DATE` (resolve which version was `latest` at that date from
+  bundle metadata timestamps, via `src/prediction/models/version_resolver.py`).
+  Reuses PR #950's pinning mechanism (`get_bundle_by_key` /
+  `ATB_MODEL_VERSION_OVERRIDE`); `MLBasicSignalGenerator` accepts an explicit
+  `model_version` and scores every bar with it, bypassing `latest`. Warns
+  loudly when the backtest window spans a model-promotion boundary (the
+  confound behind the 12-vs-6-trade parity gap, see
+  `docs/research/notes/2026-07-12_parity-gap-investigation.md`). Fail-closed:
+  an unhonorable pin aborts instead of silently resolving `latest`. Zero
+  behavior change when neither flag is passed; the live path cannot be pinned.
+
 ### Fixed
+- **Reconciliation edge paths: offline-SL double-count, partial-exit size
+  reset, silent periodic close failures** (2026-07-12 loop/state audit,
+  closes #980): (1) the legacy SL-based startup fallback re-applied an
+  offline-filled stop's `realized_pnl` on top of a `current_balance` the
+  exchange sync had already overwritten with the post-fill exchange balance —
+  double-counting the P&L in memory and in the `account_balances` ledger; the
+  fallback now skips the balance re-application while a sync correction is
+  pending (the Trade row and performance record still book the close), and
+  `synchronize_account_on_start` persists the POST-reconcile
+  `current_balance` instead of the stale pre-reconcile snapshot (write-only
+  `_pending_corrected_balance` removed). (2) The startup quantity-mismatch
+  correction (`_verify_entry_order`) overwrote `current_size` with the
+  recomputed full size, re-inflating a partially-exited recovered position to
+  full deployed size (over-sized final close, over-reported P&L); it now
+  preserves the remaining fraction (`new_size * prev_current/prev_original`,
+  the same scaling the SL re-placement uses) and omits a zero `current_size`
+  from the DB persist. (3) The periodic reconciler's external-close branches
+  (margin + spot) popped the position from the tracker and stayed silent when
+  the DB `close_position` failed, stranding an OPEN row the cycle never
+  revisits; both branches now escalate like their startup twins — CRITICAL
+  log plus a paged `system_events` row (`RECONCILE_DB_CLOSE_FAILED`,
+  `alert=True`).
+- **Market full-close SELL capped to holdings and floor-snapped (-2010 class)**
+  (2026-07-12 execution audit, Finding 2): the live full-close path derived its
+  SELL quantity from notional and snapped it round-to-NEAREST with no free-base
+  cap, so a long-close SELL could round UP above actual holdings (the entry
+  BUY's fee is deducted from the base fill: held 0.049975 vs derived 0.050000)
+  → Binance definitively rejects with -2010 → the close FAILS while the resting
+  stop is already cancelled (#710), leaving the position briefly unprotected
+  (backstopped only by `_reprotect_position` + the reconciler).
+  `LiveExecutionEngine._close_live_order` now mirrors the stop-loss SELL guard
+  (`BinanceProvider.place_stop_loss_order`): a closing SELL is capped at the
+  free base balance and its lot snap FLOORS (then `quantize_to_step`, LESSONS
+  §1.1); zero free base aborts the submit instead of guaranteeing a reject. A
+  short-cover BUY intentionally keeps the nearest snap and no base cap — it is
+  funded from quote and must repay the full base borrow; flooring it would
+  strand interest-accruing borrow dust. Balance-lookup failures degrade to
+  uncapped-but-floored so a transient API error never blocks an exit. Backtest
+  closes intentionally skip the cap/floor — there is no exchange fee-haircut or
+  -2010 mechanic to model, so applying it would only diverge from live parity.
+  The shared quote-suffix helper moved to `src.trading.symbols.factory`
+  (`base_asset_from_symbol`) so the exchange and execution layers size closes
+  against the same base asset. The same hazard in the emergency-close sites
+  (entry coordinator, recovery reconciler) is tracked in #989.
+- **Max-drawdown hard cap enforced on the same iteration; dynamic-risk
+  throttle anchored to the durable session peak** (2026-07-12 risk audit
+  P1/P2): the live loop ran `_check_entry_conditions` BEFORE
+  `_check_max_drawdown`, so on the exact bar where a stop-loss fill pushed
+  drawdown to the 20% cap a fresh entry (up to 20% notional) could execute
+  before close-only latched — the guard had no in-line pre-order gate,
+  unlike the #807 circuit breaker. Every exposure-increase chokepoint
+  (entry evaluation, `execute_entry_locked`, the legacy short path, the
+  scale-in close-only provider) now re-assesses the guard in-line via
+  `LiveTradingEngine._refresh_drawdown_gate` →
+  `MaxDrawdownEnforcer.check_before_new_risk()`, which also re-latches
+  close-only in the same iteration after a mid-breach `resume_trading()`
+  and can seed the peak before the first entry evaluation after a
+  mid-breach restart (in-line seeding never consumes the loop check's
+  bounded `MAX_SEED_ATTEMPTS` deferral budget). Relatedly, the graduated
+  dynamic-risk throttle read the restart-resettable in-memory
+  `PerformanceTracker.peak_balance` while the hard cap used the durable DB
+  session peak — a restart mid-drawdown re-anchored the throttle to the
+  depressed balance and silently disarmed the 5–20% size reductions (#845
+  peak-reset class). All three live throttle call sites (runtime entry
+  sizing, `LiveDynamicRiskCoordinator`, `_get_dynamic_risk_adjusted_params`)
+  now source `LiveTradingEngine._durable_peak_balance()` — max(guard's
+  durable session peak, tracker peak, current balance) — so the throttle and
+  the hard cap measure drawdown from the same baseline.
+- **`trades.mfe`/`mae` written in corrupted units** (#966): `MFEMAETracker`
+  persisted sized, fee-netted values (`size × move − (fee+slippage)`) into
+  `trades.mfe`/`mae` and `positions.mfe`/`mae` while the `mfe_price`/
+  `mae_price` companions held raw extreme prices — the columns disagreed
+  with their own companions by a non-constant ~10-23x factor (varies with
+  per-trade position size; #838 units-drift family), and small favorable
+  excursions were erased entirely whenever `size × move < fee + slippage`.
+  The tracker now records raw unsized price excursion from entry (decimal
+  fraction), always derivable from the `_price` companions. Readers are
+  era-defensive: `DatabaseManager` serializers and the monitoring
+  dashboard's raw-SQL positions path re-derive pre-fix rows from the
+  companions via `DatabaseManager.excursion_or_stored()`; the dashboard now
+  renders MFE/MAE as percentages (was: fractions formatted as USD).
+  Historical prod rows left untouched — backfill/NULL is a separate
+  human-approved operation (migration note on #966). (#992)
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*
