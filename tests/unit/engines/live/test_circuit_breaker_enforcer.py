@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.database.models import EventType
 from src.engines.live.monitoring.circuit_breaker_enforcer import (
     MAX_SEED_ATTEMPTS,
     CircuitBreakerEnforcer,
@@ -22,6 +23,7 @@ class _State:
         self._recovered_inactive_session_id = None
         self._close_only_mode = False
         self.events: list[str | None] = []
+        self.event_calls: list[tuple[tuple, dict]] = []
         self._day_snapshot = day_snapshot
         self.db_manager = SimpleNamespace(get_first_snapshot_of_day=lambda **kw: self._day_snapshot)
 
@@ -30,6 +32,7 @@ class _State:
 
     def _record_event(self, *args, **kwargs):
         self.events.append(kwargs.get("error_code"))
+        self.event_calls.append((args, kwargs))
 
 
 def _breaker(mode, **kw):
@@ -47,14 +50,58 @@ def test_active_trip_enters_close_only_and_records_event():
     assert "ACCOUNT_CIRCUIT_BREAKER_TRIP" in s.events
 
 
-def test_dry_run_trips_but_takes_no_action():
+def test_dry_run_trips_but_takes_no_protective_action():
     s = _State()
     enf = CircuitBreakerEnforcer(s, _breaker("dry_run"))
     enf.check()
     s.current_balance = 950.0
     enf.check()
     assert s._close_only_mode is False
-    assert s.events == []
+
+
+def test_dry_run_trip_records_durable_system_event():
+    # #964: dry_run exists to accumulate would-have-tripped evidence; stdout
+    # logs are ephemeral on Railway, so the trip must land in system_events.
+    s = _State()
+    enf = CircuitBreakerEnforcer(s, _breaker("dry_run"))
+    enf.check()
+    s.current_balance = 950.0
+    enf.check()
+
+    assert s._close_only_mode is False
+    assert s.events == ["CIRCUIT_BREAKER_DRY_RUN"]
+    (args, kwargs) = s.event_calls[0]
+    assert args[0] == EventType.CIRCUIT_BREAKER_DRY_RUN
+    assert "daily_loss_halt" in args[1]
+    assert "950.00" in args[1]
+    assert kwargs.get("severity") == "warning"
+    assert kwargs.get("component") == "risk"
+    # No alert requested: alert_sent must stay honestly False downstream.
+    assert kwargs.get("alert", False) is False
+
+
+def test_dry_run_event_recorded_once_per_trip_episode():
+    s = _State()
+    enf = CircuitBreakerEnforcer(s, _breaker("dry_run"))
+    enf.check()
+    s.current_balance = 950.0
+    enf.check()
+    enf.check()  # still tripped: must not write a second row
+    assert s.events == ["CIRCUIT_BREAKER_DRY_RUN"]
+
+
+def test_dry_run_event_failure_does_not_crash_loop():
+    s = _State()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("db down")
+
+    s._record_event = _boom
+    enf = CircuitBreakerEnforcer(s, _breaker("dry_run"))
+    enf.check()
+    s.current_balance = 950.0
+    enf.check()  # must not raise
+    assert s._close_only_mode is False
 
 
 def test_off_mode_is_inert():

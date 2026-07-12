@@ -133,6 +133,16 @@ class PositionSizer(ABC):
         """
         return {"name": self.name, "type": self.__class__.__name__}
 
+    def get_last_sizing_metrics(self) -> dict[str, float]:
+        """Structured evidence of the most recent sizing decision.
+
+        Sizers that adjust another sizer's output (e.g.
+        :class:`VolatilityTargetSizer`) override this so the strategy can merge
+        the adjustment into ``TradingDecision.risk_metrics`` for durable
+        decision logging. Values must be numeric. Default: no evidence.
+        """
+        return {}
+
     @property
     def warmup_period(self) -> int:
         """Return the minimum history required for the position sizer."""
@@ -1315,6 +1325,11 @@ class VolatilityTargetSizer(PositionSizer):
         self.max_multiplier = max_multiplier
         self.min_atr_percentile = min_atr_percentile
         self._warned_no_vol = False
+        # Last sizing decision, surfaced via get_last_sizing_metrics() so the
+        # strategy can persist activation evidence (#964). Lock-protected: the
+        # sizer instance may be shared across engine threads.
+        self._metrics_lock = threading.Lock()
+        self._last_sizing_metrics: dict[str, float] = {}
 
     @staticmethod
     def _atr_percentile(regime: Optional["RegimeContext"]) -> float | None:
@@ -1332,6 +1347,9 @@ class VolatilityTargetSizer(PositionSizer):
         atr_pctile = self._atr_percentile(regime)
         if atr_pctile is None:
             return None
+        return self._multiplier_from_percentile(atr_pctile)
+
+    def _multiplier_from_percentile(self, atr_pctile: float) -> float:
         divisor = max(atr_pctile, self.min_atr_percentile)
         raw = self.target_atr_percentile / divisor
         return float(min(max(raw, self.min_multiplier), self.max_multiplier))
@@ -1343,13 +1361,17 @@ class VolatilityTargetSizer(PositionSizer):
         risk_amount: float,
         regime: Optional["RegimeContext"] = None,
     ) -> float:
+        # Clear before validation: a failed candle (validation raise -> strategy
+        # fallback path) must surface as "no evidence", never as the previous
+        # candle's metrics.
+        self._set_sizing_metrics({})
         self.validate_inputs(balance, risk_amount)
         base_size = self.base_sizer.calculate_size(signal, balance, risk_amount, regime)
         if base_size <= 0:
             return base_size
 
-        multiplier = self.volatility_multiplier(regime)
-        if multiplier is None:
+        atr_pctile = self._atr_percentile(regime)
+        if atr_pctile is None:
             # No volatility signal -> do not guess; pass the base size through.
             if not self._warned_no_vol:
                 logger.warning(
@@ -1358,13 +1380,47 @@ class VolatilityTargetSizer(PositionSizer):
                     "Enable regime detection to activate vol targeting."
                 )
                 self._warned_no_vol = True
+            self._set_sizing_metrics(
+                {
+                    "vol_target_applied": 0.0,
+                    "vol_target_target_atr_percentile": self.target_atr_percentile,
+                }
+            )
             return base_size
 
+        multiplier = self._multiplier_from_percentile(atr_pctile)
         sized = base_size * multiplier
-        if not np.isfinite(sized):
-            return 0.0
-        # Reuse the base sizer's bounds so the wrapper never exceeds its cap.
-        return self.apply_bounds_checking(sized, balance, max_fraction=DEFAULT_MAX_POSITION_SIZE)
+        adjusted = (
+            self.apply_bounds_checking(sized, balance, max_fraction=DEFAULT_MAX_POSITION_SIZE)
+            if np.isfinite(sized)
+            # Reuse the base sizer's bounds so the wrapper never exceeds its cap.
+            else 0.0
+        )
+        self._set_sizing_metrics(
+            {
+                "vol_target_applied": 1.0,
+                "vol_target_multiplier": multiplier,
+                "vol_target_atr_percentile": atr_pctile,
+                "vol_target_target_atr_percentile": self.target_atr_percentile,
+                "vol_target_base_size": base_size,
+                "vol_target_adjusted_size": adjusted,
+            }
+        )
+        return adjusted
+
+    def _set_sizing_metrics(self, metrics: dict[str, float]) -> None:
+        with self._metrics_lock:
+            self._last_sizing_metrics = metrics
+
+    def get_last_sizing_metrics(self) -> dict[str, float]:
+        """Snapshot of the most recent sizing decision (empty when none was made).
+
+        Consumed by ``Strategy._calculate_risk_metrics`` so vol-target activation
+        evidence lands in ``TradingDecision.risk_metrics`` and, from there, the
+        ``strategy_executions`` table.
+        """
+        with self._metrics_lock:
+            return dict(self._last_sizing_metrics)
 
     @property
     def warmup_period(self) -> int:
