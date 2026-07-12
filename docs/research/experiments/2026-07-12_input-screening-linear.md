@@ -2,7 +2,7 @@
 
 Date: 2026-07-12
 Author: quant-researcher
-Status: **PLANNED — pre-registration locked before any scoring run**
+Status: **COMPLETE — no arm graduates; results appended below the locked prereg**
 Issue: GH #959 (Phase 0, input-candidates audit), this doc is Lane A Phase 1
 Related: `docs/research/2026-07-12_input-candidates-audit.md` (PR #958, open at time of
 writing — branch `docs/input-audit`, not yet merged to develop; scripts cherry-picked into
@@ -226,3 +226,184 @@ information sources" lever the target-redesign report recommended is worth GPU b
 
 *Pre-registration locked at the above wording. Results appended below after the run, never by
 editing the sections above.*
+
+---
+
+## Pre-run implementation note (added before the scoring run, not after)
+
+`max_iter=1000` (§2) produced an sklearn `ConvergenceWarning` on the arm-0 smoke test (lbfgs
+hadn't converged on ~47k rows × 600 features within 1000 iterations); raised to `max_iter=3000`
+before any fold/arm result was recorded. This is a numerical-convergence setting, not a metric,
+threshold, or graduation-rule change — noted here rather than silently edited into §2, per the
+anti-p-hacking discipline of never rewriting pre-committed sections after the fact.
+
+A first run attempt (background job `bfvf8289s`, 8 arms on F1 only, launched to smoke-test the
+full grid) ran for 29 minutes at ~620% CPU with zero output — far outside the "seconds per fit"
+budget — and was killed rather than trusted. Root cause: no BLAS thread-count cap, so `lbfgs`'s
+own thread pool oversubscribed against the exit-geometry lane's concurrent CPU-bound process
+running on the same machine (`experiments/exit_geometry_sweep.py`, confirmed still running via
+`ps aux` at the same time). Fixed by capping `OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS`/
+`MKL_NUM_THREADS`/`NUMEXPR_NUM_THREADS=4` before the real run — every fit then completed in
+10–47 seconds, matching the pre-registered compute-plan expectation. No result from the killed
+run was used; every number below comes from the capped, completed run only.
+
+---
+
+## Results
+
+**Run**: single complete pass, all 7 candidate arms × 3 folds + price-only control, `scripts/research/run_input_screening.py`,
+raw output committed at `scripts/research/input_screening_results.json` (per-bar correctness
+vectors are not included in the JSON dump — only aggregated per-fold/per-arm numbers — but are
+fully reproducible by re-running the script against the disk-cached raw data in
+`scripts/research/.cache/`, itself gitignored; re-running hits no network endpoint). 24 fits
+total, 10–47s each, ~9 minutes wall-clock with BLAS capped at 4 threads.
+
+### Validity check (arm 0 vs. the target-redesign tournament's linear baseline)
+
+| Fold | Ours (logistic-on-direction) | Tournament (LinearRegression-on-`close_normalized`) | Diff | Within ±2.0pp? |
+|---|---|---|---|---|
+| F1 | 51.94% | 53.24% | −1.30pp | **PASS** |
+| F2 | 53.10% | 53.61% | −0.51pp | **PASS** |
+| F3 | 50.79% | 53.18% | −2.39pp | **FAIL** |
+
+**Read plainly, as pre-committed in §2**: F1 and F2 replicate within tolerance; F3 does not
+(−2.39pp, 0.39pp past the ±2.0pp bar). This is reported as a **non-replication on F3**, not
+adjusted after the fact — no threshold was moved, no method was changed, after seeing this
+number. Two candidate explanations, neither chased further this session (would require rebuilding
+the tournament's unrecoverable script to confirm): (1) genuine method difference — logistic-on-
+direction and LinearRegression-on-continuous-target-then-sign are not identical estimators, and
+F3's regime (2025 H1, the most volatile/choppiest of the three per the target-redesign tournament's
+own regime notes) may be exactly where that difference bites hardest; (2) the two runs' feature
+data isn't bit-identical (this experiment re-fetched OHLCV from the live cache/API rather than
+reusing the tournament's exact frozen snapshot, which no longer exists). **This limits, but does
+not invalidate, the arm-vs-control comparisons below** — every arm in this experiment is compared
+against the SAME control, fit under the SAME method, on the SAME data, in the SAME run; the
+non-replication is specifically about the "matches the external tournament" claim for F3, not
+about internal comparability.
+
+### Per-fold, per-arm results
+
+Reported metrics only — Brier and the naive-persistence-disagreement DA are context, never used
+to rank or gate, per §5.
+
+**F1** (eval 2023-01-03→2023-06-30, n_eval=4,295, naive persistence DA=46.17%):
+
+| Arm | n_train | DA | Δ vs control (pp) | McNemar p | Brier | DA on naive-disagree subset (n) |
+|---|---|---|---|---|---|---|
+| price_only_control | 46,861 | 51.94% | — | — | 0.2502 | 54.75% (2,610) |
+| realized_vol_range | 46,812 | 52.34% | +0.40 | 0.2494 | 0.2505 | 55.14% (2,579) |
+| calendar | 46,861 | 52.08% | +0.14 | 0.7140 | 0.2504 | 54.90% (2,592) |
+| btc_cross | 46,861 | 52.06% | +0.12 | 0.7651 | 0.2503 | 54.91% (2,575) |
+| funding_rate | 27,096 | 52.41% | +0.47 | 0.5275 | 0.2529 | 55.49% (2,440) |
+| basis_premium | 26,438 | 52.36% | +0.42 | 0.5684 | 0.2532 | 55.47% (2,430) |
+| fear_greed | 42,767 | 52.22% | +0.28 | 0.6049 | 0.2507 | 55.11% (2,542) |
+| all_combined | 26,438 | 52.13% | +0.19 | 0.8225 | 0.2536 | 55.28% (2,424) |
+
+**F2** (eval 2024-01-03→2024-06-30, n_eval=4,320, naive persistence DA=46.57%):
+
+| Arm | n_train | DA | Δ vs control (pp) | McNemar p | Brier | DA on naive-disagree subset (n) |
+|---|---|---|---|---|---|---|
+| price_only_control | 55,620 | 53.10% | — | — | 0.2499 | 55.18% (2,724) |
+| realized_vol_range | 55,571 | 52.64% | −0.46 | 0.1611 | 0.2500 | 54.86% (2,694) |
+| calendar | 55,620 | 52.99% | −0.12 | 0.7700 | 0.2500 | 55.13% (2,701) |
+| btc_cross | 55,620 | 52.80% | −0.30 | 0.3974 | 0.2499 | 54.99% (2,695) |
+| funding_rate | 35,855 | 53.03% | −0.07 | 0.9422 | 0.2508 | 55.43% (2,567) |
+| basis_premium | 35,197 | 52.64% | −0.46 | 0.4831 | 0.2512 | 55.13% (2,556) |
+| fear_greed | 51,526 | 52.82% | −0.28 | 0.5736 | 0.2498 | 55.10% (2,648) |
+| all_combined | 35,197 | 53.06% | −0.05 | 0.9728 | 0.2512 | 55.53% (2,532) |
+
+**F3** (eval 2025-01-03→2025-06-30, n_eval=4,296, naive persistence DA=48.21%):
+
+| Arm | n_train | DA | Δ vs control (pp) | McNemar p | Brier | DA on naive-disagree subset (n) |
+|---|---|---|---|---|---|---|
+| price_only_control | 64,404 | 50.79% | — | — | 0.2531 | 52.02% (2,741) |
+| realized_vol_range | 64,355 | 51.00% | +0.21 | 0.5124 | 0.2531 | 52.21% (2,720) |
+| calendar | 64,404 | 50.23% | −0.56 | **0.0384** | 0.2532 | 51.59% (2,743) |
+| btc_cross | 64,404 | 50.68% | −0.12 | 0.7676 | 0.2529 | 51.95% (2,724) |
+| funding_rate | 44,639 | 51.51% | +0.72 | 0.2411 | 0.2531 | 52.74% (2,588) |
+| basis_premium | 43,981 | 51.37% | +0.58 | 0.3506 | 0.2531 | 52.61% (2,604) |
+| fear_greed | 60,310 | 51.00% | +0.21 | 0.6522 | 0.2530 | 52.22% (2,706) |
+| all_combined | 43,981 | 50.84% | +0.05 | 0.9708 | 0.2532 | 52.17% (2,601) |
+
+**One nominal-significance flag, named rather than buried**: `calendar`/F3 shows p=0.0384 —
+nominally significant at the uncorrected α=0.05, but (a) not at the pre-committed Bonferroni
+α=0.0071, and (b) in the WRONG direction (Δ=−0.56pp, calendar is *worse* than the price-only
+control on F3, not better). This is exactly the kind of result the Bonferroni correction and the
+±0.5pp practical-magnitude bar exist to filter out — a large-enough candidate set will produce an
+occasional nominal p<0.05 by chance alone, and this one doesn't even point the direction a
+"graduates" verdict would need.
+
+### Graduation verdicts (per §5's pre-committed rule, applied literally)
+
+| Arm | Avg Δ vs control (pp, F1–F3) | Folds with p < 0.0071 | Verdict |
+|---|---|---|---|
+| realized_vol_range | +0.05 | 0/3 | **does not graduate** |
+| calendar | −0.18 | 0/3 | **does not graduate** |
+| btc_cross | −0.10 | 0/3 | **does not graduate** |
+| funding_rate | +0.37 | 0/3 | **does not graduate** |
+| basis_premium | +0.18 | 0/3 | **does not graduate** |
+| fear_greed | +0.07 | 0/3 | **does not graduate** |
+| all_combined | +0.06 | 0/3 | **does not graduate** |
+
+**No arm graduates.** Zero of the seven arms clears McNemar significance at the Bonferroni bar on
+even a single fold, let alone the required two — the largest single-fold p-value below 0.05 is
+`calendar`/F3 (0.0384), which is both non-significant after correction and in the wrong direction.
+Every arm's average magnitude also sits well under the +0.5pp practical bar (`funding_rate`'s
++0.37pp is the largest, still short). Both halves of the graduation rule fail, for every arm, on
+every count — this is not a marginal or ambiguous outcome.
+
+### Reading this result honestly
+
+**This is a full, reportable negative result, not a silent gap**, per the anti-p-hacking
+discipline (§9). Read alongside the three prior tournaments (window #898, architecture #939,
+target-redesign, this doc's direct predecessor), the pattern is now four-for-four: no lever tried
+so far — training window, model architecture, target/label design, or (this experiment) a
+*linear* detector's view of six shortlisted alternative-input classes — has moved next-bar
+directional accuracy on ETHUSDT 1h meaningfully past its ~51–53% ceiling.
+
+**What this does and does not say about the input classes themselves**:
+
+- It does **not** say these inputs carry zero information at any horizon or for any model class.
+  A linear/logistic model can only detect signal that is (approximately) linearly separable in
+  the raw feature space; several of the candidates' own literature support (funding rate's
+  cross-exchange Granger evidence, HAR-RV's volatility literature for arm 1) is explicitly about
+  regime/crowding/volatility structure, not a claim that a *linear* combination of these features
+  predicts *direction* — the audit itself flagged this distinction (§4/§5 of the audit doc). A
+  nonlinear model (tree ensemble, small MLP) could in principle find structure a linear model
+  cannot; that is a real, named risk of false negative, not resolved by this experiment.
+- It **does** say that the cheapest, fastest test available found no linearly-detectable
+  directional edge from any of the six shortlisted classes, on this feature contract, on these
+  three folds, at Bonferroni-corrected significance. That is exactly what a screening gate is
+  for: it does not prove an input is worthless, but it removes the "obviously and cheaply
+  confirmed" path to the deep-model tournament for every one of these six candidates.
+- `funding_rate` (avg +0.37pp) and `basis_premium` (avg +0.18pp) are the two least-unpromising
+  candidates by raw magnitude, both missing the practical bar and nowhere near significance —
+  worth naming as the closest calls, not worth reading as "almost graduated." `calendar` is the
+  only arm with a negative average delta driven by a nominally-flagged (wrong-direction) fold,
+  making it the weakest candidate of the six by this evidence.
+
+### Recommendation
+
+**Rejected as-is — no arm graduates to the deep-model input tournament under this screen.** This
+recommendation is scoped narrowly: it says a *linear* gate finds no evidence at Bonferroni
+significance for any of the six shortlisted input classes on ETHUSDT 1h. Two honest paths forward,
+neither decided here:
+
+1. **Accept this as further evidence for the four-tournament pattern** (window/architecture/
+   target/input-linear-screen, all null) and treat "no readily-available feature addition moves
+   this system's directional-accuracy ceiling" as the standing structural finding, pending either
+   a genuinely different data modality (order-book microstructure, on-chain once a paid vendor
+   decision is made) or a nonlinear-detector re-test of the same six classes before fully retiring
+   the "new information sources" lever.
+2. **A nonlinear re-screen** (small gradient-boosted-tree or shallow-MLP version of this exact
+   experiment, same folds/arms/thresholds) is the natural next falsification test for the named
+   false-negative risk above, cheaper than jumping straight to the full deep-model tournament —
+   this would still be a screening step, not the tournament itself.
+
+This is a recommendation, not a resource commitment — the next step should go through its own
+`experiment-preregister` pass, informed by but not pre-decided by this write-up, per §9.
+
+**For risk-officer / pm**: nothing here proposes a live-affecting change; there is nothing to
+stress-test. Flagging for completeness only, per the standing convention.
+
+**Status**: COMPLETE.
