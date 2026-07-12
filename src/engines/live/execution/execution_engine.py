@@ -31,6 +31,7 @@ from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 from src.trading.precision import quantize_to_step
+from src.trading.symbols.factory import base_asset_from_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -698,12 +699,7 @@ class LiveExecutionEngine:
                 # Fail-closed: reject short on any lookup error.
                 use_margin = getattr(self.exchange_interface, "is_margin_mode", False) is True
                 if use_margin:
-                    # Extract base asset from trading pair
-                    base_asset = symbol
-                    for quote in ("USDT", "BUSD", "USD"):
-                        if symbol.endswith(quote) and len(symbol) > len(quote):
-                            base_asset = symbol[: -len(quote)]
-                            break
+                    base_asset = base_asset_from_symbol(symbol)
                     try:
                         balance = self.exchange_interface.get_balance(base_asset)
                     except Exception as e:
@@ -887,8 +883,37 @@ class LiveExecutionEngine:
                 return None
 
             order_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-            quantity = self._normalize_quantity(symbol, quantity, position_notional)
+
+            # A closing SELL can never order more base asset than is actually free:
+            # Binance deducts the entry BUY's fee from the base fill, so the
+            # notional-derived quantity can exceed real holdings, and a nearest lot
+            # snap can round UP past them — the exchange then rejects with -2010 and
+            # the close FAILS with the resting stop already cancelled (#710). Cap at
+            # the free base balance and floor the snap so the order is always
+            # coverable (mirrors the stop-loss SELL guard in
+            # BinanceProvider.place_stop_loss_order). A closing BUY (short cover) is
+            # funded from quote and must repay the full base borrow, so it keeps the
+            # nearest snap: flooring it would strand interest-accruing borrow dust.
+            if order_side == OrderSide.SELL:
+                free_base = self._free_base_for_close(symbol)
+                if free_base is not None and free_base < quantity:
+                    logger.warning(
+                        "Close sell qty %.8f for %s exceeds free base balance %.8f "
+                        "— capping to holdings to avoid -2010.",
+                        quantity,
+                        symbol,
+                        free_base,
+                    )
+                    quantity = free_base
+                quantity = self._normalize_quantity(symbol, quantity, position_notional, floor=True)
+            else:
+                quantity = self._normalize_quantity(symbol, quantity, position_notional)
             if quantity <= 0:
+                logger.error(
+                    "Close quantity for %s is not sellable after holdings cap and lot "
+                    "sizing — aborting close attempt",
+                    symbol,
+                )
                 return None
 
             # Generate deterministic client order ID for exit order idempotency
@@ -983,8 +1008,41 @@ class LiveExecutionEngine:
             logger.error("Live order close failed: %s", e)
             return None
 
-    def _normalize_quantity(self, symbol: str, quantity: float, value: float) -> float:
-        """Normalize quantity based on exchange symbol info with robust error handling."""
+    def _free_base_for_close(self, symbol: str) -> float | None:
+        """Free base-asset balance available to a closing SELL, or None when unknown.
+
+        ``free`` is the amount available to sell — reported identically in spot and
+        margin mode, and the resting stop-loss is cancelled before the close (#710),
+        so its previously locked inventory is free again by the time this reads it.
+        A None return means the cap is skipped, never that the close is blocked: a
+        transient balance-lookup failure must not stop an exit.
+
+        The base asset comes from the quote-suffix strip rather than
+        ``get_symbol_info`` — that would add a second full exchange-info fetch to
+        the latency-sensitive close path (``_normalize_quantity`` already makes
+        one). An unrecognized quote degrades safely: the balance lookup finds no
+        such asset, returns None, and only the cap is skipped.
+        """
+        if self.exchange_interface is None:
+            return None
+
+        base_asset = base_asset_from_symbol(symbol)
+        try:
+            balance = self.exchange_interface.get_balance(base_asset)
+            return float(balance.free) if balance is not None else None
+        except Exception as e:
+            logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
+            return None
+
+    def _normalize_quantity(
+        self, symbol: str, quantity: float, value: float, *, floor: bool = False
+    ) -> float:
+        """Normalize quantity based on exchange symbol info with robust error handling.
+
+        With ``floor=True`` the lot snap rounds DOWN (for closing SELLs that must
+        never exceed holdings); the default nearest snap suits entries and
+        short-cover BUYs.
+        """
         if quantity <= 0 or self.exchange_interface is None:
             return 0.0
 
@@ -1014,7 +1072,13 @@ class LiveExecutionEngine:
         else:
             # Apply step_size rounding
             try:
-                normalized = round(quantity / step_size) * step_size
+                if floor:
+                    # +epsilon so a quantity that is mathematically an exact lot
+                    # multiple but stored a hair low (float noise) isn't truncated
+                    # a whole step down (mirrors the SL SELL guard).
+                    normalized = math.floor(quantity / step_size + 1e-9) * step_size
+                else:
+                    normalized = round(quantity / step_size) * step_size
                 if not math.isfinite(normalized):
                     logger.error(
                         "Normalization produced non-finite value for %s - keeping original",

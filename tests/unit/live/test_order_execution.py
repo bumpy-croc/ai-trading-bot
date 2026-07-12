@@ -495,6 +495,167 @@ class TestExecuteExit:
 
 
 # ============================================================================
+# Tests for the close-quantity holdings guard (-2010 class)
+# ============================================================================
+
+
+@pytest.mark.unit
+class TestCloseSellHoldingsGuard:
+    """A market full-close SELL must never order more base asset than is held.
+
+    Binance deducts the entry BUY's fee from the base fill, so the notional-derived
+    close quantity exceeds real holdings, and a round-to-NEAREST lot snap can round
+    UP past them — Binance then rejects the close with -2010 and the position stays
+    open with its resting stop already cancelled (#710). The close path must mirror
+    the stop-loss SELL guard in BinanceProvider.place_stop_loss_order: cap at the
+    free base balance and floor the lot snap. A short-cover BUY is funded from
+    quote and must repay the full base borrow, so it keeps round-to-nearest.
+    """
+
+    def _configure_exchange(
+        self,
+        mock_exchange,
+        *,
+        free_base: float | None,
+        step_size: float = 0.00001,
+    ):
+        mock_exchange.get_symbol_info.return_value = {
+            "step_size": step_size,
+            "min_qty": step_size,
+            "min_notional": 10.0,
+        }
+        if free_base is None:
+            mock_exchange.get_balance.return_value = None
+        else:
+            balance = Mock()
+            balance.free = free_base
+            mock_exchange.get_balance.return_value = balance
+
+    @pytest.mark.fast
+    def test_close_sell_capped_to_free_base(self, execution_engine_with_exchange, mock_exchange):
+        """Audit case: held 0.049975 after fee haircut, derived 0.050000 → send <= held."""
+        self._configure_exchange(mock_exchange, free_base=0.049975)
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="entry123",
+            base_price=50000.0,
+            position_notional=2500.0,  # derived quantity: exactly 0.05 > held
+        )
+
+        assert result.success is True
+        # The cap consulted the base-asset (not quote) balance
+        mock_exchange.get_balance.assert_called_with("BTC")
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent <= 0.049975
+        assert sent == pytest.approx(0.04997)
+
+    @pytest.mark.fast
+    def test_close_sell_floors_instead_of_rounding_up(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """Boundary: capped qty 0.049978 → nearest snap gives 0.04998 (> held); must floor."""
+        self._configure_exchange(mock_exchange, free_base=0.049978)
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="entry123",
+            base_price=50000.0,
+            position_notional=2500.0,
+        )
+
+        assert result.success is True
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent <= 0.049978
+        assert sent == pytest.approx(0.04997)
+
+    @pytest.mark.fast
+    def test_close_sell_floored_quantity_quantized_to_step(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """LESSONS 1.1: `floor(q/step)*step` artifacts (0.00030000000000000003) are quantized."""
+        self._configure_exchange(mock_exchange, free_base=0.00037, step_size=0.0001)
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="ETHUSDT",
+            side=PositionSide.LONG,
+            order_id="entry123",
+            base_price=100000.0,
+            position_notional=40.0,  # derived quantity 0.0004 > held 0.00037
+        )
+
+        assert result.success is True
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent == pytest.approx(0.0003)
+        # No more decimals than the 0.0001 step implies (else Binance 51077)
+        assert Decimal(str(sent)).as_tuple().exponent >= -4
+
+    @pytest.mark.fast
+    def test_close_buy_short_cover_keeps_nearest_and_ignores_base_holdings(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """A short-cover BUY repays the full borrow: nearest snap, no free-base cap.
+
+        free_base=0.0 would zero a wrongly-capped BUY; flooring would under-repay
+        the margin borrow and strand interest-accruing dust.
+        """
+        self._configure_exchange(mock_exchange, free_base=0.0)
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.SHORT,
+            order_id="entry123",
+            base_price=50000.0,
+            position_notional=2498.9,  # derived 0.049978 → nearest snap 0.04998
+        )
+
+        assert result.success is True
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent == pytest.approx(0.04998)
+
+    @pytest.mark.fast
+    def test_close_sell_proceeds_uncapped_when_balance_unavailable(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """A transient balance-lookup failure must not block the close (mirrors SL guard)."""
+        self._configure_exchange(mock_exchange, free_base=None)
+        mock_exchange.get_balance.side_effect = ConnectionError("balance unavailable")
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="entry123",
+            base_price=50000.0,
+            position_notional=2500.0,
+        )
+
+        assert result.success is True
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        # Exact lot multiple survives the floor (epsilon guard), stays 0.05
+        assert sent == pytest.approx(0.05)
+
+    @pytest.mark.fast
+    def test_close_sell_no_free_base_aborts_close(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """Zero free base → a SELL is guaranteed -2010; abort instead of submitting."""
+        self._configure_exchange(mock_exchange, free_base=0.0)
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="entry123",
+            base_price=50000.0,
+            position_notional=2500.0,
+        )
+
+        assert result.success is False
+        mock_exchange.place_order.assert_not_called()
+
+
+# ============================================================================
 # Tests for LiveExitHandler filled exits
 # ============================================================================
 
