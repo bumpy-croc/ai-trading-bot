@@ -2,7 +2,7 @@
 
 Date: 2026-07-12
 Author: quant-researcher
-Status: **PLANNED — pre-registration locked before any scoring run**
+Status: **COMPLETE — no arm graduates; btc_cross flagged as a regime-specific near-miss (§ Results)**
 Issue: follow-up to GH #967 (linear screen, PR #969, merging on green), same Lane A input-tournament
 line as GH #959 (Phase 0 audit)
 Related: `docs/research/experiments/2026-07-12_input-screening-linear.md` (the linear screen this
@@ -218,3 +218,160 @@ actionable.
 
 *Pre-registration locked at the above wording. Results appended below after the run, never by
 editing the sections above.*
+
+---
+
+## Results
+
+**Environment note**: `lightgbm` required installing the OpenMP runtime (`brew install libomp`)
+on this macOS host — not previously needed by anything else in this repo. Noted for reproducibility,
+not a threshold/method change.
+
+**Run**: single complete pass, all 7 candidate arms × 3 folds, `scripts/research/run_input_screening_nonlinear.py`,
+raw output committed at `scripts/research/input_screening_nonlinear_results.json`. 21 fits, each
+with early stopping against the train-tail validation split (best iteration ranged 7–81 against
+the `n_estimators=300` ceiling — early stopping engaged on every single fit, never hit the cap).
+BLAS threads capped at 4 throughout (carried over from the linear screen's compute-contention
+fix). Wall-clock: ~1–3s per fit, ~50s total — faster than the linear screen's logistic-regression
+fits, since early stopping keeps most trees small.
+
+### Validity check (context only, per §2 — not a pass/fail gate)
+
+| Fold | Price-only LightGBM control | Price-only logistic control (linear screen) | Diff |
+|---|---|---|---|
+| F1 | 51.15% | 51.94% | −0.79pp |
+| F2 | 52.96% | 53.10% | −0.14pp |
+| F3 | 51.58% | 50.79% | +0.79pp |
+
+Trees on the bare price-only contract track the linear control closely (within ~0.8pp every
+fold, no systematic direction) — no evidence trees find extra structure in price-only alone, an
+internally consistent finding. The LightGBM price-only control (not the linear one) is this
+experiment's own reference for every arm below.
+
+### Per-fold, per-arm results
+
+**F1** (eval 2023-01-03→2023-06-30, n_eval=4,295, naive persistence DA=46.17%):
+
+| Arm | n_train (fit/val) | DA | Δ vs LightGBM control (pp) | McNemar p | Brier | Best iter |
+|---|---|---|---|---|---|---|
+| price_only_control | 42,175 / 4,686 | 51.15% | — | — | 0.2495 | 20 |
+| realized_vol_range | 42,131 / 4,681 | 50.83% | −0.33 | 0.652 | 0.2499 | 22 |
+| calendar | 42,175 / 4,686 | 51.06% | −0.09 | 0.924 | 0.2497 | 24 |
+| btc_cross | 42,175 / 4,686 | **54.99%** | **+3.84** | **6.9e-05** | 0.2478 | 37 |
+| funding_rate | 24,387 / 2,709 | 51.64% | +0.49 | 0.579 | 0.2496 | 11 |
+| basis_premium | 23,795 / 2,643 | 51.53% | +0.37 | 0.681 | 0.2496 | 16 |
+| fear_greed | 38,491 / 4,276 | 51.46% | +0.30 | 0.736 | 0.2503 | 81 |
+| all_combined | 23,795 / 2,643 | 53.88% | +2.72 | 0.0056 | 0.2477 | 45 |
+
+**F2** (eval 2024-01-03→2024-06-30, n_eval=4,320, naive persistence DA=46.57%):
+
+| Arm | n_train (fit/val) | DA | Δ vs control (pp) | McNemar p | Brier | Best iter |
+|---|---|---|---|---|---|---|
+| price_only_control | 50,058 / 5,562 | 52.96% | — | — | 0.2492 | 23 |
+| realized_vol_range | 50,014 / 5,557 | 52.66% | −0.30 | 0.712 | 0.2491 | 50 |
+| calendar | 50,058 / 5,562 | 51.81% | −1.16 | 0.097 | 0.2492 | 48 |
+| btc_cross | 50,058 / 5,562 | 54.12% | +1.16 | 0.226 | 0.2478 | 28 |
+| funding_rate | 32,270 / 3,585 | 51.78% | −1.18 | 0.173 | 0.2496 | 31 |
+| basis_premium | 31,678 / 3,519 | 52.11% | −0.86 | 0.322 | 0.2496 | 17 |
+| fear_greed | 46,374 / 5,152 | 52.22% | −0.74 | 0.360 | 0.2490 | 78 |
+| all_combined | 31,678 / 3,519 | 53.54% | +0.58 | 0.555 | 0.2482 | 32 |
+
+**F3** (eval 2025-01-03→2025-06-30, n_eval=4,296, naive persistence DA=48.21%):
+
+| Arm | n_train (fit/val) | DA | Δ vs control (pp) | McNemar p | Brier | Best iter |
+|---|---|---|---|---|---|---|
+| price_only_control | 57,964 / 6,440 | 51.58% | — | — | 0.2498 | 38 |
+| realized_vol_range | 57,920 / 6,435 | 51.98% | +0.40 | 0.588 | 0.2496 | 34 |
+| calendar | 57,964 / 6,440 | 51.12% | −0.47 | 0.468 | 0.2498 | 39 |
+| btc_cross | 57,964 / 6,440 | 51.26% | −0.33 | 0.741 | 0.2504 | 49 |
+| funding_rate | 40,176 / 4,463 | 51.63% | +0.05 | 0.979 | 0.2497 | 7 |
+| basis_premium | 39,583 / 4,398 | 52.12% | +0.54 | 0.539 | 0.2495 | 12 |
+| fear_greed | 54,279 / 6,031 | 51.98% | +0.40 | 0.609 | 0.2496 | 32 |
+| all_combined | 39,583 / 4,398 | 53.12% | +1.54 | 0.100 | 0.2494 | 30 |
+
+### Graduation verdicts (per §5's pre-committed rule, applied literally)
+
+| Arm | Avg Δ vs control (pp, F1–F3) | Folds with p < 0.0071 | Verdict |
+|---|---|---|---|
+| realized_vol_range | −0.08 | 0/3 | **does not graduate** |
+| calendar | −0.57 | 0/3 | **does not graduate** |
+| btc_cross | **+1.56** | **1/3** | **does not graduate** |
+| funding_rate | −0.22 | 0/3 | **does not graduate** |
+| basis_premium | +0.02 | 0/3 | **does not graduate** |
+| fear_greed | −0.01 | 0/3 | **does not graduate** |
+| all_combined | **+1.61** | **1/3** | **does not graduate** |
+
+**No arm graduates** — the rule requires ≥2/3 significant folds AND avg Δ≥+0.5pp; `btc_cross` and
+`all_combined` clear the magnitude bar but only 1 of 3 folds each clears Bonferroni significance,
+short of the required 2. Applying §5 literally, exactly as pre-committed, the graduation column is
+uniformly "does not graduate."
+
+### The btc_cross near-miss, named honestly (not folded into "clean null")
+
+**This screen is NOT a repeat of the linear screen's clean, uniform null — `btc_cross` behaves
+genuinely differently under trees than under logistic regression**, and this deserves being said
+plainly rather than smoothed into "still nothing graduates":
+
+- F1: DA 54.99% vs control 51.15%, **Δ=+3.84pp, p=6.9e-05** — this clears Bonferroni significance
+  by four orders of magnitude, not a borderline call.
+- F2: Δ=+1.16pp, p=0.226 — same direction, much weaker, not significant.
+- F3: Δ=−0.33pp, p=0.741 — reverses sign, not significant.
+
+**Feature-importance/gain (reported, never gating, per §5)** shows `btc_ret_1h`/`btc_ret_6h`
+carrying real, consistent gain in ALL THREE folds (16–22% and 6–8% of total gain respectively,
+`btc_cross` arm) — not just F1. This is the same pattern the target-redesign tournament flagged
+for its own confidence signal: **gain/importance does not straightforwardly track OOS DA
+improvement** — the tree consistently finds BTC-return splits worth making, but that only
+translates into a significant, generalizing accuracy edge in one of three regimes (F1, "post-
+crypto-winter chop/recovery" per the fold table). `all_combined`'s pattern is driven by the same
+BTC features (still the two largest non-price-only gain contributors in every fold of that arm).
+
+**Read plainly**: this is exactly the kind of result the linear screen's own named false-negative
+risk predicted — a nonlinear detector found something a linear one did not. It does not graduate
+under the pre-committed rule (regime-specific, not persistent across ≥2/3 folds), and the rule is
+applied as written, not loosened after seeing this number. But "found nothing at all" would be the
+wrong headline for this arm specifically; "found a real, regime-dependent signal that does not
+generalize across the three tested regimes" is the accurate one, and is exactly the kind of
+disclosure §5's feature-importance reporting exists to surface.
+
+### Reading this result honestly, against the pre-committed interpretation rule (§6)
+
+Applying §6 literally: since **zero arms graduate** (the rule's condition, checked exactly as
+written), the "new information sources" lever is formally retired for ETHUSDT-1h within these six
+input classes and this feature contract, per the PM-authorized interpretation rule. This is now
+six converged results — four tournaments (window #898, architecture #939, target-redesign) plus
+two screens (linear, this nonlinear re-screen) — all finding the same ~51–53% DA ceiling under
+every lever tried: training window, model architecture, target/label design, and now both a
+linear and a nonlinear view of six alternative input classes.
+
+**The one qualification to that headline, stated as directly as the evidence supports**:
+`btc_cross` is not "no signal" the way the other five candidates are — it is "a real,
+highly-significant-in-one-regime signal that a linear model cannot see and a nonlinear model can,
+but which does not persist across the two other tested regimes." This is not strong enough to
+graduate under the pre-committed bar (correctly not graduating — one significant fold out of three
+is exactly the kind of single-lucky-draw result the ≥2/3 requirement exists to filter), but it is
+also not nothing, and closing the "new information sources" lever entirely would be slightly
+overclaiming if it silently dropped this distinction. Recommended framing: the lever closes for
+five of six input classes with high confidence; `btc_cross` closes for THIS screening design
+specifically (i.e., "detect a fold-persistent linear-or-tree-detectable edge") while leaving open
+a narrower, separately-scoped question — whether BTC-ETH lead-lag is a regime-conditional
+relationship (stronger in some vol/trend regimes than others, consistent with the audit's own
+literature read: "plausible, weak, almost certainly time-varying") worth testing with an explicit
+regime-interaction design, not a blanket four-feature addition. That is a distinct, narrower
+research question, not a re-run of this screen, and is not decided or committed to here.
+
+### Recommendation
+
+**Confirms the pattern; formally retires the "new information sources" lever for five of six input
+classes; flags `btc_cross` as a narrower, separately-scoped open question, not a graduating
+candidate.** Per §6's pre-committed interpretation, this experiment's outcome (zero graduating
+arms) is itself decision-grade: future research levers for this system shift to trade geometry,
+frequency/symbol diversification, and the live-parity gap, rather than further feature-set
+expansion within the six audited classes. A regime-conditional BTC-ETH lead-lag question is named
+as a candidate for a future, separately-preregistered, narrowly-scoped experiment — not
+authorized or scheduled here.
+
+**For risk-officer / pm**: nothing here proposes a live-affecting change; there is nothing to
+stress-test.
+
+**Status**: COMPLETE.
