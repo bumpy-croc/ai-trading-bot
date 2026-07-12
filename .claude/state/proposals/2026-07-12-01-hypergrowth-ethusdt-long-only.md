@@ -4,11 +4,11 @@ from: quant-researcher
 to: pm
 status: open
 risk_review_required: true
-risk_verdict: null         # null | approve | approve-with-conditions | reject
+risk_verdict: approve-with-conditions  # 2026-07-12 risk-officer, 7 conditions (C1-C5 hard); see docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md
 code_review_required: true
 board_required: true       # any change affecting live capital / strategy activation needs human approval per charter.md autonomy envelope
 created: 2026-07-12T18:45:00Z
-updated: 2026-07-12T18:45:00Z
+updated: 2026-07-12T20:10:00Z
 ---
 
 ## Ask
