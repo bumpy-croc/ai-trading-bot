@@ -109,6 +109,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders MFE/MAE as percentages (was: fractions formatted as USD).
   Historical prod rows left untouched — backfill/NULL is a separate
   human-approved operation (migration note on #966). (#992)
+
+- **Inference context is scoped, not process-global** (#926, from the #923
+  review gauntlet): the live 5s inference deadline rested on an undocumented
+  one-engine-per-process invariant — `InferenceContext` was a module global
+  set by engine constructors with last-writer-wins semantics, so a
+  `Backtester` constructed inside a live process (e.g. a future in-process
+  validation gate) would silently strip the live deadline. The context is now
+  a `contextvars.ContextVar` with a composition-safe `inference_scope()`
+  context manager: `Backtester.run()` executes under a DETERMINISTIC scope
+  that restores the caller's policy on exit (constructing a Backtester no
+  longer touches the context at all), and the live trading loop pins LIVE on
+  its own thread in `_run_trading_loop` (contextvars do not cross threads).
+  Behavior is unchanged for today's single-engine processes — proven by the
+  existing suite plus a new two-engines-one-process test and a
+  DETERMINISTIC-vs-LIVE fast-path parity test.
+- **Repeated live inference timeouts now escalate instead of degrading to
+  HOLD forever** (#927, from the #923 review gauntlet): each timed-out bar
+  already degraded to HOLD with a per-bar WARNING, but
+  `PredictionEngine.health_check()` never consulted the timeout counters — a
+  permanently hung model looked healthy while the bot silently stopped
+  trading. The engine now tracks consecutive live timeouts (reset by any
+  successful inference); past a configurable threshold
+  (`PredictionConfig.inference_timeout_escalation_threshold`, default 10, env
+  `INFERENCE_TIMEOUT_ESCALATION_THRESHOLD`, 0 disables) `health_check()`
+  reports a degraded `inference` component, and the live trading loop pages
+  once per episode — CRITICAL `system_events` row
+  (`INFERENCE_TIMEOUT_ESCALATION`) + operator alert with honest `alert_sent`
+  semantics, re-armed after recovery (`INFERENCE_TIMEOUT_RECOVERED`). The
+  periodic status line now includes the timeout counters. Observability
+  only — never a trading halt: existing positions stay managed.
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*

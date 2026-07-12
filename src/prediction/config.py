@@ -17,6 +17,7 @@ from src.config.constants import (
     DEFAULT_ENABLE_SENTIMENT,
     DEFAULT_ENSEMBLE_METHOD,
     DEFAULT_FEATURE_CACHE_TTL,
+    DEFAULT_INFERENCE_TIMEOUT_ESCALATION_THRESHOLD,
     DEFAULT_LIVE_INFERENCE_TIMEOUT,
     DEFAULT_MAX_PREDICTION_LATENCY,
     DEFAULT_MIN_CONFIDENCE_THRESHOLD,
@@ -46,6 +47,9 @@ class PredictionConfig:
     max_prediction_latency: float = DEFAULT_MAX_PREDICTION_LATENCY
     # Hard deadline applied only in the LIVE inference context.
     live_inference_timeout: float = DEFAULT_LIVE_INFERENCE_TIMEOUT
+    # Consecutive live inference timeouts before health_check() reports the
+    # engine degraded (observability escalation, #927). 0 disables.
+    inference_timeout_escalation_threshold: int = DEFAULT_INFERENCE_TIMEOUT_ESCALATION_THRESHOLD
     model_registry_path: str = DEFAULT_MODEL_REGISTRY_PATH
     enable_sentiment: bool = DEFAULT_ENABLE_SENTIMENT
     enable_market_microstructure: bool = DEFAULT_ENABLE_MARKET_MICROSTRUCTURE
@@ -89,6 +93,10 @@ class PredictionConfig:
             ),
             live_inference_timeout=config.get_float(
                 "LIVE_INFERENCE_TIMEOUT", default=DEFAULT_LIVE_INFERENCE_TIMEOUT
+            ),
+            inference_timeout_escalation_threshold=config.get_int(
+                "INFERENCE_TIMEOUT_ESCALATION_THRESHOLD",
+                default=DEFAULT_INFERENCE_TIMEOUT_ESCALATION_THRESHOLD,
             ),
             model_registry_path=config.get(
                 "MODEL_REGISTRY_PATH", default=DEFAULT_MODEL_REGISTRY_PATH
@@ -135,6 +143,16 @@ class PredictionConfig:
 
         if self.live_inference_timeout <= 0.0:
             raise ValueError("live_inference_timeout must be positive")
+
+        if (
+            isinstance(self.inference_timeout_escalation_threshold, bool)
+            or not isinstance(self.inference_timeout_escalation_threshold, int)
+            or self.inference_timeout_escalation_threshold < 0
+        ):
+            raise ValueError(
+                "inference_timeout_escalation_threshold must be a non-negative "
+                "integer (0 disables escalation)"
+            )
 
         if self.feature_cache_ttl <= 0:
             raise ValueError("feature_cache_ttl must be positive")
