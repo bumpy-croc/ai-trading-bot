@@ -4,9 +4,9 @@ Date: 2026-07-12
 Author: quant-researcher
 Status: **COMPLETE — no arm graduates; results appended below the locked prereg**
 Issue: GH #959 (Phase 0, input-candidates audit), this doc is Lane A Phase 1
-Related: `docs/research/2026-07-12_input-candidates-audit.md` (PR #958, open at time of
-writing — branch `docs/input-audit`, not yet merged to develop; scripts cherry-picked into
-this worktree directly since PR #958 was not blocked on), `docs/research/experiments/2026-07-10_target-redesign-tournament-results.md`
+Related: `docs/research/2026-07-12_input-candidates-audit.md` (PR #958 — open, branch
+`docs/input-audit`, when this experiment's scripts were cherry-picked; merged to develop at
+`9e7ea5e8` before this experiment's own PR landed), `docs/research/experiments/2026-07-10_target-redesign-tournament-results.md`
 (fold definitions, linear-baseline methodology, merged to develop at `25e0a202`)
 North star: the target-redesign report's conclusion, quoted verbatim: *"the feature set
 itself — not the model, not the window, not the target shape — is the ceiling... The next
