@@ -1378,8 +1378,9 @@ function V2InspectPosition({ symbol }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <HRow k="trail SL" v={p.trailSL ? Number(p.trailSL).toLocaleString() : '—'} />
           <HRow k="breakeven" v={p.breakeven ? '✓ active' : '—'} color={p.breakeven ? 'var(--accent-2)' : 'var(--text-3)'} />
-          <HRow k="MFE" v={fmtUSD(p.mfe, { sign: true })} color="var(--accent-2)" />
-          <HRow k="MAE" v={fmtUSD(p.mae, { sign: true })} color="var(--danger)" />
+          {/* mfe/mae are raw price excursions as decimal fractions */}
+          <HRow k="MFE" v={fmtPct(p.mfe * 100)} color="var(--accent-2)" />
+          <HRow k="MAE" v={fmtPct(p.mae * 100)} color="var(--danger)" />
           <HRow k="age" v={`${Math.floor(p.ageMs / 3600000)}h ${Math.floor(p.ageMs % 3600000 / 60000)}m`} />
         </div>
       </div>
@@ -1533,8 +1534,8 @@ function V2PosView({ setSelected, setNavTab }) {
                   </td>
                   <td>{p.trailSL ? Number(p.trailSL).toLocaleString() : '—'}</td>
                   <td style={{ color: p.breakeven ? 'var(--accent-2)' : 'var(--text-3)' }}>{p.breakeven ? '✓' : '—'}</td>
-                  <td style={{ color: 'var(--accent-2)' }}>{fmtUSD(p.mfe, { sign: true })}</td>
-                  <td style={{ color: 'var(--danger)' }}>{fmtUSD(p.mae, { sign: true })}</td>
+                  <td style={{ color: 'var(--accent-2)' }}>{fmtPct(p.mfe * 100)}</td>
+                  <td style={{ color: 'var(--danger)' }}>{fmtPct(p.mae * 100)}</td>
                 </tr>
               ))}
             </tbody>

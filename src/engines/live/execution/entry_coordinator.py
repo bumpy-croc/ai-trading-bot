@@ -49,7 +49,6 @@ if TYPE_CHECKING:
     from src.engines.live.order_tracker import OrderTracker
     from src.engines.live.reconciliation import BaseAssetLockRegistry
     from src.risk.risk_manager import RiskManager
-    from src.trading.performance import PerformanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +68,6 @@ class LiveEntryEngineState(Protocol):
     trading_session_id: int | None
     strategy: Any
     risk_manager: RiskManager
-    performance_tracker: PerformanceTracker
     live_entry_handler: LiveEntryHandler
     live_position_tracker: LivePositionTracker
     stop_loss_manager: LiveStopLossManager
@@ -94,6 +92,10 @@ class LiveEntryEngineState(Protocol):
     def _send_alert(self, message: str) -> bool: ...
 
     def _enter_close_only_mode(self) -> None: ...
+
+    def _refresh_drawdown_gate(self) -> bool: ...
+
+    def _durable_peak_balance(self) -> float: ...
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict: ...
 
@@ -179,6 +181,11 @@ class LiveEntryCoordinator:
         """Check if new positions should be opened"""
         state = self._state
 
+        # In-line hard-cap gate (#807 pattern): re-assess the drawdown guard
+        # BEFORE reading close-only, so a breach realized earlier in this same
+        # iteration (e.g. a stop-loss fill) blocks this entry, not the next one.
+        state._refresh_drawdown_gate()
+
         # Close-only mode: skip all entry signals, exits/stops still active
         if state._close_only_mode:
             logger.debug("Close-only mode active — skipping entry check")
@@ -206,7 +213,6 @@ class LiveEntryCoordinator:
         decision_signal = getattr(runtime_decision, "signal", None)
 
         if use_runtime:
-            perf_metrics = state.performance_tracker.get_metrics()
             # Pass symbol/timeframe/df/index so LiveEntryHandler can run
             # correlation control. These are required keyword args of the
             # handler's correlation guard (see LiveEntryHandler.process_runtime_decision
@@ -214,6 +220,9 @@ class LiveEntryCoordinator:
             # them, correlation_handler.apply_correlation_control is silently
             # skipped, so the live engine over-concentrates in correlated pairs
             # that the backtest engine de-risks.
+            # peak_balance comes from the engine's durable session peak (the
+            # same baseline as the hard cap), NOT the restart-resettable
+            # PerformanceTracker peak (#845 peak-reset class).
             entry_signal_result = state.live_entry_handler.process_runtime_decision(
                 runtime_decision=runtime_decision,
                 balance=state.current_balance,
@@ -223,7 +232,7 @@ class LiveEntryCoordinator:
                 timeframe=state.timeframe,
                 df=df,
                 index=current_index,
-                peak_balance=perf_metrics.peak_balance or state.current_balance,
+                peak_balance=state._durable_peak_balance() or state.current_balance,
                 trading_session_id=state.trading_session_id,
             )
             if entry_signal_result.should_enter and entry_signal_result.side is not None:
@@ -524,6 +533,10 @@ class LiveEntryCoordinator:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         state = self._state
+        # In-line hard-cap gate: re-assess the drawdown guard at the execution
+        # chokepoint so callers that routed around check_entry_conditions are
+        # still blocked on the breach bar itself.
+        state._refresh_drawdown_gate()
         # Defense-in-depth: refuse any entry routed around check_entry_conditions.
         # Close-only mode gates the chokepoint too, so the legacy short path and
         # any direct caller can never add exposure while halted.
@@ -960,6 +973,8 @@ class LiveEntryCoordinator:
     ) -> None:
         """Evaluate and execute a legacy duck-typed short entry (non-runtime strategies)."""
         state = self._state
+        # In-line hard-cap gate: same-iteration enforcement for the legacy path.
+        state._refresh_drawdown_gate()
         # Close-only mode: skip legacy short evaluation, exits/stops still active
         if state._close_only_mode:
             logger.debug("Close-only mode active — skipping legacy short entry check")

@@ -56,6 +56,7 @@ from src.ml.training_pipeline.meta_labels import (
     META_LABEL_FEATURE_ORDER,
     build_meta_label_features,
     encode_meta_label_features_for_training,
+    fire_generation_corpus_fingerprint,
     resolve_fired_trade,
     run_primary_signal_forward,
 )
@@ -230,6 +231,30 @@ def _build_alt_target(
     return aligned_values, aligned_valid
 
 
+def _meta_label_fire_checkpoint_path(
+    ctx: TrainingContext, signal_generator: MLBasicSignalGenerator, price_df: pd.DataFrame
+) -> Path | None:
+    """Where this run's fire-generation checkpoint lives, or None if disabled.
+
+    The corpus fingerprint goes INTO the filename so different corpora
+    (window/symbol/generator changes between a crash and a rerun) resolve to
+    different files instead of tripping the checkpoint's mismatch rejection.
+    """
+    configured = ctx.config.meta_label_fire_checkpoint_dir
+    if configured is None or len(price_df) == 0:
+        return None
+    base = (
+        ctx.paths.data_dir / "meta_label_fire_checkpoints"
+        if configured == "auto"
+        else Path(configured)
+    )
+    base.mkdir(parents=True, exist_ok=True)
+    fingerprint = fire_generation_corpus_fingerprint(signal_generator, price_df)
+    return base / (
+        f"fires_{ctx.config.symbol.upper()}_{ctx.config.timeframe}_{fingerprint[:16]}.json"
+    )
+
+
 def _run_meta_label_pipeline(ctx: TrainingContext) -> TrainingResult:
     """Train entrant (a)'s meta-labeling classifier (TARGET-REDESIGN
     tournament preregistration §2a).
@@ -256,7 +281,13 @@ def _run_meta_label_pipeline(ctx: TrainingContext) -> TrainingResult:
             symbol=ctx.config.symbol,
         )
 
-        fired = run_primary_signal_forward(primary_signal_generator, price_df)
+        # Checkpoint-protected by default (#955 defect 2): a ~47k-bar
+        # forward pass runs the better part of an hour, and task-lifetime
+        # caps killed uncheckpointed passes twice during the #933 tournament.
+        checkpoint_path = _meta_label_fire_checkpoint_path(ctx, primary_signal_generator, price_df)
+        fired = run_primary_signal_forward(
+            primary_signal_generator, price_df, checkpoint_path=checkpoint_path
+        )
         if not fired:
             raise ValueError(
                 f"Primary signal (model_type={ctx.config.primary_model_type!r}) produced "
@@ -393,6 +424,17 @@ def _run_meta_label_pipeline(ctx: TrainingContext) -> TrainingResult:
             metadata_path=metadata_path,
             plot_path=None,
         )
+
+        # Crash-recovery artifact, not a cache: fires depend on the primary
+        # model's WEIGHTS, which the checkpoint fingerprint cannot see --
+        # keeping a completed checkpoint would silently reuse stale fires
+        # after a primary-model retrain. Kept until here (not right after
+        # fire generation) so a crash anywhere above resumes instantly.
+        if checkpoint_path is not None and checkpoint_path.exists():
+            checkpoint_path.unlink()
+            logger.info(
+                "Removed fire-generation checkpoint %s after successful run", checkpoint_path
+            )
 
         duration = perf_counter() - start_time
         logger.info(

@@ -75,6 +75,10 @@ class RecoveryEngineState(Protocol):
     _active_symbol: str | None
     _orphan_sweep_cooldown: dict[str, float]
     _base_asset_locks: BaseAssetLockRegistry
+    # True while a startup exchange-balance overwrite awaits its DB persist
+    # (set by LiveStartupSequencer.synchronize_account_on_start before
+    # reconciliation runs) — the synced balance already reflects offline fills.
+    _pending_balance_correction: bool
 
     # Mutated during recovery
     trading_session_id: int | None
@@ -617,6 +621,14 @@ class LiveSessionRecoverer:
             logger.info("📊 No local positions to reconcile")
             return
 
+        # When synchronize_account_on_start overwrote current_balance with the
+        # exchange-queried value THIS startup (the flag is still pending its DB
+        # persist while reconciliation runs), that balance already reflects any
+        # offline SL fill — the exchange executed the stop before the balance
+        # was queried. `is True` keeps non-bool sentinels (mock states) on the
+        # conservative re-apply path.
+        balance_synced_from_exchange = getattr(state, "_pending_balance_correction", False) is True
+
         try:
             positions_to_close = state.stop_loss_manager.find_offline_filled_stops(
                 positions_snapshot
@@ -707,8 +719,19 @@ class LiveSessionRecoverer:
                                 e,
                             )
 
-                    # Atomic balance update for offline stop-loss reconciliation
-                    if state.trading_session_id is not None:
+                    # Atomic balance update for offline stop-loss reconciliation.
+                    # Skipped when the exchange-synced balance already reflects
+                    # this fill — re-applying realized_pnl would double-count it
+                    # in memory AND in the account_balances ledger. The Trade
+                    # row / performance record below still book the close.
+                    if balance_synced_from_exchange:
+                        logger.info(
+                            "💰 Offline stop-loss P&L $%+.2f for %s already reflected in "
+                            "exchange-synced balance — skipping balance re-application",
+                            realized_pnl,
+                            position.symbol,
+                        )
+                    elif state.trading_session_id is not None:
                         try:
                             with state.db_manager.atomic_balance_update(
                                 balance_change=realized_pnl,

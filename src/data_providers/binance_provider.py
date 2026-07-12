@@ -38,7 +38,7 @@ from src.config.constants import (
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.trading.precision import quantize_to_step
-from src.trading.symbols.factory import SymbolFactory
+from src.trading.symbols.factory import SymbolFactory, base_asset_from_symbol
 
 from .data_provider import DataProvider
 from .exchange_interface import (
@@ -1759,19 +1759,6 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             client_order_id=client_oid,
         )
 
-    def _base_asset_from_symbol(self, symbol: str) -> str:
-        """Best-effort base asset for ``symbol`` by stripping a known quote suffix.
-
-        Fallback only — prefer the exchange-authoritative ``base_asset`` from
-        ``get_symbol_info`` when it is available. Quotes are checked longest-first
-        so e.g. ``ETHUSDT`` resolves to ``ETH``. Returns ``symbol`` unchanged when
-        no known quote matches.
-        """
-        for quote in ("USDT", "BUSD", "USDC", "USD"):
-            if symbol.endswith(quote) and len(symbol) > len(quote):
-                return symbol[: -len(quote)]
-        return symbol
-
     def _free_base_balance(self, base_asset: str) -> float | None:
         """Free (un-locked) balance of ``base_asset`` (e.g. ETH), or None on failure.
 
@@ -1877,9 +1864,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # get_symbol_info failure must not silently disable the protection. A BUY
             # (short cover) is funded from quote, so it isn't constrained by base holdings.
             if side == OrderSide.SELL:
-                free_base = self._free_base_balance(
-                    base_asset or self._base_asset_from_symbol(symbol)
-                )
+                free_base = self._free_base_balance(base_asset or base_asset_from_symbol(symbol))
                 if free_base is not None and free_base < quantity:
                     logger.warning(
                         "Stop-loss sell qty %.8f for %s exceeds free base balance "

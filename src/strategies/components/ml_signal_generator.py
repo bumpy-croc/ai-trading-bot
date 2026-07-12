@@ -67,6 +67,15 @@ class MLSignalGenerator(SignalGenerator):
     - Regime-aware dynamic threshold adjustment
     - Confidence calculation based on prediction quality
     - Optional prediction engine integration
+
+    Unlike :class:`MLBasicSignalGenerator`, this generator does not resolve
+    its model bundle from ``PredictionModelRegistry`` by symbol/type/timeframe
+    — it only supports an explicit ``model_name`` override (or the prediction
+    engine's own symbol-agnostic default bundle when ``model_name`` is unset).
+    ``self.symbol`` therefore identifies which pair this instance is scoring
+    (for logging/metadata/factory-symbol-threading) but does not by itself
+    select a symbol-specific model; see GH issue tracking registry-based
+    selection for this class.
     """
 
     # Default thresholds (overridable per-instance for experiments).
@@ -84,6 +93,11 @@ class MLSignalGenerator(SignalGenerator):
     SHORT_THRESHOLD_LOW_VOL = -0.0006  # More conservative in low volatility (-0.06%)
     SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER = 0.2  # Adjust threshold based on regime confidence
 
+    # Default symbol used when no trading symbol is threaded in (mirrors
+    # MLBasicSignalGenerator's convention so an unspecified symbol keeps
+    # today's behavior for existing callers).
+    DEFAULT_SYMBOL = "BTCUSDT"
+
     # Registry-selection hints optionally attached by strategy factories
     # (e.g. create_ml_sentiment_strategy). Bare annotations so hasattr()
     # behavior is unchanged until a factory assigns them.
@@ -95,6 +109,7 @@ class MLSignalGenerator(SignalGenerator):
         name: str = "ml_signal_generator",
         sequence_length: int = 120,
         model_name: str | None = None,
+        symbol: str | None = None,
         *,
         long_entry_threshold: float | None = None,
         short_entry_threshold: float | None = None,
@@ -113,6 +128,10 @@ class MLSignalGenerator(SignalGenerator):
             name: Name for this signal generator
             sequence_length: Sequence length for model input
             model_name: Model name for prediction engine (optional)
+            symbol: Trading symbol this generator is scoring (optional,
+                defaults to BTCUSDT). Stamped into signal metadata/logging so
+                a strategy traded on a non-default symbol is identifiable;
+                see class docstring for the model-selection caveat.
             long_entry_threshold: Minimum predicted return to open a long.
             short_entry_threshold: Maximum predicted return to open a short
                 (expected to be negative).
@@ -187,6 +206,15 @@ class MLSignalGenerator(SignalGenerator):
                 else short_threshold_confidence_multiplier
             ),
         )
+
+        # Normalize to the registry's Binance-style directory convention
+        # (mirrors MLBasicSignalGenerator) so provider-specific symbol formats
+        # (e.g. Coinbase "ETH-USD") resolve consistently.
+        raw_symbol = symbol or self.DEFAULT_SYMBOL
+        try:
+            self.symbol = SymbolFactory.to_exchange_symbol(raw_symbol, "binance")
+        except ValueError as exc:
+            raise ValueError(f"Invalid trading symbol {raw_symbol!r}: {exc}") from exc
 
         # Model name configuration
         cfg = get_config()
@@ -285,6 +313,7 @@ class MLSignalGenerator(SignalGenerator):
                     "reason": "insufficient_history",
                     "index": index,
                     "required_length": self.sequence_length,
+                    "symbol": self.symbol,
                 },
             )
 
@@ -300,6 +329,7 @@ class MLSignalGenerator(SignalGenerator):
                     "reason": "prediction_failed",
                     "timed_out": self._last_prediction_timed_out,
                     "index": index,
+                    "symbol": self.symbol,
                 },
             )
 
@@ -318,6 +348,7 @@ class MLSignalGenerator(SignalGenerator):
                     "current_price": current_price,
                     "predicted_return": 0,  # Set to 0 when price is invalid
                     "index": index,
+                    "symbol": self.symbol,
                 },
             )
 
@@ -348,6 +379,7 @@ class MLSignalGenerator(SignalGenerator):
             "long_entry_threshold": self.long_entry_threshold,
             "engine_model_name": self.model_name,
             "engine_batch": self.use_engine_batch,
+            "symbol": self.symbol,
         }
 
         # Add regime information if available
@@ -414,7 +446,7 @@ class MLSignalGenerator(SignalGenerator):
 
             # Get prediction from prediction engine
             if self.prediction_engine is None:
-                logger.error("Prediction engine not initialized for symbol prediction")
+                logger.error("Prediction engine not initialized for %s prediction", self.symbol)
                 return None
 
             window_df = df[["open", "high", "low", "close", "volume"]].iloc[
@@ -428,7 +460,8 @@ class MLSignalGenerator(SignalGenerator):
             if result.error is not None:
                 self._last_prediction_timed_out = bool(result.metadata.get("timed_out", False))
                 logger.warning(
-                    "MLSignalGenerator: prediction failed at index %d (timed_out=%s): %s",
+                    "MLSignalGenerator: prediction failed for %s at index %d (timed_out=%s): %s",
+                    self.symbol,
                     index,
                     self._last_prediction_timed_out,
                     result.error,
@@ -441,7 +474,9 @@ class MLSignalGenerator(SignalGenerator):
             return pred
 
         except Exception:
-            logger.exception("MLSignalGenerator: Prediction error at index %d", index)
+            logger.exception(
+                "MLSignalGenerator: Prediction error for %s at index %d", self.symbol, index
+            )
             return None
 
     def _should_generate_short_signal(
@@ -528,6 +563,7 @@ class MLSignalGenerator(SignalGenerator):
             {
                 "sequence_length": self.sequence_length,
                 "model_name": self.model_name,
+                "symbol": self.symbol,
                 "long_entry_threshold": self.long_entry_threshold,
                 "short_entry_threshold": self.short_entry_threshold,
                 "confidence_multiplier": self.confidence_multiplier,
@@ -588,6 +624,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         long_entry_threshold: float | None = None,
         short_entry_threshold: float | None = None,
         confidence_multiplier: float | None = None,
+        model_version: str | None = None,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -602,6 +639,13 @@ class MLBasicSignalGenerator(SignalGenerator):
             long_entry_threshold: Minimum predicted return for long entry.
             short_entry_threshold: Maximum predicted return for short entry.
             confidence_multiplier: Scales |predicted_return| → confidence.
+            model_version: Pin every prediction to this exact registry
+                version (e.g. ``2026-07-04_22h_v1``) instead of resolving
+                ``latest`` — the backtest harness's point-in-time pin
+                (GH #988). Construction fails fast when the version does
+                not exist. Never set on the live trading path, which must
+                always follow ``latest``; only an explicit caller argument
+                can pin (no ambient env/config override).
         """
         super().__init__(name)
 
@@ -655,6 +699,12 @@ class MLBasicSignalGenerator(SignalGenerator):
         self._model_symbol: str | None = None
         self._cross_symbol_bundle_key: str | None = None
         self._symbol_guard_log_ts: dict[str, float] = {}
+
+        # Point-in-time version pin (backtest harness only). Resolved to a
+        # full bundle key by _validate_model_availability, which fails fast
+        # when the pin cannot be honored.
+        self.model_version = model_version
+        self._pinned_bundle_key: str | None = None
 
         # Initialize feature pipeline
         self._setup_feature_pipeline()
@@ -736,8 +786,19 @@ class MLBasicSignalGenerator(SignalGenerator):
         not shipped yet.
         """
         if self._registry is None:
+            if self.model_version:
+                # A pinned run degrading to HOLD-only would silently produce
+                # a zero-trade "comparison" — refuse instead.
+                raise ModelNotAvailableError(
+                    f"Model version pin {self.model_version!r} requested but the "
+                    f"prediction engine/model registry failed to initialize — "
+                    f"a pinned run must fail fast rather than run unpinned."
+                )
             # Engine degraded/unavailable — prediction path already fails
             # safe (returns None → HOLD), so nothing to validate against.
+            return
+        if self.model_version:
+            self._resolve_pinned_bundle(self._registry)
             return
         try:
             self._registry.select_bundle(
@@ -758,8 +819,8 @@ class MLBasicSignalGenerator(SignalGenerator):
             raise ModelNotAvailableError(
                 f"No {self.model_type}/{self.model_timeframe} model exists for trading "
                 f"symbol {self.symbol}. Available models: {', '.join(available) or 'none'}. "
-                f"Train and deploy a {self.symbol} model, or set "
-                f"FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true to explicitly accept scoring "
+                f"Train and deploy one via `atb live-control train --symbol {self.symbol}`, "
+                f"or set FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true to explicitly accept scoring "
                 f"{self.symbol} with another symbol's model."
             )
 
@@ -776,12 +837,49 @@ class MLBasicSignalGenerator(SignalGenerator):
         logger.critical(
             "CROSS-SYMBOL MODEL SUBSTITUTION ACTIVE: trading %s but scoring with %s "
             "model %s (FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true). Predictions are not "
-            "trained on %s — deploy a %s model and unset the flag as soon as possible.",
+            "trained on %s — no %s/%s/%s model exists in the registry. Train one via "
+            "`atb live-control train --symbol %s`, deploy it, then unset the flag to "
+            "remove this substitution.",
             self.symbol,
             fallback.symbol,
             fallback.key,
             self.symbol,
             self.symbol,
+            self.model_type,
+            self.model_timeframe,
+            self.symbol,
+        )
+
+    @property
+    def pinned_model_key(self) -> str | None:
+        """Full bundle key the generator is pinned to, or None when unpinned."""
+        return self._pinned_bundle_key
+
+    def _resolve_pinned_bundle(self, registry: "PredictionModelRegistry") -> None:
+        """Resolve ``model_version`` to a full bundle key, failing fast.
+
+        ``get_bundle_by_key`` is the one registry path that can load a
+        non-latest version (lazily, exam/backtest-only — the live path only
+        ever calls ``select_bundle``). A pin that cannot be resolved raises
+        instead of degrading: scoring with the wrong model is exactly the
+        confound this pin exists to prevent (GH #988).
+        """
+        key = f"{self.symbol}:{self.model_timeframe}:{self.model_type}:{self.model_version}"
+        bundle = registry.get_bundle_by_key(key)
+        if bundle is None:
+            available = self._available_bundle_keys()
+            raise ModelNotAvailableError(
+                f"Pinned model version not found: {key}. Check the version directory "
+                f"exists under the registry and its metadata timeframe matches "
+                f"{self.model_timeframe!r}. Loaded bundles: {', '.join(available) or 'none'}."
+            )
+        self._pinned_bundle_key = key
+        self._model_symbol = bundle.symbol
+        logger.warning(
+            "MODEL VERSION PINNED: scoring %s with %s — 'latest' resolution is "
+            "bypassed for this run (point-in-time backtest pin)",
+            self.symbol,
+            key,
         )
 
     def _available_bundle_keys(self) -> list[str]:
@@ -1007,7 +1105,13 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Try to select bundle using registry
             selected_bundle_key = None
             resolved_model_symbol: str | None = None
-            if self._cross_symbol_bundle_key is not None:
+            if self._pinned_bundle_key is not None:
+                # Point-in-time pin (backtest harness): the exact version
+                # was resolved and validated at construction — never
+                # re-resolve "latest" mid-run.
+                selected_bundle_key = self._pinned_bundle_key
+                resolved_model_symbol = self._model_symbol
+            elif self._cross_symbol_bundle_key is not None:
                 # Startup explicitly opted into substitution via
                 # FEATURE_ALLOW_CROSS_SYMBOL_MODEL — score with the pinned
                 # bundle and keep reminding the operator.
@@ -1060,6 +1164,18 @@ class MLBasicSignalGenerator(SignalGenerator):
                 else:
                     result = self.prediction_engine.predict(window_df)
             except (KeyError, ValueError):
+                # Never fall back to default resolution when pinned —
+                # scoring with a different model is exactly the confound the
+                # pin exists to prevent (GH #988). Degrade to HOLD instead.
+                if self._pinned_bundle_key is not None:
+                    self._model_symbol = None
+                    logger.error(
+                        "MLBasicSignalGenerator: pinned model %s lookup failed at "
+                        "index %d — holding (refusing unpinned fallback)",
+                        self._pinned_bundle_key,
+                        index,
+                    )
+                    return None
                 # Fall back to default registry resolution if explicit lookup fails
                 result = self.prediction_engine.predict(window_df)
 
@@ -1143,6 +1259,8 @@ class MLBasicSignalGenerator(SignalGenerator):
                 "long_entry_threshold": self.long_entry_threshold,
                 "short_entry_threshold": self.short_entry_threshold,
                 "confidence_multiplier": self.confidence_multiplier,
+                "model_version": self.model_version,
+                "pinned_model_key": self._pinned_bundle_key,
             }
         )
         return params
