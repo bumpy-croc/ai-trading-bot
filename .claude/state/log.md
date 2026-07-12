@@ -671,3 +671,40 @@ Part 2: no exam artifact retained per-trade entry-time observables (checked dire
 Aside: independently hit and reconfirmed GH #997/#998 (ExperimentRunner's cross-symbol BTCUSDT-scores-ETHUSDT bug) while building the Part 2 control rerun, before reading either issue -- my first bare-factory rerun reproduced a third, differently-wrong result (stacked with the sys.path shadowing bug from the same addendum); after applying the known fix my F1 rerun reproduced round 2's independently-verified corrected baseline bit-for-bit (29 trades, -1.69%, PF 0.7971). No new issue filed, corroboration only.
 No proposal filed -- neither verdict touches live-affecting code or capital; no risk_review_required.
 Ref: GH #984 (updated), #997, #998, PR #1010
+
+---
+
+## 2026-07-12 · track-record · quant-researcher [D-2026-07-12-03]
+Experiment #1013: EXIT-GEOMETRY round 2 (early-cut, trailing/breakeven ablation, tp_06 rerun) -> REJECTED, no staging-trial candidate
+Preregistered (docs/research/experiments/2026-07-12_exit-geometry-round2.md) then ran 35 backtests
+(7 configs x 5 folds: F1/F2/F3 2023-2025H1 primary + F0a/F0b 2021/2022H1 extension) + determinism
+recheck (PASS). Validity-gate work found, BEFORE any arm was read, that round 1's entire study
+(#970/#971) and PR #976's own regression-evidence table scored ETHUSDT candles with BTCUSDT's
+model, not ETHUSDT's -- ExperimentRunner._load_strategy never threads config.symbol into the
+strategy factory. Filed #997 (harness bug, fix in #1004, open) and #998 (round 1 needs
+re-verification, open) rather than silently absorbing the finding. This round's own control is a
+new, correct baseline (symbol explicitly threaded, verified via a 4-way isolation test that
+reproduces round 1's exact published number only when both the bug AND the wrong worktree are
+present). A predecessor turn's sweep process was killed mid-run by a session/quota limit; resumed
+by inspecting the partial output first (25 of 36 records already valid/complete) rather than
+assuming total loss, then running only the 2 missing arms (breakeven_only, tp_06_rerun).
+Result: NO-GO for all 6 arms against the pre-committed four-bar test (Sec 1). Every arm fails Bar 1
+outright (Bonferroni-significant return improvement on >=2 of 3 primary folds, alpha=0.05/6=0.0083)
+-- 0/3 for every arm, lowest p-value anywhere is 0.09. tp_06_rerun is the only arm to pass Bar 2
+(aggregate PF + return improve, pooled across all 5 folds) -- reproduces round 1's
+directionally-positive-but-never-significant finding on an independent second sample; recommended
+as closed, not "needs more data." breakeven_only's +7.92pp aggregate return delta flagged explicitly
+as a naive-read trap (driven by 2 folds with far fewer trades than control; pooled PF worse than
+control's). Mechanism read: neither trailing-distance nor breakeven-move alone reproduces control's
+combined MFE-capture behavior; early-cut cut-precision is 42-56% (near coin-flip), only 21-37% of
+cut trades have a verifiable control-matched counterpart.
+Recommendation to PM/risk-officer: rejected as a staging-trial candidate, all 6 arms; closes the
+exit-geometry thread for now across both rounds (12 arms, 8 exam folds, 2021-2025H1) -- no
+exit/trade-management lever tested flips HyperGrowth's expectancy at a statistically defensible
+level. Any further work here needs a genuinely different mechanism (volatility/regime-conditioned
+exits), not another fixed-threshold variant.
+Ref: issue #1013, PR #1012, docs/research/experiments/2026-07-12_exit-geometry-round2.md,
+experiments/exit_geometry_round2_sweep.py + analyze_exit_geometry_round2.py +
+exit_geometry_round2_results.jsonl, issue #997/#998/#999/#977 (harness bugs filed this round),
+issue #970/#971 (round 1, whose absolute numbers/mechanism metrics this round's Sec 5.1 finding
+calls into question, tracked separately via #998).
