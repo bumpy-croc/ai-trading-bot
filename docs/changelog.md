@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **DB-durable short-guard rejection events** (#990 step 4): the live
+  SHORT-side margin inventory guard now writes a `system_events` row
+  (`event_type=SHORT_ENTRY_BLOCKED`, component `execution`) whenever it
+  rejects a short entry — carrying symbol/side, the observed free base-asset
+  balance, the $1 dust threshold, the rejection reason
+  (`free_inventory_above_threshold` vs the fail-closed
+  `balance_lookup_error`/`balance_unavailable` branches), signal
+  strength/confidence, and an open-position snapshot. Rows are bounded per
+  rejection episode (first + every 10th + an episode-end summary carrying the
+  TRUE rejection total, written on guard pass or after a 2h inactivity gap),
+  so the confirmed 30-cycle/45-min episode class writes ~4 rows, not 30.
+  Purely additive observability: the guard's accept/reject behavior,
+  threshold, and ordering are unchanged, and event writes are fault-isolated
+  so they can never break or delay the trading decision. No migration needed
+  (the 19-char enum value fits the varchar(23) column from migration 0013).
+  Funnel query: `SELECT * FROM system_events WHERE event_type =
+  'SHORT_ENTRY_BLOCKED'` (`error_code` distinguishes rejection rows from
+  `SHORT_GUARD_EPISODE_END` summaries).
 - **Point-in-time model pinning for the backtest harness** (#988): new
   `atb backtest` flags `--model-version` (pin an exact registry version) and
   `--model-as-of DATE` (resolve which version was `latest` at that date from
@@ -109,6 +127,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders MFE/MAE as percentages (was: fractions formatted as USD).
   Historical prod rows left untouched — backfill/NULL is a separate
   human-approved operation (migration note on #966). (#992)
+
+- **Inference context is scoped, not process-global** (#926, from the #923
+  review gauntlet): the live 5s inference deadline rested on an undocumented
+  one-engine-per-process invariant — `InferenceContext` was a module global
+  set by engine constructors with last-writer-wins semantics, so a
+  `Backtester` constructed inside a live process (e.g. a future in-process
+  validation gate) would silently strip the live deadline. The context is now
+  a `contextvars.ContextVar` with a composition-safe `inference_scope()`
+  context manager: `Backtester.run()` executes under a DETERMINISTIC scope
+  that restores the caller's policy on exit (constructing a Backtester no
+  longer touches the context at all), and the live trading loop pins LIVE on
+  its own thread in `_run_trading_loop` (contextvars do not cross threads).
+  Behavior is unchanged for today's single-engine processes — proven by the
+  existing suite plus a new two-engines-one-process test and a
+  DETERMINISTIC-vs-LIVE fast-path parity test.
+- **Repeated live inference timeouts now escalate instead of degrading to
+  HOLD forever** (#927, from the #923 review gauntlet): each timed-out bar
+  already degraded to HOLD with a per-bar WARNING, but
+  `PredictionEngine.health_check()` never consulted the timeout counters — a
+  permanently hung model looked healthy while the bot silently stopped
+  trading. The engine now tracks consecutive live timeouts (reset by any
+  successful inference); past a configurable threshold
+  (`PredictionConfig.inference_timeout_escalation_threshold`, default 10, env
+  `INFERENCE_TIMEOUT_ESCALATION_THRESHOLD`, 0 disables) `health_check()`
+  reports a degraded `inference` component, and the live trading loop pages
+  once per episode — CRITICAL `system_events` row
+  (`INFERENCE_TIMEOUT_ESCALATION`) + operator alert with honest `alert_sent`
+  semantics, re-armed after recovery (`INFERENCE_TIMEOUT_RECOVERED`). The
+  periodic status line now includes the timeout counters. Observability
+  only — never a trading halt: existing positions stay managed.
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*

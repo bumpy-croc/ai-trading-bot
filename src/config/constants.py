@@ -15,6 +15,11 @@ DEFAULT_MAX_PREDICTION_LATENCY = 0.1
 # inference measures ~30-400ms even under heavy load; 5s is headroom, not a
 # latency target. Backtests apply no deadline (determinism requirement).
 DEFAULT_LIVE_INFERENCE_TIMEOUT = 5.0
+# Consecutive live inference timeouts before the prediction engine reports
+# itself degraded and the live engine escalates (system_events row + operator
+# alert, #927). Observability only — never halts trading; existing positions
+# stay managed. 0 disables escalation.
+DEFAULT_INFERENCE_TIMEOUT_ESCALATION_THRESHOLD = 10
 # Default model registry base path (legacy flat layout). The registry also
 # auto-detects a structured subdirectory at base/models when present.
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"

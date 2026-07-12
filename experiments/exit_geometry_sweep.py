@@ -149,6 +149,18 @@ class ExitGeometryRunner(ExperimentRunner):
 def build_config(
     arm_name: str, start: datetime, end: datetime, random_seed: int | None = None
 ) -> ExperimentConfig:
+    # BUG FIX (GH #997/#998, found during round 2): ExperimentRunner._load_strategy
+    # builds the strategy via builder(**factory_kwargs) and does NOT thread
+    # config.symbol in on its own (fixed at the runner level by PR #1004,
+    # merged separately) -- without an explicit factory_kwargs["symbol"],
+    # create_hyper_growth_strategy defaults symbol=None, so
+    # MLBasicSignalGenerator falls back to DEFAULT_SYMBOL="BTCUSDT" and every
+    # run in this script actually scored ETHUSDT candles with BTCUSDT's
+    # model. Round 1's original numbers (docs/research/experiments/
+    # 2026-07-12_exit-geometry-honest.md) predate this fix and are addended,
+    # not silently corrected in place (see that doc's RESULTS addendum).
+    # Fixed here to match round 2's exit_geometry_round2_sweep.py::build_config,
+    # which threaded this correctly from the start.
     overrides = ARMS.get(arm_name)
     risk_parameters = ARM_RISK_PARAMETERS.get(arm_name, {})
     parameters = ParameterSet(name=arm_name, values=overrides) if overrides else None
@@ -161,6 +173,7 @@ def build_config(
         initial_balance=INITIAL_BALANCE,
         parameters=parameters,
         risk_parameters=risk_parameters,
+        factory_kwargs={"symbol": SYMBOL},
         use_cache=True,
         provider="binance",
         random_seed=random_seed,

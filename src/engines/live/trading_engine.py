@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -115,7 +116,11 @@ from src.position_management.macro_events import MacroEventGuard
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
-from src.prediction.inference_context import InferenceContext, set_inference_context
+from src.prediction.inference_context import (
+    InferenceContext,
+    inference_scope,
+    set_inference_context,
+)
 from src.regime.detector import RegimeDetector
 from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
@@ -132,6 +137,7 @@ if TYPE_CHECKING:
     from src.engines.live.kline_buffer import KlineBuffer
     from src.engines.live.reconciliation import PeriodicReconciler
     from src.engines.live.user_data_processor import UserDataProcessor
+    from src.prediction.engine import PredictionEngine
     from src.strategies.components.runtime import SupportsRuntimeHooks
     from src.strategies.components.strategy import TradingDecision
 
@@ -263,6 +269,8 @@ class LiveTradingEngine:
         # Live inference runs under a bounded latency budget so the trading
         # loop cannot block indefinitely on a hung model; timeouts are
         # accounted loudly (WARNING + counter + timed_out signal stamp).
+        # This pins the constructing thread only (contextvar, #926); the
+        # trading loop thread scopes itself LIVE in _run_trading_loop.
         set_inference_context(InferenceContext.LIVE)
 
         self._validate_inputs(
@@ -349,6 +357,9 @@ class LiveTradingEngine:
         # outage made Postgres unresolvable and shut the live bot down).
         self.db_unreachable_since: float | None = None
         self.error_cooldown = DEFAULT_ERROR_COOLDOWN
+        # Episode latch for the consecutive-inference-timeout escalation
+        # (#927): page once when the threshold is crossed, re-arm on recovery.
+        self._inference_escalation_active = False
 
         self._init_time_exit_policy(time_exit_policy)
 
@@ -930,6 +941,12 @@ class LiveTradingEngine:
         )
         # Wire db_manager for order journaling (session_id set during start())
         self.live_execution_engine.db_manager = self.db_manager
+        # Open-position snapshot for short-guard rejection events; the
+        # positions property returns a lock-guarded copy, so this read is
+        # safe from the entry path.
+        self.live_execution_engine.position_snapshot_provider = lambda: list(
+            self.live_position_tracker.positions.values()
+        )
 
     def _init_entry_handler(self, entry_handler: LiveEntryHandler | None) -> ExposureGovernor:
         """Build the entry handler and its exposure/macro/circuit-breaker gates."""
@@ -1447,7 +1464,11 @@ class LiveTradingEngine:
         and let start() turn it into a non-zero exit for an orchestrator restart (#630).
         """
         try:
-            self._trading_loop(symbol, timeframe, max_steps)
+            # The loop thread does not inherit the constructor thread's
+            # context (contextvars, #926): pin LIVE here so every prediction
+            # made by the loop runs under the bounded inference deadline.
+            with inference_scope(InferenceContext.LIVE):
+                self._trading_loop(symbol, timeframe, max_steps)
         except Exception as e:
             self._loop_crashed = True
             logger.critical("Trading loop terminated unexpectedly: %s", e, exc_info=True)
@@ -1681,6 +1702,8 @@ class LiveTradingEngine:
                 self._update_performance_metrics()
                 # Enforce the portfolio max-drawdown hard cap (close-only on breach)
                 self._check_max_drawdown()
+                # Escalate persistent inference timeouts (#927, observability only)
+                self._check_inference_health()
                 self._log_periodic_account_state()
                 # Log status periodically
                 if (
@@ -2184,6 +2207,99 @@ class LiveTradingEngine:
             if math.isfinite(value) and value > peak:
                 peak = value
         return peak
+
+    def _iter_prediction_engines(self) -> Iterator[PredictionEngine]:
+        """Yield the prediction engine(s) reachable from the active strategy.
+
+        Read at call time (not captured) so hot-swaps and regime switches that
+        replace ``self.strategy`` mid-session are always reflected. Covers both
+        strategy shapes: ComponentStrategy (``strategy.signal_generator``) and
+        StrategyRuntime (``runtime.strategy.signal_generator``). Strategies
+        without an ML prediction engine yield nothing. isinstance-gated so
+        only real PredictionEngines are consulted (a mock or unrelated object
+        on the attribute path must not fabricate an escalation).
+        """
+        from src.prediction.engine import PredictionEngine  # deferred: heavy module
+
+        strategy = getattr(self, "strategy", None)
+        seen: set[int] = set()
+        for holder in (strategy, getattr(strategy, "strategy", None)):
+            generator = getattr(holder, "signal_generator", None)
+            prediction_engine = getattr(generator, "prediction_engine", None)
+            if (
+                isinstance(prediction_engine, PredictionEngine)
+                and id(prediction_engine) not in seen
+            ):
+                seen.add(id(prediction_engine))
+                yield prediction_engine
+
+    def inference_timeout_totals(self) -> tuple[int, int]:
+        """Return (total, consecutive) live inference timeouts across engines.
+
+        Fault-isolated: observability reads must never break the trading loop
+        or a status line, so any failure reports (0, 0).
+        """
+        total = 0
+        consecutive = 0
+        try:
+            for prediction_engine in self._iter_prediction_engines():
+                total += prediction_engine.inference_timeout_count
+                consecutive += prediction_engine.consecutive_inference_timeouts
+        except Exception as e:
+            logger.warning("inference timeout totals unavailable: %s", e)
+            return (0, 0)
+        return (total, consecutive)
+
+    def _check_inference_health(self) -> None:
+        """Escalate persistent live inference timeouts (#927).
+
+        Each timed-out bar already degrades to HOLD with a per-bar WARNING,
+        but a permanently hung model would otherwise look healthy while the
+        bot silently stops trading. When any prediction engine reports its
+        consecutive-timeout escalation, page once per episode (system_events
+        row + operator alert with honest ``alert_sent``); re-arm after the
+        engine recovers. Observability only — never a trading halt: existing
+        positions stay managed and no mode changes.
+        """
+        try:
+            escalated = [
+                pe for pe in self._iter_prediction_engines() if pe.timeout_escalation_active
+            ]
+            if escalated and not self._inference_escalation_active:
+                self._inference_escalation_active = True
+                worst = max(pe.consecutive_inference_timeouts for pe in escalated)
+                threshold = max(
+                    pe.config.inference_timeout_escalation_threshold for pe in escalated
+                )
+                message = (
+                    f"ML inference timed out {worst} consecutive times "
+                    f"(threshold {threshold}) — model may be hung; live signals "
+                    "are degrading to HOLD every bar. Not a trading halt: "
+                    "existing positions remain managed, but no new ML signals "
+                    "will fire until inference recovers."
+                )
+                logger.critical("🚨 %s", message)
+                self._record_event(
+                    EventType.ALERT,
+                    message,
+                    severity="critical",
+                    component="prediction",
+                    error_code="INFERENCE_TIMEOUT_ESCALATION",
+                    alert=True,
+                )
+            elif not escalated and self._inference_escalation_active:
+                self._inference_escalation_active = False
+                logger.info("✅ ML inference recovered — timeout streak broken")
+                self._record_event(
+                    EventType.WARNING,
+                    "ML inference recovered after a consecutive-timeout escalation",
+                    severity="warning",
+                    component="prediction",
+                    error_code="INFERENCE_TIMEOUT_RECOVERED",
+                )
+        except Exception as e:
+            # Observability must never propagate into the trading loop.
+            logger.warning("inference health check failed: %s", e)
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
