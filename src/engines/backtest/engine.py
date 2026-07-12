@@ -76,7 +76,7 @@ from src.position_management.early_cut import EarlyCutPolicy
 from src.position_management.macro_events import MacroEventGuard
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
-from src.prediction.inference_context import InferenceContext, set_inference_context
+from src.prediction.inference_context import InferenceContext, inference_scope
 from src.regime.detector import RegimeDetector
 from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
@@ -246,11 +246,6 @@ class Backtester:
             _regime_switcher_class: Optional regime switcher class for testing (internal).
             _strategy_manager: Optional strategy manager class or instance for testing (internal).
         """
-        # Backtest results must not depend on wall-clock/CPU load: pin the
-        # prediction pipeline to its deterministic policy (no inference
-        # deadline, no latency-based substitution). See #912 side-finding.
-        set_inference_context(InferenceContext.DETERMINISTIC)
-
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
         if annual_margin_interest_rate < 0 or not math.isfinite(annual_margin_interest_rate):
@@ -975,7 +970,16 @@ class Backtester:
             # (#486). ONNX Runtime keeps its own (deterministic) thread pool, so
             # inference stays multi-threaded and fast; measured wall-time is
             # neutral-to-faster since this also avoids thread oversubscription.
-            with threadpool_limits(limits=1):
+            #
+            # The inference_scope pins the prediction pipeline to its
+            # deterministic policy (no inference deadline, no latency-based
+            # substitution — #912 side-finding) for exactly this run, and
+            # restores the caller's policy on exit so a backtest hosted inside
+            # a live process can never strip the live deadline (#926).
+            with (
+                threadpool_limits(limits=1),
+                inference_scope(InferenceContext.DETERMINISTIC),
+            ):
                 # Reset all mutable state from any previous run so that reusing
                 # a Backtester instance produces correct, isolated results.
                 self._reset_run_state()

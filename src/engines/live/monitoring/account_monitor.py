@@ -42,6 +42,10 @@ class MonitoringEngineState(Protocol):
     performance_tracker: PerformanceTracker
     event_logger: LiveEventLogger
 
+    def inference_timeout_totals(self) -> tuple[int, int]:
+        """(total, consecutive) live inference timeouts (#927)."""
+        ...
+
 
 class LiveAccountMonitor:
     """Snapshots, status lines, and performance summaries for a live session."""
@@ -90,12 +94,22 @@ class LiveAccountMonitor:
         perf_metrics = state.performance_tracker.get_metrics()
         win_rate = perf_metrics.win_rate * 100
 
+        # Surface live inference timeouts (#927) so a degrading model is
+        # visible in routine ops logs, not only in per-bar WARNINGs.
+        # getattr keeps bare/legacy engine states working.
+        totals_fn = getattr(state, "inference_timeout_totals", None)
+        total_timeouts, consecutive_timeouts = totals_fn() if callable(totals_fn) else (0, 0)
+        timeout_note = f" | Inference timeouts: {total_timeouts}"
+        if consecutive_timeouts:
+            timeout_note += f" ({consecutive_timeouts} consecutive)"
+
         logger.info(
             f"📊 Status: {symbol} @ ${current_price:.2f} | "
             f"Balance: ${state.current_balance:.2f} | "
             f"Positions: {state.live_position_tracker.position_count} | "
             f"Unrealized: ${total_unrealized:.2f} | "
             f"Trades: {perf_metrics.total_trades} ({win_rate:.1f}% win)"
+            f"{timeout_note}"
         )
 
     def print_final_stats(self) -> None:
