@@ -555,6 +555,76 @@ merged 9e7ea5e8).
 
 ---
 
+---
+
+## 2026-07-12 · track-record · quant-researcher [D-2026-07-12-01]
+Experiment #971: EXIT-GEOMETRY honest-engine rerun (HyperGrowth, ETHUSDT/1h) -> REJECTED, no promotion candidate
+Preregistered (docs/research/experiments/2026-07-12_exit-geometry-honest.md, committed before first
+run) then ran 21 backtests (control + 6 exit/trade-management-only arms x F1/F2/F3 2023-2025H1) +
+1 determinism recheck (PASS, byte-identical) in a fresh worktree off origin/develop, strictly
+sequential per the LOCAL HEAVY-COMPUTE LOCK. Expressibility audit first: stop_loss_pct/
+take_profit_pct are honored via the checked-in src/experiments/runner.py; max_holding_hours via
+RiskParameters.time_exits (hyper_growth declares no time_exits override, so the fallback applies).
+Trailing-stop distance/activation, breakeven threshold, and the partial-exit ladder are locked to
+hyper_growth's hardcoded set_risk_overrides dict and NOT expressible without a src/ change --
+confirmed by tracing build_trailing_stop_policy's strategy-cfg-always-wins precedence, explicitly
+SKIPPED rather than faked. Incorporated #961's mid-flight live-trade-review finding (91% MAE-ride,
+72% MFE-capture, live fills) by reweighting arms toward the stop side before locking, not after
+seeing results.
+Result: NO-GO for every arm against the pre-committed decision table (Bonferroni alpha=0.05/6=
+0.0083, bootstrap diff-in-means on trade P&L; lowest p anywhere = 0.0648, ~8x above threshold).
+Stop-tightening (sl_08/06/04) makes return and MaxDD monotonically worse on every fold, reproducing
+the 2026-07-04 pre-#838/#867 sweep's conclusion on honest plumbing. tp_06 is directionally positive
+on all 3 folds (return + PF both improve) but never significant -- "promising, not ready," not
+forced into a win. maxhold_18 improves PF on 2/3 folds while return/MaxDD worsen on all 3 -- a
+genuine PF-vs-aggregate-return trap, flagged explicitly. combo_sl06_tp15 == sl_06 bit-for-bit;
+traced (not just asserted) to realized winning price moves being far below either tested TP level
+in this trade population, not a bug. F4 (2026H1) correctly not run -- no arm cleared the F1-F3 bar,
+per the pre-committed budget-conservation rule.
+Recommendation to PM/risk-officer: rejected as a promotion candidate, all 6 arms; nothing proceeds
+to staging or the live config. Next lever (not built here): a genuine src/ ExitHandler feature for
+an MFE-conditioned early-cut policy plus real trailing/breakeven RiskParameters wiring for
+hyper_growth -- needs its own prereg and risk-officer-reviewed code change.
+Ref: issue #971, PR #970, docs/research/experiments/2026-07-12_exit-geometry-honest.md,
+experiments/exit_geometry_sweep.py + analyze_exit_geometry.py + exit_geometry_results.jsonl,
+issue #961 (live-trade-review, incorporated mid-flight), issue #933/#939/#898 (entry-side
+tournaments reaching the same "not fixable at this layer" shape).
+
+---
+
+## 2026-07-12 11:30 · track-record · quant-researcher
+Experiment (follow-up to #967): NONLINEAR INPUT-SCREENING re-screen -- was the linear screen's
+null a detector-family artifact? PM-authorized same-session follow-up. -> REJECTED overall
+(zero arms graduate), but NOT a clean uniform null like the linear screen -- one arm shows a real,
+regime-specific signal.
+Evidence: docs/research/experiments/2026-07-12_input-screening-nonlinear.md
+Same 7 arms/F1-F3 folds/graduation bar (Bonferroni alpha=0.0071 on >=2/3 folds AND avg DA>=0.5pp)
+as the linear screen, swapping ONLY the model to a single fixed LightGBM config (n_estimators=300,
+max_depth=5, early-stopped on a train-tail validation split, NO hyperparameter search -- pre-
+committed, not tuned per arm/fold). btc_cross: F1 Delta=+3.84pp p=6.9e-05 (clears Bonferroni by 4
+orders of magnitude) but F2 Delta=+1.16pp p=0.226 and F3 Delta=-0.33pp p=0.741 (both non-sig,
+sign flips on F3) -- 1/3 significant folds, short of the required 2, correctly does NOT graduate
+under the literal rule. Feature-importance/gain confirms btc_ret_1h/6h carry real, consistent gain
+in ALL THREE folds (16-22%/6-8% of total gain) -- gain does not straightforwardly track OOS DA
+improvement, same lesson as the target-redesign tournament's confidence-signal finding. all_combined
+mirrors the same pattern (driven by the same BTC features). All other 5 arms: uniformly null,
+0/3 significant, matching the linear screen's read for those five.
+Per the PM-authorized pre-committed interpretation rule: zero graduating arms formally retires the
+"new information sources" lever for ETHUSDT-1h across the six audited input classes -- six
+converged results now (window #898, architecture #939, target-redesign, linear screen #967, this
+nonlinear re-screen = five; the sixth being the aggregate structural-ceiling finding itself), all
+finding the same ~51-53% DA ceiling under every lever tried. btc_cross's regime-dependence is named
+as a narrower, separately-scoped open question (is BTC->ETH lead-lag regime-conditional, per the
+audit's own "plausible, weak, time-varying" literature read) -- NOT authorized or scheduled as a
+follow-up here, explicitly deferred to a future preregistration if pursued.
+Recommendation to pm: future research levers shift to trade geometry, frequency/symbol
+diversification, and the live-parity gap, not further feature-set expansion within these six
+classes. No src/ change, no live-affecting decision -- nothing for risk-officer to stress-test.
+Ref: docs/research/experiments/2026-07-12_input-screening-linear.md (prior screen), PR (opening
+now).
+
+---
+
 ## 2026-07-12 · decision · daemon(PM) [D-2026-07-12-02]
 Synthesis: `docs/research/2026-07-12_returns-levers-synthesis.md` rolls up the day's full research
 program for the Board. FIVE independent experiments (window #898, architecture #939 -- unmerged,
