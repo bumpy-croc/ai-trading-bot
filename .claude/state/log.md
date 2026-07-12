@@ -552,3 +552,40 @@ before fully retiring the "new information sources" lever, cheaper than the full
 tournament. No src/ change, no live-affecting decision -- nothing for risk-officer to stress-test.
 Ref: issue #967 (closed), PR #969, docs/research/2026-07-12_input-candidates-audit.md (PR #958,
 merged 9e7ea5e8).
+
+---
+
+---
+
+## 2026-07-12 · track-record · quant-researcher [D-2026-07-12-01]
+Experiment #971: EXIT-GEOMETRY honest-engine rerun (HyperGrowth, ETHUSDT/1h) -> REJECTED, no promotion candidate
+Preregistered (docs/research/experiments/2026-07-12_exit-geometry-honest.md, committed before first
+run) then ran 21 backtests (control + 6 exit/trade-management-only arms x F1/F2/F3 2023-2025H1) +
+1 determinism recheck (PASS, byte-identical) in a fresh worktree off origin/develop, strictly
+sequential per the LOCAL HEAVY-COMPUTE LOCK. Expressibility audit first: stop_loss_pct/
+take_profit_pct are honored via the checked-in src/experiments/runner.py; max_holding_hours via
+RiskParameters.time_exits (hyper_growth declares no time_exits override, so the fallback applies).
+Trailing-stop distance/activation, breakeven threshold, and the partial-exit ladder are locked to
+hyper_growth's hardcoded set_risk_overrides dict and NOT expressible without a src/ change --
+confirmed by tracing build_trailing_stop_policy's strategy-cfg-always-wins precedence, explicitly
+SKIPPED rather than faked. Incorporated #961's mid-flight live-trade-review finding (91% MAE-ride,
+72% MFE-capture, live fills) by reweighting arms toward the stop side before locking, not after
+seeing results.
+Result: NO-GO for every arm against the pre-committed decision table (Bonferroni alpha=0.05/6=
+0.0083, bootstrap diff-in-means on trade P&L; lowest p anywhere = 0.0648, ~8x above threshold).
+Stop-tightening (sl_08/06/04) makes return and MaxDD monotonically worse on every fold, reproducing
+the 2026-07-04 pre-#838/#867 sweep's conclusion on honest plumbing. tp_06 is directionally positive
+on all 3 folds (return + PF both improve) but never significant -- "promising, not ready," not
+forced into a win. maxhold_18 improves PF on 2/3 folds while return/MaxDD worsen on all 3 -- a
+genuine PF-vs-aggregate-return trap, flagged explicitly. combo_sl06_tp15 == sl_06 bit-for-bit;
+traced (not just asserted) to realized winning price moves being far below either tested TP level
+in this trade population, not a bug. F4 (2026H1) correctly not run -- no arm cleared the F1-F3 bar,
+per the pre-committed budget-conservation rule.
+Recommendation to PM/risk-officer: rejected as a promotion candidate, all 6 arms; nothing proceeds
+to staging or the live config. Next lever (not built here): a genuine src/ ExitHandler feature for
+an MFE-conditioned early-cut policy plus real trailing/breakeven RiskParameters wiring for
+hyper_growth -- needs its own prereg and risk-officer-reviewed code change.
+Ref: issue #971, PR #970, docs/research/experiments/2026-07-12_exit-geometry-honest.md,
+experiments/exit_geometry_sweep.py + analyze_exit_geometry.py + exit_geometry_results.jsonl,
+issue #961 (live-trade-review, incorporated mid-flight), issue #933/#939/#898 (entry-side
+tournaments reaching the same "not fixable at this layer" shape).
