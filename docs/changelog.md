@@ -38,6 +38,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so degraded live decisions are attributable in the database. Closes #913.
 
 ### Added
+- **Exit-policy expressibility: MFE early-cut + config-driven trailing/breakeven (#971)**:
+  the exit-geometry experiment (docs/research/experiments/2026-07-12_exit-geometry-honest.md,
+  Sec. 8) flagged three trade-management policies as inexpressible without src/ patches. Now:
+  (a) **MFE-conditioned early-cut** — a new shared `EarlyCutPolicy`
+  (`src/position_management/early_cut.py`, params `mfe_threshold_pct`,
+  `evaluation_window_hours`) flattens a position whose raw price MFE never reached the
+  threshold within the first N hours of entry. One stateless implementation serves both
+  engines (backtest `ExitHandler` and `LiveExitHandler` — the #948 barrier-touch pattern):
+  the window MFE is recomputed from candle history at each evaluation (entry bar excluded,
+  window frozen at entry+N hours), so live restarts cannot corrupt state, and insufficient
+  history never cuts. MFE here is deliberately raw price excursion, NOT the sized/fee-adjusted
+  `MFEMAETracker`/DB `trades.mfe` values (writer path known-corrupted per #966 — untouched
+  and not reused). Config channels: strategy `get_risk_overrides()["early_cut"]`,
+  `RiskParameters.early_cut`, and hyper_growth factory kwargs
+  (`early_cut_mfe_threshold_pct`, `early_cut_evaluation_window_hours`). Exit priority:
+  SL > TP > time > early-cut > signal, in both engines. Default OFF everywhere.
+  (b) **Config-driven trailing/breakeven** — `build_trailing_stop_policy` now resolves
+  strategy `trailing_stop` overrides by key presence: an explicit key wins (including
+  explicit `None`, e.g. to block the RiskParameters ATR fallback or disable the breakeven
+  move), an absent key falls back to RiskParameters exactly as before, `{"enabled": False}`
+  disables trailing entirely, and a cfg-declared breakeven threshold supports a
+  breakeven-only policy with no trailing distance. `create_hyper_growth_strategy` exposes
+  `enable_trailing_stop`, `trailing_activation_threshold`, `trailing_distance_pct`,
+  `breakeven_threshold`, `breakeven_buffer` as factory kwargs (defaults emit the exact
+  pre-change overrides dict). Regression evidence: HyperGrowth's live prod config produces
+  bit-identical backtest results before/after on the exit-geometry F1–F3 exam folds
+  (31/-2.8818%/PF 0.662, 46/-6.6430%/0.528, 70/-11.5577%/0.446 — full float precision,
+  including per-trade P&L sequences).
 - **Feature-flag observability: vol-target sizing + circuit-breaker dry_run (#964)**: two flags
   under paper-trading evaluation were structurally unobservable — nothing DB-durable recorded
   whether they ever did anything, blocking their promote/kill verdicts. Now (a)

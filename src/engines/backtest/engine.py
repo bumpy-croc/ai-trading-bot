@@ -61,6 +61,7 @@ from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_po
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
+    build_early_cut_policy,
     build_partial_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
@@ -71,6 +72,7 @@ from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.early_cut import EarlyCutPolicy
 from src.position_management.macro_events import MacroEventGuard
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
@@ -183,6 +185,7 @@ class Backtester:
         legacy_stop_loss_indexing: bool = True,
         enable_engine_risk_exits: bool = True,
         time_exit_policy: TimeExitPolicy | None = None,
+        early_cut_policy: EarlyCutPolicy | None = None,
         enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
         dynamic_risk_config: DynamicRiskConfig | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
@@ -215,6 +218,8 @@ class Backtester:
             legacy_stop_loss_indexing: Use legacy SL calculation behavior.
             enable_engine_risk_exits: Enable SL/TP checks in engine.
             time_exit_policy: Policy for time-based exits.
+            early_cut_policy: MFE-conditioned early-cut policy; when None it
+                is built from strategy overrides / RiskParameters (default OFF).
             enable_dynamic_risk: Enable dynamic risk management.
             dynamic_risk_config: Configuration for dynamic risk.
             trailing_stop_policy: Policy for trailing stops.
@@ -321,6 +326,12 @@ class Backtester:
 
         self._custom_time_exit_policy = time_exit_policy is not None
         self.time_exit_policy = time_exit_policy or self._build_time_exit_policy()
+
+        # MFE early-cut policy (#971): default OFF unless configured via
+        # strategy overrides or RiskParameters.early_cut.
+        self.early_cut_policy = early_cut_policy or build_early_cut_policy(
+            self.strategy, self.risk_manager
+        )
 
         # Partial operations policy (enabled by default for parity with live engine)
         self.enable_partial_operations = bool(enable_partial_operations)
@@ -482,6 +493,7 @@ class Backtester:
             execution_model=self.execution_model,
             trailing_stop_policy=self.trailing_stop_policy,
             time_exit_policy=self.time_exit_policy,
+            early_cut_policy=self.early_cut_policy,
             partial_manager=partial_ops_manager,
             enable_engine_risk_exits=enable_engine_risk_exits,
             use_high_low_for_stops=use_high_low_for_stops,
@@ -1359,6 +1371,7 @@ class Backtester:
                 current_price=current_price,
                 symbol=symbol,
                 component_strategy=self._component_strategy,
+                df=df,
             )
 
         # Log exit decision

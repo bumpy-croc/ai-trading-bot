@@ -191,6 +191,9 @@ class LiveExitCoordinator:
                 candle_low=candle_low,
                 runtime_decision=decision_for_exit,
                 component_strategy=component_strategy,
+                # Candle history for the MFE early-cut policy (inert when the
+                # policy is not configured).
+                df=df,
             )
 
             should_exit = exit_check.should_exit
