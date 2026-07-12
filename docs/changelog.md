@@ -12,6 +12,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Reconciliation edge paths: offline-SL double-count, partial-exit size
+  reset, silent periodic close failures** (2026-07-12 loop/state audit,
+  closes #980): (1) the legacy SL-based startup fallback re-applied an
+  offline-filled stop's `realized_pnl` on top of a `current_balance` the
+  exchange sync had already overwritten with the post-fill exchange balance —
+  double-counting the P&L in memory and in the `account_balances` ledger; the
+  fallback now skips the balance re-application while a sync correction is
+  pending (the Trade row and performance record still book the close), and
+  `synchronize_account_on_start` persists the POST-reconcile
+  `current_balance` instead of the stale pre-reconcile snapshot (write-only
+  `_pending_corrected_balance` removed). (2) The startup quantity-mismatch
+  correction (`_verify_entry_order`) overwrote `current_size` with the
+  recomputed full size, re-inflating a partially-exited recovered position to
+  full deployed size (over-sized final close, over-reported P&L); it now
+  preserves the remaining fraction (`new_size * prev_current/prev_original`,
+  the same scaling the SL re-placement uses) and omits a zero `current_size`
+  from the DB persist. (3) The periodic reconciler's external-close branches
+  (margin + spot) popped the position from the tracker and stayed silent when
+  the DB `close_position` failed, stranding an OPEN row the cycle never
+  revisits; both branches now escalate like their startup twins — CRITICAL
+  log plus a paged `system_events` row (`RECONCILE_DB_CLOSE_FAILED`,
+  `alert=True`).
+- **Market full-close SELL capped to holdings and floor-snapped (-2010 class)**
+  (2026-07-12 execution audit, Finding 2): the live full-close path derived its
+  SELL quantity from notional and snapped it round-to-NEAREST with no free-base
+  cap, so a long-close SELL could round UP above actual holdings (the entry
+  BUY's fee is deducted from the base fill: held 0.049975 vs derived 0.050000)
+  → Binance definitively rejects with -2010 → the close FAILS while the resting
+  stop is already cancelled (#710), leaving the position briefly unprotected
+  (backstopped only by `_reprotect_position` + the reconciler).
+  `LiveExecutionEngine._close_live_order` now mirrors the stop-loss SELL guard
+  (`BinanceProvider.place_stop_loss_order`): a closing SELL is capped at the
+  free base balance and its lot snap FLOORS (then `quantize_to_step`, LESSONS
+  §1.1); zero free base aborts the submit instead of guaranteeing a reject. A
+  short-cover BUY intentionally keeps the nearest snap and no base cap — it is
+  funded from quote and must repay the full base borrow; flooring it would
+  strand interest-accruing borrow dust. Balance-lookup failures degrade to
+  uncapped-but-floored so a transient API error never blocks an exit. Backtest
+  closes intentionally skip the cap/floor — there is no exchange fee-haircut or
+  -2010 mechanic to model, so applying it would only diverge from live parity.
+  The shared quote-suffix helper moved to `src.trading.symbols.factory`
+  (`base_asset_from_symbol`) so the exchange and execution layers size closes
+  against the same base asset. The same hazard in the emergency-close sites
+  (entry coordinator, recovery reconciler) is tracked in #989.
 - **Max-drawdown hard cap enforced on the same iteration; dynamic-risk
   throttle anchored to the durable session peak** (2026-07-12 risk audit
   P1/P2): the live loop ran `_check_entry_conditions` BEFORE

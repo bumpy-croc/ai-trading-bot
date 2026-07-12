@@ -1682,17 +1682,33 @@ class PositionReconciler:
                     entry_price = position.entry_price
                     entry_balance = getattr(position, "entry_balance", None)
                     if entry_price and entry_price > 0 and entry_balance and entry_balance > 0:
-                        new_size = (filled_qty * entry_price) / entry_balance
+                        new_size = (filled_qty * float(entry_price)) / float(entry_balance)
                         position.size = new_size
+                        # The entry fill defines the ORIGINAL deployment.
+                        # current_size must keep any partial-exit reduction
+                        # (same current/original scaling as the SL re-placement
+                        # above) — overwriting it with new_size would re-inflate
+                        # a partially-exited position to full size and oversize
+                        # its final close. Coerce to float: DB-loaded positions
+                        # carry Decimal fields (#673 Bug 2 class).
+                        remaining_fraction = 1.0
+                        denom = prev_original_size if prev_original_size is not None else prev_size
+                        denom_f = float(denom) if denom is not None else 0.0
+                        if prev_current_size is not None and denom_f > 0:
+                            remaining_fraction = min(
+                                max(float(prev_current_size) / denom_f, 0.0), 1.0
+                            )
                         if hasattr(position, "current_size"):
-                            position.current_size = new_size
+                            position.current_size = new_size * remaining_fraction
                         if hasattr(position, "original_size"):
                             position.original_size = new_size
                         logger.info(
-                            "Size recalculated for %s: %s → %.6f",
+                            "Size recalculated for %s: %s → %.6f "
+                            "(remaining fraction %.4f preserved)",
                             position.symbol,
                             prev_size,
                             new_size,
+                            remaining_fraction,
                         )
 
                     # Persist corrected quantity/size to DB
@@ -1700,7 +1716,14 @@ class PositionReconciler:
                     correction_kwargs: dict[str, float | None] = {"quantity": filled_qty}
                     if entry_price and entry_price > 0 and entry_balance and entry_balance > 0:
                         correction_kwargs["size"] = getattr(position, "size", None)
-                        correction_kwargs["current_size"] = getattr(position, "current_size", None)
+                        # A fully-drained position (current_size 0 after partial
+                        # exits) stays 0 in memory; omit it from the persist —
+                        # _persist_position_correction rejects non-positive
+                        # values, and None means "leave the DB value untouched".
+                        cur_size = getattr(position, "current_size", None)
+                        correction_kwargs["current_size"] = (
+                            cur_size if cur_size is not None and cur_size > 0 else None
+                        )
                         correction_kwargs["original_size"] = getattr(
                             position, "original_size", None
                         )
@@ -3597,6 +3620,8 @@ class PeriodicReconciler:
                         # AccountSynchronizer._sync_margin_equity, so no balance move here.
                         if db_closed and removed is not None:
                             self._position_reconciler._log_external_close_trade(position)
+                        elif removed is not None and db_pos_id is not None:
+                            self._escalate_failed_db_close(position, db_pos_id)
                 except Exception as e:
                     logger.warning(
                         "Margin position check failed for %s: %s",
@@ -3770,6 +3795,8 @@ class PeriodicReconciler:
                         # reconciler), gated on the close succeeding.
                         if db_closed and removed is not None:
                             self._position_reconciler._log_external_close_trade(position)
+                        elif removed is not None and db_pos_id is not None:
+                            self._escalate_failed_db_close(position, db_pos_id)
 
                         if severity > max_severity:
                             max_severity = severity
@@ -4116,6 +4143,35 @@ class PeriodicReconciler:
         shown = "; ".join(unique[:limit])
         extra = len(unique) - limit
         return f"{shown} (+{extra} more)" if extra > 0 else shown
+
+    def _escalate_failed_db_close(self, position: Any, db_pos_id: Any) -> None:
+        """Page on an external close that popped the tracker but left the DB row OPEN.
+
+        The periodic loop iterates the tracker, so once the position is popped
+        the OPEN row is never re-examined — it heals only on restart re-adoption.
+        The startup twins (``_verify_asset_holdings`` / ``_remove_phantom_position``)
+        treat this identical condition as CRITICAL; mirror them here instead of
+        diverging silently. Emits an honest paged system_event (``alert=True``);
+        safe to POST here — the cycle iterates a snapshot, no tracker lock is held.
+        """
+        symbol = getattr(position, "symbol", "?")
+        logger.critical(
+            "External close for %s: removed from tracker but DB position %s close "
+            "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may "
+            "be needed.",
+            symbol,
+            db_pos_id,
+        )
+        _emit_event(
+            self.on_event,
+            EventType.ALERT,
+            f"External close for {symbol}: position removed from tracker but DB "
+            f"position {db_pos_id} is still OPEN (close failed) — memory/DB "
+            "divergence until the next restart re-adoption",
+            severity="critical",
+            error_code="RECONCILE_DB_CLOSE_FAILED",
+            alert=True,
+        )
 
     def _audit_unprotected(self, position: Any, cause: str) -> str:
         """Persist a CRITICAL audit row for a position left without a stop-loss and

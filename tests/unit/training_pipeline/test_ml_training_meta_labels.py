@@ -16,6 +16,8 @@ at fire index t must not be affected by bars after t).
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -33,6 +35,7 @@ from src.ml.training_pipeline.meta_labels import (
     run_primary_signal_forward,
     simulate_fired_trade_profitability,
 )
+from src.regime.enhanced_detector import EnhancedRegimeDetector
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
 
 
@@ -115,6 +118,198 @@ class TestRunPrimarySignalForward:
         generator = _StubSignalGenerator({}, warmup=0)
 
         assert run_primary_signal_forward(generator, df) == []
+
+
+class TestRunPrimarySignalForwardCheckpointing:
+    """Defect 2 of #955: a ~47k-bar fire-generation pass ran 60+ min in one
+    uninterruptible pass. run_primary_signal_forward now supports a
+    caller-supplied checkpoint file: progress (fires so far + last completed
+    bar) is persisted every N bars via an atomic write, and a rerun with the
+    same checkpoint resumes after the last completed bar instead of
+    reprocessing from the start."""
+
+    @staticmethod
+    def _make_df(periods: int = 40) -> pd.DataFrame:
+        return pd.DataFrame({"close": np.linspace(100.0, 110.0, periods)})
+
+    class _ScriptedSignalGenerator(SignalGenerator):
+        """Deterministic fires; records every bar index it is asked to
+        evaluate (the counting stub the resume tests assert against), and
+        optionally simulates an interruption at a given bar."""
+
+        def __init__(self, warmup: int = 5, fail_at: int | None = None):
+            super().__init__("scripted_signal_generator")
+            self.evaluated: list[int] = []
+            self._warmup = warmup
+            self._fail_at = fail_at
+
+        def generate_signal(self, df, index, regime=None) -> Signal:
+            if self._fail_at is not None and index >= self._fail_at:
+                raise RuntimeError("simulated interruption")
+            self.evaluated.append(index)
+            if index % 3 == 0:
+                direction = SignalDirection.BUY if index % 2 == 0 else SignalDirection.SELL
+                return Signal(
+                    direction=direction,
+                    strength=0.5,
+                    confidence=0.5,
+                    metadata={"predicted_return": index / 1000.0},
+                )
+            return Signal(direction=SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={})
+
+        def get_confidence(self, df, index) -> float:
+            return 0.0
+
+        @property
+        def warmup_period(self) -> int:
+            return self._warmup
+
+    def test_checkpointed_run_matches_single_pass_output(self, tmp_path):
+        df = self._make_df()
+        single_pass = run_primary_signal_forward(self._ScriptedSignalGenerator(), df)
+        assert single_pass  # fixture sanity: the comparison below is not vacuous
+
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        chunked = run_primary_signal_forward(
+            self._ScriptedSignalGenerator(),
+            df,
+            checkpoint_path=checkpoint,
+            checkpoint_every_bars=7,
+        )
+
+        assert chunked == single_pass
+
+    def test_interrupted_run_resumes_from_checkpoint_and_matches_single_pass(self, tmp_path):
+        df = self._make_df()
+        single_pass = run_primary_signal_forward(self._ScriptedSignalGenerator(), df)
+
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        failing = self._ScriptedSignalGenerator(fail_at=25)
+        with pytest.raises(RuntimeError, match="simulated interruption"):
+            run_primary_signal_forward(
+                failing, df, checkpoint_path=checkpoint, checkpoint_every_bars=10
+            )
+        assert checkpoint.exists()
+
+        resumed_generator = self._ScriptedSignalGenerator()
+        resumed = run_primary_signal_forward(
+            resumed_generator, df, checkpoint_path=checkpoint, checkpoint_every_bars=10
+        )
+
+        # warmup=5 + checkpoint every 10 bars -> the last durable checkpoint
+        # before the bar-25 crash covers bars 5..24. The resume must evaluate
+        # ONLY bars after it -- no bar at-or-before 24 is reprocessed.
+        assert resumed_generator.evaluated == list(range(25, len(df)))
+        assert resumed == single_pass
+
+    def test_completed_checkpoint_skips_all_bars_on_rerun(self, tmp_path):
+        df = self._make_df()
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        first = run_primary_signal_forward(
+            self._ScriptedSignalGenerator(),
+            df,
+            checkpoint_path=checkpoint,
+            checkpoint_every_bars=10,
+        )
+
+        rerun_generator = self._ScriptedSignalGenerator()
+        rerun = run_primary_signal_forward(
+            rerun_generator, df, checkpoint_path=checkpoint, checkpoint_every_bars=10
+        )
+
+        assert rerun_generator.evaluated == []
+        assert rerun == first
+
+    def test_no_temp_file_left_behind(self, tmp_path):
+        df = self._make_df()
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        run_primary_signal_forward(
+            self._ScriptedSignalGenerator(),
+            df,
+            checkpoint_path=checkpoint,
+            checkpoint_every_bars=10,
+        )
+        assert [p.name for p in tmp_path.iterdir()] == ["fires.checkpoint.json"]
+
+    def test_checkpoint_for_a_different_corpus_is_rejected(self, tmp_path):
+        """Silently reusing a checkpoint recorded against a different window
+        would splice fires from two corpora into one training set -- must
+        raise, never guess."""
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        run_primary_signal_forward(
+            self._ScriptedSignalGenerator(), self._make_df(periods=40), checkpoint_path=checkpoint
+        )
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(),
+                self._make_df(periods=60),
+                checkpoint_path=checkpoint,
+            )
+
+    def test_invalid_checkpoint_interval_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="checkpoint_every_bars"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(),
+                self._make_df(),
+                checkpoint_path=tmp_path / "fires.checkpoint.json",
+                checkpoint_every_bars=0,
+            )
+
+    def test_same_length_different_corpus_checkpoint_is_rejected(self, tmp_path):
+        """PR #981 arch-review finding: guarding only (start_index,
+        total_bars) lets two equal-length but different corpora (another
+        window or symbol) resume-splice silently -- the exact failure the
+        guard exists to prevent. The checkpoint carries a content
+        fingerprint (index endpoints + close-column checksum + generator
+        identity), so an equal-length different corpus must be rejected."""
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        run_primary_signal_forward(
+            self._ScriptedSignalGenerator(), self._make_df(periods=40), checkpoint_path=checkpoint
+        )
+
+        other_window = pd.DataFrame({"close": np.linspace(200.0, 210.0, 40)})
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(), other_window, checkpoint_path=checkpoint
+            )
+
+    def test_start_index_mismatch_checkpoint_is_rejected(self, tmp_path):
+        df = self._make_df()
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        run_primary_signal_forward(self._ScriptedSignalGenerator(), df, checkpoint_path=checkpoint)
+
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(), df, start_index=3, checkpoint_path=checkpoint
+            )
+
+    def test_corrupt_checkpoint_file_is_rejected_loudly(self, tmp_path):
+        """A checkpoint that isn't valid JSON must raise a clear ValueError
+        naming the checkpoint file (policy: never guess, never overwrite a
+        file we can't positively identify as our own checkpoint), not leak
+        a raw json decoding error."""
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        checkpoint.write_text("not json {{{", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(), self._make_df(), checkpoint_path=checkpoint
+            )
+
+    def test_partial_checkpoint_missing_keys_is_rejected_loudly(self, tmp_path):
+        """Valid JSON that isn't a complete checkpoint (e.g. truncated or
+        foreign file) must raise the same clear ValueError -- never a raw
+        KeyError, and never a silent resume from garbage."""
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        checkpoint.write_text(
+            json.dumps({"start_index": 5, "total_bars": 40, "last_completed_index": 10}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(), self._make_df(), checkpoint_path=checkpoint
+            )
 
 
 class TestSimulateFiredTradeProfitability:
@@ -674,6 +869,109 @@ class TestBuildMetaLabelFeatures:
         ]
         with pytest.raises(ValueError, match="length"):
             build_meta_label_features(df, fires, resolutions)
+
+
+class TestBuildMetaLabelFeaturesRegimeAnnotationSingleTraversal:
+    """Defect 1 of #955: EnhancedRegimeDetector.detect_regime re-annotates
+    the ENTIRE DataFrame on every per-fire call when the regime columns are
+    absent -- O(n_fires * n_bars), which made real (~46k-fire x ~47k-bar)
+    corpora infeasible. build_meta_label_features must annotate exactly once
+    upfront, with output identical to the per-call semantics."""
+
+    _synthetic_df = staticmethod(TestBuildMetaLabelFeatures._synthetic_df)
+    _resolved_next_bar = staticmethod(TestBuildMetaLabelFeatures._resolved_next_bar)
+
+    def _fires(self) -> list[PrimarySignalRecord]:
+        return [
+            PrimarySignalRecord(index=index, direction=1, predicted_return=0.01)
+            for index in (60, 100, 150, 220)
+        ]
+
+    def test_regime_annotation_runs_exactly_once_for_multi_fire_run(self):
+        df = self._synthetic_df()
+        fires = self._fires()
+        resolutions = self._resolved_next_bar(fires, [True, False, True, False])
+
+        detector = EnhancedRegimeDetector()
+        annotate_calls = []
+        original_annotate = detector.base_detector.annotate
+
+        def counting_annotate(frame):
+            annotate_calls.append(len(frame))
+            return original_annotate(frame)
+
+        detector.base_detector.annotate = counting_annotate
+
+        features = build_meta_label_features(df, fires, resolutions, regime_detector=detector)
+
+        assert len(features) == len(fires)
+        assert len(annotate_calls) == 1
+
+    def test_regime_features_match_per_fire_annotation_reference(self):
+        """Each fire's regime feature must equal a fresh-state full-frame
+        annotation read at that fire's index -- the CORRECT semantics, and
+        what annotate-once produces. This is deliberately NOT a pure
+        old-vs-new equivalence: the old shared-detector path re-annotated
+        per fire with hysteresis state carried over from the previous
+        call's pass, so fires evaluated after the first call could get
+        stale-state labels near the frame start. Where old and new differ,
+        the new fresh-state output is the fix (a behavior correction, not
+        drift); where the old path was already fresh (its first call, and
+        empirically most fires), they are identical."""
+        df = self._synthetic_df()
+        fires = self._fires()
+        resolutions = self._resolved_next_bar(fires, [True, False, True, False])
+
+        features = build_meta_label_features(df, fires, resolutions)
+
+        reference = pd.DataFrame(
+            [
+                {
+                    "regime_trend": regime.trend.value,
+                    "regime_volatility": regime.volatility.value,
+                    "regime_confidence": float(regime.confidence),
+                }
+                for regime in (
+                    EnhancedRegimeDetector().detect_regime(df.copy(), fire.index) for fire in fires
+                )
+            ]
+        )
+
+        pd.testing.assert_frame_equal(
+            features[["regime_trend", "regime_volatility", "regime_confidence"]].reset_index(
+                drop=True
+            ),
+            reference,
+        )
+
+    def test_pre_annotated_frame_is_used_as_is_without_reannotation(self):
+        """The explicit annotate-once seam: a caller that already annotated
+        the frame (e.g. once for a whole training run) must get identical
+        features with ZERO further annotation passes."""
+        from src.regime.detector import RegimeDetector
+
+        df = self._synthetic_df()
+        fires = self._fires()
+        resolutions = self._resolved_next_bar(fires, [True, False, True, False])
+        annotated = RegimeDetector().annotate(df.copy())
+
+        detector = EnhancedRegimeDetector()
+        annotate_calls = []
+        original_annotate = detector.base_detector.annotate
+
+        def counting_annotate(frame):
+            annotate_calls.append(len(frame))
+            return original_annotate(frame)
+
+        detector.base_detector.annotate = counting_annotate
+
+        features_pre_annotated = build_meta_label_features(
+            annotated, fires, resolutions, regime_detector=detector
+        )
+        features_plain = build_meta_label_features(df, fires, resolutions)
+
+        assert annotate_calls == []
+        pd.testing.assert_frame_equal(features_pre_annotated, features_plain)
 
 
 class TestEncodeMetaLabelFeaturesForTraining:

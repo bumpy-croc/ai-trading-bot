@@ -107,3 +107,34 @@ def test_synchronize_account_persists_balance_correction():
 
     assert state.current_balance == 1234.5
     state.db_manager.update_balance.assert_called_once_with(1234.5, "account_sync", "system", 7)
+
+
+def test_synchronize_account_persists_post_reconcile_balance():
+    """The persisted balance must be the POST-reconcile in-memory value.
+
+    Reconciliation (step b, between the exchange sync and the DB persist) may
+    legitimately adjust ``current_balance``; persisting the pre-reconcile
+    snapshot writes a stale value that diverges the DB row from memory — the
+    next restart's ``recover_last_balance`` then reads the wrong balance
+    (audit 2026-07-12 F2)."""
+    state = _make_state()
+    state.enable_live_trading = True
+    state.trading_session_id = 7
+    state._active_symbol = "BTCUSDT"
+    state._balance_lock = threading.Lock()  # real CM; annotation-only on the protocol
+    state.account_synchronizer = MagicMock()
+    sync_result = MagicMock()
+    sync_result.success = True
+    sync_result.data = {
+        "balance_sync": {"corrected": True, "old_balance": 1000.0, "new_balance": 1234.5}
+    }
+    state.account_synchronizer.sync_account_data.return_value = sync_result
+
+    def _reconcile_adjusts_balance():
+        state.current_balance = 1200.0
+
+    state._reconcile_positions_with_exchange.side_effect = _reconcile_adjusts_balance
+
+    LiveStartupSequencer(engine_state=state).synchronize_account_on_start()
+
+    state.db_manager.update_balance.assert_called_once_with(1200.0, "account_sync", "system", 7)
