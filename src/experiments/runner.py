@@ -14,6 +14,7 @@ from src.data_providers.offline import FixtureProvider, RandomWalkProvider
 from src.engines.backtest.engine import Backtester
 from src.experiments.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
+from src.strategies import factory_accepts_symbol
 from src.strategies.components import Strategy
 from src.strategies.hyper_growth import create_hyper_growth_strategy
 from src.strategies.ml_adaptive import create_ml_adaptive_strategy
@@ -63,6 +64,7 @@ class ExperimentRunner:
         self,
         strategy_name: str,
         factory_kwargs: dict[str, object] | None = None,
+        symbol: str | None = None,
     ) -> Strategy:
         """Construct a strategy, optionally passing kwargs to the factory.
 
@@ -72,6 +74,15 @@ class ExperimentRunner:
         (which is baked into the LeverageManager at construction), and
         ``min_regime_bars``. For post-construction knobs like
         ``long_entry_threshold`` use ``parameters`` overrides instead.
+
+        ``symbol`` (typically ``config.symbol``, the symbol the backtest
+        actually runs on) is auto-injected into the factory call when the
+        factory accepts a ``symbol`` parameter — mirroring the live-runner
+        and CLI backtest loaders (backtest-live parity). Without this, ML
+        strategies silently default their signal generator's symbol to
+        ``MLBasicSignalGenerator.DEFAULT_SYMBOL`` ("BTCUSDT"), scoring
+        whatever symbol the backtest runs on with the wrong model (GH #997).
+        An explicit ``symbol`` key in ``factory_kwargs`` always wins.
         """
         strategies: dict[str, Callable[..., Strategy]] = {
             "ml_basic": create_ml_basic_strategy,
@@ -83,6 +94,8 @@ class ExperimentRunner:
         if builder is None:
             raise ValueError(f"Unknown strategy: {strategy_name}")
         kwargs = dict(factory_kwargs or {})
+        if symbol is not None and "symbol" not in kwargs and factory_accepts_symbol(builder):
+            kwargs["symbol"] = symbol
         if not kwargs:
             return builder()
         try:
@@ -451,6 +464,7 @@ class ExperimentRunner:
         strategy = self._load_strategy(
             config.strategy_name,
             factory_kwargs=config.factory_kwargs or None,
+            symbol=config.symbol,
         )
         # Apply any parameter overrides for strategy-level tuning
         self._apply_parameter_overrides(strategy, config)
