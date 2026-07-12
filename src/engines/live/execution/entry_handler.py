@@ -329,7 +329,8 @@ class LiveEntryHandler(SharedEntryHandlerMixin):
                 error=f"entry_no_fill_{decision.reason}",
             )
 
-        # Execute via execution engine
+        # Execute via execution engine. signal_context enriches short-guard
+        # rejection events only; it never influences execution.
         exec_result = self.execution_engine.execute_entry(
             symbol=symbol,
             side=signal.side,
@@ -337,6 +338,10 @@ class LiveEntryHandler(SharedEntryHandlerMixin):
             base_price=decision.fill_price,
             balance=balance,
             liquidity=decision.liquidity,
+            signal_context={
+                "strength": signal.signal_strength,
+                "confidence": signal.signal_confidence,
+            },
         )
 
         if not exec_result.success:

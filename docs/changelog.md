@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **DB-durable short-guard rejection events** (#990 step 4): the live
+  SHORT-side margin inventory guard now writes a `system_events` row
+  (`event_type=SHORT_ENTRY_BLOCKED`, component `execution`) whenever it
+  rejects a short entry — carrying symbol/side, the observed free base-asset
+  balance, the $1 dust threshold, the rejection reason
+  (`free_inventory_above_threshold` vs the fail-closed
+  `balance_lookup_error`/`balance_unavailable` branches), signal
+  strength/confidence, and an open-position snapshot. Rows are bounded per
+  rejection episode (first + every 10th + an episode-end summary carrying the
+  TRUE rejection total, written on guard pass or after a 2h inactivity gap),
+  so the confirmed 30-cycle/45-min episode class writes ~4 rows, not 30.
+  Purely additive observability: the guard's accept/reject behavior,
+  threshold, and ordering are unchanged, and event writes are fault-isolated
+  so they can never break or delay the trading decision. No migration needed
+  (the 19-char enum value fits the varchar(23) column from migration 0013).
+  Funnel query: `SELECT * FROM system_events WHERE event_type =
+  'SHORT_ENTRY_BLOCKED'` (`error_code` distinguishes rejection rows from
+  `SHORT_GUARD_EPISODE_END` summaries).
 - **Point-in-time model pinning for the backtest harness** (#988): new
   `atb backtest` flags `--model-version` (pin an exact registry version) and
   `--model-as-of DATE` (resolve which version was `latest` at that date from

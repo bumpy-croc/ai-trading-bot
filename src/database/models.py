@@ -132,6 +132,10 @@ class EventType(enum.Enum):
     # mode. Distinct from ALERT so promote/kill verdicts can count trips with a
     # single event_type filter. Requires migration 0013 (widened varchar).
     CIRCUIT_BREAKER_DRY_RUN = "CIRCUIT_BREAKER_DRY_RUN"
+    # Short entries rejected by the margin inventory guard, plus their
+    # episode-end summaries (error_code distinguishes the two). 19 chars —
+    # fits the varchar(23) column from migration 0013, no migration needed.
+    SHORT_ENTRY_BLOCKED = "SHORT_ENTRY_BLOCKED"
     TEST = "TEST"  # Added for verification scripts and development diagnostics
 
 
