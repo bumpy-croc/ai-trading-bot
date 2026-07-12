@@ -552,3 +552,36 @@ before fully retiring the "new information sources" lever, cheaper than the full
 tournament. No src/ change, no live-affecting decision -- nothing for risk-officer to stress-test.
 Ref: issue #967 (closed), PR #969, docs/research/2026-07-12_input-candidates-audit.md (PR #958,
 merged 9e7ea5e8).
+
+---
+
+## 2026-07-12 11:30 · track-record · quant-researcher
+Experiment (follow-up to #967): NONLINEAR INPUT-SCREENING re-screen -- was the linear screen's
+null a detector-family artifact? PM-authorized same-session follow-up. -> REJECTED overall
+(zero arms graduate), but NOT a clean uniform null like the linear screen -- one arm shows a real,
+regime-specific signal.
+Evidence: docs/research/experiments/2026-07-12_input-screening-nonlinear.md
+Same 7 arms/F1-F3 folds/graduation bar (Bonferroni alpha=0.0071 on >=2/3 folds AND avg DA>=0.5pp)
+as the linear screen, swapping ONLY the model to a single fixed LightGBM config (n_estimators=300,
+max_depth=5, early-stopped on a train-tail validation split, NO hyperparameter search -- pre-
+committed, not tuned per arm/fold). btc_cross: F1 Delta=+3.84pp p=6.9e-05 (clears Bonferroni by 4
+orders of magnitude) but F2 Delta=+1.16pp p=0.226 and F3 Delta=-0.33pp p=0.741 (both non-sig,
+sign flips on F3) -- 1/3 significant folds, short of the required 2, correctly does NOT graduate
+under the literal rule. Feature-importance/gain confirms btc_ret_1h/6h carry real, consistent gain
+in ALL THREE folds (16-22%/6-8% of total gain) -- gain does not straightforwardly track OOS DA
+improvement, same lesson as the target-redesign tournament's confidence-signal finding. all_combined
+mirrors the same pattern (driven by the same BTC features). All other 5 arms: uniformly null,
+0/3 significant, matching the linear screen's read for those five.
+Per the PM-authorized pre-committed interpretation rule: zero graduating arms formally retires the
+"new information sources" lever for ETHUSDT-1h across the six audited input classes -- six
+converged results now (window #898, architecture #939, target-redesign, linear screen #967, this
+nonlinear re-screen = five; the sixth being the aggregate structural-ceiling finding itself), all
+finding the same ~51-53% DA ceiling under every lever tried. btc_cross's regime-dependence is named
+as a narrower, separately-scoped open question (is BTC->ETH lead-lag regime-conditional, per the
+audit's own "plausible, weak, time-varying" literature read) -- NOT authorized or scheduled as a
+follow-up here, explicitly deferred to a future preregistration if pursued.
+Recommendation to pm: future research levers shift to trade geometry, frequency/symbol
+diversification, and the live-parity gap, not further feature-set expansion within these six
+classes. No src/ change, no live-affecting decision -- nothing for risk-officer to stress-test.
+Ref: docs/research/experiments/2026-07-12_input-screening-linear.md (prior screen), PR (opening
+now).
