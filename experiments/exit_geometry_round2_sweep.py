@@ -43,7 +43,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 for noisy in (
+    "Strategy.HyperGrowth",
     "atb.Strategy.HyperGrowth",
+    "src.engines.backtest",
+    "src.engines",
+    "src.strategies",
+    "src.strategies.components.ml_signal_generator",
+    "src.prediction",
+    "src.data_providers",
     "atb.src.engines.backtest",
     "atb.src.engines",
     "atb.src.strategies",
@@ -52,6 +59,7 @@ for noisy in (
     "MLBasicSignalGenerator",
 ):
     logging.getLogger(noisy).setLevel(logging.ERROR)
+logging.getLogger().setLevel(logging.WARNING)
 
 from src.engines.backtest.engine import Backtester  # noqa: E402
 from src.experiments.runner import ExperimentRunner  # noqa: E402

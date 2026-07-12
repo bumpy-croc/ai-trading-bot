@@ -170,4 +170,69 @@ An arm is a **staging-trial candidate** only if it clears all four bars in Sec. 
 
 ## RESULTS
 
-_(to be appended after all runs complete)_
+**Executive verdict: NO-GO for all 6 arms. No staging-trial candidate.** All 35 primary runs (7 configs × 5 folds) completed, plus the Sec. 9 determinism recheck (PASS, byte-identical: `control`/F1 = 29 trades, -1.693401679408757%, PF 0.7970607439231735, both runs). Every arm fails Bar 1 outright (0 of 3 primary folds ever reach Bonferroni significance) — the strictest bar in Sec. 1 — so the verdict does not turn on any judgment call about Bars 2/3.
+
+**Process note (transparency on how this was produced)**: this sweep was interrupted mid-run by a session/quota limit (predecessor turns), then resumed. On resume, the partial output (`experiments/exit_geometry_round2_results.jsonl`) was inspected directly rather than assumed empty or assumed complete — it held 25 of the eventual 36 records (5 of 7 arms fully done across all 5 folds, plus a valid, already-passing determinism check against the corrected ETHUSDT-model baseline). Only the 2 remaining arms (`breakeven_only`, `tp_06_rerun` — 10 runs) were re-run, appended to the same file; nothing already-completed was discarded or redone.
+
+### Per-fold results (all 5 folds; fees/slippage on; `initial_balance=$85`)
+
+**Control** (corrected ETHUSDT-model baseline, per Sec. 5.1): F1 29 trades/-1.69%/PF 0.797/MaxDD 4.31%; F2 40/-8.17%/0.412/9.16%; F3 67/-13.76%/0.373/14.89%; F0a 67/-19.73%/0.160/20.52%; F0b 104/-18.23%/0.341/19.28%.
+
+| Arm | F1 Δret% | F2 Δret% | F3 Δret% | F0a Δret% | F0b Δret% | Agg. Δret% (mean of 5) | Pooled PF | vs control PF |
+|---|---|---|---|---|---|---|---|---|
+| control | — | — | — | — | — | — | 0.346 | — |
+| early_cut_1p5_12h | -6.75 | -2.27 | -2.13 | +0.14 | -1.57 | **-2.52** | 0.370 | up |
+| early_cut_1p5_18h | -1.26 | +1.33 | -0.58 | -0.16 | -1.07 | **-0.35** | 0.413 | up |
+| early_cut_1p0_24h | -6.36 | +2.55 | +0.55 | -0.08 | -1.78 | **-1.02** | 0.331 | down |
+| trailing_only | -1.88 | -3.96 | +0.60 | -0.22 | -0.66 | **-1.22** | 0.310 | down |
+| breakeven_only | -3.06 | +4.63 | +16.68 | +1.39 | +19.95 | **+7.92** | 0.275 | down |
+| tp_06_rerun | -1.27 | -0.25 | +2.21 | +0.45 | -0.27 | **+0.17** | 0.388 | up |
+
+### Bar 1 — Bonferroni-significant return improvement, ≥2 of 3 primary folds (α=0.05/6=0.0083)
+
+**Every single arm is 0/3.** The lowest p-value found anywhere across all 18 primary-fold arm comparisons: 0.0907 (`breakeven_only`/F2) — still >10× the 0.0083 threshold. Full per-fold p-values are in `experiments/analyze_exit_geometry_round2.py`'s output (committed alongside this doc). No arm gets remotely close, even with 2 extra folds and, for `tp_06_rerun`, ~40% more trades pooled than round 1 had.
+
+### Bar 2 — aggregate PF and aggregate return improve vs. control (pooled across all 5 folds)
+
+Only **`tp_06_rerun`** passes both halves (agg. return +0.17pp, pooled PF 0.388 vs. control 0.346). This reproduces round 1's finding almost exactly — still directionally positive, still tiny, still nowhere near Bar 1. **`breakeven_only`'s +7.92pp aggregate return delta is the outlier a naive read would flag as a strong win — it is not.** That number is driven almost entirely by two folds (F3 +16.68pp, F0b +19.95pp) where `breakeven_only` closed far fewer trades than control (25 vs. 67 in F3; 25 vs. 104 in F0b) — removing distance-based trailing changes *when* the position exits enough that it happened to sidestep two bad stretches in this specific 5-fold sample, while its **pooled profit factor is worse than control's** (0.275 vs. 0.346) and it fails Bar 1 on every primary fold. Flagged explicitly here as the round's clearest "don't be misled by the headline aggregate-return number" case — matching round 1's `maxhold_18` PF-vs-return trap in spirit, just on the opposite metric.
+
+### Bar 3 — no fold's MaxDD worse than control's by more than 2.0pp
+
+`breakeven_only`, `early_cut_1p5_18h`, and `tp_06_rerun` pass (worst deltas +0.89pp, +0.88pp, +1.18pp respectively). `early_cut_1p0_24h` (+5.61pp, F1), `early_cut_1p5_12h` (+4.17pp, F1), and `trailing_only` (+4.07pp, F2) all breach — in every breaching case the same fold (F1, the shortest/lowest-trade-count primary fold) or F2 is where a looser exit policy let a handful of trades run further against the position than control's tighter combined trailing+breakeven config would have allowed.
+
+### Final verdict per arm (Sec. 1 all-four-bars test)
+
+| Arm | Bar 1 (≥2/3 sig.) | Bar 2 (agg. PF+ret) | Bar 3 (MaxDD cap) | Bar 4 (no fabrication) | Verdict |
+|---|---|---|---|---|---|
+| early_cut_1p5_12h | fail (0/3) | fail | **FAIL** (breach) | pass | NO-GO |
+| early_cut_1p5_18h | fail (0/3) | fail | pass | pass | NO-GO |
+| early_cut_1p0_24h | fail (0/3) | fail | **FAIL** (breach) | pass | NO-GO |
+| trailing_only | fail (0/3) | fail | **FAIL** (breach) | pass | NO-GO |
+| breakeven_only | fail (0/3) | fail (PF worse) | pass | pass | NO-GO |
+| tp_06_rerun | fail (0/3) | **PASS** | pass | pass | NO-GO |
+
+**Bar 4 (fabrication check)**: manually scanned every row across all 35 runs for the standard signature (0%-win positive return; near-zero MaxDD with multi-% return; return/win-rate/trade-count inconsistency). None found — trade counts, win rates, PF, and returns are all mutually consistent with each other across every arm/fold, including the anomalous-looking `breakeven_only` rows (its low trade counts and unusual PF are mechanistically explained by the trailing-distance ablation, not an accounting artifact).
+
+**No arm clears all four bars. No staging-trial candidate this round either.**
+
+### H1/H2/H3 read against the actual mechanism data
+
+- **H1 (tighter trailing captures more MFE) — not supported.** `trailing_only` (distance-trailing alone, no breakeven) and `breakeven_only` (breakeven alone, no distance-trailing) both underperform control's *combined* config on pooled PF (0.310 and 0.275 vs. 0.346) — the ablation shows the two mechanisms are not redundant with each other (neither alone reproduces control), but neither isolated mechanism, nor a further-tightened combination in round 1 (`sl_04`, `maxhold_18`), moved the needle in the helpful direction.
+- **H2 (MFE-conditioned early-cut beats an unconditional time cutoff) — partially supported on mechanism, not on outcome.** Cut-precision (fraction of matched early-cut trades whose control counterpart eventually lost) is 42–56% across the three early-cut arms (`early_cut_1p0_24h` 42.3%, `early_cut_1p5_12h` 53.3%, `early_cut_1p5_18h` 55.6%) — barely better than a coin flip, with only 21–37% of cut trades even having a matched control counterpart to check (entry-sequence divergence, disclosed in Sec. 8). This is a real, if modest, improvement in *discrimination* over round 1's unconditional `maxhold_18` (which by construction couldn't discriminate winners from losers at all), but "slightly-better-than-coinflip precision, mostly on trades we can't even verify" is not a mechanism worth shipping. Cut rates were substantial (19–39% of all trades), and the tightest/most aggressive arm (`early_cut_1p5_12h`) is also the one that breaches the MaxDD cap and has the worst aggregate return (-2.52pp) — tightening the early-cut window doesn't trade off cleanly, it makes things worse on both precision-adjacent dimensions.
+- **H3 (decompose control's capture ratio into trailing vs. breakeven) — answered, mechanism identified as roughly additive, not simple.** Neither single mechanism reproduces control's capture behavior alone (both underperform pooled), so control's 0.73–0.82 historical capture ratio (round 1) is not attributable to either the trailing-distance or the breakeven-move component in isolation — both appear to be doing real, complementary work, and removing either one is a net negative, not neutral.
+
+### How this could be misleading (adversarial self-review, per house style)
+
+- **`breakeven_only`'s aggregate return number is the single most dangerous cell in this report to skim without context** — flagged prominently above rather than left for a reader to discover.
+- **Cut-precision's low match rate (21–37%) means most of the early-cut mechanism's actual effect is unverified by the matched-entry proxy** — Sec. 8's own disclosed limitation, not resolved here; a true counterfactual would need a parallel no-cut shadow simulation, out of scope for this round.
+- **5 folds is still a small basket, and the extension folds (2021/2022) are earlier, thinner-liquidity, and further from the deployed model's effective training influence** than F1–F3 — this doesn't change the verdict (every arm still fails Bar 1 on the primary folds alone) but means the aggregate/pooled numbers in Bar 2 lean partly on a less representative period.
+- **Absolute numbers remain non-conservative** (Sec. 3) — the live model's training window covers every fold tested, restated from round 1 and unchanged here.
+
+## Recommendation to PM / risk-officer
+
+**Recommendation: rejected as a staging-trial candidate — all 6 arms, both rounds now complete (12 arms total across round 1 + round 2), none clears the bar.** This closes the exit-geometry research thread opened by Lane D's live-trade-review for now: neither the previously-inexpressible mechanisms (MFE-conditioned early-cut, trailing/breakeven ablation) nor round 1's SL/TP/time-cutoff sweep flips HyperGrowth's expectancy at a statistically defensible level, across 8 exam folds (2021–2025 H1) and two independent rounds of testing.
+
+- **Nothing here goes to risk-officer stress-testing or staging** — there is no candidate.
+- **`tp_06_rerun` remains the one thread with a consistent directional signal across both rounds** (round 1: +0.49/+0.97/+1.39pp on F1/F2/F3, never significant; round 2: same arm, 2 more folds, aggregate +0.17pp, pooled PF improves, still never significant). At this point, two independent samples (8 folds total) have failed to distinguish this effect from noise. Recommend treating this as **closed, not "needs more data"** — the effect size (if real) is small enough that a defensible go/no-go would need either a fundamentally larger trade sample (more symbols, not just more history on ETHUSDT) or acceptance that it's not distinguishable from zero with backtesting alone.
+- **The mechanism findings (H1/H2/H3) are the more useful output of this round than the verdict itself** — cut-precision near coin-flip, and neither trailing nor breakeven alone reproducing control's combined capture behavior, both argue against further parameter search *within* this same exit-geometry design space. Any future work here would need a genuinely different mechanism (not tested in either round): e.g. a volatility- or regime-conditioned exit policy, rather than another fixed-threshold variant of stop/TP/time/MFE-cutoff.
+- **Escalated separately, not silently folded into this verdict**: GH #997 (`ExperimentRunner` symbol-threading gap, fix open in #1004) and #998 (round 1's numbers need re-verification against the corrected model) remain open follow-up items independent of this round's own (correctly-modeled) result.
