@@ -261,7 +261,9 @@ class LiveExecutionEngine:
                 "free_base_balance": float(free_balance) if free_balance is not None else None,
                 "free_value_usd": float(free_value_usd) if free_value_usd is not None else None,
                 "threshold_usd": SHORT_GUARD_DUST_THRESHOLD_USD,
-                "signal": dict(signal_context) if signal_context else None,
+                "signal": {k: float(v) for k, v in signal_context.items()}
+                if signal_context
+                else None,
                 "open_positions": self._open_position_snapshot(),
                 "episode": {
                     "started_at": episode_started_at.isoformat(),
