@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Reconciliation edge paths: offline-SL double-count, partial-exit size
+  reset, silent periodic close failures** (2026-07-12 loop/state audit,
+  closes #980): (1) the legacy SL-based startup fallback re-applied an
+  offline-filled stop's `realized_pnl` on top of a `current_balance` the
+  exchange sync had already overwritten with the post-fill exchange balance —
+  double-counting the P&L in memory and in the `account_balances` ledger; the
+  fallback now skips the balance re-application while a sync correction is
+  pending (the Trade row and performance record still book the close), and
+  `synchronize_account_on_start` persists the POST-reconcile
+  `current_balance` instead of the stale pre-reconcile snapshot (write-only
+  `_pending_corrected_balance` removed). (2) The startup quantity-mismatch
+  correction (`_verify_entry_order`) overwrote `current_size` with the
+  recomputed full size, re-inflating a partially-exited recovered position to
+  full deployed size (over-sized final close, over-reported P&L); it now
+  preserves the remaining fraction (`new_size * prev_current/prev_original`,
+  the same scaling the SL re-placement uses) and omits a zero `current_size`
+  from the DB persist. (3) The periodic reconciler's external-close branches
+  (margin + spot) popped the position from the tracker and stayed silent when
+  the DB `close_position` failed, stranding an OPEN row the cycle never
+  revisits; both branches now escalate like their startup twins — CRITICAL
+  log plus a paged `system_events` row (`RECONCILE_DB_CLOSE_FAILED`,
+  `alert=True`).
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*
