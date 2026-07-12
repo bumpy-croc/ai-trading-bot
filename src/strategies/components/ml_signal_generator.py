@@ -67,6 +67,15 @@ class MLSignalGenerator(SignalGenerator):
     - Regime-aware dynamic threshold adjustment
     - Confidence calculation based on prediction quality
     - Optional prediction engine integration
+
+    Unlike :class:`MLBasicSignalGenerator`, this generator does not resolve
+    its model bundle from ``PredictionModelRegistry`` by symbol/type/timeframe
+    — it only supports an explicit ``model_name`` override (or the prediction
+    engine's own symbol-agnostic default bundle when ``model_name`` is unset).
+    ``self.symbol`` therefore identifies which pair this instance is scoring
+    (for logging/metadata/factory-symbol-threading) but does not by itself
+    select a symbol-specific model; see GH issue tracking registry-based
+    selection for this class.
     """
 
     # Default thresholds (overridable per-instance for experiments).
@@ -84,6 +93,11 @@ class MLSignalGenerator(SignalGenerator):
     SHORT_THRESHOLD_LOW_VOL = -0.0006  # More conservative in low volatility (-0.06%)
     SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER = 0.2  # Adjust threshold based on regime confidence
 
+    # Default symbol used when no trading symbol is threaded in (mirrors
+    # MLBasicSignalGenerator's convention so an unspecified symbol keeps
+    # today's behavior for existing callers).
+    DEFAULT_SYMBOL = "BTCUSDT"
+
     # Registry-selection hints optionally attached by strategy factories
     # (e.g. create_ml_sentiment_strategy). Bare annotations so hasattr()
     # behavior is unchanged until a factory assigns them.
@@ -95,6 +109,7 @@ class MLSignalGenerator(SignalGenerator):
         name: str = "ml_signal_generator",
         sequence_length: int = 120,
         model_name: str | None = None,
+        symbol: str | None = None,
         *,
         long_entry_threshold: float | None = None,
         short_entry_threshold: float | None = None,
@@ -113,6 +128,10 @@ class MLSignalGenerator(SignalGenerator):
             name: Name for this signal generator
             sequence_length: Sequence length for model input
             model_name: Model name for prediction engine (optional)
+            symbol: Trading symbol this generator is scoring (optional,
+                defaults to BTCUSDT). Stamped into signal metadata/logging so
+                a strategy traded on a non-default symbol is identifiable;
+                see class docstring for the model-selection caveat.
             long_entry_threshold: Minimum predicted return to open a long.
             short_entry_threshold: Maximum predicted return to open a short
                 (expected to be negative).
@@ -187,6 +206,15 @@ class MLSignalGenerator(SignalGenerator):
                 else short_threshold_confidence_multiplier
             ),
         )
+
+        # Normalize to the registry's Binance-style directory convention
+        # (mirrors MLBasicSignalGenerator) so provider-specific symbol formats
+        # (e.g. Coinbase "ETH-USD") resolve consistently.
+        raw_symbol = symbol or self.DEFAULT_SYMBOL
+        try:
+            self.symbol = SymbolFactory.to_exchange_symbol(raw_symbol, "binance")
+        except ValueError as exc:
+            raise ValueError(f"Invalid trading symbol {raw_symbol!r}: {exc}") from exc
 
         # Model name configuration
         cfg = get_config()
@@ -285,6 +313,7 @@ class MLSignalGenerator(SignalGenerator):
                     "reason": "insufficient_history",
                     "index": index,
                     "required_length": self.sequence_length,
+                    "symbol": self.symbol,
                 },
             )
 
@@ -300,6 +329,7 @@ class MLSignalGenerator(SignalGenerator):
                     "reason": "prediction_failed",
                     "timed_out": self._last_prediction_timed_out,
                     "index": index,
+                    "symbol": self.symbol,
                 },
             )
 
@@ -318,6 +348,7 @@ class MLSignalGenerator(SignalGenerator):
                     "current_price": current_price,
                     "predicted_return": 0,  # Set to 0 when price is invalid
                     "index": index,
+                    "symbol": self.symbol,
                 },
             )
 
@@ -348,6 +379,7 @@ class MLSignalGenerator(SignalGenerator):
             "long_entry_threshold": self.long_entry_threshold,
             "engine_model_name": self.model_name,
             "engine_batch": self.use_engine_batch,
+            "symbol": self.symbol,
         }
 
         # Add regime information if available
@@ -414,7 +446,7 @@ class MLSignalGenerator(SignalGenerator):
 
             # Get prediction from prediction engine
             if self.prediction_engine is None:
-                logger.error("Prediction engine not initialized for symbol prediction")
+                logger.error("Prediction engine not initialized for %s prediction", self.symbol)
                 return None
 
             window_df = df[["open", "high", "low", "close", "volume"]].iloc[
@@ -428,7 +460,8 @@ class MLSignalGenerator(SignalGenerator):
             if result.error is not None:
                 self._last_prediction_timed_out = bool(result.metadata.get("timed_out", False))
                 logger.warning(
-                    "MLSignalGenerator: prediction failed at index %d (timed_out=%s): %s",
+                    "MLSignalGenerator: prediction failed for %s at index %d (timed_out=%s): %s",
+                    self.symbol,
                     index,
                     self._last_prediction_timed_out,
                     result.error,
@@ -441,7 +474,9 @@ class MLSignalGenerator(SignalGenerator):
             return pred
 
         except Exception:
-            logger.exception("MLSignalGenerator: Prediction error at index %d", index)
+            logger.exception(
+                "MLSignalGenerator: Prediction error for %s at index %d", self.symbol, index
+            )
             return None
 
     def _should_generate_short_signal(
@@ -528,6 +563,7 @@ class MLSignalGenerator(SignalGenerator):
             {
                 "sequence_length": self.sequence_length,
                 "model_name": self.model_name,
+                "symbol": self.symbol,
                 "long_entry_threshold": self.long_entry_threshold,
                 "short_entry_threshold": self.short_entry_threshold,
                 "confidence_multiplier": self.confidence_multiplier,

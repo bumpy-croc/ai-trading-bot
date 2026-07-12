@@ -30,6 +30,27 @@ class TestLoadStrategySymbolThreading:
 
             mock_create.assert_called_once_with(symbol="ETHUSDT")
 
+    def test_threads_symbol_to_ml_adaptive(self):
+        """Regression test for GH #1002: create_ml_adaptive_strategy previously
+        had no ``symbol`` parameter at all, so ``call_strategy_factory``'s
+        signature check always found it unsupported and dropped the symbol.
+        """
+        with patch(
+            "cli.commands.backtest.create_ml_adaptive_strategy", autospec=True
+        ) as mock_create:
+            _load_strategy("ml_adaptive", symbol="ETHUSDT")
+
+            mock_create.assert_called_once_with(symbol="ETHUSDT")
+
+    def test_threads_symbol_to_ml_sentiment(self):
+        """Regression test for GH #1002 (see test_threads_symbol_to_ml_adaptive)."""
+        with patch(
+            "cli.commands.backtest.create_ml_sentiment_strategy", autospec=True
+        ) as mock_create:
+            _load_strategy("ml_sentiment", symbol="ETHUSDT")
+
+            mock_create.assert_called_once_with(symbol="ETHUSDT")
+
     def test_factory_without_symbol_param_called_plain(self):
         """Factories that do not accept symbol are invoked without it."""
         with patch(
