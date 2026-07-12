@@ -85,21 +85,27 @@ class TestLoadStrategySymbolThreading:
 
         mock_create.assert_called_once_with()
 
-    @patch(ENGINE_PATH)
-    @patch(CONFIG_PATH)
-    def test_factory_without_symbol_param_not_regressed(self, _cfg, engine_cls):
-        """ml_adaptive's factory (create_ml_adaptive_strategy) has no
-        `symbol` parameter at all -- auto-injection must detect this via
-        inspect.signature and skip it rather than raising
-        TypeError: create_ml_adaptive_strategy() got an unexpected keyword
-        argument 'symbol'."""
-        engine_cls.return_value = _mock_prediction_engine()
+    def test_factory_without_symbol_param_not_regressed(self):
+        """A factory with no ``symbol`` parameter (and no ``**kwargs``) must
+        be called without one -- auto-injection detects support via
+        inspect.signature and skips it rather than raising
+        ``TypeError: ... got an unexpected keyword argument 'symbol'``.
+
+        Every real registry factory now accepts ``symbol`` (GH #1002), so
+        the no-symbol case is exercised with a stub."""
         runner = ExperimentRunner()
+        built = MagicMock(name="strategy")
 
-        strategy = runner._load_strategy("ml_adaptive", symbol="ETHUSDT")
+        def _symbolless_factory():
+            return built
 
-        assert strategy is not None
-        assert not hasattr(strategy.signal_generator, "symbol")
+        with patch(
+            "src.experiments.runner.create_ml_adaptive_strategy",
+            new=_symbolless_factory,
+        ):
+            strategy = runner._load_strategy("ml_adaptive", symbol="ETHUSDT")
+
+        assert strategy is built
 
 
 class TestRunThreadsConfigSymbol:
