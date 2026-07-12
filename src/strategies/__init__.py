@@ -26,7 +26,24 @@ __all__ = [
     "create_leveraged_regime_strategy",
     "create_hyper_growth_strategy",
     "call_strategy_factory",
+    "factory_accepts_symbol",
 ]
+
+
+def factory_accepts_symbol(factory: Callable[..., Any]) -> bool:
+    """Return whether ``factory`` has a ``symbol`` parameter (or ``**kwargs``).
+
+    Shared by every caller that must decide whether to thread a trading
+    symbol into a strategy factory — passing ``symbol=`` to a factory that
+    doesn't accept it raises ``TypeError``, so callers check this first.
+    """
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        return False
+    return "symbol" in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
 
 
 def call_strategy_factory(
@@ -69,11 +86,7 @@ def call_strategy_factory(
             )
         kwargs["model_version"] = model_version
 
-    if symbol is not None and parameters is not None:
-        accepts_symbol = "symbol" in parameters or any(
-            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
-        )
-        if accepts_symbol:
-            kwargs["symbol"] = symbol
+    if symbol is not None and factory_accepts_symbol(factory):
+        kwargs["symbol"] = symbol
 
     return factory(**kwargs)
