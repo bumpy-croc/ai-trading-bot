@@ -45,8 +45,8 @@ class TestHandleSymbolWiring:
     def test_handle_passes_cli_symbol_to_load_strategy(self, monkeypatch):
         recorded = {}
 
-        def fake_load(name, symbol=None):
-            recorded["call"] = (name, symbol)
+        def fake_load(name, symbol=None, model_version=None):
+            recorded["call"] = (name, symbol, model_version)
             raise RuntimeError("stop after strategy load")
 
         monkeypatch.setattr("cli.commands.backtest._load_strategy", fake_load)
@@ -73,4 +73,6 @@ class TestHandleSymbolWiring:
         rc = _handle(ns)
 
         assert rc == 1
-        assert recorded["call"] == ("hyper_growth", "ETHUSDT")
+        # model_version None: no pin flags on the namespace means the pin
+        # machinery must stay entirely out of the way (GH #988).
+        assert recorded["call"] == ("hyper_growth", "ETHUSDT", None)

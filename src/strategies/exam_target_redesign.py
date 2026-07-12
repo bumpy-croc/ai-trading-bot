@@ -63,18 +63,19 @@ DEFAULT_EXAM_STRATEGY_NAME = "TargetRedesignExam"
 # (f"{symbol}:{timeframe}:{model_type}:{version}"), which
 # PredictionEngine._resolve_bundle finds via PredictionModelRegistry.
 # get_bundle_by_key -- the one place a non-latest version is reachable by
-# exact key.
-_MODEL_VERSION_OVERRIDE_ENV_VAR = "ATB_MODEL_VERSION_OVERRIDE"
+# exact key. Public so the backtest CLI's --model-version flag can set the
+# same override for exam strategies (GH #988).
+MODEL_VERSION_OVERRIDE_ENV_VAR = "ATB_MODEL_VERSION_OVERRIDE"
 
 
 def _exam_model_name(symbol: str, timeframe: str, model_type: str) -> str | None:
     """Resolve the model_name to pass an exam SignalGenerator.
 
     Returns a full bundle key (pinning to a specific version) when
-    ``_MODEL_VERSION_OVERRIDE_ENV_VAR`` is set, else None (registry
+    ``MODEL_VERSION_OVERRIDE_ENV_VAR`` is set, else None (registry
     default: latest).
     """
-    version = os.environ.get(_MODEL_VERSION_OVERRIDE_ENV_VAR)
+    version = os.environ.get(MODEL_VERSION_OVERRIDE_ENV_VAR)
     if not version:
         return None
     return f"{symbol}:{timeframe}:{model_type}:{version}"
@@ -303,6 +304,7 @@ def create_exam_meta_label_strategy(
 
 __all__ = [
     "DEFAULT_EXAM_STRATEGY_NAME",
+    "MODEL_VERSION_OVERRIDE_ENV_VAR",
     "create_exam_binary_direction_strategy",
     "create_exam_meta_label_strategy",
     "create_exam_smoothed_return_strategy",

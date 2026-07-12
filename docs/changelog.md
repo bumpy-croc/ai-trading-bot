@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Point-in-time model pinning for the backtest harness** (#988): new
+  `atb backtest` flags `--model-version` (pin an exact registry version) and
+  `--model-as-of DATE` (resolve which version was `latest` at that date from
+  bundle metadata timestamps, via `src/prediction/models/version_resolver.py`).
+  Reuses PR #950's pinning mechanism (`get_bundle_by_key` /
+  `ATB_MODEL_VERSION_OVERRIDE`); `MLBasicSignalGenerator` accepts an explicit
+  `model_version` and scores every bar with it, bypassing `latest`. Warns
+  loudly when the backtest window spans a model-promotion boundary (the
+  confound behind the 12-vs-6-trade parity gap, see
+  `docs/research/notes/2026-07-12_parity-gap-investigation.md`). Fail-closed:
+  an unhonorable pin aborts instead of silently resolving `latest`. Zero
+  behavior change when neither flag is passed; the live path cannot be pinned.
+
 ### Fixed
 - **Reconciliation edge paths: offline-SL double-count, partial-exit size
   reset, silent periodic close failures** (2026-07-12 loop/state audit,
