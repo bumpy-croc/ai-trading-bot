@@ -105,7 +105,7 @@ into part of that same spike before its stop/target fired 2 seconds after order 
 | | n | mean (bps) | median (bps) | std |
 |---|---|---|---|---|
 | Full sample | 24 | −10.65 | −4.09 | 21.23 |
-| Trimmed (drop 3 largest \|x\|) | 21 | −4.25 | (median of trimmed set) | — |
+| Trimmed (drop 3 largest \|x\|) | 21 | −4.25 | −0.73 | 12.09 |
 
 Sign convention: positive = adverse (worse than reference), negative = favorable (better than
 reference). **Median and mean are both slightly favorable**, not adverse — i.e., on this sample,
