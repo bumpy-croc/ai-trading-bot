@@ -144,6 +144,18 @@ def test_metrics_cleared_when_no_sizing_happens():
     assert sizer.get_last_sizing_metrics() == {}
 
 
+def test_metrics_cleared_when_validation_raises():
+    # A failed candle (validation raise -> strategy fallback) must surface as
+    # "no evidence", never as the previous candle's metrics.
+    sizer = VolatilityTargetSizer(_Base(size=100.0))
+    sizer.calculate_size(_sig(), 1000.0, 20.0, _Regime(0.9))
+    assert sizer.get_last_sizing_metrics() != {}
+
+    with pytest.raises(ValueError):
+        sizer.calculate_size(_sig(), -1.0, 20.0, _Regime(0.9))
+    assert sizer.get_last_sizing_metrics() == {}
+
+
 def test_sizing_metrics_snapshot_is_a_copy():
     sizer = VolatilityTargetSizer(_Base(size=100.0))
     sizer.calculate_size(_sig(), 1000.0, 20.0, _Regime(0.9))

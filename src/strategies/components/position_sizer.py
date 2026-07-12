@@ -1361,8 +1361,11 @@ class VolatilityTargetSizer(PositionSizer):
         risk_amount: float,
         regime: Optional["RegimeContext"] = None,
     ) -> float:
+        # Clear before validation: a failed candle (validation raise -> strategy
+        # fallback path) must surface as "no evidence", never as the previous
+        # candle's metrics.
+        self._set_sizing_metrics({})
         self.validate_inputs(balance, risk_amount)
-        self._set_sizing_metrics({})  # clear so a no-size candle never shows stale evidence
         base_size = self.base_sizer.calculate_size(signal, balance, risk_amount, regime)
         if base_size <= 0:
             return base_size
