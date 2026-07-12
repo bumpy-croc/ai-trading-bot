@@ -27,7 +27,9 @@ resolved yet as of "now."
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import math
 import os
 from collections.abc import Sequence
@@ -46,6 +48,8 @@ from src.strategies.components.signal_generator import SignalDirection
 
 if TYPE_CHECKING:
     from src.strategies.components.signal_generator import SignalGenerator
+
+logger = logging.getLogger(__name__)
 
 # Feature-set constants, per preregistration §2a's exact spec.
 REALIZED_VOL_WINDOW_BARS = 48
@@ -79,8 +83,62 @@ class PrimarySignalRecord:
     predicted_return: float
 
 
+def fire_generation_corpus_fingerprint(
+    signal_generator: SignalGenerator,
+    df: pd.DataFrame,
+    start_index: int | None = None,
+) -> str:
+    """Content fingerprint identifying one (corpus, start, generator) run.
+
+    Guards checkpoint resumes: two equal-length but different corpora (a
+    shifted window, another symbol) must never resume-splice into one
+    training set, so the fingerprint hashes the frame's index endpoints,
+    the full close column, the resolved start index, and the generator's
+    identity string. Best-effort on generator identity: the name does not
+    capture model WEIGHTS, so callers must not reuse a checkpoint across
+    primary-model retrains (the pipeline deletes its checkpoint after each
+    successful run for exactly this reason).
+
+    Raises:
+        ValueError: df is empty (nothing to fingerprint or checkpoint).
+    """
+    if len(df) == 0:
+        raise ValueError("cannot fingerprint an empty corpus")
+    start = start_index if start_index is not None else signal_generator.warmup_period
+    generator_identity = getattr(signal_generator, "name", type(signal_generator).__name__)
+    close_digest = hashlib.sha256(df["close"].to_numpy(dtype=np.float64).tobytes()).hexdigest()
+    payload = "|".join(
+        [
+            str(df.index[0]),
+            str(df.index[-1]),
+            str(len(df)),
+            str(start),
+            close_digest,
+            str(generator_identity),
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _checkpoint_rejection(checkpoint_path: Path, reason: str) -> ValueError:
+    """Uniform rejection policy: raise, never guess, never overwrite.
+
+    A checkpoint that cannot be positively identified as THIS run's own
+    (corpus fingerprint mismatch, unparseable JSON, missing keys) is never
+    silently ignored or overwritten -- overwriting would destroy either
+    another run's progress or, if the caller mis-pointed checkpoint_path,
+    an unrelated file. The operator resolves it: delete the file or point
+    at a different path to start fresh.
+    """
+    return ValueError(
+        f"checkpoint at {checkpoint_path} {reason} -- refusing to resume from or "
+        f"overwrite it; delete the file or pass a different checkpoint_path to "
+        f"start fresh"
+    )
+
+
 def _load_fire_generation_checkpoint(
-    checkpoint_path: Path, start: int, total_bars: int
+    checkpoint_path: Path, fingerprint: str
 ) -> tuple[list[PrimarySignalRecord], int] | None:
     """Load a prior run's progress, or None if no checkpoint exists yet.
 
@@ -88,40 +146,52 @@ def _load_fire_generation_checkpoint(
         (records so far, first index still to evaluate).
 
     Raises:
-        ValueError: the checkpoint was recorded against a different corpus
-            (start index or bar count mismatch) -- resuming from it would
-            splice fires from two different windows into one training set.
+        ValueError: the checkpoint belongs to a different (corpus, start,
+            generator) fingerprint, or is corrupt/incomplete -- see
+            ``_checkpoint_rejection`` for the policy.
     """
     if not checkpoint_path.exists():
         return None
-    state = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    if state.get("start_index") != start or state.get("total_bars") != total_bars:
-        raise ValueError(
-            f"checkpoint at {checkpoint_path} was recorded for a different corpus "
-            f"(checkpoint start_index={state.get('start_index')}, "
-            f"total_bars={state.get('total_bars')}; this run has start_index={start}, "
-            f"total_bars={total_bars}) -- delete it or point at the right file"
+    try:
+        state = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        recorded_fingerprint = state["fingerprint"]
+        last_completed_index = int(state["last_completed_index"])
+        records = [
+            PrimarySignalRecord(
+                index=int(record["index"]),
+                direction=int(record["direction"]),
+                predicted_return=float(record["predicted_return"]),
+            )
+            for record in state["records"]
+        ]
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise _checkpoint_rejection(
+            checkpoint_path, f"is corrupt or not a fire-generation checkpoint ({exc})"
+        ) from exc
+    if recorded_fingerprint != fingerprint:
+        raise _checkpoint_rejection(
+            checkpoint_path,
+            "was recorded for a different corpus, start index, or signal generator "
+            f"(fingerprint {recorded_fingerprint!r} != this run's {fingerprint!r})",
         )
-    records = [
-        PrimarySignalRecord(
-            index=int(record["index"]),
-            direction=int(record["direction"]),
-            predicted_return=float(record["predicted_return"]),
-        )
-        for record in state["records"]
-    ]
-    return records, int(state["last_completed_index"]) + 1
+    return records, last_completed_index + 1
 
 
 def _write_fire_generation_checkpoint(
     checkpoint_path: Path,
+    fingerprint: str,
     start: int,
     total_bars: int,
     last_completed_index: int,
     records: Sequence[PrimarySignalRecord],
 ) -> None:
-    """Persist progress crash-safely: write a temp file, then atomically rename."""
+    """Persist progress crash-safely: write a temp file, then atomically rename.
+
+    ``start``/``total_bars`` are stored for human debugging only -- resume
+    validation compares the fingerprint (which already covers both).
+    """
     state = {
+        "fingerprint": fingerprint,
         "start_index": start,
         "total_bars": total_bars,
         "last_completed_index": last_completed_index,
@@ -171,7 +241,11 @@ def run_primary_signal_forward(
         checkpoint_path: Optional JSON file to persist/resume progress
             through. The file is left in place after a completed run (a
             rerun then returns its fires without reprocessing); the caller
-            owns cleanup.
+            owns cleanup. An existing file that cannot be positively
+            identified as this exact run's checkpoint (corpus/start/
+            generator fingerprint mismatch, corrupt or incomplete JSON) is
+            rejected with ValueError -- never resumed from, never
+            overwritten (see ``_checkpoint_rejection``).
         checkpoint_every_bars: Completed bars between checkpoint writes.
             Only meaningful with ``checkpoint_path``.
 
@@ -180,20 +254,31 @@ def run_primary_signal_forward(
 
     Raises:
         ValueError: ``checkpoint_every_bars`` < 1, or the checkpoint file
-            belongs to a different corpus (see
-            ``_load_fire_generation_checkpoint``).
+            was rejected (see ``_load_fire_generation_checkpoint``).
     """
     start = start_index if start_index is not None else signal_generator.warmup_period
     records: list[PrimarySignalRecord] = []
     resume_from = start
 
     checkpoint = Path(checkpoint_path) if checkpoint_path is not None else None
+    fingerprint = ""
     if checkpoint is not None:
         if checkpoint_every_bars < 1:
             raise ValueError(f"checkpoint_every_bars must be >= 1, got {checkpoint_every_bars}")
-        loaded = _load_fire_generation_checkpoint(checkpoint, start, len(df))
-        if loaded is not None:
-            records, resume_from = loaded
+        if len(df) == 0:
+            checkpoint = None  # nothing to evaluate or checkpoint
+        else:
+            fingerprint = fire_generation_corpus_fingerprint(signal_generator, df, start)
+            loaded = _load_fire_generation_checkpoint(checkpoint, fingerprint)
+            if loaded is not None:
+                records, resume_from = loaded
+                logger.info(
+                    "fire generation resuming from bar %d of %d (%d fires loaded from %s)",
+                    resume_from,
+                    len(df),
+                    len(records),
+                    checkpoint,
+                )
 
     bars_since_checkpoint = 0
     for index in range(resume_from, len(df)):
@@ -208,13 +293,24 @@ def run_primary_signal_forward(
             )
         bars_since_checkpoint += 1
         if checkpoint is not None and bars_since_checkpoint >= checkpoint_every_bars:
-            _write_fire_generation_checkpoint(checkpoint, start, len(df), index, records)
+            _write_fire_generation_checkpoint(
+                checkpoint, fingerprint, start, len(df), index, records
+            )
             bars_since_checkpoint = 0
 
     if checkpoint is not None and resume_from < len(df):
         # Final checkpoint marks the run complete -- a rerun against the same
         # file returns these fires without re-evaluating any bar.
-        _write_fire_generation_checkpoint(checkpoint, start, len(df), len(df) - 1, records)
+        _write_fire_generation_checkpoint(
+            checkpoint, fingerprint, start, len(df), len(df) - 1, records
+        )
+        logger.info(
+            "fire generation complete: %d fires over bars %d..%d, checkpoint finalized at %s",
+            len(records),
+            start,
+            len(df) - 1,
+            checkpoint,
+        )
     return records
 
 
@@ -668,6 +764,7 @@ __all__ = [
     "build_meta_label_features",
     "encode_meta_label_feature_row",
     "encode_meta_label_features_for_training",
+    "fire_generation_corpus_fingerprint",
     "resolution_ordered_hit_rate",
     "resolve_fired_trade",
     "run_primary_signal_forward",

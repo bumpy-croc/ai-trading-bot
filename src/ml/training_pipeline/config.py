@@ -87,6 +87,13 @@ class TrainingConfig:
     # "meta_label" (validated below), ignored otherwise.
     primary_model_type: str | None = None
 
+    # Fire-generation checkpoint directory for target_type="meta_label"
+    # (#955 defect 2: the ~60-min forward pass over the corpus was killed
+    # twice by task-lifetime caps with all progress lost). "auto" (default)
+    # checkpoints under <data_dir>/meta_label_fire_checkpoints; any other
+    # string is used as the directory; None disables checkpointing.
+    meta_label_fire_checkpoint_dir: str | None = "auto"
+
     # Test-only escape hatch: routes load_training_corpus (ingestion.py) to
     # MockDataProvider (deterministic synthetic OHLCV, no network) instead of
     # the real Binance-backed cache. Mirrors `atb live --mock-data`'s

@@ -16,6 +16,8 @@ at fire index t must not be affected by bars after t).
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -251,6 +253,62 @@ class TestRunPrimarySignalForwardCheckpointing:
                 self._make_df(),
                 checkpoint_path=tmp_path / "fires.checkpoint.json",
                 checkpoint_every_bars=0,
+            )
+
+    def test_same_length_different_corpus_checkpoint_is_rejected(self, tmp_path):
+        """PR #981 arch-review finding: guarding only (start_index,
+        total_bars) lets two equal-length but different corpora (another
+        window or symbol) resume-splice silently -- the exact failure the
+        guard exists to prevent. The checkpoint carries a content
+        fingerprint (index endpoints + close-column checksum + generator
+        identity), so an equal-length different corpus must be rejected."""
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        run_primary_signal_forward(
+            self._ScriptedSignalGenerator(), self._make_df(periods=40), checkpoint_path=checkpoint
+        )
+
+        other_window = pd.DataFrame({"close": np.linspace(200.0, 210.0, 40)})
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(), other_window, checkpoint_path=checkpoint
+            )
+
+    def test_start_index_mismatch_checkpoint_is_rejected(self, tmp_path):
+        df = self._make_df()
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        run_primary_signal_forward(self._ScriptedSignalGenerator(), df, checkpoint_path=checkpoint)
+
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(), df, start_index=3, checkpoint_path=checkpoint
+            )
+
+    def test_corrupt_checkpoint_file_is_rejected_loudly(self, tmp_path):
+        """A checkpoint that isn't valid JSON must raise a clear ValueError
+        naming the checkpoint file (policy: never guess, never overwrite a
+        file we can't positively identify as our own checkpoint), not leak
+        a raw json decoding error."""
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        checkpoint.write_text("not json {{{", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(), self._make_df(), checkpoint_path=checkpoint
+            )
+
+    def test_partial_checkpoint_missing_keys_is_rejected_loudly(self, tmp_path):
+        """Valid JSON that isn't a complete checkpoint (e.g. truncated or
+        foreign file) must raise the same clear ValueError -- never a raw
+        KeyError, and never a silent resume from garbage."""
+        checkpoint = tmp_path / "fires.checkpoint.json"
+        checkpoint.write_text(
+            json.dumps({"start_index": 5, "total_bars": 40, "last_completed_index": 10}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="checkpoint"):
+            run_primary_signal_forward(
+                self._ScriptedSignalGenerator(), self._make_df(), checkpoint_path=checkpoint
             )
 
 
@@ -850,12 +908,16 @@ class TestBuildMetaLabelFeaturesRegimeAnnotationSingleTraversal:
         assert len(annotate_calls) == 1
 
     def test_regime_features_match_per_fire_annotation_reference(self):
-        """Equivalence with the old per-call semantics: each fire's regime
-        feature must equal what a per-fire full-frame annotation produces.
-        The reference uses a FRESH detector per fire because
-        RegimeDetector.annotate carries hysteresis state across calls --
-        fresh-per-call is the deterministic form of 'annotate this frame
-        from scratch', exactly what the old path did on its first call."""
+        """Each fire's regime feature must equal a fresh-state full-frame
+        annotation read at that fire's index -- the CORRECT semantics, and
+        what annotate-once produces. This is deliberately NOT a pure
+        old-vs-new equivalence: the old shared-detector path re-annotated
+        per fire with hysteresis state carried over from the previous
+        call's pass, so fires evaluated after the first call could get
+        stale-state labels near the frame start. Where old and new differ,
+        the new fresh-state output is the fix (a behavior correction, not
+        drift); where the old path was already fresh (its first call, and
+        empirically most fires), they are identical."""
         df = self._synthetic_df()
         fires = self._fires()
         resolutions = self._resolved_next_bar(fires, [True, False, True, False])
