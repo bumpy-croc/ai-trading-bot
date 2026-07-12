@@ -875,3 +875,66 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange._reconcile_positions_with_exchange()
 
         assert engine_with_exchange.current_balance < 20000.0
+
+    def test_reconcile_skips_pnl_when_balance_synced_from_exchange(
+        self, engine_with_exchange, sample_position
+    ):
+        """The legacy fallback must not re-apply offline-SL P&L that the
+        exchange-synced balance already reflects.
+
+        synchronize_account_on_start overwrites current_balance with the
+        exchange-queried value BEFORE reconciliation runs; the exchange executed
+        the stop, so that balance already moved. Re-applying realized_pnl here
+        double-counts the loss (audit 2026-07-12 F2)."""
+        engine = engine_with_exchange
+        engine.live_position_tracker.track_recovered_position(sample_position, db_id=None)
+        engine.exchange_interface.get_open_orders.return_value = []
+        sl_order = MagicMock()
+        sl_order.status = ExchangeOrderStatus.FILLED
+        sl_order.average_price = 48000.0
+        engine.exchange_interface.get_order.return_value = sl_order
+        # Simulate the account-sync overwrite that precedes reconciliation.
+        engine.current_balance = 20000.0
+        engine._pending_balance_correction = True
+
+        engine._reconcile_positions_with_exchange()
+
+        # Balance untouched — the SL's P&L is already in the synced value.
+        assert engine.current_balance == 20000.0
+        # The close is still fully booked: tracker cleared + audit trade recorded.
+        assert not engine.live_position_tracker.has_position("entry_order_123")
+        assert len(engine.completed_trades) == 1
+        assert engine.completed_trades[0].exit_reason == "stop_loss_offline"
+
+    def test_reconcile_sessioned_skips_atomic_update_when_balance_synced(
+        self, engine_with_exchange, sample_position
+    ):
+        """Sessioned variant of the double-count guard: no atomic_balance_update
+        (no account_balances re-debit) when the exchange sync already owns the
+        balance, while the Trade row is still persisted (audit 2026-07-12 F2)."""
+        engine = engine_with_exchange
+        engine.trading_session_id = 1
+        engine.live_position_tracker.track_recovered_position(sample_position, db_id=None)
+        engine.exchange_interface.get_open_orders.return_value = []
+        sl_order = MagicMock()
+        sl_order.status = ExchangeOrderStatus.FILLED
+        sl_order.average_price = 48000.0
+        engine.exchange_interface.get_order.return_value = sl_order
+        engine.current_balance = 20000.0
+        engine._pending_balance_correction = True
+        engine.db_manager.atomic_balance_update = MagicMock()
+        engine.db_manager.log_trade = MagicMock(return_value=1)
+
+        # Force the legacy fallback (a session id would otherwise route to
+        # PositionReconciler first).
+        with patch(
+            "src.engines.live.reconciliation.PositionReconciler",
+            side_effect=RuntimeError("reconciler unavailable"),
+        ):
+            engine._reconcile_positions_with_exchange()
+
+        engine.db_manager.atomic_balance_update.assert_not_called()
+        assert engine.current_balance == 20000.0
+        # The audit Trade row is still written even though no balance moved.
+        engine.db_manager.log_trade.assert_called_once()
+        assert engine.db_manager.log_trade.call_args.kwargs["exit_reason"] == "stop_loss_offline"

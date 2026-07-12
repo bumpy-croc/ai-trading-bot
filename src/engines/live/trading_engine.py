@@ -761,7 +761,6 @@ class LiveTradingEngine:
         # session is wired; owned by LiveStartupSequencer, declared here so the
         # engine carries the attribute for the startup backref Protocol (#486).
         self._pending_balance_correction: bool = False
-        self._pending_corrected_balance: float | None = None
         # Set during start() for live trading
         self._periodic_reconciler: PeriodicReconciler | None = None
         # Shared per-base-asset cooldown for the orphaned-borrow sweep, so the
