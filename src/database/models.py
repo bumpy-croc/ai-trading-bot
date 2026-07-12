@@ -128,6 +128,10 @@ class EventType(enum.Enum):
     WARNING = "WARNING"
     ALERT = "ALERT"
     BALANCE_ADJUSTMENT = "BALANCE_ADJUSTMENT"
+    # Would-have-tripped evidence from the account circuit breaker's dry_run
+    # mode. Distinct from ALERT so promote/kill verdicts can count trips with a
+    # single event_type filter. Requires migration 0013 (widened varchar).
+    CIRCUIT_BREAKER_DRY_RUN = "CIRCUIT_BREAKER_DRY_RUN"
     TEST = "TEST"  # Added for verification scripts and development diagnostics
 
 

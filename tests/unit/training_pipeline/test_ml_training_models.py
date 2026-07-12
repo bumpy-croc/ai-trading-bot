@@ -19,6 +19,11 @@ from src.ml.training_pipeline.models import (
     create_model,
     default_callbacks,
 )
+from src.ml.training_pipeline.task_types import (
+    TaskType,
+    get_model_task_type,
+    validate_target_head_compatibility,
+)
 
 
 @pytest.mark.fast
@@ -408,6 +413,24 @@ class TestCreateModelTrainerContract:
         assert model.input_shape == (None, 120, 5)
         assert model.output_shape == (None, 1)
 
+    @pytest.mark.parametrize("variant", ["default", "lightweight", "deep"])
+    def test_constructs_tft_ternary_with_trainer_kwargs(self, variant):
+        """tft_ternary is excluded from TRAINER_MODEL_MATRIX because it has a
+        3-class output_shape, not the (None, 1) all other architectures
+        share -- tested separately with the correct expected shape."""
+        input_shape = (120, 5)
+
+        model = create_model(
+            model_type="tft_ternary",
+            input_shape=input_shape,
+            variant=variant,
+            has_sentiment=False,
+        )
+
+        assert isinstance(model, tf.keras.Model)
+        assert model.input_shape == (None, 120, 5)
+        assert model.output_shape == (None, 3)
+
 
 # lstm/cnn_lstm compile with a single metric ([rmse]); attention_lstm/tcn/tcn_attention
 # compile with two ([rmse, mae]). tft is excluded: it's a binary direction-classification
@@ -455,3 +478,134 @@ class TestCreateModelEvaluationContract:
         # Assert
         assert set(result) == {"train_loss", "test_loss", "train_rmse", "test_rmse", "mape"}
         assert all(np.isfinite(v) for v in result.values())
+
+
+def _infer_actual_task_type(model) -> TaskType:
+    """Ground-truth task type inferred from a REAL compiled model's loss.
+
+    Every architecture in this codebase today compiles "mse" (regression),
+    "binary_crossentropy" (binary classification, tft), or
+    "sparse_categorical_crossentropy" (ternary classification, tft_ternary)
+    -- if a future architecture compiles something else, this helper
+    intentionally has no silent fallback for it.
+    """
+    loss_name = str(model.loss).lower()
+    if "sparse_categorical_crossentropy" in loss_name:
+        return TaskType.TERNARY_CLASSIFICATION
+    if "binary_crossentropy" in loss_name or "bce" in loss_name:
+        return TaskType.BINARY_CLASSIFICATION
+    if "mse" in loss_name or "mean_squared_error" in loss_name:
+        return TaskType.REGRESSION
+    raise AssertionError(
+        f"Unrecognized compiled loss {model.loss!r} -- "
+        "_infer_actual_task_type needs a new branch, and task_types.py's "
+        "MODEL_TASK_TYPES needs the corresponding entry."
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
+class TestModelTaskTypeMatchesRealCompiledHead:
+    """Regression guard for #947: task_types.MODEL_TASK_TYPES must never
+    silently drift from what a real create_model() build actually compiles.
+
+    TestCreateModelTrainerContract (above) catches per-architecture
+    CONSTRUCTION-kwarg drift (#928); TestCreateModelEvaluationContract
+    catches per-architecture EVALUATION-metric drift (#936); this catches
+    per-architecture TARGET/LOSS drift (#947) -- the same contract-drift
+    family, one axis further, caught here instead of on a live SageMaker job.
+    """
+
+    @pytest.mark.parametrize(("model_type", "variant"), TRAINER_MODEL_MATRIX)
+    def test_declared_task_type_matches_compiled_loss(self, model_type, variant):
+        # Arrange
+        model = create_model(
+            model_type=model_type,
+            input_shape=(120, 5),
+            variant=variant,
+            has_sentiment=False,
+        )
+
+        # Act
+        declared = get_model_task_type(model_type)
+        actual = _infer_actual_task_type(model)
+
+        # Assert
+        assert declared == actual, (
+            f"task_types.MODEL_TASK_TYPES[{model_type!r}] = {declared} but the "
+            f"real compiled model's loss ({model.loss!r}) implies {actual} -- "
+            f"update MODEL_TASK_TYPES in task_types.py to match."
+        )
+
+    def test_tft_ternary_declared_task_type_matches_compiled_loss(self):
+        """tft_ternary excluded from TRAINER_MODEL_MATRIX (different output
+        contract, see TestCreateModelTrainerContract) but still needs this
+        same drift guard."""
+        model = create_model(
+            model_type="tft_ternary",
+            input_shape=(120, 5),
+            variant="default",
+            has_sentiment=False,
+        )
+
+        declared = get_model_task_type("tft_ternary")
+        actual = _infer_actual_task_type(model)
+
+        assert declared == actual, (
+            f"task_types.MODEL_TASK_TYPES['tft_ternary'] = {declared} but the "
+            f"real compiled model's loss ({model.loss!r}) implies {actual} -- "
+            f"update MODEL_TASK_TYPES in task_types.py to match."
+        )
+
+
+# Every model_type x target_type pairing the training pipeline could be
+# asked to run. Extends the #937 15-pair smoke matrix's spirit -- assert
+# the PER-PAIR verdict, not just "some pairs work" -- to target/loss
+# compatibility (the #947 guard, task_types.validate_target_head_compatibility).
+TARGET_COMPATIBILITY_MATRIX = [
+    (model_type, target_type)
+    for model_type in [
+        "lstm",
+        "cnn_lstm",
+        "attention_lstm",
+        "tcn",
+        "tcn_attention",
+        "tft",
+        "tft_ternary",
+    ]
+    for target_type in ["regression", "binary_direction", "triple_barrier", "smoothed_return"]
+]
+
+# Compatible pairs: regression-headed architectures need a REGRESSION-task
+# target (regression or smoothed_return, both continuous); tft's binary
+# sigmoid/BCE head needs binary_direction; tft_ternary's 3-class softmax
+# head needs triple_barrier (TERNARY_CLASSIFICATION) -- entrant (c) of the
+# TARGET-REDESIGN tournament. Every other pairing must be rejected.
+_COMPATIBLE_MODEL_TARGET_PAIRS = {
+    ("lstm", "regression"),
+    ("lstm", "smoothed_return"),
+    ("cnn_lstm", "regression"),
+    ("cnn_lstm", "smoothed_return"),
+    ("attention_lstm", "regression"),
+    ("attention_lstm", "smoothed_return"),
+    ("tcn", "regression"),
+    ("tcn", "smoothed_return"),
+    ("tcn_attention", "regression"),
+    ("tcn_attention", "smoothed_return"),
+    ("tft", "binary_direction"),
+    ("tft_ternary", "triple_barrier"),
+}
+
+
+class TestValidateTargetHeadCompatibilityMatrix:
+    """Per-pair (model_type, target_type) compatibility verdicts (#947)."""
+
+    @pytest.mark.parametrize(("model_type", "target_type"), TARGET_COMPATIBILITY_MATRIX)
+    def test_compatibility_verdict(self, model_type, target_type):
+        should_be_compatible = (model_type, target_type) in _COMPATIBLE_MODEL_TARGET_PAIRS
+
+        if should_be_compatible:
+            validate_target_head_compatibility(model_type, target_type)  # must not raise
+        else:
+            with pytest.raises(ValueError, match="incompatible"):
+                validate_target_head_compatibility(model_type, target_type)

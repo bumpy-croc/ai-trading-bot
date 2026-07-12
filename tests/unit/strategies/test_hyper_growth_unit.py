@@ -327,3 +327,106 @@ class TestHyperGrowthStrategy:
 
         assert strategy.name == "HyperGrowth"
         # Momentum source should work without ML models
+
+
+class TestHyperGrowthExitPolicyExpressibility:
+    """#971: trailing/breakeven/early-cut must be factory-configurable."""
+
+    def test_default_overrides_dict_is_bit_identical_to_pre_971(self):
+        """Zero behavior change: the default factory must emit EXACTLY the
+        overrides dict it emitted before the expressibility kwargs existed."""
+        strategy = create_hyper_growth_strategy()
+
+        assert strategy._risk_overrides["trailing_stop"] == {
+            "activation_threshold": 0.03,
+            "trailing_distance_pct": 0.015,
+            "breakeven_threshold": 0.05,
+            "breakeven_buffer": 0.008,
+        }
+        assert "early_cut" not in strategy._risk_overrides
+
+    def test_trailing_kwargs_flow_into_overrides(self):
+        strategy = create_hyper_growth_strategy(
+            trailing_activation_threshold=0.05,
+            trailing_distance_pct=0.025,
+            breakeven_threshold=0.08,
+            breakeven_buffer=0.01,
+        )
+
+        assert strategy._risk_overrides["trailing_stop"] == {
+            "activation_threshold": 0.05,
+            "trailing_distance_pct": 0.025,
+            "breakeven_threshold": 0.08,
+            "breakeven_buffer": 0.01,
+        }
+
+    def test_trailing_can_be_disabled(self):
+        strategy = create_hyper_growth_strategy(enable_trailing_stop=False)
+
+        assert strategy._risk_overrides["trailing_stop"] == {"enabled": False}
+
+    def test_disabled_trailing_builds_no_policy(self):
+        """End to end: the shared builder honors the disabled config."""
+        from src.engines.shared.risk_configuration import build_trailing_stop_policy
+        from src.risk.risk_manager import RiskManager, RiskParameters
+
+        strategy = create_hyper_growth_strategy(enable_trailing_stop=False)
+
+        assert build_trailing_stop_policy(strategy, RiskManager(RiskParameters())) is None
+
+    def test_early_cut_kwargs_flow_into_overrides(self):
+        strategy = create_hyper_growth_strategy(
+            early_cut_mfe_threshold_pct=0.015,
+            early_cut_evaluation_window_hours=18,
+        )
+
+        assert strategy._risk_overrides["early_cut"] == {
+            "mfe_threshold_pct": 0.015,
+            "evaluation_window_hours": 18,
+        }
+
+    def test_early_cut_builds_policy_via_shared_builder(self):
+        from src.engines.shared.risk_configuration import build_early_cut_policy
+        from src.position_management.early_cut import EarlyCutPolicy
+
+        strategy = create_hyper_growth_strategy(
+            early_cut_mfe_threshold_pct=0.015,
+            early_cut_evaluation_window_hours=18,
+        )
+        policy = build_early_cut_policy(strategy)
+
+        assert isinstance(policy, EarlyCutPolicy)
+        assert policy.mfe_threshold_pct == 0.015
+        assert policy.evaluation_window_hours == 18
+
+    def test_early_cut_default_off(self):
+        from src.engines.shared.risk_configuration import build_early_cut_policy
+
+        assert build_early_cut_policy(create_hyper_growth_strategy()) is None
+
+    def test_partial_early_cut_kwargs_raise(self):
+        """Both early-cut kwargs are required together — a silent partial
+        config would run with an unintended default."""
+        import pytest
+
+        with pytest.raises(ValueError):
+            create_hyper_growth_strategy(early_cut_mfe_threshold_pct=0.015)
+        with pytest.raises(ValueError):
+            create_hyper_growth_strategy(early_cut_evaluation_window_hours=18)
+
+    def test_default_trailing_policy_unchanged_via_builder(self):
+        """The built TrailingStopPolicy for the default factory + default
+        RiskParameters must keep the exact pre-971 field values."""
+        from src.engines.shared.risk_configuration import build_trailing_stop_policy
+        from src.risk.risk_manager import RiskManager, RiskParameters
+
+        policy = build_trailing_stop_policy(
+            create_hyper_growth_strategy(), RiskManager(RiskParameters())
+        )
+
+        assert policy is not None
+        assert policy.activation_threshold == 0.03
+        assert policy.trailing_distance_pct == 0.015
+        assert policy.atr_multiplier == 1.5  # params fallback leak, pinned
+        assert policy.breakeven_threshold == 0.05
+        assert policy.breakeven_buffer == 0.008

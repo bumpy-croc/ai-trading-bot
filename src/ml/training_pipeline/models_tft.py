@@ -474,6 +474,113 @@ def create_tft_model(
     return model
 
 
+def create_tft_ternary_model(
+    input_shape: tuple[int, int],
+    n_heads: int = 4,
+    hidden_size: int = 64,
+    dropout: float = 0.1,
+    num_lstm_layers: int = 1,
+    learning_rate: float = 1e-3,
+) -> Any:
+    """Create a Temporal Fusion Transformer model for ternary (3-class) prediction.
+
+    Entrant (c) of the TARGET-REDESIGN tournament (triple-barrier labels:
+    {-1, 0, 1} for down/no-touch/up). Reuses the exact same VSN / LSTM
+    encoder / attention decoder backbone as create_tft_model -- tft was
+    already the only classification-capable architecture in this codebase,
+    so the ternary head is a sibling rather than a new architecture family.
+    Only the output head and loss differ: softmax over 3 classes trained
+    with sparse categorical cross-entropy instead of a single sigmoid unit.
+
+    Args:
+        input_shape: Shape of input sequences (sequence_length, n_features)
+        n_heads: Number of attention heads in the decoder
+        hidden_size: Hidden dimension for GRN and attention layers
+        dropout: Dropout rate for regularization (0.0-0.5)
+        num_lstm_layers: Number of stacked LSTM layers (1-3)
+        learning_rate: Adam optimizer learning rate
+
+    Returns:
+        Compiled Keras model with a 3-unit softmax output, class order
+        matching src.ml.training_pipeline.labels' triple-barrier encoding
+        (index 0 = down/-1, index 1 = no-touch/0, index 2 = up/1).
+
+    Raises:
+        ValueError: If input parameters are invalid
+
+    Example:
+        >>> model = create_tft_ternary_model((60, 15), n_heads=4, hidden_size=64)
+        >>> model.fit(train_ds, validation_data=val_ds, epochs=50)
+    """
+    _ensure_tensorflow_available()
+
+    sequence_length, n_features = input_shape
+
+    # Validate parameters (mirrors create_tft_model)
+    if n_features <= 0:
+        raise ValueError(f"n_features must be positive, got {n_features}")
+    if n_heads <= 0:
+        raise ValueError(f"n_heads must be positive, got {n_heads}")
+    if hidden_size <= 0:
+        raise ValueError(f"hidden_size must be positive, got {hidden_size}")
+    if hidden_size % n_heads != 0:
+        raise ValueError(f"hidden_size ({hidden_size}) must be divisible by n_heads ({n_heads})")
+    if not 0.0 <= dropout < 1.0:
+        raise ValueError(f"dropout must be in [0.0, 1.0), got {dropout}")
+    if num_lstm_layers <= 0:
+        raise ValueError(f"num_lstm_layers must be positive, got {num_lstm_layers}")
+
+    inputs = layers.Input(shape=input_shape, name="sequence_input")
+
+    # 1. Variable Selection Network - select important features
+    x = VariableSelectionNetwork(
+        n_features=n_features,
+        hidden_size=hidden_size,
+        dropout=dropout,
+        name="variable_selection",
+    )(inputs)
+
+    # 2. LSTM encoder for temporal processing
+    for i in range(num_lstm_layers):
+        x = layers.LSTM(
+            hidden_size,
+            return_sequences=True,
+            dropout=dropout,
+            name=f"lstm_encoder_{i + 1}",
+        )(x)
+
+    # 3. Multi-head self-attention decoder
+    x = TemporalFusionDecoder(
+        n_heads=n_heads,
+        hidden_size=hidden_size,
+        dropout=dropout,
+        name="temporal_decoder",
+    )(x)
+
+    # 4. Global pooling and output
+    avg_pool = layers.GlobalAveragePooling1D(name="global_avg_pool")(x)
+    max_pool = layers.GlobalMaxPooling1D(name="global_max_pool")(x)
+    pooled = layers.Concatenate(name="pooling_concat")([avg_pool, max_pool])
+
+    x = layers.Dense(hidden_size, activation="relu", name="dense_1")(pooled)
+    x = layers.Dropout(dropout, name="dropout_dense")(x)
+
+    # Softmax over 3 classes for triple-barrier prediction (down/no-touch/up)
+    outputs = layers.Dense(3, activation="softmax", name="direction_prediction")(x)
+
+    model = Model(inputs=inputs, outputs=outputs, name="tft_ternary")
+
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        loss="sparse_categorical_crossentropy",
+        metrics=[
+            tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy"),
+        ],
+    )
+
+    return model
+
+
 def tft_callbacks(patience: int = 20, min_delta: float = 1e-4) -> list[Any]:
     """Get optimized callbacks for TFT training.
 

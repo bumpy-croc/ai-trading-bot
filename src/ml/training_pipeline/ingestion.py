@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import UTC, timedelta
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -223,15 +224,27 @@ def load_training_corpus(ctx: TrainingContext) -> pd.DataFrame:
     Raises:
         RuntimeError: If the corpus cannot be fetched or fails coverage validation
     """
-    from src.config.paths import get_cache_dir
-    from src.data_providers.binance_provider import BinanceProvider
-    from src.data_providers.cached_data_provider import CachedDataProvider
-
-    provider = CachedDataProvider(BinanceProvider(), cache_dir=str(get_cache_dir()))
     # End-of-day boundaries (ctx.start_iso/end_iso) so the corpus covers the full
     # requested last day instead of truncating it at midnight.
     query_start = pd.Timestamp(ctx.start_iso)
     query_end = pd.Timestamp(ctx.end_iso)
+
+    if ctx.config.use_mock_data:
+        # Test-only escape hatch (mirrors `atb live --mock-data`,
+        # src/engines/live/runner.py): deterministic synthetic OHLCV, zero
+        # network, zero disk cache -- lets acceptance/integration tests
+        # exercise the REAL training pipeline end-to-end. Never set by any
+        # production CLI path.
+        from src.data_providers.mock_data_provider import MockDataProvider
+
+        provider: Any = MockDataProvider(seed=42)
+    else:
+        from src.config.paths import get_cache_dir
+        from src.data_providers.binance_provider import BinanceProvider
+        from src.data_providers.cached_data_provider import CachedDataProvider
+
+        provider = CachedDataProvider(BinanceProvider(), cache_dir=str(get_cache_dir()))
+
     try:
         df = provider.get_historical_data(
             ctx.symbol_exchange,

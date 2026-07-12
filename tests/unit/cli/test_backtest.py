@@ -54,6 +54,45 @@ class TestLoadStrategy:
             with pytest.raises(Exception, match="Model not found"):
                 _load_strategy("ml_basic")
 
+    @pytest.mark.parametrize(
+        ("strategy_name", "patch_target"),
+        [
+            (
+                "exam_binary_direction",
+                "cli.commands.backtest.create_exam_binary_direction_strategy",
+            ),
+            ("exam_triple_barrier", "cli.commands.backtest.create_exam_triple_barrier_strategy"),
+            ("exam_smoothed_return", "cli.commands.backtest.create_exam_smoothed_return_strategy"),
+            ("exam_meta_label", "cli.commands.backtest.create_exam_meta_label_strategy"),
+        ],
+    )
+    def test_loads_exam_target_redesign_strategies(self, strategy_name, patch_target):
+        """TARGET-REDESIGN tournament exam-only strategies (Phase 2b item 4)
+        must be selectable via the backtest CLI -- this is the fold-runner's
+        only entry point for entrants (b)/(c)/(d)."""
+        with patch(patch_target) as mock_create:
+            mock_strategy = Mock(name=strategy_name)
+            mock_create.return_value = mock_strategy
+
+            result = _load_strategy(strategy_name)
+
+            assert result == mock_strategy
+            mock_create.assert_called_once()
+
+    def test_exam_target_redesign_strategies_are_not_selectable_by_live_runner(self):
+        """Arch-review requirement: the exam harness (ConfidenceWeightedSizer
+        + ratified risk-limits defaults, deliberately different from
+        HyperGrowth's live wiring) must never be reachable from a live/paper
+        trading session. src/engines/live/runner.py's strategy dict must not
+        import or reference any exam_target_redesign factory."""
+        import inspect
+
+        from src.engines.live import runner as live_runner
+
+        source = inspect.getsource(live_runner)
+        assert "exam_target_redesign" not in source
+        assert "create_exam_" not in source
+
 
 class TestGetDateRange:
     """Tests for the _get_date_range function."""
@@ -146,6 +185,7 @@ class TestHandleBacktest:
             cache_ttl=24,
             log_to_db=False,
             provider="binance",
+            mock_data=False,
         )
 
     @pytest.fixture
@@ -342,6 +382,39 @@ class TestHandleBacktest:
             # Assert
             assert result == 0
             mock_create_provider.assert_called_once_with(provider_type="coinbase")
+
+    def test_backtest_with_mock_data_bypasses_real_providers_entirely(
+        self, default_args, mock_backtester
+    ):
+        """--mock-data (mirrors `atb live --mock-data`) must never construct
+        a real network-backed provider or the disk cache -- this is what
+        acceptance/integration tests rely on to exercise the REAL backtest
+        CLI path with zero network dependency (Phase 2b item 6)."""
+        default_args.mock_data = True
+
+        with (
+            patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
+            patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
+            patch("cli.commands.backtest.configure_logging"),
+            patch(
+                "src.data_providers.provider_factory.create_data_provider"
+            ) as mock_create_provider,
+            patch(
+                "src.data_providers.cached_data_provider.CachedDataProvider"
+            ) as mock_cached_provider,
+            patch("cli.commands.backtest.SymbolFactory.to_exchange_symbol", return_value="BTCUSDT"),
+            patch("builtins.open", create=True),
+            patch("cli.commands.backtest.PROJECT_ROOT", Path("/tmp/test")),
+        ):
+            mock_strategy = Mock(name="ml_basic")
+            mock_strategy.get_trading_pair.return_value = "BTCUSDT"
+            mock_load_strategy.return_value = mock_strategy
+
+            result = _handle(default_args)
+
+            assert result == 0
+            mock_create_provider.assert_not_called()
+            mock_cached_provider.assert_not_called()
 
     def test_returns_error_on_invalid_strategy(self, default_args):
         """Test that error is returned when strategy loading fails."""

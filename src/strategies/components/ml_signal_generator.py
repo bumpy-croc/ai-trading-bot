@@ -758,8 +758,8 @@ class MLBasicSignalGenerator(SignalGenerator):
             raise ModelNotAvailableError(
                 f"No {self.model_type}/{self.model_timeframe} model exists for trading "
                 f"symbol {self.symbol}. Available models: {', '.join(available) or 'none'}. "
-                f"Train and deploy a {self.symbol} model, or set "
-                f"FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true to explicitly accept scoring "
+                f"Train and deploy one via `atb live-control train --symbol {self.symbol}`, "
+                f"or set FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true to explicitly accept scoring "
                 f"{self.symbol} with another symbol's model."
             )
 
@@ -776,11 +776,16 @@ class MLBasicSignalGenerator(SignalGenerator):
         logger.critical(
             "CROSS-SYMBOL MODEL SUBSTITUTION ACTIVE: trading %s but scoring with %s "
             "model %s (FEATURE_ALLOW_CROSS_SYMBOL_MODEL=true). Predictions are not "
-            "trained on %s — deploy a %s model and unset the flag as soon as possible.",
+            "trained on %s — no %s/%s/%s model exists in the registry. Train one via "
+            "`atb live-control train --symbol %s`, deploy it, then unset the flag to "
+            "remove this substitution.",
             self.symbol,
             fallback.symbol,
             fallback.key,
             self.symbol,
+            self.symbol,
+            self.model_type,
+            self.model_timeframe,
             self.symbol,
         )
 

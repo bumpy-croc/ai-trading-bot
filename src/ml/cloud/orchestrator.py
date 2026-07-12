@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 
-from src.infrastructure.runtime.paths import get_project_root
+from src.infrastructure.runtime.paths import get_model_registry_root
 from src.ml.cloud.artifacts.latest_link import update_latest_symlink
 from src.ml.cloud.artifacts.s3_manager import S3ArtifactManager
 from src.ml.cloud.config import CloudTrainingConfig
@@ -346,6 +346,12 @@ class CloudTrainingOrchestrator:
                 "mixed_precision": str(tc.mixed_precision).lower(),
                 "model_type": tc.model_type,
                 "model_variant": tc.model_variant,
+                "target_type": tc.target_type,
+                "target_horizon": str(tc.target_horizon),
+                # SageMaker hyperparameters must be strings; "" round-trips
+                # to None on the parsing side (entrypoint.py::parse_hyperparameters).
+                "primary_model_type": tc.primary_model_type or "",
+                "use_mock_data": str(tc.use_mock_data).lower(),
             },
         )
 
@@ -460,8 +466,15 @@ class CloudTrainingOrchestrator:
             else:
                 symbol = config_symbol
 
-            # Sync to local registry
-            local_registry = get_project_root() / "src" / "ml" / "models"
+            # Sync to local registry. get_model_registry_root() honors
+            # MODEL_REGISTRY_PATH (the same key PredictionConfig.model_registry_path
+            # reads) -- this is the FINAL destination every trained bundle
+            # (cloud or local provider) lands in, so it must agree with
+            # TrainingPaths.default()/promote_model_version's own default or
+            # a MODEL_REGISTRY_PATH override (e.g. for acceptance-test
+            # hermeticity, PR #950 review item 5) would silently miss this
+            # sync step and still write into the real registry.
+            local_registry = get_model_registry_root()
 
             # Artifacts are already extracted locally by provider.download_artifacts()
             # Use _sync_local_artifacts for both local and cloud providers

@@ -102,6 +102,69 @@ def test_warmup_and_feature_generators_delegate():
     assert sizer.get_feature_generators() == ["fg"]
 
 
+# --- sizing observability (#964) --------------------------------------------
+
+
+def test_no_sizing_metrics_before_any_call():
+    sizer = VolatilityTargetSizer(_Base())
+    assert sizer.get_last_sizing_metrics() == {}
+
+
+def test_metrics_recorded_when_adjustment_applied():
+    sizer = VolatilityTargetSizer(_Base(size=100.0))
+    sized = sizer.calculate_size(_sig(), 1000.0, 20.0, _Regime(0.9))
+
+    metrics = sizer.get_last_sizing_metrics()
+    assert metrics["vol_target_applied"] == pytest.approx(1.0)
+    assert metrics["vol_target_atr_percentile"] == pytest.approx(0.9)
+    assert metrics["vol_target_target_atr_percentile"] == pytest.approx(sizer.target_atr_percentile)
+    assert metrics["vol_target_multiplier"] == pytest.approx(sizer.target_atr_percentile / 0.9)
+    assert metrics["vol_target_base_size"] == pytest.approx(100.0)
+    assert metrics["vol_target_adjusted_size"] == pytest.approx(sized)
+
+
+def test_metrics_recorded_on_passthrough_without_vol_signal():
+    sizer = VolatilityTargetSizer(_Base(size=100.0))
+    sizer.calculate_size(_sig(), 1000.0, 20.0, None)
+
+    metrics = sizer.get_last_sizing_metrics()
+    assert metrics["vol_target_applied"] == pytest.approx(0.0)
+    assert "vol_target_multiplier" not in metrics
+    assert metrics["vol_target_target_atr_percentile"] == pytest.approx(sizer.target_atr_percentile)
+
+
+def test_metrics_cleared_when_no_sizing_happens():
+    base = _Base(size=100.0)
+    sizer = VolatilityTargetSizer(base)
+    sizer.calculate_size(_sig(), 1000.0, 20.0, _Regime(0.9))
+    assert sizer.get_last_sizing_metrics() != {}
+
+    base._size = 0.0  # next candle: no position -> stale metrics must not linger
+    sizer.calculate_size(_sig(), 1000.0, 20.0, _Regime(0.9))
+    assert sizer.get_last_sizing_metrics() == {}
+
+
+def test_metrics_cleared_when_validation_raises():
+    # A failed candle (validation raise -> strategy fallback) must surface as
+    # "no evidence", never as the previous candle's metrics.
+    sizer = VolatilityTargetSizer(_Base(size=100.0))
+    sizer.calculate_size(_sig(), 1000.0, 20.0, _Regime(0.9))
+    assert sizer.get_last_sizing_metrics() != {}
+
+    with pytest.raises(ValueError):
+        sizer.calculate_size(_sig(), -1.0, 20.0, _Regime(0.9))
+    assert sizer.get_last_sizing_metrics() == {}
+
+
+def test_sizing_metrics_snapshot_is_a_copy():
+    sizer = VolatilityTargetSizer(_Base(size=100.0))
+    sizer.calculate_size(_sig(), 1000.0, 20.0, _Regime(0.9))
+
+    snapshot = sizer.get_last_sizing_metrics()
+    snapshot["vol_target_multiplier"] = -1.0
+    assert sizer.get_last_sizing_metrics()["vol_target_multiplier"] != -1.0
+
+
 # --- validation ------------------------------------------------------------
 
 

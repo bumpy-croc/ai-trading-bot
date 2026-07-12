@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from src.engines.live.execution.exit_handler import LiveExitHandler
     from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
     from src.engines.live.strategy_manager import StrategyManager
+    from src.position_management.early_cut import EarlyCutPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class HotSwapEngineState(Protocol):
     partial_manager: PartialExitPolicy | None
     _partial_operations_opt_in: bool
     time_exit_policy: TimeExitPolicy | None
+    early_cut_policy: EarlyCutPolicy | None
     _runtime_dataset: Any
     _runtime_warmup: int
 
@@ -347,6 +349,22 @@ class StrategyHotSwapCoordinator:
         except Exception as exc:
             logger.warning(
                 "Hot-swap: failed to refresh time exit policy: %s",
+                exc,
+                exc_info=True,
+            )
+
+        # 5b. Rebuild engine-level MFE early-cut policy from the new
+        #     strategy / risk-manager (shared builder, parity with backtest).
+        try:
+            from src.engines.shared.risk_configuration import build_early_cut_policy
+
+            state.early_cut_policy = build_early_cut_policy(state.strategy, state.risk_manager)
+            exit_handler = getattr(state, "live_exit_handler", None)
+            if exit_handler is not None:
+                exit_handler.early_cut_policy = state.early_cut_policy
+        except Exception as exc:
+            logger.warning(
+                "Hot-swap: failed to refresh early-cut policy: %s",
                 exc,
                 exc_info=True,
             )

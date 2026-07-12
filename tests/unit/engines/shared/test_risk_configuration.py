@@ -1,9 +1,20 @@
-"""Tests for shared risk configuration builders (regression for #760)."""
+"""Tests for shared risk configuration builders (regression for #760, #971)."""
 
 import pytest
 
-from src.config.constants import DEFAULT_MAX_HOLDING_HOURS
-from src.engines.shared.risk_configuration import build_time_exit_policy
+from src.config.constants import (
+    DEFAULT_BREAKEVEN_THRESHOLD,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_TRAILING_ACTIVATION_THRESHOLD,
+    DEFAULT_TRAILING_DISTANCE_ATR_MULT,
+    DEFAULT_TRAILING_DISTANCE_PCT,
+)
+from src.engines.shared.risk_configuration import (
+    build_early_cut_policy,
+    build_time_exit_policy,
+    build_trailing_stop_policy,
+)
+from src.position_management.early_cut import EarlyCutPolicy
 from src.position_management.time_exits import TimeExitPolicy
 
 pytestmark = pytest.mark.unit
@@ -125,3 +136,272 @@ class TestBuildTimeExitPolicy:
         strategy = _StrategyWithOverrides({"time_exits": {"time_restrictions": "invalid"}})
 
         assert build_time_exit_policy(strategy) is None
+
+
+def _default_params() -> "_Params":
+    """RiskParameters-shaped defaults for the trailing-stop fields."""
+    return _Params(
+        trailing_activation_threshold=DEFAULT_TRAILING_ACTIVATION_THRESHOLD,
+        trailing_distance_pct=DEFAULT_TRAILING_DISTANCE_PCT,
+        trailing_atr_multiplier=DEFAULT_TRAILING_DISTANCE_ATR_MULT,
+        breakeven_threshold=DEFAULT_BREAKEVEN_THRESHOLD,
+        breakeven_buffer=0.001,
+    )
+
+
+class TestBuildTrailingStopPolicyExistingBehavior:
+    """Regression pins: existing config shapes must produce identical policies.
+
+    These cases mirror the strategies that declare a ``trailing_stop``
+    override today (hyper_growth, kelly_momentum, leveraged_regime,
+    momentum_leverage, chaos_test, ensemble_weighted) plus the params-only
+    path, so the #971 expressibility rework provably changes nothing for
+    any existing config.
+    """
+
+    @pytest.mark.fast
+    def test_hyper_growth_shaped_cfg_with_default_params(self):
+        """hyper_growth's cfg: params atr multiplier still leaks in (pinned)."""
+        strategy = _StrategyWithOverrides(
+            {
+                "trailing_stop": {
+                    "activation_threshold": 0.03,
+                    "trailing_distance_pct": 0.015,
+                    "breakeven_threshold": 0.05,
+                    "breakeven_buffer": 0.008,
+                }
+            }
+        )
+        policy = build_trailing_stop_policy(strategy, _RiskManager(_default_params()))
+
+        assert policy is not None
+        assert policy.activation_threshold == 0.03
+        assert policy.trailing_distance_pct == 0.015
+        # Key absent from cfg -> params fallback (pre-existing behavior,
+        # kept bit-identical; the TrailingStopManager prefers pct distance
+        # so this leaked multiplier is inert at runtime).
+        assert policy.atr_multiplier == DEFAULT_TRAILING_DISTANCE_ATR_MULT
+        assert policy.breakeven_threshold == 0.05
+        assert policy.breakeven_buffer == 0.008
+
+    @pytest.mark.fast
+    def test_cfg_without_breakeven_keys_falls_back_to_params(self):
+        """chaos_test's cfg shape: missing breakeven keys use params values."""
+        strategy = _StrategyWithOverrides(
+            {
+                "trailing_stop": {
+                    "activation_threshold": 0.005,
+                    "trailing_distance_pct": 0.003,
+                }
+            }
+        )
+        policy = build_trailing_stop_policy(strategy, _RiskManager(_default_params()))
+
+        assert policy is not None
+        assert policy.activation_threshold == 0.005
+        assert policy.trailing_distance_pct == 0.003
+        assert policy.breakeven_threshold == DEFAULT_BREAKEVEN_THRESHOLD
+        assert policy.breakeven_buffer == 0.001
+
+    @pytest.mark.fast
+    def test_params_only_path(self):
+        """No strategy cfg: params-driven policy (unchanged)."""
+        strategy = _StrategyWithOverrides(None)
+        policy = build_trailing_stop_policy(strategy, _RiskManager(_default_params()))
+
+        assert policy is not None
+        assert policy.activation_threshold == DEFAULT_TRAILING_ACTIVATION_THRESHOLD
+        assert policy.trailing_distance_pct == DEFAULT_TRAILING_DISTANCE_PCT
+        assert policy.atr_multiplier == DEFAULT_TRAILING_DISTANCE_ATR_MULT
+
+    @pytest.mark.fast
+    def test_no_cfg_no_params_returns_none(self):
+        assert build_trailing_stop_policy(_StrategyWithOverrides(None)) is None
+
+    @pytest.mark.fast
+    def test_inert_extra_keys_ignored(self):
+        """ensemble_weighted's cfg carries extra keys ('enabled': True,
+        'distance', 'step') that must stay inert."""
+        strategy = _StrategyWithOverrides(
+            {
+                "trailing_stop": {
+                    "enabled": True,
+                    "activation_threshold": 0.04,
+                    "distance": 0.02,
+                    "step": 0.01,
+                    "cooldown_hours": 4,
+                }
+            }
+        )
+        policy = build_trailing_stop_policy(strategy, _RiskManager(_default_params()))
+
+        assert policy is not None
+        assert policy.activation_threshold == 0.04
+        # No trailing_distance_pct key -> params fallback (unchanged).
+        assert policy.trailing_distance_pct == DEFAULT_TRAILING_DISTANCE_PCT
+
+    @pytest.mark.fast
+    def test_params_zero_breakeven_threshold_preserved(self):
+        """Review #976 arch nit 1: a params breakeven_threshold of exactly
+        0.0 is preserved as 0.0 (old or-chain semantics: `None or 0.0`
+        evaluates to 0.0), not silently upgraded to the default."""
+        params = _default_params()
+        params.breakeven_threshold = 0.0
+        strategy = _StrategyWithOverrides(
+            {"trailing_stop": {"activation_threshold": 0.03, "trailing_distance_pct": 0.015}}
+        )
+        policy = build_trailing_stop_policy(strategy, _RiskManager(params))
+
+        assert policy is not None
+        assert policy.breakeven_threshold == 0.0
+
+
+class TestBuildTrailingStopPolicyExpressibility:
+    """#971: config must be able to genuinely control trailing/breakeven."""
+
+    @pytest.mark.fast
+    def test_enabled_false_disables_trailing_entirely(self):
+        strategy = _StrategyWithOverrides({"trailing_stop": {"enabled": False}})
+
+        assert build_trailing_stop_policy(strategy, _RiskManager(_default_params())) is None
+
+    @pytest.mark.fast
+    def test_explicit_none_atr_mult_stops_params_leak(self):
+        strategy = _StrategyWithOverrides(
+            {
+                "trailing_stop": {
+                    "activation_threshold": 0.03,
+                    "trailing_distance_pct": 0.02,
+                    "trailing_distance_atr_mult": None,
+                }
+            }
+        )
+        policy = build_trailing_stop_policy(strategy, _RiskManager(_default_params()))
+
+        assert policy is not None
+        assert policy.trailing_distance_pct == 0.02
+        assert policy.atr_multiplier is None
+
+    @pytest.mark.fast
+    def test_explicit_none_breakeven_disables_breakeven(self):
+        strategy = _StrategyWithOverrides(
+            {
+                "trailing_stop": {
+                    "activation_threshold": 0.03,
+                    "trailing_distance_pct": 0.02,
+                    "breakeven_threshold": None,
+                }
+            }
+        )
+        policy = build_trailing_stop_policy(strategy, _RiskManager(_default_params()))
+
+        assert policy is not None
+        assert policy.breakeven_threshold is None
+
+    @pytest.mark.fast
+    def test_breakeven_only_policy_without_trailing_distance(self):
+        """Breakeven-at-+X% without any trailing distance is expressible."""
+        strategy = _StrategyWithOverrides(
+            {
+                "trailing_stop": {
+                    "activation_threshold": 0.05,
+                    "trailing_distance_pct": None,
+                    "trailing_distance_atr_mult": None,
+                    "breakeven_threshold": 0.05,
+                    "breakeven_buffer": 0.005,
+                }
+            }
+        )
+        policy = build_trailing_stop_policy(strategy, _RiskManager(_default_params()))
+
+        assert policy is not None
+        assert policy.trailing_distance_pct is None
+        assert policy.atr_multiplier is None
+        assert policy.breakeven_threshold == 0.05
+        assert policy.breakeven_buffer == 0.005
+
+
+class TestBuildEarlyCutPolicy:
+    """#971: MFE-conditioned early-cut config channels."""
+
+    @pytest.mark.fast
+    def test_builds_from_strategy_overrides(self):
+        strategy = _StrategyWithOverrides(
+            {"early_cut": {"mfe_threshold_pct": 0.015, "evaluation_window_hours": 18}}
+        )
+        policy = build_early_cut_policy(strategy)
+
+        assert isinstance(policy, EarlyCutPolicy)
+        assert policy.mfe_threshold_pct == 0.015
+        assert policy.evaluation_window_hours == 18
+
+    @pytest.mark.fast
+    def test_falls_back_to_risk_manager_params(self):
+        """Expressible via RiskParameters(early_cut=...) — the same channel
+        the exit-geometry experiment used for time_exits."""
+        strategy = _StrategyWithOverrides(None)
+        risk_manager = _RiskManager(
+            _Params(early_cut={"mfe_threshold_pct": 0.02, "evaluation_window_hours": 12})
+        )
+        policy = build_early_cut_policy(strategy, risk_manager)
+
+        assert isinstance(policy, EarlyCutPolicy)
+        assert policy.mfe_threshold_pct == 0.02
+        assert policy.evaluation_window_hours == 12
+
+    @pytest.mark.fast
+    def test_strategy_overrides_win_over_params(self):
+        strategy = _StrategyWithOverrides(
+            {"early_cut": {"mfe_threshold_pct": 0.015, "evaluation_window_hours": 18}}
+        )
+        risk_manager = _RiskManager(
+            _Params(early_cut={"mfe_threshold_pct": 0.02, "evaluation_window_hours": 12})
+        )
+        policy = build_early_cut_policy(strategy, risk_manager)
+
+        assert policy is not None
+        assert policy.mfe_threshold_pct == 0.015
+
+    @pytest.mark.fast
+    def test_returns_none_without_config(self):
+        """DEFAULT OFF: no config anywhere means no policy."""
+        assert build_early_cut_policy(_StrategyWithOverrides(None)) is None
+        assert build_early_cut_policy(object()) is None
+        assert (
+            build_early_cut_policy(
+                _StrategyWithOverrides(None), _RiskManager(_Params(early_cut=None))
+            )
+            is None
+        )
+
+    @pytest.mark.fast
+    def test_enabled_false_returns_none(self):
+        strategy = _StrategyWithOverrides(
+            {
+                "early_cut": {
+                    "enabled": False,
+                    "mfe_threshold_pct": 0.015,
+                    "evaluation_window_hours": 18,
+                }
+            }
+        )
+        assert build_early_cut_policy(strategy) is None
+
+    @pytest.mark.fast
+    def test_invalid_config_returns_none(self):
+        """Malformed config disables the policy (warn, never crash the engine)."""
+        assert build_early_cut_policy(_StrategyWithOverrides({"early_cut": "18h"})) is None
+        assert (
+            build_early_cut_policy(
+                _StrategyWithOverrides({"early_cut": {"mfe_threshold_pct": 0.015}})
+            )
+            is None
+        )
+        assert (
+            build_early_cut_policy(
+                _StrategyWithOverrides(
+                    {"early_cut": {"mfe_threshold_pct": -1, "evaluation_window_hours": 18}}
+                )
+            )
+            is None
+        )

@@ -191,6 +191,9 @@ class LiveExitCoordinator:
                 candle_low=candle_low,
                 runtime_decision=decision_for_exit,
                 component_strategy=component_strategy,
+                # Candle history for the MFE early-cut policy (inert when the
+                # policy is not configured).
+                df=df,
             )
 
             should_exit = exit_check.should_exit
@@ -228,6 +231,14 @@ class LiveExitCoordinator:
                     f"position_age_{(datetime.now(UTC).replace(tzinfo=None) - position.entry_time.replace(tzinfo=None)).total_seconds():.0f}s",
                     f"entry_price_{position.entry_price:.2f}",
                 ]
+
+                # Window MFE seen by the early-cut policy, when it evaluated —
+                # DB-durable via strategy_executions.reasons (#976 review).
+                # isinstance (not `is not None`): tests inject MagicMock exit
+                # checks whose attributes are truthy non-numerics.
+                early_cut_window_mfe = getattr(exit_check, "early_cut_window_mfe_pct", None)
+                if isinstance(early_cut_window_mfe, int | float):
+                    log_reasons.append(f"early_cut_window_mfe_{early_cut_window_mfe:.6f}")
 
                 # Add regime context if available from TradingDecision
                 if (

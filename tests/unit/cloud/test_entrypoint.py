@@ -44,6 +44,39 @@ class TestParseHyperparameters:
         assert parsed["epochs"] == 50
         assert parsed["batch_size"] == 64
 
+    def test_target_type_defaults_preserve_current_behavior(self) -> None:
+        parsed = parse_hyperparameters({})
+        assert parsed["target_type"] == "regression"
+        assert parsed["target_horizon"] == 1
+
+    def test_target_type_and_horizon_are_parsed(self) -> None:
+        parsed = parse_hyperparameters({"target_type": "binary_direction", "target_horizon": "6"})
+        assert parsed["target_type"] == "binary_direction"
+        assert parsed["target_horizon"] == 6
+
+    def test_primary_model_type_defaults_to_none(self) -> None:
+        parsed = parse_hyperparameters({})
+        assert parsed["primary_model_type"] is None
+
+    def test_primary_model_type_empty_string_parses_to_none(self) -> None:
+        """orchestrator.py's _build_job_spec sends "" for an unset
+        primary_model_type (SageMaker hyperparameters must be strings) --
+        must round-trip back to None, not the literal empty string."""
+        parsed = parse_hyperparameters({"primary_model_type": ""})
+        assert parsed["primary_model_type"] is None
+
+    def test_primary_model_type_is_parsed(self) -> None:
+        parsed = parse_hyperparameters({"primary_model_type": "basic"})
+        assert parsed["primary_model_type"] == "basic"
+
+    def test_use_mock_data_defaults_to_false(self) -> None:
+        parsed = parse_hyperparameters({})
+        assert parsed["use_mock_data"] is False
+
+    def test_use_mock_data_is_parsed(self) -> None:
+        parsed = parse_hyperparameters({"use_mock_data": "true"})
+        assert parsed["use_mock_data"] is True
+
 
 @pytest.mark.fast
 class TestRunTrainingThreading:
@@ -96,6 +129,68 @@ class TestRunTrainingThreading:
         assert ctx.config.model_type == "cnn_lstm"
         assert ctx.config.model_variant == "default"
 
+    def test_target_type_and_horizon_reach_training_config(self) -> None:
+        # Arrange
+        params = self._base_params(
+            model_type="tft", target_type="binary_direction", target_horizon=6
+        )
+
+        # Act
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        # Assert
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.target_type == "binary_direction"
+        assert ctx.config.target_horizon == 6
+
+    def test_target_type_defaults_reach_training_config(self) -> None:
+        params = self._base_params()
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.target_type == "regression"
+        assert ctx.config.target_horizon == 1
+
+    def test_primary_model_type_reaches_training_config(self) -> None:
+        params = self._base_params(target_type="meta_label", primary_model_type="basic")
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.target_type == "meta_label"
+        assert ctx.config.primary_model_type == "basic"
+
+    def test_primary_model_type_default_reaches_training_config_as_none(self) -> None:
+        params = self._base_params()
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.primary_model_type is None
+
+    def test_use_mock_data_reaches_training_config(self) -> None:
+        params = self._base_params(use_mock_data=True)
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.use_mock_data is True
+
+    def test_use_mock_data_default_reaches_training_config_as_false(self) -> None:
+        params = self._base_params()
+
+        rc, mock_run = self._run_with_stub_pipeline(params)
+
+        assert rc == 0
+        ctx = mock_run.call_args.args[0]
+        assert ctx.config.use_mock_data is False
+
     def test_invalid_model_type_fails_before_training(self) -> None:
         # Arrange - TrainingConfig validation must reject unknown architectures
         params = self._base_params(model_type="transformer")
@@ -112,3 +207,44 @@ class TestRunTrainingThreading:
         assert rc == 1
         fake_pipeline.run_training_pipeline.assert_not_called()
         mock_failure.assert_called_once()
+
+    def test_target_type_mismatch_after_construction_fails_before_training(self) -> None:
+        """PR #950 review item 3: a future bug that silently constructs a
+        TrainingConfig with a different target_type/target_horizon than
+        hyperparameters.json requested (e.g. a copy-paste error in the
+        constructor call, or a key-name desync from orchestrator.py) must
+        be caught HERE -- before run_training_pipeline spends any paid
+        SageMaker GPU time -- not silently train the wrong target."""
+        params = self._base_params(target_type="triple_barrier", target_horizon=6)
+        fake_pipeline = MagicMock()
+
+        class _MismatchedConfig:
+            """Stands in for TrainingConfig but ignores the requested
+            target_type/target_horizon -- simulates the exact drift class
+            this check exists to catch."""
+
+            def __init__(self, **kwargs) -> None:
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+                # Simulate the bug: silently defaults instead of honoring
+                # what was actually requested.
+                self.target_type = "regression"
+                self.target_horizon = 1
+
+        with (
+            patch.dict(sys.modules, {"src.ml.training_pipeline.pipeline": fake_pipeline}),
+            patch(
+                "src.ml.training_pipeline.config.TrainingConfig",
+                _MismatchedConfig,
+            ),
+            patch("src.ml.cloud.entrypoint.write_failure_file") as mock_failure,
+        ):
+            rc = run_training(params)
+
+        assert rc == 1
+        fake_pipeline.run_training_pipeline.assert_not_called()
+        mock_failure.assert_called_once()
+        (failure_message,) = mock_failure.call_args.args
+        assert "mismatch" in failure_message
+        assert "triple_barrier" in failure_message
+        assert "regression" in failure_message

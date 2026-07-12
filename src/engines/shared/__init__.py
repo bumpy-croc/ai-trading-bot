@@ -48,6 +48,7 @@ from src.engines.shared.policy_hydration import (
     apply_policies_to_engine,
 )
 from src.engines.shared.risk_configuration import (
+    build_early_cut_policy,
     build_time_exit_policy,
     build_trailing_stop_policy,
     extract_risk_overrides,
@@ -120,6 +121,7 @@ __all__ = [
     "merge_dynamic_risk_config",
     "build_trailing_stop_policy",
     "build_time_exit_policy",
+    "build_early_cut_policy",
     "extract_risk_overrides",
     "get_risk_parameters",
     # Partial operations
