@@ -12,7 +12,7 @@ Written ~14:20 UTC as the ~9h autonomous window closed. Everything below is eith
 **Parity investigation (PR #987, merged) — the session's biggest single finding:** the "live beat backtest" mystery was TWO mechanisms, not forming-bars: (1) the matched backtest used TODAY's model but live trades predate the Jul-5 promotion (model-version confound → fixed by point-in-time pinning, PR #1006 open); (2) **live has effectively been trading SHORT-DISABLED** — an inventory guard rejects shorts whenever free ETH > $1 dust, only ever blocking shorts (9 long / 3 short real vs 50/50 signals). Filed #990 with forensics→counterfactual→risk-review sequence. This is a genuine returns lever in EITHER direction.
 
 **Codebase deep audit (5 subsystems):** money path is SOUND (all historical bug classes verified remediated). Real finds fixed/filed:
-- P1 drawdown-gate fired one iteration late → **PR #1001** (risk-officer SAFE-WITH-CONDITIONS, gating peak-check CLEARED at $84.42; merging).
+- P1 drawdown-gate fired one iteration late → **#1001 MERGED** (risk-officer SAFE-WITH-CONDITIONS, gating peak-check CLEARED at $84.42). THE safety-critical fix. All 3 live-path P1/P2 safety fixes (#994/#996/#1001) now on develop; #992 analytics-only still greening.
 - P1 market-close SELL could round up past holdings → **#994 MERGED**.
 - Reconciliation edge paths (double-count, partial-exit reset, silent divergence) → **#996 MERGED**.
 - mfe/mae columns corrupted (sized-vs-unsized, 10-23x) → **#992** (merging).
@@ -55,3 +55,6 @@ Session 20, peak $84.4159, current $84.4025 (~0.5% DD), 899 account_history rows
 3. If staging clean → prod promote per runbook above (before 12:30 UTC Mon).
 4. Decide the #990 short-suppression investigation (biggest latent returns lever) and #984 slippage recalibration + the exit-round-2 outcome — these three define the next experiment.
 5. #986 risk-ratification bundle needs Alex (circuit breakers off in prod is the notable one).
+6. #1007 (MLSignalGenerator registry gap) — design done + posted to issue, NO live impact (ml_adaptive/sentiment never ran live), blocked on #1008 merge; re-dispatch fresh-cwd ml-engineer from branch fix/ml-signal-generator-symbol-1002 next session. Non-urgent.
+
+## SAFETY-SET STATUS: all live-path P1/P2 fixes MERGED to develop (#994 close-cap, #996 reconciliation, #1001 drawdown-gate). Staging soak (PR #1009) validates them. Prod promote runbook ready — deferred to next window before Mon 12:30 UTC.
