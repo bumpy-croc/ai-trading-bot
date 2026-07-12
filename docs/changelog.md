@@ -56,6 +56,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`base_asset_from_symbol`) so the exchange and execution layers size closes
   against the same base asset. The same hazard in the emergency-close sites
   (entry coordinator, recovery reconciler) is tracked in #989.
+- **Max-drawdown hard cap enforced on the same iteration; dynamic-risk
+  throttle anchored to the durable session peak** (2026-07-12 risk audit
+  P1/P2): the live loop ran `_check_entry_conditions` BEFORE
+  `_check_max_drawdown`, so on the exact bar where a stop-loss fill pushed
+  drawdown to the 20% cap a fresh entry (up to 20% notional) could execute
+  before close-only latched — the guard had no in-line pre-order gate,
+  unlike the #807 circuit breaker. Every exposure-increase chokepoint
+  (entry evaluation, `execute_entry_locked`, the legacy short path, the
+  scale-in close-only provider) now re-assesses the guard in-line via
+  `LiveTradingEngine._refresh_drawdown_gate` →
+  `MaxDrawdownEnforcer.check_before_new_risk()`, which also re-latches
+  close-only in the same iteration after a mid-breach `resume_trading()`
+  and can seed the peak before the first entry evaluation after a
+  mid-breach restart (in-line seeding never consumes the loop check's
+  bounded `MAX_SEED_ATTEMPTS` deferral budget). Relatedly, the graduated
+  dynamic-risk throttle read the restart-resettable in-memory
+  `PerformanceTracker.peak_balance` while the hard cap used the durable DB
+  session peak — a restart mid-drawdown re-anchored the throttle to the
+  depressed balance and silently disarmed the 5–20% size reductions (#845
+  peak-reset class). All three live throttle call sites (runtime entry
+  sizing, `LiveDynamicRiskCoordinator`, `_get_dynamic_risk_adjusted_params`)
+  now source `LiveTradingEngine._durable_peak_balance()` — max(guard's
+  durable session peak, tracker peak, current balance) — so the throttle and
+  the hard cap measure drawdown from the same baseline.
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*
