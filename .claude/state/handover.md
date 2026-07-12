@@ -1,3 +1,20 @@
+# ⚠️ SESSION ENDED ON QUOTA LIMIT (~16:30 UTC / 17:30 London) — corrections below
+
+Several background agents were KILLED mid-work by the session limit. What actually landed vs. what I optimistically marked "will complete":
+
+**DID NOT COMPLETE (resume next session):**
+- **exit-round-2 sweep: NO VERDICT.** Its doc still ends "RESULTS: to be appended after all runs complete" — the sweep was killed before producing any arm results. Prereg is LOCKED and complete (arms/folds/thresholds all defined in docs/research/experiments/2026-07-12_exit-geometry-round2.md); resume = just re-run the sweep (correct-model config verified earlier) and append results + apply the §1/§13 decision rule. Cheap to resume. THIS is the session's one unfinished substantive experiment.
+- **Staging soak boot-verification: NOT DONE.** PR #1009 merged (staging branch = develop, so Railway auto-deploys), BUT the 5 change-specific boot checks (esp. drawdown-gate must-not-false-trip) were NEVER confirmed — the soak agent died. **The prod-promote gate is NOT cleared.** Next session must verify staging booted clean (check logs: guard armed at staging peak not phantom, no spurious close-only, loop started, no ERROR) BEFORE any prod promote.
+- **Review gauntlets incomplete**: #1000 (inference-context), #1006 (model-pinning), #1008 (symbol-threading) reviews died mid-pass — no verdicts. #1010/#992 also open.
+
+**DID land (verified via my own tools, which outlived the agent limit):**
+- ALL 3 live-path safety fixes MERGED to develop: #994 close-cap, #996 reconciliation, #1001 drawdown-gate. THE capital-protection set is complete on develop.
+- #992 (mfe/mae) re-pushed post-conflict, waiting on CI — may or may not have merged; check.
+
+**Corrected prod-promote status:** BLOCKED until staging boot is verified next session (was gated on the soak that didn't finish). Everything else in the runbook still stands.
+
+---
+
 # Session handover — 2026-07-12 (Sunday research+audit day)
 
 Written ~14:20 UTC as the ~9h autonomous window closed. Everything below is either merged, PR-open, or a filed issue — nothing lives only in memory.
