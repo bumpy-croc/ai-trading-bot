@@ -494,3 +494,24 @@ averaged method (not pooled, per PM catch) with per-fold Bonferroni significance
 Ref: issue #933, PR (docs/target-redesign-tournament-results -> develop, opening now), Amendment 1
 (PR #951), Amendment 2 (PR #956), GH #953/#955 (scaffolding/platform gaps filed), GH #954 (upstream
 target_distribution fix, merged, bridge-patched in this tournament's own worktree instead).
+
+## 2026-07-12 · track-record · quant-researcher
+Experiment #959: INPUT tournament Lane A Phase 0 — which alternative input features have credible
+evidence + are historically obtainable for ETH 1h-4h → research complete, feeds next-phase linear
+screening prereg (no verdict yet, this is not itself a run-and-measure result).
+Evidence: docs/research/2026-07-12_input-candidates-audit.md (PR #958). Audited 6 candidate classes:
+derivatives state, cross-asset lead-lag, sentiment, on-chain, own-OHLCV microstructure, calendar.
+KEY FINDING: OnChainFeatureExtractor, MacroFeatureExtractor, and 2/3 of EnhancedSentimentExtractor
+are 100% simulated (deterministic price/volume proxies dressed as alternative data) -- confirmed by
+reading source, not assumed; disabled by default for good reason; must not be enabled expecting new
+information in any future tournament. Empirically confirmed via live Binance API probes (scripts/
+research/check_binance_derivatives_retention.py, run this session): open-interest-history and
+long/short-ratio free-tier endpoints hard-cut at ~30 days retention (code -1130 beyond that) --
+unusable for the 2023H1/2024H1/2025H1 historical folds. Funding rate and premium-index basis proxy
+have no such wall (confirmed depth to ~2019). Fear & Greed already wired (FearGreedProvider +
+SentimentFeatureExtractor, 3,080 daily records 2018-02-01 to today, confirmed live) but disabled.
+Ranked shortlist for next phase: (1) multi-scale realized vol/range from own cached OHLCV, (2) time/
+calendar features, (3) BTC->ETH cross-asset (already-cached BTC data), (4) funding rate, (5) basis/
+premium proxy, (6) Fear & Greed. Deferred: OI, long/short ratio, on-chain flows, DXY/SPX/NDX macro,
+BTC dominance, social volume -- unobtainable at needed depth or weak evidence.
+Ref: GH #959 (research issue, state:researching), PR #958 (docs/input-audit -> develop).
