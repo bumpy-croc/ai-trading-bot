@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import queue
 import signal
@@ -98,6 +99,7 @@ from src.engines.shared.models import (
 )
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.risk_configuration import (
+    build_early_cut_policy,
     build_partial_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
@@ -108,6 +110,7 @@ from src.infrastructure.logging.events import (
 )
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.early_cut import EarlyCutPolicy
 from src.position_management.macro_events import MacroEventGuard
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
@@ -219,6 +222,7 @@ class LiveTradingEngine:
         dynamic_risk_config: DynamicRiskConfig | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
+        early_cut_policy: EarlyCutPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = True,  # Enable by default for better profit capture
         # Execution realism parameters (parity with backtest engine)
@@ -347,6 +351,13 @@ class LiveTradingEngine:
         self.error_cooldown = DEFAULT_ERROR_COOLDOWN
 
         self._init_time_exit_policy(time_exit_policy)
+
+        # MFE early-cut policy (#971): default OFF unless configured via
+        # strategy overrides or RiskParameters.early_cut. Shared builder for
+        # parity with the backtest engine.
+        self.early_cut_policy = early_cut_policy or build_early_cut_policy(
+            self.strategy, self.risk_manager
+        )
 
         # Threading
         self.main_thread: threading.Thread | None = None
@@ -751,7 +762,6 @@ class LiveTradingEngine:
         # session is wired; owned by LiveStartupSequencer, declared here so the
         # engine carries the attribute for the startup backref Protocol (#486).
         self._pending_balance_correction: bool = False
-        self._pending_corrected_balance: float | None = None
         # Set during start() for live trading
         self._periodic_reconciler: PeriodicReconciler | None = None
         # Shared per-base-asset cooldown for the orphaned-borrow sweep, so the
@@ -989,12 +999,15 @@ class LiveTradingEngine:
             trailing_stop_policy=self.trailing_stop_policy,
             partial_manager=partial_ops_manager,
             time_exit_policy=self.time_exit_policy,
+            early_cut_policy=self.early_cut_policy,
             use_high_low_for_stops=self.use_high_low_for_stops,
             max_position_size=self.max_position_size,
             max_filled_price_deviation=self.max_filled_price_deviation,
             # Close-only mode must block ALL exposure increases, including
             # scale-ins; read at call time so mid-session trips take effect.
-            close_only_provider=lambda: self._close_only_mode,
+            # The gate re-assesses the drawdown guard on read so a breach
+            # realized earlier in the SAME iteration blocks the scale-in too.
+            close_only_provider=self._refresh_drawdown_gate,
             # Manual kill-switch (#922): scale-ins share the engine's halt state.
             system_halt=self._system_halt,
         )
@@ -1091,11 +1104,12 @@ class LiveTradingEngine:
             return self.risk_manager.params
 
         try:
-            # Calculate dynamic risk adjustments
-            perf_metrics = self.performance_tracker.get_metrics()
+            # Calculate dynamic risk adjustments from the durable session peak
+            # (#845 peak-reset class: the in-memory tracker peak re-anchors to
+            # the depressed balance on restart and disarms the throttle).
             adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
                 current_balance=self.current_balance,
-                peak_balance=perf_metrics.peak_balance or self.current_balance,
+                peak_balance=self._durable_peak_balance() or self.current_balance,
                 session_id=self.trading_session_id,
             )
 
@@ -1233,6 +1247,12 @@ class LiveTradingEngine:
         Delegated to LiveStartupSequencer; the capital-critical bootstrap ordering
         lives there (#486).
         """
+        # Fail fast on a mis-sized early-cut window (#976 review F1/F2):
+        # refuse to start rather than trade with a policy that can never
+        # evaluate (window <= bar) or diverges from backtest (non-aligned).
+        if self.early_cut_policy is not None:
+            self.early_cut_policy.validate_for_timeframe(timeframe)
+
         self.startup_sequencer.run(
             symbol,
             timeframe=timeframe,
@@ -2120,6 +2140,50 @@ class LiveTradingEngine:
         """
         self._drawdown_enforcer.check()
         self._circuit_breaker_enforcer.check()
+
+    def _refresh_drawdown_gate(self) -> bool:
+        """Re-assess the max-drawdown hard cap at an exposure-increase chokepoint.
+
+        The loop-level ``_check_max_drawdown`` runs AFTER entry evaluation, so
+        on the bar that crosses the cap a fresh entry would execute before
+        close-only latched (one-iteration leak, 2026-07-12 risk audit P1).
+        Entry evaluation, ``execute_entry_locked``, the legacy short path, and
+        the scale-in gate call this first — mirroring the #807 in-line
+        circuit-breaker gate — so the cap binds on the SAME iteration.
+
+        Returns the (possibly just-latched) close-only flag, making it usable
+        directly as the exit handler's ``close_only_provider``.
+        """
+        self._drawdown_enforcer.check_before_new_risk()
+        return self._close_only_mode
+
+    def _durable_peak_balance(self) -> float:
+        """Peak balance for drawdown-based risk throttling, durable across restarts.
+
+        The graduated dynamic-risk throttle must measure drawdown from the
+        same baseline as the max-drawdown hard cap. The in-memory
+        PerformanceTracker peak re-anchors to the (possibly depressed) current
+        balance on restart, which silently disarmed the throttle exactly when
+        it should bind (#845 peak-reset class). The drawdown guard's peak is
+        seeded from the durable ``account_history`` session max, so it
+        survives restarts; take the max with the tracker peak and the current
+        balance so the throttle never measures from a LOWER peak than either
+        source. Until the guard seeds (first gate/loop check at boot) this
+        degrades to the in-memory behavior.
+        """
+        peak = 0.0
+        for candidate in (
+            self._drawdown_enforcer.guard.peak_balance,
+            self.performance_tracker.get_metrics().peak_balance,
+            self.current_balance,
+        ):
+            try:
+                value = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > peak:
+                peak = value
+        return peak
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""

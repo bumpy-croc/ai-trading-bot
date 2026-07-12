@@ -168,6 +168,11 @@ class TestPredictionEnginePredict:
         bundle = _make_bundle(Mock())
         engine.model_registry.list_bundles.return_value = [bundle]
         engine.model_registry.get_default_bundle.return_value = bundle
+        # Also miss on the versioned-bundle fallback (Phase 2b item 4) --
+        # otherwise the mocked registry's auto-generated Mock return would
+        # be treated as a real bundle and this test would stop exercising
+        # the not-found path at all.
+        engine.model_registry.get_bundle_by_key.return_value = None
 
         mock_features = np.random.random((1, 10))
         engine.feature_pipeline.transform.return_value = mock_features
@@ -177,6 +182,44 @@ class TestPredictionEnginePredict:
 
         assert result.error is not None
         assert "not found" in result.error
+
+    @patch("src.prediction.engine.PredictionModelRegistry")
+    @patch("src.prediction.engine.FeaturePipeline")
+    def test_predict_falls_back_to_versioned_bundle_by_key(self, mock_pipeline, mock_registry):
+        """A model_name that doesn't match any currently-latest bundle
+        (list_bundles()) but does match a specific, non-latest version's
+        exact key must still resolve -- the TARGET-REDESIGN exam harness's
+        fold-runner pins a specific version this way (Phase 2b item 4)."""
+        engine = PredictionEngine()
+
+        mock_model = Mock()
+        mock_prediction = ModelPrediction(
+            price=101.0,
+            confidence=0.6,
+            direction=1,
+            model_name="pinned_model",
+            inference_time=0.01,
+        )
+        mock_model.predict.return_value = mock_prediction
+
+        latest_bundle = _make_bundle(Mock(), version="v2")
+        pinned_bundle = _make_bundle(mock_model, version="v1")
+        engine.model_registry.list_bundles.return_value = [latest_bundle]
+        engine.model_registry.get_default_bundle.return_value = latest_bundle
+        # list_bundles() only exposes "latest" (v2); the pinned version (v1)
+        # is only reachable through get_bundle_by_key.
+        engine.model_registry.get_bundle_by_key.return_value = pinned_bundle
+
+        mock_features = np.random.random((1, 10))
+        engine.feature_pipeline.transform.return_value = mock_features
+
+        data = self.create_test_data()
+        result = engine.predict(data, model_name=pinned_bundle.key)
+
+        engine.model_registry.get_bundle_by_key.assert_called_once_with(pinned_bundle.key)
+        assert result.error is None
+        assert mock_model.predict.call_count == 1
+        assert result.model_name == "pinned_model"
 
     @patch("src.prediction.engine.PredictionModelRegistry")
     @patch("src.prediction.engine.FeaturePipeline")

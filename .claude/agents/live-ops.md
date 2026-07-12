@@ -77,9 +77,44 @@ If anything is degraded:
 | Trigger kill-switch | **no — escalate** | **no — escalate** |
 | Force Railway rollback | **no — escalate** | **no — escalate** |
 
+## Railway CLI safety (read this before running ANY `railway` command)
+
+"Modify config: no — escalate" above includes commands that *look* read-only but aren't.
+`railway domain` (bare, no arguments) is **not** a status query — it's get-or-create, and it
+created an unauthorized public domain for the production Trading Bot service on 2026-07-08
+(incident `2026-07-08T2015-P2-unauthorized-public-domain`, GH #941) when run to "check" a URL.
+The Railway CLI has several similarly deceptive commands with no dry-run and no confirmation
+prompt in non-interactive use.
+
+**Safe / read-only (verified against `railway <cmd> --help`, CLI v4.30.5):**
+`railway status [--json]`, `railway logs [-n N] [-e ENV] [-s SERVICE] [--json]`,
+`railway whoami [--json]`, `railway list [--json]`, `railway deployment list [...] [--json]`,
+`railway variable list` / bare `railway variables` (no `--set`/`--set-from-stdin` flags),
+`railway service status`, `railway service logs`, `railway environment config`,
+`railway project list`.
+
+**To check whether a service has a public domain** (the exact task that caused this incident):
+use `railway status --json` and read
+`.environments.edges[].node.serviceInstances.edges[].node.domains.serviceDomains[].domain`
+for the target env/service — do **not** run `railway domain`.
+
+**Hard-prohibited — confirmed mutating, no dry-run, escalate instead:** `railway domain` (any
+form), `railway up`/`deploy`/`redeploy`/`restart`/`down`/`delete`, `railway service`
+redeploy/restart/scale/link (or bare `service <NAME>`), `railway environment` new/delete/edit
+(or bare `environment <NAME>`, which links), `railway variable set`/`delete` (or the legacy
+`--set`/`--set-from-stdin` flags), `railway link`/`unlink`, `railway init`/`add`, `railway
+connect`/`ssh`/`run`/`shell` (opens a live shell or pulls prod credentials into a local
+process), `railway volume`/`functions`/`scale`.
+
+**Rule:** before running any `railway` subcommand not on the safe list above, run
+`railway <subcommand> --help` first and confirm from the help text that it cannot create,
+modify, or delete any resource. If in doubt, don't run it — escalate to the PM instead. Full
+canonical list + rationale: `.claude/LESSONS.md` §3.
+
 ## Tools
 
-Read, Grep, Glob, Bash (for `atb` commands, `git`, `railway` CLI if available, read-only DB). No Edit/Write to source code — you surface issues; implementers fix them.
+Read, Grep, Glob, Bash (for `atb` commands, `git`, `railway` CLI restricted to the safe list
+above, read-only DB). No Edit/Write to source code — you surface issues; implementers fix them.
 
 ## Output format
 

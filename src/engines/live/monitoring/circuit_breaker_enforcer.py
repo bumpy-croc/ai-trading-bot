@@ -11,7 +11,9 @@ new entries when tripped). This enforcer adds the loop-driven half:
   **close-only mode** (new entries AND scale-ins stop; exits and stop-losses keep
   running — nothing is liquidated), matching the ``MaxDrawdownGuard`` precedent
   (the codebase deliberately does not force-liquidate into a dip). In ``dry_run``
-  it logs "would halt" and takes no action. ``off`` is fully inert.
+  it logs "would halt", writes a ``CIRCUIT_BREAKER_DRY_RUN`` ``system_events``
+  row (durable would-have-tripped evidence), and takes no protective action.
+  ``off`` is fully inert.
 - **Surfacing**: a trip emits a ``risk_event`` + a CRITICAL ``system_events`` row
   so the monitoring dashboard and alerting pick it up.
 
@@ -104,13 +106,29 @@ class CircuitBreakerEnforcer:
 
         if mode == MODE_DRY_RUN:
             if not self._halt_notified:
-                logger.warning(
-                    "🟡 Account circuit breaker WOULD HALT (dry_run): %s (balance $%.2f). "
-                    "Set account_circuit_breakers=active to enforce.",
-                    decision.reason,
-                    balance,
-                )
                 self._halt_notified = True
+                message = (
+                    f"Account circuit breaker WOULD HALT (dry_run): {decision.reason} "
+                    f"(balance ${balance:,.2f}). "
+                    "Set account_circuit_breakers=active to enforce."
+                )
+                logger.warning("🟡 %s", message)
+                # dry_run exists to accumulate would-have-tripped evidence for the
+                # promote/kill verdict (#964); container stdout is ephemeral, so
+                # the trip must also land in system_events. Best-effort: an
+                # observability failure never crashes the trading loop.
+                try:
+                    state._record_event(
+                        EventType.CIRCUIT_BREAKER_DRY_RUN,
+                        message,
+                        severity="warning",
+                        component="risk",
+                        error_code="CIRCUIT_BREAKER_DRY_RUN",
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.error(
+                        "Failed to record circuit-breaker dry-run event: %s", e, exc_info=True
+                    )
             return
 
         # active mode: trip close-only (protective action first, then observe).

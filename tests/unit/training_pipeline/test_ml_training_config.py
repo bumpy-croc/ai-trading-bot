@@ -62,9 +62,17 @@ class TestTrainingPaths:
         assert paths.models_dir == models_dir
 
     @patch("src.ml.training_pipeline.config.get_project_root")
-    def test_default_factory(self, mock_get_root, tmp_path):
+    def test_default_factory(self, mock_get_root, tmp_path, monkeypatch):
         # Arrange
         mock_get_root.return_value = tmp_path
+        # models_dir is resolved by get_model_registry_root() (shared with
+        # promote_model_version and PredictionConfig.model_registry_path,
+        # PR #950 review item 5) -- it calls its OWN get_project_root()
+        # (src.infrastructure.runtime.paths), unaffected by the patch
+        # above, so it must be patched too for the default (no
+        # MODEL_REGISTRY_PATH override) case to resolve under tmp_path.
+        monkeypatch.setattr("src.infrastructure.runtime.paths.get_project_root", lambda: tmp_path)
+        monkeypatch.delenv("MODEL_REGISTRY_PATH", raising=False)
 
         # Act
         paths = TrainingPaths.default()
@@ -106,6 +114,10 @@ class TestTrainingConfig:
         assert config.force_price_only is False
         assert config.mixed_precision is True
         assert isinstance(config.diagnostics, DiagnosticsOptions)
+        # New fields (TARGET-REDESIGN scaffolding): default preserves the
+        # incumbent next-bar price-regression behavior exactly.
+        assert config.target_type == "regression"
+        assert config.target_horizon == 1
 
     def test_custom_values(self):
         # Arrange
@@ -152,6 +164,19 @@ class TestTrainingConfig:
         # Assert
         assert config.model_type == "tft"
 
+    def test_accepts_tft_ternary_model_type(self):
+        # Arrange & Act
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            model_type="tft_ternary",
+        )
+
+        # Assert
+        assert config.model_type == "tft_ternary"
+
     def test_rejects_unknown_model_type(self):
         # Act & Assert
         with pytest.raises(ValueError, match="model_type"):
@@ -173,6 +198,125 @@ class TestTrainingConfig:
                 end_date=datetime(2024, 12, 31),
                 model_variant="huge",
             )
+
+    def test_accepts_target_type_and_horizon(self):
+        # Arrange & Act
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            target_type="triple_barrier",
+            target_horizon=6,
+        )
+
+        # Assert
+        assert config.target_type == "triple_barrier"
+        assert config.target_horizon == 6
+
+    def test_rejects_unknown_target_type(self):
+        # Act & Assert
+        with pytest.raises(ValueError, match="target_type"):
+            TrainingConfig(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_date=datetime(2024, 1, 1),
+                end_date=datetime(2024, 12, 31),
+                target_type="not_a_real_target",
+            )
+
+    def test_rejects_non_positive_target_horizon(self):
+        # Act & Assert
+        with pytest.raises(ValueError, match="target_horizon"):
+            TrainingConfig(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_date=datetime(2024, 1, 1),
+                end_date=datetime(2024, 12, 31),
+                target_horizon=0,
+            )
+
+    def test_config_construction_does_not_cross_validate_model_vs_target(self):
+        """TrainingConfig construction only validates each field is a known
+        value -- it does NOT cross-validate model_type against target_type.
+        That cross-check (the #947 guard) runs at run_training_pipeline()
+        entry instead, so config objects remain freely constructible/mutable
+        before a run, and CLI callers that don't yet expose --target-type
+        (e.g. `atb train cloud --model-type tft`) are unaffected."""
+        # tft (binary_classification head) + default target_type=regression
+        # would fail the cross-check, but must NOT fail here.
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            model_type="tft",
+        )
+        assert config.model_type == "tft"
+        assert config.target_type == "regression"
+
+    def test_accepts_lightgbm_model_type(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            model_type="lightgbm",
+        )
+        assert config.model_type == "lightgbm"
+
+    def test_accepts_meta_label_target_type_with_primary_model_type(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            target_type="meta_label",
+            primary_model_type="basic",
+        )
+        assert config.target_type == "meta_label"
+        assert config.primary_model_type == "basic"
+
+    def test_meta_label_without_primary_model_type_raises(self):
+        """meta_label needs a primary signal to run forward first --
+        primary_model_type names its registry model_type. Required, per
+        train.py's --primary-model-type help text."""
+        with pytest.raises(ValueError, match="primary_model_type"):
+            TrainingConfig(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_date=datetime(2024, 1, 1),
+                end_date=datetime(2024, 12, 31),
+                target_type="meta_label",
+            )
+
+    def test_use_mock_data_defaults_to_false(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+        )
+        assert config.use_mock_data is False
+
+    def test_use_mock_data_is_settable(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+            use_mock_data=True,
+        )
+        assert config.use_mock_data is True
+
+    def test_primary_model_type_defaults_to_none(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+        )
+        assert config.primary_model_type is None
 
     def test_days_requested(self):
         # Arrange

@@ -1,5 +1,6 @@
 """Unit tests for ML training pipeline orchestration module."""
 
+import json
 from datetime import datetime
 from importlib.util import find_spec
 from unittest.mock import MagicMock, patch
@@ -11,8 +12,11 @@ import pytest
 _TENSORFLOW_AVAILABLE = find_spec("tensorflow") is not None
 
 from src.ml.training_pipeline.config import TrainingConfig, TrainingContext, TrainingPaths
+from src.ml.training_pipeline.labels import LabelResult
+from src.ml.training_pipeline.meta_labels import META_LABEL_FEATURE_ORDER
 from src.ml.training_pipeline.pipeline import (
     TrainingResult,
+    _build_alt_target,
     _generate_version_id,
     enable_mixed_precision,
     run_training_pipeline,
@@ -208,6 +212,280 @@ class TestEnableMixedPrecision:
 
 
 @pytest.mark.fast
+class TestBuildAltTarget:
+    """_build_alt_target's triple_barrier branch must emit class INDICES
+    {0, 1, 2} for sparse_categorical_crossentropy, not the raw direction
+    values {-1, 0, 1} triple_barrier_labels() returns -- an #838-class units
+    bug (raw values fed straight into a loss that requires indices in
+    [0, num_classes) would crash or silently corrupt every tft_ternary
+    training run). class_labels=[-1, 0, 1] (task_types.py) is the single
+    source of truth for both this training-side encoding and OnnxRunner's
+    inference-side decoding -- they must never drift apart.
+    """
+
+    def test_triple_barrier_values_are_class_indices_not_raw_directions(self):
+        idx = pd.date_range("2024-01-01", periods=5, freq="1h")
+        merged_df = pd.DataFrame(
+            {"close": [100.0] * 5, "high": [100.0] * 5, "low": [100.0] * 5}, index=idx
+        )
+        feature_data = pd.DataFrame({"dummy": [0.0] * 5}, index=idx)
+
+        raw_label = LabelResult(
+            values=np.array([-1, 0, 1, -1, 1], dtype=np.int64),
+            valid_mask=np.array([True, True, True, True, True]),
+            horizon_bars=336,
+        )
+
+        with patch(
+            "src.ml.training_pipeline.pipeline.triple_barrier_labels",
+            return_value=raw_label,
+        ):
+            target_array, valid_mask = _build_alt_target(
+                "triple_barrier", 1, merged_df, feature_data
+            )
+
+        # class_labels = [-1, 0, 1] -> index 0 is direction -1, index 1 is
+        # direction 0, index 2 is direction 1.
+        assert list(target_array) == [0.0, 1.0, 2.0, 0.0, 2.0]
+        assert list(valid_mask) == [True, True, True, True, True]
+
+    def test_triple_barrier_invalid_rows_stay_masked_out(self):
+        """Invalid (unresolved) rows carry the LabelResult placeholder value
+        0 (see LabelResult docstring); they must remain excluded via
+        valid_mask regardless of how the placeholder maps through the
+        class_labels encoding."""
+        idx = pd.date_range("2024-01-01", periods=3, freq="1h")
+        merged_df = pd.DataFrame(
+            {"close": [100.0] * 3, "high": [100.0] * 3, "low": [100.0] * 3}, index=idx
+        )
+        feature_data = pd.DataFrame({"dummy": [0.0] * 3}, index=idx)
+
+        raw_label = LabelResult(
+            values=np.array([1, 0, 0], dtype=np.int64),
+            valid_mask=np.array([True, True, False]),
+            horizon_bars=336,
+        )
+
+        with patch(
+            "src.ml.training_pipeline.pipeline.triple_barrier_labels",
+            return_value=raw_label,
+        ):
+            _target_array, valid_mask = _build_alt_target(
+                "triple_barrier", 1, merged_df, feature_data
+            )
+
+        assert list(valid_mask) == [True, True, False]
+
+
+@pytest.mark.fast
+class TestRunMetaLabelPipeline:
+    """entrant (a): the sklearn-only training path (target_type="meta_label"),
+    which run_training_pipeline dispatches to BEFORE the TensorFlow
+    availability check and BEFORE validate_target_head_compatibility (model_type
+    is irrelevant for meta_label -- it always trains a LogisticRegression
+    regardless of --model-type, see train.py's help text)."""
+
+    @staticmethod
+    def _synthetic_price_df(periods=400):
+        rng = np.random.default_rng(21)
+        closes = 100.0 + np.cumsum(rng.normal(0, 0.3, periods))
+        return pd.DataFrame(
+            {
+                "open": closes - 0.1,
+                "high": closes + 0.5,
+                "low": closes - 0.5,
+                "close": closes,
+                "volume": 1000.0 + rng.uniform(0, 50, periods),
+            },
+            index=pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC"),
+        )
+
+    class _StubPrimarySignalGenerator:
+        """Fires a deterministic long/short pattern with predicted_return
+        metadata -- mirrors MLBasicSignalGenerator's generate_signal
+        contract without needing a real ONNX bundle."""
+
+        warmup_period = 60
+
+        def generate_signal(self, df, index, regime=None):
+            from src.strategies.components.signal_generator import Signal, SignalDirection
+
+            if index % 15 != 0:
+                return Signal(
+                    direction=SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={}
+                )
+            direction = SignalDirection.BUY if (index // 15) % 2 == 0 else SignalDirection.SELL
+            return Signal(
+                direction=direction,
+                strength=0.5,
+                confidence=0.5,
+                metadata={"predicted_return": 0.01 if direction == SignalDirection.BUY else -0.01},
+            )
+
+    def _make_ctx(self, tmp_path, **overrides):
+        defaults = dict(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            target_type="meta_label",
+            primary_model_type="basic",
+        )
+        defaults.update(overrides)
+        config = TrainingConfig(**defaults)
+        paths = TrainingPaths(
+            project_root=tmp_path, data_dir=tmp_path / "data", models_dir=tmp_path / "models"
+        )
+        return TrainingContext(config=config, paths=paths)
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_dispatches_before_tensorflow_check(self, mock_download, mock_signal_cls, tmp_path):
+        """Must not raise ImportError even when _TENSORFLOW_AVAILABLE is
+        False -- meta_label training is sklearn-only."""
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path)
+
+        with patch("src.ml.training_pipeline.pipeline._TENSORFLOW_AVAILABLE", False):
+            result = run_training_pipeline(ctx)
+
+        assert result.success is True
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_successful_training_writes_artifacts(self, mock_download, mock_signal_cls, tmp_path):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is True
+        assert result.artifact_paths is not None
+        assert result.artifact_paths.directory.exists()
+        onnx_path = result.artifact_paths.directory / "model.onnx"
+        assert onnx_path.exists()
+        metadata_path = result.artifact_paths.directory / "metadata.json"
+        assert metadata_path.exists()
+
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        assert metadata["task_type"] == "binary_classification"
+        assert metadata["class_labels"] == [0, 1]
+        assert metadata["primary_model_type"] == "basic"
+        assert metadata["feature_names"] == list(META_LABEL_FEATURE_ORDER)
+        # Same top-level "timeframe" regression guard as
+        # TestRunTrainingPipeline::test_successful_training_price_only --
+        # registry.py::_load_bundle reads it at the top level, not nested
+        # under training_params.
+        assert metadata.get("timeframe") == "1h"
+
+        latest_link = result.artifact_paths.directory.parent / "latest"
+        assert latest_link.is_symlink()
+        assert latest_link.resolve() == result.artifact_paths.directory.resolve()
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_primary_signal_generator_constructed_with_config_fields(
+        self, mock_download, mock_signal_cls, tmp_path
+    ):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(
+            tmp_path, symbol="ETHUSDT", timeframe="4h", primary_model_type="sentiment"
+        )
+
+        run_training_pipeline(ctx)
+
+        mock_signal_cls.assert_called_once_with(
+            model_type="sentiment", timeframe="4h", symbol="ETHUSDT"
+        )
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_zero_fires_fails_gracefully(self, mock_download, mock_signal_cls, tmp_path):
+        from src.strategies.components.signal_generator import Signal, SignalDirection
+
+        mock_download.return_value = self._synthetic_price_df()
+        always_hold = MagicMock()
+        always_hold.warmup_period = 5
+        always_hold.generate_signal.return_value = Signal(
+            direction=SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={}
+        )
+        mock_signal_cls.return_value = always_hold
+        ctx = self._make_ctx(tmp_path)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is False
+        assert "fire" in result.metadata.get("error", "").lower()
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_fire_generation_checkpoint_wired_by_default(
+        self, mock_download, mock_signal_cls, tmp_path
+    ):
+        """#955 defect 2's motivating call site: the real meta_label
+        training run's fire generation (the ~60-min uncheckpointed pass
+        that task-lifetime caps killed twice) must be checkpoint-protected
+        by default, with the checkpoint under the run's data dir and
+        removed after a successful run (crash-recovery artifact, not a
+        cache -- a completed checkpoint must never silently reuse fires
+        across primary-model retrains)."""
+        from pathlib import Path
+
+        from src.ml.training_pipeline.meta_labels import (
+            run_primary_signal_forward as real_run_primary_signal_forward,
+        )
+
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path)
+
+        captured: dict = {}
+
+        def spy(signal_generator, df, start_index=None, **kwargs):
+            captured.update(kwargs)
+            return real_run_primary_signal_forward(signal_generator, df, start_index, **kwargs)
+
+        with patch("src.ml.training_pipeline.pipeline.run_primary_signal_forward", side_effect=spy):
+            result = run_training_pipeline(ctx)
+
+        assert result.success is True
+        checkpoint_path = captured.get("checkpoint_path")
+        assert checkpoint_path is not None
+        checkpoint_path = Path(checkpoint_path)
+        assert ctx.paths.data_dir in checkpoint_path.parents
+        assert not checkpoint_path.exists()  # removed after success
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_fire_generation_checkpoint_disableable_via_config(
+        self, mock_download, mock_signal_cls, tmp_path
+    ):
+        from src.ml.training_pipeline.meta_labels import (
+            run_primary_signal_forward as real_run_primary_signal_forward,
+        )
+
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path, meta_label_fire_checkpoint_dir=None)
+
+        captured: dict = {}
+
+        def spy(signal_generator, df, start_index=None, **kwargs):
+            captured.update(kwargs)
+            return real_run_primary_signal_forward(signal_generator, df, start_index, **kwargs)
+
+        with patch("src.ml.training_pipeline.pipeline.run_primary_signal_forward", side_effect=spy):
+            result = run_training_pipeline(ctx)
+
+        assert result.success is True
+        assert captured.get("checkpoint_path") is None
+
+
+@pytest.mark.fast
 @pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
 class TestRunTrainingPipeline:
     """Test run_training_pipeline function."""
@@ -321,6 +599,16 @@ class TestRunTrainingPipeline:
         assert result.duration_seconds > 0
         assert "symbol" in result.metadata
         assert result.metadata["symbol"] == "BTCUSDT"
+        # Regression guard: found while running Phase 2b item 6's
+        # acceptance tests for real -- registry.py::_load_bundle reads a
+        # TOP-LEVEL "timeframe" key (md.get("timeframe", ...)), but this
+        # metadata dict only ever set it nested under "training_params".
+        # Every bundle trained via this pipeline registered with
+        # StrategyModel.timeframe == "unknown", making it unfindable by any
+        # symbol/timeframe/model_type lookup (select_bundle,
+        # get_bundle_by_key) -- the exact mechanism every exam signal
+        # generator and MLBasicSignalGenerator depend on.
+        assert result.metadata.get("timeframe") == "1h"
 
     def _make_price_df(self, periods=200):
         """Build a deterministic OHLCV frame with varying prices."""
@@ -351,6 +639,9 @@ class TestRunTrainingPipeline:
         mocks["build_tf_datasets"].return_value = (MagicMock(), MagicMock())
         model = MagicMock()
         model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
+        # smoothed_return seeds target_distribution from model.predict on the
+        # training split -- a bare MagicMock isn't array-convertible there.
+        model.predict.return_value = np.full((40, 1), 0.001, dtype=np.float32)
         mocks["create_model"].return_value = model
         mocks["validate_model_robustness"].return_value = {}
         mocks["evaluate_model_performance"].return_value = {"test_rmse": 0.1}
@@ -665,6 +956,207 @@ class TestRunTrainingPipeline:
         # Assert - should not fail on timezone mismatch
         # Will fail on other things (like insufficient data), but that's expected
         assert result.success is False
+
+    def test_incompatible_target_type_fails_loud_before_download(self, tmp_path):
+        """#947 guard: model_type's head must match target_type's task type.
+        tft (binary_classification head) + target_type=regression (the
+        default) previously trained silently against the wrong target --
+        must now fail loudly, and fast (before any data download)."""
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            model_type="tft",
+            target_type="regression",
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+
+        with patch("src.ml.training_pipeline.pipeline.download_price_data") as mock_download:
+            result = run_training_pipeline(ctx)
+
+        assert result.success is False
+        assert "incompatible" in result.metadata["error"]
+        mock_download.assert_not_called()
+
+    def test_compatible_classification_target_passes_the_guard(self, tmp_path):
+        """tft + binary_direction is the compatible pairing -- must NOT be
+        rejected by the guard (only fails later for unrelated pipeline
+        reasons, since data isn't mocked in this test)."""
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            model_type="tft",
+            target_type="binary_direction",
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+
+        with patch("src.ml.training_pipeline.pipeline.download_price_data") as mock_download:
+            mock_download.side_effect = RuntimeError("stop after the guard, unrelated to it")
+            result = run_training_pipeline(ctx)
+
+        # Guard passed (download was actually attempted); failure is the
+        # unrelated injected error, not an "incompatible" guard rejection.
+        mock_download.assert_called_once()
+        assert result.success is False
+        assert "incompatible" not in result.metadata["error"]
+
+    def test_binary_direction_target_builds_labels_from_raw_close(self, tmp_path):
+        """target_type=binary_direction must override the regression target
+        with binary_direction_labels() output, row-aligned to feature_data,
+        with trailing unresolved rows dropped from BOTH feature and target
+        arrays (never silently zero-filled)."""
+        from src.ml.training_pipeline.labels import binary_direction_labels
+
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+            model_type="tft",
+            target_type="binary_direction",
+            target_horizon=1,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+
+        # create_robust_features mocked to a byte-identical copy of price_df
+        # (plus a feature column) so feature_data's index is the SAME as
+        # merged_df's -- isolates the alt-target alignment/truncation logic
+        # from feature-engineering warmup-row-dropping concerns.
+        feature_df = price_df.copy()
+        feature_df["close_scaled"] = 0.5
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        assert result.success is True, result.metadata
+        feature_array, target_array, seq_len = mocks["create_sequences"].call_args.args
+        assert seq_len == 10
+
+        expected_label = binary_direction_labels(price_df["close"], horizon=1)
+        expected_target = expected_label.values[expected_label.valid_mask].astype(np.float32)
+        expected_rows = int(expected_label.valid_mask.sum())
+
+        assert len(target_array) == expected_rows
+        assert len(feature_array) == expected_rows
+        np.testing.assert_array_equal(target_array, expected_target)
+        # Every value is 0 or 1 -- confirms the classification label (not the
+        # continuous close price) reached create_sequences.
+        assert set(np.unique(target_array)).issubset({0.0, 1.0})
+
+    def test_smoothed_return_target_builds_labels_from_raw_close(self, tmp_path):
+        """target_type=smoothed_return overrides the regression target with
+        smoothed_forward_return_labels() output (still a REGRESSION task
+        type, so a regression-headed model_type is compatible)."""
+        from src.ml.training_pipeline.labels import smoothed_forward_return_labels
+
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+            target_type="smoothed_return",
+            target_horizon=3,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+
+        feature_df = price_df.copy()
+        feature_df["close_scaled"] = 0.5
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        assert result.success is True, result.metadata
+        feature_array, target_array, _ = mocks["create_sequences"].call_args.args
+
+        expected_label = smoothed_forward_return_labels(price_df["close"], horizon=3)
+        expected_target = expected_label.values[expected_label.valid_mask].astype(np.float32)
+
+        assert len(target_array) == len(feature_array)
+        np.testing.assert_allclose(target_array, expected_target, rtol=1e-5)
+
+    def test_regression_target_type_is_byte_identical_to_current_behavior(self, tmp_path):
+        """target_type="regression" (the default) must produce EXACTLY the
+        existing target_array -- no truncation, no row drops."""
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path,
+            data_dir=tmp_path / "data",
+            models_dir=tmp_path / "models",
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+        price_df = self._make_price_df()
+        feature_df = price_df.copy()
+        feature_df["close_scaled"] = 0.5
+
+        stack, mocks = self._pipeline_mocks()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            mocks["create_robust_features"].return_value = (
+                feature_df,
+                {"close": MagicMock()},
+                ["close_scaled"],
+            )
+            result = self._run_pipeline_with_mocks(ctx, price_df, mocks)
+
+        assert result.success is True, result.metadata
+        _, target_array, _ = mocks["create_sequences"].call_args.args
+        np.testing.assert_allclose(target_array, feature_df["close"].to_numpy(dtype=np.float32))
+        assert len(target_array) == len(feature_df)
 
     def test_evaluation_crash_does_not_lose_trained_model(self, tmp_path):
         """Regression guard for #936: evaluate_model_performance/validate_model_robustness

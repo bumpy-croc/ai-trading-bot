@@ -65,6 +65,11 @@ class PredictionResult:
     cache_hit: bool = False
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Ordered class probabilities for classification bundles, propagated
+    # from ModelPrediction.probabilities. None for every regression bundle
+    # (purely additive -- see docs/prediction.md and OnnxRunner's
+    # _process_classification_output).
+    probabilities: tuple[float, ...] | None = None
 
 
 class PredictionEngine:
@@ -187,6 +192,7 @@ class PredictionEngine:
             bundle = self._resolve_bundle(model_name)
             model = bundle.runner
             prepared_features = self._prepare_features_for_bundle(bundle, features, features_df)
+            final_probabilities: tuple[float, ...] | None = None
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
@@ -200,11 +206,17 @@ class PredictionEngine:
                 final_conf = prediction.confidence
                 final_dir = prediction.direction
                 final_model_name = prediction.model_name
+                final_probabilities = getattr(prediction, "probabilities", None)
                 member_preds = None
                 features_used = self._count_features_used(prepared_features)
 
-                # Apply rolling MinMax denormalization if needed
-                final_price = self._apply_rolling_denormalization(final_price, bundle, data)
+                if final_probabilities is None:
+                    # Apply rolling MinMax denormalization if needed. Classification
+                    # bundles have no price to denormalize -- probabilities is the
+                    # authoritative output there (see PredictionResult.probabilities);
+                    # skipping this also avoids the finite-price guard below rejecting
+                    # a classifier's deliberate NaN price placeholder.
+                    final_price = self._apply_rolling_denormalization(final_price, bundle, data)
             else:
                 # Run all available structured runners for ensemble
                 preds = []
@@ -321,6 +333,7 @@ class PredictionEngine:
                 inference_time=inference_time,
                 features_used=features_used,
                 cache_hit=cache_hit,
+                probabilities=final_probabilities,
                 metadata={
                     "data_length": len(data),
                     "feature_extraction_time": feature_time,
@@ -687,6 +700,20 @@ class PredictionEngine:
                     "loaded": True,
                     "inference_time_avg": self._get_model_avg_inference_time(bundle.key),
                 }
+        # list_bundles() only exposes "latest" per (symbol, timeframe,
+        # model_type) -- a caller pinning to a SPECIFIC, non-latest version
+        # (e.g. the TARGET-REDESIGN exam harness's fold-runner) passes that
+        # version's exact bundle.key, which won't appear above. Mirrors
+        # _resolve_bundle's identical fallback.
+        versioned_bundle = self.model_registry.get_bundle_by_key(model_name)
+        if versioned_bundle is not None:
+            return {
+                "name": versioned_bundle.key,
+                "path": getattr(versioned_bundle.runner, "model_path", None),
+                "metadata": versioned_bundle.metadata,
+                "loaded": True,
+                "inference_time_avg": self._get_model_avg_inference_time(versioned_bundle.key),
+            }
         return {}
 
     def get_performance_stats(self) -> dict[str, Any]:
@@ -1004,6 +1031,14 @@ class PredictionEngine:
             for bundle in bundles:
                 if bundle.key == model_name:
                     return bundle
+            # list_bundles() only exposes "latest" per (symbol, timeframe,
+            # model_type) -- a caller pinning to a SPECIFIC, non-latest
+            # version (e.g. the TARGET-REDESIGN exam harness's fold-runner)
+            # passes that version's exact bundle.key, which won't appear
+            # above. get_bundle_by_key searches every loaded version.
+            versioned_bundle = self.model_registry.get_bundle_by_key(model_name)
+            if versioned_bundle is not None:
+                return versioned_bundle
             raise ModelNotFoundError(f"Model '{model_name}' not found")
 
         if bundles:

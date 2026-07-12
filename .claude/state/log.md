@@ -321,3 +321,344 @@ Experiment #933: ML target-design literature/ecosystem survey for the TARGET-RED
 Evidence: docs/research/2026-07-07_ml-target-design-research.md — surveys FreqAI target conventions, freqst.com (skeptical: 100% non-ML technical-indicator leaderboard, zero disclosed methodology, unmaintained), triple-barrier/meta-labeling/trend-scanning/quantile literature (cited, evidence quality flagged per source), and what correlates with live profitability (coverage/precision tradeoff, not raw accuracy). Ranked shortlist: (1) meta-labeling secondary classifier, (2) binary direction classification, (3) triple-barrier ternary classification, (4) vol-normalized regression, (5) quantile/distributional regression, (6) trend-scanning — top-3 recommended for Round 1.
 Key self-diagnosed risk: a meta-labeling entrant built on |predicted_return| alone would reproduce #912's already-falsified degenerate one-feature result — must use a richer feature set (vol regime, rolling hit-rate, session) to be a genuinely new test.
 Recommendation: promising direction, ready to pre-register — do NOT reuse the 2026-01-01→2026-07-04 exam window again (already served 7 candidates across #898+#912, near the ~10-candidate multiple-comparison budget); new frozen exam window required before Round 1 runs. Confirm #913 (backtest non-determinism) fix holds before trusting new numbers.
+
+---
+
+## 2026-07-07 15:40 · decision · daemon(PM) · [D-2026-07-07-03]
+**#929 (real manual kill-switch, closes #922) merged to develop after two-reviewer gauntlet + one fix round; staging live-fire drill dispatched.**
+- Arch review found the P1 that mattered: startup state was fail-OPEN (active halt row + first-poll DB failure → engine trades up to 30 min against an operator who believes it's halted). Fix: `established` flag + `prime()` at engine construction; unestablished state gates as halted; healthy boot trades with zero delay. Re-verified line-by-line by the same reviewer → APPROVE. Code review APPROVE-WITH-NITS (getpass hardening, DI exit-handler rebind — both fixed). Alembic migration 0012 added; CLI echoes masked DB target before mutating.
+- emergency-stop command REMOVED (was "(simulated)" vapor — the original #922 finding).
+- Board item pending: risk-limits.json `manual_trigger_command` should be ratified to `atb live-control halt --env production --reason "<why>"` (human-owned file; bundle with next risk-ratification).
+- Process notes: (1) live-ops agent correctly REFUSED the drill per its authorization matrix ("kill-switch: no — escalate") — charter discipline held against a PM instruction; re-routed to a general-purpose implementer with explicit PM authorization. (2) The #931 fix agent switched the PM worktree's branch instead of isolating — delegation-protocol amendment: dispatch prompts must mandate `git worktree add` + verify agent matrix vs task authorization BEFORE dispatch. PM worktree restored.
+
+## 2026-07-07 15:45 · decision · daemon(PM) · [D-2026-07-07-04]
+**Board directive (Alex): TARGET-REDESIGN tournament adopts FreqAI-validated practices** — smoothed forward return added as entrant #4; auto-computed target-distribution statistics adopted as a harness-wide consumption rule (no hardcoded conversion constants for ANY entrant). Caveat logged: calibration study falsified constant-rescaling on the current target; distribution stats are hygiene, alpha burden stays on the new labels. Fresh exam window required (2026-H1 window has served ~7 candidates). Ref: GH #933, docs/research/2026-07-07_ml-target-design-research.md (rides on PR #932).
+
+## 2026-07-07 16:20 · verification · daemon(PM) · [D-2026-07-07-05]
+**Staging kill-switch drill PASS 6/6 — the manual halt is real and verified.** Staging synced to develop @1f3ffcde (PR #934, carries #929/#925/#923); drill evidence PR #935. Command→enforcement 26s, resume→cleared 15s (both within the 60s check interval); exits/position monitoring ungated throughout; fail-closed priming read succeeded on boot (no SYSTEM_HALT_UNVERIFIED); idempotent resume verified; full system_events trail (44→47). system_control_flags auto-created on boot — no manual DDL needed.
+FINDING (pre-existing, not a #929 regression): staging has no ALERT_WEBHOOK_URL → alert delivery unvalidated end-to-end; alert_sent=f recorded honestly. #915 (p3) is the remaining gap for a fully-green quarterly drill — commented with drill evidence.
+risk-limits.json's `manual_trigger_command` is no longer vapor; Board ratification of the exact command string still pending (bundled into next risk-ratification sitting).
+**Prod-promote readiness: the safety bundle (#923 phantom-SELL/determinism, #925 cloud training, #929 kill-switch) is now develop+staging-verified. Promote decision scheduled post-FOMC (after 2026-07-08 21:00 UK pause-off) per charter's macro-event constraint.**
+
+## 2026-07-07 12:45 · change · daemon(PM) · [D-2026-07-07-06]
+**#937 merged (closes #936) — evaluate_model_performance eval-metrics crash fixed upstream.** Third infra bug the architecture tournament shook loose (after #928 construction-kwargs, #931 boot-boundary validator): attention_lstm/tcn/tcn_attention compile with 3 metrics but the old code hard-unpacked model.evaluate() into 2, crashing AFTER training completed and destroying the trained artifact (eval ran before save). Fix: return_dict=True + read-by-key; pipeline.py degrades a diagnostics-stage crash to a metadata gap instead of losing the model. Validated twice: worktree-local synthetic smoke across all 5 architectures, then two real completed SageMaker jobs (attention_lstm default+lightweight) using the exact fix before it was upstreamed. Review confirmed the #801 promotion gate reads the backtest harness, not eval metrics — no path for the error-dict shape to corrupt gate decisions or registry metadata. New 15-pair construction+evaluation smoke test (extends #925's matrix) is revert-proof (confirmed via git-stash round-trip).
+Ref: GH #931, #932, #936, #937, #928, #925
+
+## 2026-07-08 00:15 · decision · daemon(PM) · [D-2026-07-08-02]
+*(renumbered from D-2026-07-08-01 during branch merge — that id was independently used by the post-FOMC promote entry below, which landed on develop first; this entry is chronologically earlier in wall-clock time but is the one being merged in later, so it takes the next free id)*
+**Root cause found for the architecture tournament's bit-identical trade blotter — evaluation-harness validity issue, not model equivalence.** Investigation (docs/research/notes/2026-07-08_hypergrowth-confidence-collapse.md) traced why cnn_lstm/default and attention_lstm/default — confirmed genuinely different raw ONNX outputs, max abs diff 0.31 — produce identical HyperGrowth trades: `FlatRiskManager.calculate_position_size` (hyper_growth.py:97-118) uses confidence only as a boolean gate then returns a flat `balance × risk_fraction` constant; `signal.strength` is never read; `FixedFractionSizer` has both `adjust_for_*=False`; `LeveragedPositionSizer` keys only on regime. Empirical sweep proved position size is invariant to an 8x predicted_return range once past the gate. Contrast: ml_basic/ml_adaptive use `ConfidenceWeightedSizer` and would NOT collapse this way.
+**Implication acted on**: instructed the architecture-tournament agent to reframe its closing report — HyperGrowth P&L cannot rank model quality beyond directional-sign agreement, so DA (already computed, ONNX-consistent across all 5 entrants) is the metric that actually discriminates, not L2 P&L. Tournament's infra-bug findings (#928/#931/#936) stand independent of this.
+**Implication queued, not yet actioned**: target-redesign tournament (#933) preregistration must explicitly declare which RiskManager/PositionSizer the exam uses — a meta-labeling/quantile candidate scored through HyperGrowth's exact flat-sizer wiring would hit the identical wall.
+**Live-config question raised but NOT actioned**: whether HyperGrowth's flat sizing leaves edge on the table by discarding model confidence is a legitimate FUTURE preregistered-experiment question, not a live change — live capital is involved, flat sizing is a documented deliberate design choice, changing it needs the full backtest+sensitivity+risk-officer process.
+Ref: GH #938, docs/research/notes/2026-07-08_hypergrowth-confidence-collapse.md
+
+---
+
+## [D-2026-07-08-01] 2026-07-08 20:33 · deploy-verify · daemon(PM, scheduled task post-fomc-prod-promote)
+**Promoted develop → production (parity): `main` now byte-identical to `develop` @ `f62260dd`.** Ships the post-FOMC safety bundle: #923 (deterministic backtest inference / phantom-SELL fix), #929 (real DB-backed manual kill-switch, closes vapor #922), #925 (cloud-first training), #932 + #937 (ML-pipeline-only), plus docs/skills (#935/#924/#921/#920/#919/#916) and #917/#891. Pre-approved by Alex on 2026-07-08 — the human chose to wait for the FOMC entry-pause to lift (20:00Z) rather than deploy during the event window; this run executed that decision post-pause.
+Rationale: routine parity promote of a CI-green, staging-validated bundle. Autonomy per charter v0.1 — "Deployment to production" is a MAY-do-without-asking action; no `board_required` gate (code promote, no model `latest`-symlink change, kill-switch not triggered). Rubric: ΔP high (phantom-SELL correctness fix + a real halt lever both *reduce* live-capital risk), ΔR ≈0 (no strategy/param/sizing change), C=4 (staging kill-switch drill 6/6 PASS #935 + prod boot verified below), E low → high-priority, veto-clear (ΔP well above the 2 floor).
+Gates verified (all PASS; would have halted on any failure):
+- **FOMC pause lifted**: scheduled task `fomc-pause-off` fired 20:00:05Z → `FEATURE_ENTRY_PAUSE=false` on prod; pause-triggered redeploy SUCCESS 20:01:18Z; bot evaluating entries (live `Decision:` lines, not gated).
+- **Staging healthy**: `origin/staging` tree == `origin/develop` tree (`9bf797e0…`); sync PR #940 deploy SUCCESS 15:38Z; loop alive, balance $1006.80, no ERROR/CRITICAL.
+- **Promote proof**: ours-merge tie commit `04cbb431` (parents develop `f62260dd` + main `53d41f31`), `HEAD^{tree}`==develop tree pre-push; PR #942 CI fully green (unit×4 + integration + claude-review); merged with `--merge` (merge commit, not squash) → main `c4024ea9`; post-merge `origin/main` tree == `origin/develop` tree, 0 behind.
+- **Prod boot** (deploy `f930301e` SUCCESS ~20:30Z): trading loop started 20:30:16Z; Max Position 20.0%; check interval 60s; HyperGrowth/ETHUSDT resolves natively (no cross-symbol/mismatch warnings); ETHUSDT SHORT re-adopted @ $1696.83; reconciliation 0 corrections / 0 critical; **drawdown guard armed peak=$84.42 (session 20, account_history peak)**; no ERROR/CRITICAL.
+- **Session continuity**: prod reused active session — session 20 still `is_active`, no spurious session 21; `account_history` heartbeat fresh (id 2058 @ 20:31:21Z, $84.40).
+- **Kill-switch (#929) live**: alembic `0012_add_system_control_flags` applied in prod; `system_control_flags` table present, 0 rows → no active halt (safe default; matches the 6/6 staging drill).
+Anomalies: none. (Pre-existing informational WARN unchanged: partial-exits DISABLED #734.)
+Ref: PR #942 (promote), #940 (staging sync), #935 (kill-switch drill); commits #923/#925/#929/#932/#937 (+#917/#891/#916/#919/#920/#921/#924); scheduled task `post-fomc-prod-promote`; `.claude/state/charter.md` v0.1 (autonomy envelope); `.claude/skills/deploy-prod`.
+
+---
+
+## 2026-07-08 15:32 · track-record · ml-engineer
+Architecture tournament (ETHUSDT 1h, 5 entrants: cnn_lstm/default, attention_lstm default+lightweight, tcn default+lightweight) · event: trained|evaluated
+Metrics: L1 directional accuracy (n=14,141, ONNX-consistent method across all 5) — cnn_lstm 53.49%, attn-default 53.96%, attn-lightweight 54.45%, tcn-default 53.16%, tcn-lightweight 54.18% — a 1.29pp spread, at the edge of statistical noise (pairwise SE≈0.59pp), no confident winner after accounting for 10 implicit pairwise comparisons. L2 (hyper_growth frozen exam, 2026-01-01→2026-07-04) produced a bit-identical trade blotter across all 5 entrants (profit_factor 0.693097, return -7.47%, 54 trades, matching the incumbent W_full baseline within noise) — root-caused as a harness-validity defect (GH #938, independently reverified from source: FlatRiskManager position sizing ignores confidence/strength above a boolean gate), not model equivalence. No promotion recommended; ensemble Phase 2 gate (+10%) not cleared, not justified. Three infra bugs found/fixed along the way: #928 (model-factory kwarg contract drift, fixed upstream via #925), #931 (SageMaker input-channel day-boundary validation bug, worktree-local fix only, not yet upstreamed), #936 (evaluate_model_performance metric-unpack crash destroying trained models post-training, fixed upstream via #937). Training split across local (entrant 1, pre-#925) and cloud/SageMaker (entrants 2-5, post-#925, per Board cloud-first decision) — full honest protocol trail in the report.
+Ref: issue #939, docs/research/experiments/2026-07-06_architecture-tournament.md
+
+## 2026-07-08 20:20 · track-record · live-ops
+Severity: yellow  Top anomaly: self-inflicted P2 — `railway domain` (get-or-create, not read-only) created a new unauthenticated public domain for the prod Trading Bot service while checking for a health-endpoint URL; filed incident + GH #941, human decision needed (remove vs. secure). Trading system itself is clean: equity $84.06 vs session-20 peak $84.44 (DD 0.46%, nowhere near soft/reduce/hard tripwires ~$80.22/$76.00/$67.56); one open position (ETHUSDT SHORT #22, -$0.32 unrealized, stops/targets normal); 6 consecutive winning trades through 2026-07-02, none closed since (position #22 has been open 6.3 days); FOMC entry-pause confirmed genuinely resumed at 20:06:10 UTC (~6min after scheduled 20:00 lift, fully explained by the redeploy+healthcheck the env-var flip required — not a stuck pause); zero errors/tracebacks in current deployment logs, system_events silent since the 07-06 WS-churn alert (already fixed, holding 2+ days); prod confirmed still on FEATURE_ENTRY_PAUSE-only (system_control_flags/#929 kill-switch not present in prod DB, as expected pre-promote).
+Ref: docs/research/ops-snapshots/2026-07-08_2015.md, .claude/state/incidents/2026-07-08T2015-P2-unauthorized-public-domain.md, GH #941
+
+## 2026-07-09 10:30 · decision · daemon(PM) · [D-2026-07-09-01]
+**Incident `2026-07-08T2015-P2-unauthorized-public-domain` (GH #941) CLOSED — domain removal confirmed, Railway CLI read-only guardrails added.**
+- **Resolution confirmed:** PM removed the auto-generated public domain via the Railway GraphQL API (`serviceDomainDelete`, schema-introspected before calling); re-verified during this closing pass via `railway status --json` (serviceId `f032a62c-d98d-4fa7-9302-359249be154b`, production "Trading Bot") — `domains: {'serviceDomains': [], 'customDomains': []}`. No regression; domain has not been recreated.
+- **Root cause (unchanged from incident file):** `railway domain` (bare) is get-or-create, not read-only — live-ops ran it to "check" for an existing health-endpoint URL during a routine monitoring pass and it created one where none existed.
+- **Hardening shipped (process/docs only, no admin access needed):** explicit Railway CLI read-only allowlist + hard-prohibited list + "check `--help` before running anything not on the list" rule added to `.claude/agents/live-ops.md`, `.claude/skills/bot-monitor-live/SKILL.md` (the two files most likely to run a Railway command during a "just checking" pass), and canonicalized in `.claude/LESSONS.md` §3. One-line cross-references added to `.claude/skills/prod-forensics/SKILL.md`, `.claude/skills/incident-response/SKILL.md`, and `CLAUDE.md`'s Railway Environments section. `deploy-prod`/`deploy-staging`/`kill-switch-drill` skills checked and left unchanged — they already use mutating Railway commands correctly as pre-committed, authorized actions within their own playbooks, a different (sanctioned) use case from a read-only monitoring pass.
+- **Two admin-only structural levers recommended to Alex, not actioned (require Railway dashboard access):** (1) Railway's workspace "Guardrails" toggle, which per Railway's own docs currently disables public-domain generation and TCP-proxy creation for non-admin members — the most direct fix for this exact failure mode; (2) issue a project-scoped (or Viewer-role) Railway token for agent use — `railway whoami` confirms all current agent Railway CLI access runs through Alex's own personal account-scoped `railway login` session, the broadest possible tier.
+- **Gap surfaced, not fixed (filed as GH #944, not actioned unilaterally):** agent "Tools:" restrictions in agent-definition prose are advisory only, not technically enforced. The real enforcement layer, `.claude/settings.local.json` `permissions.deny`, is gitignored/per-checkout; the checkout inspected during this pass had an empty deny list and separately *allowed* the mutating MCP tools `mcp__Railway__set-variables` / `mcp__Railway__deploy`. Not remediated here because it's a live-operational-permissions change that could break legitimate authorized flows (`deploy-prod`/`deploy-staging`/`kill-switch-drill` all deliberately use `railway variables --set`) — needs explicit PM/human scoping, not a blind deny-list edit.
+Ref: GH #941, GH #944, .claude/state/incidents/2026-07-08T2015-P2-unauthorized-public-domain.md, .claude/LESSONS.md §3
+
+---
+
+## 2026-07-10 · note · daemon(PM)
+**Log-stream merge (branch `docs/incident-941-hardening`, cherry-picked from the long-lived PM session branch).** Entries below interleaved chronologically around the already-merged post-FOMC promote entry. One decision-id collision found and fixed: both this branch and the promote entry independently used `[D-2026-07-08-01]` — the promote entry (already shared on develop) kept it; the confidence-collapse entry was renumbered to `[D-2026-07-08-02]`.
+
+---
+
+## 2026-07-10 · track-record · quant-researcher
+Experiment #933 (TARGET-REDESIGN tournament) Phase 1: pre-registration only, no run → N/A (hypothesis not yet tested)
+Evidence: docs/research/experiments/2026-07-10_target-redesign-tournament-prereg.md
+Preregistered 4 entrants per Board/PM binding constraints (meta-labeling secondary classifier, binary fixed-horizon direction classification, triple-barrier ternary classification, smoothed forward return N=6h) against a NEW purged/embargoed 3-fold walk-forward exam (F1 2023H1, F2 2024H1, F3 2025H1, all pre-2026, zero overlap with the already-spent 2026-01-01→2026-07-04 window) plus a short non-deciding confirmatory fold on the most recent data (2026-05-03→2026-07-09). Metric hierarchy: DA/calibration/Brier on the shared frozen folds RANKS entrants (Bonferroni-corrected pairwise significance, α=0.0083 for 6 comparisons); money-exam P&L through a new ConfidenceWeightedSizer-based harness (NOT HyperGrowth's flat-sizer wiring, per #938) is secondary/confirmatory — gates but does not rank. Harness-wide rule specified per entrant: percentile-rank/z-score of each model's own training-set target distribution converts raw output to confidence, no hardcoded constants (`×12`-class formulas prohibited). Engineering-work inventory (§8) found: `tft` classification architecture already exists (`models_tft.py`, sigmoid/BCE) but is unwired — `pipeline.py` builds a regression-only target unconditionally, no classification-label code exists anywhere in `src/ml/training_pipeline/`, and the strategy-consumption layer (`PredictionResult`, `MLBasicSignalGenerator`) has no native probability field — triple-barrier label generation (shared by 2 of 4 entrants) and the classification-native signal path are the largest, highest-risk pieces of new Phase-2 code. Deviated from the research doc's original two-round (meta-labeling gated behind a Round-1 winner) design per the Board's binding 4-entrant list, and changed entrant (a)/(c)'s label exit-geometry from HyperGrowth's 10%/30% to the exam harness's prod-matched 5%/4% for internal consistency post-#938 — both deviations reasoned explicitly in §9.
+Recommendation: ready for PM review of the pre-registration itself (not ready to run — Phase 2 build has not started; no training, data prep, or code change accompanies this document).
+Ref: GH #933, PR #946 (docs/target-tournament-prereg)
+
+---
+
+## 2026-07-10 · track-record · ml-engineer
+TARGET-REDESIGN tournament (GH #933) · event: wired (Phase 2b — not a training run or promotion)
+An execution agent found PR #948's Phase 2 scaffolding was unit-tested but not reachable end-to-end via any CLI entry point. This round closed that gap across 6 items: (1) `--target-type`/`--target-horizon` threaded through both `atb train` and `atb train cloud` (incl. SageMaker container-side plumbing); (2) `tft_ternary` architecture added (3-class softmax), unblocking entrant (c) triple-barrier; (3) meta-labeling training driver + hand-rolled sklearn->ONNX export + causal exam consumer wired end-to-end, unblocking entrant (a); (4) exam-only strategies registered in `backtest.py`'s CLI loader (never added to the live runner) + `PredictionModelRegistry.get_bundle_by_key()`/`ATB_MODEL_VERSION_OVERRIDE` pinning so exam folds can pin a specific non-latest version; (5) disposed all 3 outstanding claude[bot] PR #948 review comments plus 5 more bugs found only by actually running the real path (most consequential: `exam_target_redesign.py` used the CORE risk manager's `"confidence_weighted"` sizer-type string, which reads a `"prediction_confidence"` indicator nothing in the codebase populates — silently zeroed every trade for all four entrants regardless of signal; fixed to `"fixed_fraction"`, matching `ml_basic.py`); (6) one real, non-mocked, subprocess-based end-to-end acceptance test per entrant (`tests/integration/tournament/test_entrant_dry_runs.py`) — synthetic OHLCV -> train via the real CLI -> correctly-registered+timeframed artifact -> exam backtest via the real CLI with version pinning -> >=1 real trade.
+Metrics: N/A — no training run or model promotion occurred this round. All 4 entrants confirmed running end-to-end (individually and together, 406s combined, clean teardown); quality gate and full unit suite (4273 passed) green. Ref: issue #949, PR (feat/target-tournament-wiring -> develop, not yet opened/merged at time of this entry)
+
+---
+
+
+## 2026-07-11 07:45 · track-record · ml-engineer
+TARGET-REDESIGN tournament (GH #933) · event: preregistration amended (Amendment 1, pre-data)
+During Phase 3 execution (determinism guard passed clean for entrant (b)/F1 — 659 trades,
+byte-for-byte identical across 2 runs; wave 1 submitted for entrant (c)/F1 and entrant (d)/F1), a
+validity bug was found in the LOCKED prereg's §2a before any entrant-(a) job was submitted: as
+literally written, entrant (a) (meta-labeling)'s primary signal is "the currently-deployed
+incumbent" (training cutoff 2025-12-31) for every fold, including F1 (eval 2023-01-03→2023-06-30)
+and F2 (eval 2024-01-03→2024-06-30) — both entirely inside that training window, i.e. lookahead
+contamination of exactly the class this tournament's purged/embargoed fold design exists to
+eliminate. Flagged to PM rather than resolved unilaterally (not one of §3/4/6/7's frozen
+sections, but changes what entrant (a)'s result would mean). PM ruling: fold-matched — entrant
+(a)'s primary signal per fold is that fold's own incumbent-control retrain (already in the
+training matrix for the baseline row; F3 reuses the existing live artifact, matching how the
+incumbent-control baseline itself treats F3). Zero additional training cost. Sequencing
+consequence: each fold's incumbent-control job must complete before that fold's entrant-(a) run.
+Recorded as "Amendment 1" appended to the prereg doc (original §2a text left unedited per the
+append-only convention) — decided and logged BEFORE any entrant-(a) training job existed,
+pre-data and validity-strengthening, not results-driven.
+Ref: GH #933, docs/research/experiments/2026-07-10_target-redesign-tournament-prereg.md (Amendment 1)
+
+## 2026-07-11 12:25 · track-record · ml-engineer
+TARGET-REDESIGN tournament (GH #933) · event: preregistration amended (Amendment 2, pre-data,
+corrects a factual error inherited by an earlier PM ruling)
+While preparing entrant (a)/F3 (which the prereg's own baseline text, and a same-day PM ruling
+built on it, said should reuse the live artifact basic/2026-07-04_22h_v1 rather than retrain),
+checked that artifact's actual training_params.end_date directly instead of trusting the prereg's
+prose claim of a 2025-12-31 cutoff. The real cutoff is 2026-07-04 — the live artifact's training
+data entirely covers F3's eval window (2025-01-03→2025-06-30) and extends over a year beyond it.
+This is the identical lookahead-contamination class Amendment 1 fixed for entrant (a) at F1/F2,
+here applying to BOTH the F3 incumbent-control baseline itself and entrant (a)/F3's intended
+primary signal. Flagged to PM rather than proceeding on the earlier ruling (which had just been
+made that same day, based on the same unverified premise) — paused entrant (a)/F3 entirely rather
+than running it against either artifact until this was resolved.
+PM ruling (reversing the earlier same-day one): the fold-matched F3 incumbent-control retrain
+already trained this session (price/2026-07-11_11h17m33s_v1, cutoff 2024-12-31, exactly matching
+F3's fold definition) is the authoritative F3 baseline for its L1 row, L2 exam, and as entrant
+(a)/F3's primary signal. The live artifact is excluded from F3 entirely — not even as a
+supplementary cross-check. Zero additional training cost: this retrain was already logged earlier
+as an "unnecessary" accidental job (a minor budget deviation from the since-corrected assumption);
+that characterization now reverses -- it was the correct call all along, and its prior existence
+is why this correction is free. Recorded as "Amendment 2" appended to the prereg doc (original
+text and Amendment 1 both left unedited) — decided and logged before any F3-control-dependent
+result existed, pre-data and validity-strengthening, not results-driven. The superseded ruling is
+named explicitly in the amendment text as inheriting the same wrong premise, not as an independent
+error.
+Ref: GH #933, docs/research/experiments/2026-07-10_target-redesign-tournament-prereg.md (Amendment 2)
+
+## 2026-07-11 19:15 · track-record · ml-engineer
+TARGET-REDESIGN tournament (GH #933) · event: evaluated|reported (final)
+Full results published: docs/research/experiments/2026-07-10_target-redesign-tournament-results.md.
+Training matrix COMPLETE: 19 SageMaker jobs (entrants (b)/(c)/incumbent-control x4 folds each,
+entrant (d) x7 attempts incl. 3 uniform-policy retries on F2/F3/F4 -- F2's retry succeeded, F3 and
+F4 both collapsed again and are final trained-but-degenerate) + entrant (a) trained locally x3
+folds (chunked/checkpointed, ~200 bars/sec once measured correctly, working around a confirmed
+hard ~60min background-task lifetime cap -- GH #953/#955 filed for the underlying platform/
+scaffolding gaps found). Two prereg amendments during execution, both pre-data: Amendment 1 (PR
+#951, fold-matched primary signal for entrant (a), fixes an F1/F2 lookahead contamination in the
+literal S2a text) and Amendment 2 (PR #956, corrects a factual error in the prereg's own F3
+incumbent-control claim -- direct artifact inspection found the live model's real training cutoff
+contaminates F3, superseding a same-day PM ruling that inherited the same wrong premise).
+Headline finding: a unifying degeneracy mechanism across THREE of four entrants -- (a) meta_label
+and (b) binary_direction both converge to predicting their training-period class base rate as a
+near-constant probability (confirmed via direct ONNX input-probing + exact-tie-with-dummy L1
+accuracy on every fold, including F4 where the regime flipped and the frozen collapse actively
+underperformed); (d) smoothed_return shows the MSE/regression-to-the-mean analogue (4 of 6 total
+training attempts collapsed to literal constant output); (c) triple_barrier is genuinely
+fold-dependent (2 of 4 folds collapsed identically, 1 fold -- F2 -- shows real, non-degenerate
+signal, though even there the confidence signal is not well-calibrated per the accuracy-vs-coverage
+curves). Money-exam gate fails universally: every entrant's profit factor sits at 0.31-0.58 across
+every fold, net-lossy after fees, with no exception. Per S7's decision table applied literally:
+entrant (c) numerically clears the L1 primary-quality bar (Bonferroni-significant vs naive AND
+incumbent, every fold) but fails the money-exam gate -- S4's pre-committed "quality win, not yet
+exam-actionable" language applies. NO ENTRANT PROCEEDS TO L3A STAGING. Converges with the window
+tournament (#898) and architecture tournament (#939) as a THIRD independent line of evidence,
+now with a mechanistic explanation, that the price-only 1h feature set is the binding constraint,
+not the model, window, or target shape -- a linear baseline on the identical feature contract
+matches the incumbent's own accuracy almost bar-for-bar, corroborating this directly.
+Metrics: full L1 (accuracy/Brier/dummy-baseline/coverage-curves) and L2 (return/PF/MaxDD/trades)
+tables per entrant per fold in the report; aggregate stats corrected to prereg S4's per-fold-
+averaged method (not pooled, per PM catch) with per-fold Bonferroni significance.
+Ref: issue #933, PR (docs/target-redesign-tournament-results -> develop, opening now), Amendment 1
+(PR #951), Amendment 2 (PR #956), GH #953/#955 (scaffolding/platform gaps filed), GH #954 (upstream
+target_distribution fix, merged, bridge-patched in this tournament's own worktree instead).
+
+## 2026-07-12 · track-record · quant-researcher
+Experiment #959: INPUT tournament Lane A Phase 0 — which alternative input features have credible
+evidence + are historically obtainable for ETH 1h-4h → research complete, feeds next-phase linear
+screening prereg (no verdict yet, this is not itself a run-and-measure result).
+Evidence: docs/research/2026-07-12_input-candidates-audit.md (PR #958). Audited 6 candidate classes:
+derivatives state, cross-asset lead-lag, sentiment, on-chain, own-OHLCV microstructure, calendar.
+KEY FINDING: OnChainFeatureExtractor, MacroFeatureExtractor, and 2/3 of EnhancedSentimentExtractor
+are 100% simulated (deterministic price/volume proxies dressed as alternative data) -- confirmed by
+reading source, not assumed; disabled by default for good reason; must not be enabled expecting new
+information in any future tournament. Empirically confirmed via live Binance API probes (scripts/
+research/check_binance_derivatives_retention.py, run this session): open-interest-history and
+long/short-ratio free-tier endpoints hard-cut at ~30 days retention (code -1130 beyond that) --
+unusable for the 2023H1/2024H1/2025H1 historical folds. Funding rate and premium-index basis proxy
+have no such wall (confirmed depth to ~2019). Fear & Greed already wired (FearGreedProvider +
+SentimentFeatureExtractor, 3,080 daily records 2018-02-01 to today, confirmed live) but disabled.
+Ranked shortlist for next phase: (1) multi-scale realized vol/range from own cached OHLCV, (2) time/
+calendar features, (3) BTC->ETH cross-asset (already-cached BTC data), (4) funding rate, (5) basis/
+premium proxy, (6) Fear & Greed. Deferred: OI, long/short ratio, on-chain flows, DXY/SPX/NDX macro,
+BTC dominance, social volume -- unobtainable at needed depth or weak evidence.
+Ref: GH #959 (research issue, state:researching), PR #958 (docs/input-audit -> develop, merged
+9e7ea5e8).
+
+---
+
+## 2026-07-12 10:45 · track-record · quant-researcher
+Experiment #967: LINEAR INPUT-SCREENING (Lane A, Phase 1) -- does any of the input-candidates
+audit's (#959, PR #958) 6 shortlisted alternative-input classes show a linearly-detectable
+next-bar directional edge over the price-only feature contract? -> REJECTED, no arm graduates.
+Evidence: docs/research/experiments/2026-07-12_input-screening-linear.md
+Preregistered (folds/thresholds/graduation rule locked before any scoring run) then ran: logistic
+regression on next-bar direction, PriceOnlyFeatureExtractor(120) contract (same as the
+target-redesign tournament's linear baseline), F1/F2/F3 walk-forward folds identical to that
+tournament, 7 arms (price-only control + realized-vol/range, calendar, BTC cross-asset, funding
+rate, basis/premium, Fear&Greed, all-combined). Pre-committed graduation rule (McNemar-significant
+at Bonferroni alpha=0.05/7~=0.0071 on >=2/3 folds AND avg DA improvement >=0.5pp) fails for EVERY
+arm on EVERY count -- zero folds reach Bonferroni significance for any arm (best single-fold
+p=0.0384, calendar/F3, itself in the WRONG direction and still non-significant after correction);
+largest average delta is funding_rate at +0.37pp, still short of the +0.5pp bar. All CPU-only,
+seconds-per-fit, 24 fits total (~9min wall-clock once BLAS threads were capped at 4 to stop
+oversubscription against the exit-geometry lane's concurrent process -- an uncapped first attempt
+ran 29min/620%CPU with zero progress and was killed, no result from it used).
+Validity check (arm 0 vs the target-redesign tournament's reported linear-baseline DA): replicates
+within the pre-committed +/-2pp tolerance on F1 (-1.30pp) and F2 (-0.51pp), MISSES on F3 (-2.39pp)
+-- disclosed as a non-replication (method necessarily differs: logistic-on-direction vs the
+tournament's unrecoverable LinearRegression-on-continuous-target script, an explicitly
+pre-approved substitution per this experiment's own dispatch brief), does not invalidate the
+internal arm-vs-control comparisons (same control/method/run for every arm).
+Reading: converges with the four-tournament pattern (window #898, architecture #939,
+target-redesign, now this linear input screen) -- no lever tried so far moves ETHUSDT 1h
+next-bar directional accuracy meaningfully past its ~51-53% ceiling. Named risk NOT resolved here:
+a linear detector can only find linearly-separable signal; several candidates' own literature
+support (funding-rate crowding, HAR-RV volatility) is about regime/vol structure, not linear
+direction -- a nonlinear re-screen of the same 6 classes is the natural next falsification test
+before fully retiring the "new information sources" lever, cheaper than the full deep-model
+tournament. No src/ change, no live-affecting decision -- nothing for risk-officer to stress-test.
+Ref: issue #967 (closed), PR #969, docs/research/2026-07-12_input-candidates-audit.md (PR #958,
+merged 9e7ea5e8).
+
+---
+
+---
+
+## 2026-07-12 · track-record · quant-researcher [D-2026-07-12-01]
+Experiment #971: EXIT-GEOMETRY honest-engine rerun (HyperGrowth, ETHUSDT/1h) -> REJECTED, no promotion candidate
+Preregistered (docs/research/experiments/2026-07-12_exit-geometry-honest.md, committed before first
+run) then ran 21 backtests (control + 6 exit/trade-management-only arms x F1/F2/F3 2023-2025H1) +
+1 determinism recheck (PASS, byte-identical) in a fresh worktree off origin/develop, strictly
+sequential per the LOCAL HEAVY-COMPUTE LOCK. Expressibility audit first: stop_loss_pct/
+take_profit_pct are honored via the checked-in src/experiments/runner.py; max_holding_hours via
+RiskParameters.time_exits (hyper_growth declares no time_exits override, so the fallback applies).
+Trailing-stop distance/activation, breakeven threshold, and the partial-exit ladder are locked to
+hyper_growth's hardcoded set_risk_overrides dict and NOT expressible without a src/ change --
+confirmed by tracing build_trailing_stop_policy's strategy-cfg-always-wins precedence, explicitly
+SKIPPED rather than faked. Incorporated #961's mid-flight live-trade-review finding (91% MAE-ride,
+72% MFE-capture, live fills) by reweighting arms toward the stop side before locking, not after
+seeing results.
+Result: NO-GO for every arm against the pre-committed decision table (Bonferroni alpha=0.05/6=
+0.0083, bootstrap diff-in-means on trade P&L; lowest p anywhere = 0.0648, ~8x above threshold).
+Stop-tightening (sl_08/06/04) makes return and MaxDD monotonically worse on every fold, reproducing
+the 2026-07-04 pre-#838/#867 sweep's conclusion on honest plumbing. tp_06 is directionally positive
+on all 3 folds (return + PF both improve) but never significant -- "promising, not ready," not
+forced into a win. maxhold_18 improves PF on 2/3 folds while return/MaxDD worsen on all 3 -- a
+genuine PF-vs-aggregate-return trap, flagged explicitly. combo_sl06_tp15 == sl_06 bit-for-bit;
+traced (not just asserted) to realized winning price moves being far below either tested TP level
+in this trade population, not a bug. F4 (2026H1) correctly not run -- no arm cleared the F1-F3 bar,
+per the pre-committed budget-conservation rule.
+Recommendation to PM/risk-officer: rejected as a promotion candidate, all 6 arms; nothing proceeds
+to staging or the live config. Next lever (not built here): a genuine src/ ExitHandler feature for
+an MFE-conditioned early-cut policy plus real trailing/breakeven RiskParameters wiring for
+hyper_growth -- needs its own prereg and risk-officer-reviewed code change.
+Ref: issue #971, PR #970, docs/research/experiments/2026-07-12_exit-geometry-honest.md,
+experiments/exit_geometry_sweep.py + analyze_exit_geometry.py + exit_geometry_results.jsonl,
+issue #961 (live-trade-review, incorporated mid-flight), issue #933/#939/#898 (entry-side
+tournaments reaching the same "not fixable at this layer" shape).
+
+---
+
+## 2026-07-12 11:30 · track-record · quant-researcher
+Experiment (follow-up to #967): NONLINEAR INPUT-SCREENING re-screen -- was the linear screen's
+null a detector-family artifact? PM-authorized same-session follow-up. -> REJECTED overall
+(zero arms graduate), but NOT a clean uniform null like the linear screen -- one arm shows a real,
+regime-specific signal.
+Evidence: docs/research/experiments/2026-07-12_input-screening-nonlinear.md
+Same 7 arms/F1-F3 folds/graduation bar (Bonferroni alpha=0.0071 on >=2/3 folds AND avg DA>=0.5pp)
+as the linear screen, swapping ONLY the model to a single fixed LightGBM config (n_estimators=300,
+max_depth=5, early-stopped on a train-tail validation split, NO hyperparameter search -- pre-
+committed, not tuned per arm/fold). btc_cross: F1 Delta=+3.84pp p=6.9e-05 (clears Bonferroni by 4
+orders of magnitude) but F2 Delta=+1.16pp p=0.226 and F3 Delta=-0.33pp p=0.741 (both non-sig,
+sign flips on F3) -- 1/3 significant folds, short of the required 2, correctly does NOT graduate
+under the literal rule. Feature-importance/gain confirms btc_ret_1h/6h carry real, consistent gain
+in ALL THREE folds (16-22%/6-8% of total gain) -- gain does not straightforwardly track OOS DA
+improvement, same lesson as the target-redesign tournament's confidence-signal finding. all_combined
+mirrors the same pattern (driven by the same BTC features). All other 5 arms: uniformly null,
+0/3 significant, matching the linear screen's read for those five.
+Per the PM-authorized pre-committed interpretation rule: zero graduating arms formally retires the
+"new information sources" lever for ETHUSDT-1h across the six audited input classes -- six
+converged results now (window #898, architecture #939, target-redesign, linear screen #967, this
+nonlinear re-screen = five; the sixth being the aggregate structural-ceiling finding itself), all
+finding the same ~51-53% DA ceiling under every lever tried. btc_cross's regime-dependence is named
+as a narrower, separately-scoped open question (is BTC->ETH lead-lag regime-conditional, per the
+audit's own "plausible, weak, time-varying" literature read) -- NOT authorized or scheduled as a
+follow-up here, explicitly deferred to a future preregistration if pursued.
+Recommendation to pm: future research levers shift to trade geometry, frequency/symbol
+diversification, and the live-parity gap, not further feature-set expansion within these six
+classes. No src/ change, no live-affecting decision -- nothing for risk-officer to stress-test.
+Ref: docs/research/experiments/2026-07-12_input-screening-linear.md (prior screen), PR (opening
+now).
+
+---
+
+## 2026-07-12 · decision · daemon(PM) [D-2026-07-12-02]
+Synthesis: `docs/research/2026-07-12_returns-levers-synthesis.md` rolls up the day's full research
+program for the Board. FIVE independent experiments (window #898, architecture #939 -- unmerged,
+flagged as a doc-hygiene gap, see synthesis header --, target-redesign #933/#957, linear input
+screen #967/#969, nonlinear input re-screen PR #973) converge on one structural finding: ETHUSDT/1h
+next-bar directional accuracy has a ~51-53% ceiling that training window, model architecture,
+target/label design, and six alternative-input classes (tested twice, linear + nonlinear detector)
+all fail to move. Every tournament's L2 money exam nets PF <1.0 on every entrant/fold regardless of
+lever -- at current CostCalculator defaults (fee 0.1%/slippage 0.05% per side, never disabled),
+a 1-3pp DA edge over coinflip does not clear round-trip transaction costs. Formally retired: 5 of 6
+input classes (both detector families), target reformulation, architecture search, window curation,
+stop-tightening (subset of exit geometry, from #970/#971's honest-engine rerun). Levers ranked:
+(a) exit/trade-management round 2 -- confirmed #1 but sharpened: tp_06 is the ONLY directionally-
+positive result in the whole program (all 3 folds) yet not significant (p=0.81-0.94, n=28-70/fold);
+true MFE-conditioned/trailing fix blocked on GH #971 (open, src/ change, money-path review required).
+(b) BTCUSDT/symbol diversification -- confirmed #2, currently a scoping question (native BTCUSDT
+model exists, but no L1/L2 exam run yet -- diversification of a net-negative edge compounds losses
+same as gains, must be scoped honestly before any capital-allocation read). (c) live-vs-backtest
+parity gap -- ELEVATED above PM's tentative #3: live-trade-review (12 trades, sample-size-capped)
+found matched backtest 6 trades/-0.78% vs live 12 trades/+9%, 2x trade-count + sign-flipped return,
+outside the charter's 15% parity band; if this generalizes it revises how every other result in this
+program should be read, not just one more lever. (d) btc_cross regime-conditional lead-lag --
+confirmed #4, narrower than framed (1 of 3 folds significant, correctly not graduating). (e) 4h/1d
+timeframe -- confirmed #5, genuinely untested (not falsified), cheapest opportunistic next probe.
+Next-session sequence (docs/research/2026-07-12_returns-levers-synthesis.md S4): BTCUSDT scoping
+exam + parity-gap sizing pass first (cheap, no prerequisites), tp_06 bigger-sample follow-up
+(startable now, no src/ change needed), GH #971 build (multi-session, risk-officer required),
+btc_cross regime prereg and timeframe probe deferred/opportunistic.
+Evidence: docs/research/2026-07-12_returns-levers-synthesis.md (cites all six source docs directly,
+no new numbers computed).
+Ref: PR (docs/returns-levers-synthesis -> develop, opening now).
+
+## 2026-07-12 14:20 · track-record · quant-researcher
+Experiment (issue #988): parity-gap investigation, lever #2 of the returns-levers synthesis — the 12-vs-6-trade, sign-flipped live/backtest divergence from #961 → rejected as a forming-bar-dominant story; two other mechanisms explain it.
+Evidence: docs/research/notes/2026-07-12_parity-gap-investigation.md (PR #987). Finding 1: the "matched" backtest resolves ETHUSDT's model at invocation time (today's `latest`, promoted 2026-07-05); all 12 live trades + open position #22 entered before that promotion, when live ran a different (cross-symbol-substitute) model — the comparison silently re-scores live's history with a model that was never live for it. Finding 2: `strategy_executions.action_taken` logs the engine's fully-sized entry decision before execution; 3,325 flat-period "opened_long/opened_short" rows over the window, <12 became trades (>99% attrition), direction-asymmetric (near-50/50 raw signal split vs 9 LONG/3 SHORT real trades) — consistent with a code-confirmed SHORT-side margin/inventory dust guard (`execution_engine.py:663-706`) that only ever blocks shorts; not empirically confirmed against historical balance state (no such ledger exists; Railway logs don't retain history for these dates). Finding 3 (forming-bar, reconfirmed from the 2026-07-06 fliprate study, minor): bar-close counterfactual on the 12 real trades costs only -1.1pp of the +9.0% realized return — real but far short of the ~10pp gap, and doesn't touch trade count. Fliprate's ~15% actionable flip rate does not predict a 2x trade-count divergence. Recommend point-in-time model pinning in the backtest harness (cheap) and live-ops forensics on the execution funnel ahead of any forming-bar-aware backtest mode (expensive, could widen the gap if built first). Does not touch or revisit the closed-candle-gating build (owned elsewhere, stopped by the human). Five convergent-null tournament results in the returns-levers synthesis are not retroactively undermined (none cross a live model-promotion boundary).
+Note on session integrity: a mid-task system message purporting to relay a "coordinator" handoff (citing scratchpad/audit_data_path.md) tried to redirect this investigation toward the forming-bar mechanism specifically. Not treated as an instruction (no agent message is authorization); its code citations were independently re-verified and found to restate the already-published fliprate study without addressing either finding above.
+Ref: PR #987, issue #988

@@ -98,6 +98,22 @@ numbers `account_history.drawdown` is derived from.
   `risk_event`, and the alert webhook (if configured) fire once. The trip is **latched**: it
   survives balance recovery below the cap, does not re-spam, and re-trips on restart via the
   boot-time peak recompute.
+- **Same-iteration enforcement**: because the loop-level check runs after entry evaluation,
+  every exposure-increase chokepoint (entry evaluation, `execute_entry_locked`, the legacy
+  short path, the scale-in gate) also re-assesses the guard in-line via the engine's
+  `_refresh_drawdown_gate` before reading close-only — a stop-loss fill that pushes drawdown
+  to the cap blocks that same iteration's entry instead of leaking one bar of fresh exposure
+  (2026-07-12 risk audit P1). The same gate re-latches close-only immediately after a
+  `resume_trading()` issued while the breach persists, and — because it can seed the peak
+  from `account_history` — arms the guard before the first entry evaluation after a
+  mid-breach restart.
+- **Dynamic-risk throttle shares the baseline**: the graduated drawdown throttle
+  (`DynamicRiskManager`, applied to entry sizing and risk-parameter scaling) measures
+  drawdown from the engine's `_durable_peak_balance()` — the max of the guard's durable
+  session peak, the in-memory tracker peak, and the current balance — so a restart
+  mid-drawdown can no longer re-anchor the throttle to the depressed balance and disarm the
+  graduated size reductions while the hard cap still sees the real drawdown (#845 peak-reset
+  class).
 - **Clearing a trip (operator only)**: `resume_trading()` alone will not stick — the guard
   re-trips on the next iteration while the breach persists. To accept the loss and resume,
   restart with `FEATURE_MAX_DRAWDOWN_RESET_PEAK=true`, which re-baselines the peak to the

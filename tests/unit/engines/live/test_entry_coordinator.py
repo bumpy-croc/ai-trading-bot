@@ -579,8 +579,7 @@ def _make_runtime_entry_state() -> MagicMock:
     state.live_position_tracker.position_count = 0
     state.risk_manager = MagicMock()
     state.risk_manager.get_max_concurrent_positions.return_value = 1
-    state.performance_tracker = MagicMock()
-    state.performance_tracker.get_metrics.return_value = MagicMock(peak_balance=1000.0)
+    state._durable_peak_balance.return_value = 1000.0
     state.live_entry_handler = MagicMock()
     no_entry = MagicMock()
     no_entry.should_enter = False
@@ -616,6 +615,20 @@ def _runtime_decision_with(signal) -> MagicMock:
     decision.risk_metrics = None
     decision.metadata = {}
     return decision
+
+
+def test_runtime_entry_passes_the_durable_peak_to_the_handler():
+    """The drawdown throttle inside process_runtime_decision must measure
+    drawdown from the engine's durable peak, not the restart-resettable
+    PerformanceTracker peak (#845 peak-reset class)."""
+    state = _make_runtime_entry_state()
+    state._durable_peak_balance.return_value = 1234.0
+    decision = _runtime_decision_with(_ml_signal({}))
+
+    _run_runtime_entry(state, decision)
+
+    kwargs = state.live_entry_handler.process_runtime_decision.call_args.kwargs
+    assert kwargs["peak_balance"] == 1234.0
 
 
 def test_runtime_entry_logs_signal_ml_predictions():

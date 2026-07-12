@@ -280,15 +280,58 @@ def create_model(
             return create_tft_model(input_shape, **variant_params)
         return create_tft_model(input_shape, **kwargs)
 
+    # Temporal Fusion Transformer, ternary (3-class) head -- entrant (c) of
+    # the TARGET-REDESIGN tournament (triple_barrier target). Same backbone
+    # as 'tft', softmax(3)/sparse_categorical_crossentropy head instead of
+    # sigmoid/BCE. Deliberately reuses TFT's variant hyperparameter presets
+    # (batch_size/epochs/patience excluded exactly like the 'tft' branch
+    # above) since the two share every layer except the output head.
+    elif model_type_lower == "tft_ternary":
+        try:
+            from src.ml.training_pipeline.models_tft import (
+                RECOMMENDED_HYPERPARAMETERS as TFT_HYPERPARAMS,
+            )
+            from src.ml.training_pipeline.models_tft import (
+                create_tft_ternary_model,
+            )
+        except ImportError:
+            raise ImportError(
+                "tft_ternary model requires models_tft module. "
+                "Ensure the file exists in src/ml/training_pipeline/"
+            ) from None
+
+        if variant != "default" and variant in TFT_HYPERPARAMS:
+            variant_params = {
+                k: v
+                for k, v in TFT_HYPERPARAMS[variant].items()
+                if k not in ("batch_size", "epochs", "patience")
+            }
+            variant_params.update(kwargs)
+            return create_tft_ternary_model(input_shape, **variant_params)
+        return create_tft_ternary_model(input_shape, **kwargs)
+
     # Price-only LSTM (simple baseline)
     elif model_type_lower == "lstm":
         sequence_length, num_features = input_shape
         return build_price_only_model(sequence_length, num_features)
 
+    # LightGBM directional classifier. Reachable from this factory (per
+    # Phase 2b item 3 -- "models_lightgbm.py's classifier isn't reachable
+    # from create_model or the CLI"), but lightgbm is NOT an installed or
+    # declared dependency in this repo -- _ensure_lightgbm_available() raises
+    # ImportError here, same as it always has. input_shape/variant are
+    # unused (LightGBM is tabular, not sequence-shaped); ONNX export for
+    # this architecture is an explicit follow-up, not built here.
+    elif model_type_lower == "lightgbm":
+        from src.ml.training_pipeline.models_lightgbm import create_directional_classifier
+
+        return create_directional_classifier(**kwargs)
+
     else:
         raise ValueError(
             f"Unknown model_type: {model_type}. "
-            f"Supported types: 'cnn_lstm', 'attention_lstm', 'tcn', 'tcn_attention', 'tft', 'lstm'"
+            f"Supported types: 'cnn_lstm', 'attention_lstm', 'tcn', 'tcn_attention', "
+            f"'tft', 'tft_ternary', 'lstm', 'lightgbm'"
         )
 
 
@@ -326,7 +369,7 @@ def get_model_callbacks(model_type: str, patience: int = 15) -> list[Any]:
         except ImportError:
             pass
 
-    elif model_type_lower == "tft":
+    elif model_type_lower in ("tft", "tft_ternary"):
         try:
             from src.ml.training_pipeline.models_tft import tft_callbacks
 
@@ -345,7 +388,9 @@ AVAILABLE_MODELS = {
     "tcn": "Temporal Convolutional Network (fast training, competitive accuracy)",
     "tcn_attention": "TCN with multi-head attention",
     "tft": "Temporal Fusion Transformer (interpretable, attention-based)",
+    "tft_ternary": "TFT with 3-class softmax head (triple-barrier target)",
     "lstm": "Simple LSTM baseline",
+    "lightgbm": "LightGBM directional classifier (requires optional lightgbm dependency)",
 }
 
 # Model variants

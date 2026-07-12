@@ -32,8 +32,7 @@ def _make_state(*, manager=_ENABLED, session_id=1, balance=1000.0) -> MagicMock:
     state.current_balance = balance
     state.initial_balance = 1000.0
     state.trading_session_id = session_id
-    state.performance_tracker = MagicMock()
-    state.performance_tracker.get_metrics.return_value = MagicMock(peak_balance=1200.0)
+    state._durable_peak_balance.return_value = 1200.0
     state.db_manager = MagicMock()
     state._dynamic_risk_handler = MagicMock()
     state._dynamic_risk_handler.get_adjustment_objects.return_value = []
@@ -54,13 +53,26 @@ def test_apply_returns_handler_adjusted_size_and_logs():
     result = LiveDynamicRiskCoordinator(state).apply_dynamic_risk_adjustment(0.1, datetime.now(UTC))
 
     assert result == 0.05
-    # peak_balance passed = max(peak, balance) = max(1200, 1000) = 1200
+    # peak_balance passed = max(durable peak, balance) = max(1200, 1000) = 1200
     kwargs = state._dynamic_risk_handler.apply_dynamic_risk.call_args.kwargs
     assert kwargs["balance"] == 1000.0
     assert kwargs["peak_balance"] == 1200.0
     assert kwargs["trading_session_id"] == 1
     # adjustment objects were drained for logging
     state._dynamic_risk_handler.get_adjustment_objects.assert_called_once_with(clear=True)
+
+
+def test_apply_peak_never_below_balance_when_durable_source_lags():
+    """A durable peak of 0.0 (guard not yet seeded, tracker empty) must not
+    produce a phantom 100% drawdown — the balance floors the peak."""
+    state = _make_state()
+    state._durable_peak_balance.return_value = 0.0
+    state._dynamic_risk_handler.apply_dynamic_risk.return_value = 0.08
+
+    LiveDynamicRiskCoordinator(state).apply_dynamic_risk_adjustment(0.1, datetime.now(UTC))
+
+    kwargs = state._dynamic_risk_handler.apply_dynamic_risk.call_args.kwargs
+    assert kwargs["peak_balance"] == 1000.0
 
 
 def test_apply_falls_back_to_original_on_error():

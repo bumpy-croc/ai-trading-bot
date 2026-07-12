@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.engines.shared.execution.entry_handler_mixin import SharedEntryHandlerMixin
 from src.position_management.macro_events import (
+    DEFAULT_CALENDAR_PATH,
     MacroEvent,
     MacroEventCalendar,
     MacroEventGuard,
@@ -86,6 +87,58 @@ def test_from_config_applies_defaults_and_overrides(tmp_path):
     # Event A uses defaults: 10h before -> window opens 02:30.
     assert cal.active_event(datetime(2026, 7, 14, 2, 30, tzinfo=UTC)) is not None
     assert cal.active_event(datetime(2026, 7, 14, 2, 29, tzinfo=UTC)) is None
+
+
+# --- default config integrity (regression: #962, wrong FOMC date) ----------
+#
+# #962: config/macro_events.json listed "FOMC July 2026" as 2026-07-29 when the
+# real meeting (and the one production actually scheduled entry-pause windows
+# around) was 2026-07-08. Nothing caught the typo because the file parses fine
+# and MacroEventCalendar.from_config() fails open (silently drops malformed
+# entries, never raises) — a config typo produces no visible symptom short of
+# an empirical audit of `strategy_executions.reasons`. These tests give the
+# file itself a few load-bearing invariants.
+
+
+def test_default_config_events_have_valid_iso8601_utc_times():
+    raw = json.loads(DEFAULT_CALENDAR_PATH.read_text(encoding="utf-8"))
+    assert raw["events"], "default macro event calendar is empty"
+    for event in raw["events"]:
+        time_str = event["time"]
+        assert time_str.endswith(
+            "Z"
+        ), f"{event['name']!r} time is not UTC ('Z' suffix): {time_str!r}"
+        parsed = datetime.fromisoformat(time_str[:-1] + "+00:00")
+        assert parsed.tzinfo is not None
+
+
+def test_default_config_no_events_silently_dropped():
+    """`from_config` swallows malformed entries via try/except+log instead of raising,
+    so a schema regression would otherwise shrink the calendar with no test failure."""
+    raw = json.loads(DEFAULT_CALENDAR_PATH.read_text(encoding="utf-8"))
+    cal = MacroEventCalendar.from_config()
+    assert len(cal) == len(raw["events"])
+
+
+def test_default_config_has_upcoming_coverage():
+    """Canary: if nobody maintains this file, the guard silently stops de-risking
+    anything (fail-safe-by-design, but that's exactly how #962 went unnoticed for
+    an entire staging trial). Flag it loudly instead."""
+    raw = json.loads(DEFAULT_CALENDAR_PATH.read_text(encoding="utf-8"))
+    times = [
+        (
+            datetime.fromisoformat(e["time"][:-1] + "+00:00")
+            if e["time"].endswith("Z")
+            else datetime.fromisoformat(e["time"])
+        )
+        for e in raw["events"]
+    ]
+    most_recent = max(times)
+    now = datetime.now(UTC)
+    assert most_recent >= now - timedelta(days=14), (
+        "macro_events.json's most recent listed event is over 14 days in the past — "
+        "the calendar needs a maintenance pass to keep upcoming de-risk coverage (#962)."
+    )
 
 
 # --- guard -----------------------------------------------------------------

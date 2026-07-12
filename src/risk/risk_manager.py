@@ -150,6 +150,10 @@ class RiskParameters:
     atr_period: int = DEFAULT_ATR_PERIOD
     # Time exit config (optional; strategies may override)
     time_exits: dict | None = None
+    # MFE-conditioned early-cut config (optional; default OFF — see
+    # src/position_management/early_cut.py). Keys: mfe_threshold_pct,
+    # evaluation_window_hours. Strategy `early_cut` overrides win.
+    early_cut: dict | None = None
     # Partial operations (defaults can be overridden by strategies)
     partial_exit_targets: list[float] | None = None
     partial_exit_sizes: list[float] | None = None

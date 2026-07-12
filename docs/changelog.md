@@ -12,6 +12,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Reconciliation edge paths: offline-SL double-count, partial-exit size
+  reset, silent periodic close failures** (2026-07-12 loop/state audit,
+  closes #980): (1) the legacy SL-based startup fallback re-applied an
+  offline-filled stop's `realized_pnl` on top of a `current_balance` the
+  exchange sync had already overwritten with the post-fill exchange balance —
+  double-counting the P&L in memory and in the `account_balances` ledger; the
+  fallback now skips the balance re-application while a sync correction is
+  pending (the Trade row and performance record still book the close), and
+  `synchronize_account_on_start` persists the POST-reconcile
+  `current_balance` instead of the stale pre-reconcile snapshot (write-only
+  `_pending_corrected_balance` removed). (2) The startup quantity-mismatch
+  correction (`_verify_entry_order`) overwrote `current_size` with the
+  recomputed full size, re-inflating a partially-exited recovered position to
+  full deployed size (over-sized final close, over-reported P&L); it now
+  preserves the remaining fraction (`new_size * prev_current/prev_original`,
+  the same scaling the SL re-placement uses) and omits a zero `current_size`
+  from the DB persist. (3) The periodic reconciler's external-close branches
+  (margin + spot) popped the position from the tracker and stayed silent when
+  the DB `close_position` failed, stranding an OPEN row the cycle never
+  revisits; both branches now escalate like their startup twins — CRITICAL
+  log plus a paged `system_events` row (`RECONCILE_DB_CLOSE_FAILED`,
+  `alert=True`).
+- **Market full-close SELL capped to holdings and floor-snapped (-2010 class)**
+  (2026-07-12 execution audit, Finding 2): the live full-close path derived its
+  SELL quantity from notional and snapped it round-to-NEAREST with no free-base
+  cap, so a long-close SELL could round UP above actual holdings (the entry
+  BUY's fee is deducted from the base fill: held 0.049975 vs derived 0.050000)
+  → Binance definitively rejects with -2010 → the close FAILS while the resting
+  stop is already cancelled (#710), leaving the position briefly unprotected
+  (backstopped only by `_reprotect_position` + the reconciler).
+  `LiveExecutionEngine._close_live_order` now mirrors the stop-loss SELL guard
+  (`BinanceProvider.place_stop_loss_order`): a closing SELL is capped at the
+  free base balance and its lot snap FLOORS (then `quantize_to_step`, LESSONS
+  §1.1); zero free base aborts the submit instead of guaranteeing a reject. A
+  short-cover BUY intentionally keeps the nearest snap and no base cap — it is
+  funded from quote and must repay the full base borrow; flooring it would
+  strand interest-accruing borrow dust. Balance-lookup failures degrade to
+  uncapped-but-floored so a transient API error never blocks an exit. Backtest
+  closes intentionally skip the cap/floor — there is no exchange fee-haircut or
+  -2010 mechanic to model, so applying it would only diverge from live parity.
+  The shared quote-suffix helper moved to `src.trading.symbols.factory`
+  (`base_asset_from_symbol`) so the exchange and execution layers size closes
+  against the same base asset. The same hazard in the emergency-close sites
+  (entry coordinator, recovery reconciler) is tracked in #989.
+- **Max-drawdown hard cap enforced on the same iteration; dynamic-risk
+  throttle anchored to the durable session peak** (2026-07-12 risk audit
+  P1/P2): the live loop ran `_check_entry_conditions` BEFORE
+  `_check_max_drawdown`, so on the exact bar where a stop-loss fill pushed
+  drawdown to the 20% cap a fresh entry (up to 20% notional) could execute
+  before close-only latched — the guard had no in-line pre-order gate,
+  unlike the #807 circuit breaker. Every exposure-increase chokepoint
+  (entry evaluation, `execute_entry_locked`, the legacy short path, the
+  scale-in close-only provider) now re-assesses the guard in-line via
+  `LiveTradingEngine._refresh_drawdown_gate` →
+  `MaxDrawdownEnforcer.check_before_new_risk()`, which also re-latches
+  close-only in the same iteration after a mid-breach `resume_trading()`
+  and can seed the peak before the first entry evaluation after a
+  mid-breach restart (in-line seeding never consumes the loop check's
+  bounded `MAX_SEED_ATTEMPTS` deferral budget). Relatedly, the graduated
+  dynamic-risk throttle read the restart-resettable in-memory
+  `PerformanceTracker.peak_balance` while the hard cap used the durable DB
+  session peak — a restart mid-drawdown re-anchored the throttle to the
+  depressed balance and silently disarmed the 5–20% size reductions (#845
+  peak-reset class). All three live throttle call sites (runtime entry
+  sizing, `LiveDynamicRiskCoordinator`, `_get_dynamic_risk_adjusted_params`)
+  now source `LiveTradingEngine._durable_peak_balance()` — max(guard's
+  durable session peak, tracker peak, current balance) — so the throttle and
+  the hard cap measure drawdown from the same baseline.
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*
@@ -38,6 +106,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so degraded live decisions are attributable in the database. Closes #913.
 
 ### Added
+- **Exit-policy expressibility: MFE early-cut + config-driven trailing/breakeven (#971)**:
+  the exit-geometry experiment (docs/research/experiments/2026-07-12_exit-geometry-honest.md,
+  Sec. 8) flagged three trade-management policies as inexpressible without src/ patches. Now:
+  (a) **MFE-conditioned early-cut** — a new shared `EarlyCutPolicy`
+  (`src/position_management/early_cut.py`, params `mfe_threshold_pct`,
+  `evaluation_window_hours`) flattens a position whose raw price MFE never reached the
+  threshold within the first N hours of entry. One stateless implementation serves both
+  engines (backtest `ExitHandler` and `LiveExitHandler` — the #948 barrier-touch pattern):
+  the window MFE is recomputed from candle history at each evaluation (entry bar excluded,
+  window frozen at entry+N hours), so live restarts cannot corrupt state, and unknowable
+  windows never cut (insufficient history, data gaps, and empty windows all HOLD). Both
+  engines fail fast at start/run time if the window is not strictly longer than one bar and
+  a whole multiple of the traded timeframe (`EarlyCutPolicy.validate_for_timeframe`), and
+  the window MFE that triggered a cut is persisted (backtest `Trade.metadata
+  ["early_cut_window_mfe_pct"]`; live `strategy_executions.reasons`) so exam output carries
+  the MFE-capture metric. Live fires on wall clock vs backtest bar close — tracked as #977.
+  MFE here is deliberately raw price excursion, NOT the sized/fee-adjusted
+  `MFEMAETracker`/DB `trades.mfe` values (writer path known-corrupted per #966 — untouched
+  and not reused). Config channels: strategy `get_risk_overrides()["early_cut"]`,
+  `RiskParameters.early_cut`, and hyper_growth factory kwargs
+  (`early_cut_mfe_threshold_pct`, `early_cut_evaluation_window_hours`). Exit priority:
+  SL > TP > time > early-cut > signal, in both engines. Default OFF everywhere.
+  (b) **Config-driven trailing/breakeven** — `build_trailing_stop_policy` now resolves
+  strategy `trailing_stop` overrides by key presence: an explicit key wins (including
+  explicit `None`, e.g. to block the RiskParameters ATR fallback or disable the breakeven
+  move), an absent key falls back to RiskParameters exactly as before, `{"enabled": False}`
+  disables trailing entirely, and a cfg-declared breakeven threshold supports a
+  breakeven-only policy with no trailing distance. `create_hyper_growth_strategy` exposes
+  `enable_trailing_stop`, `trailing_activation_threshold`, `trailing_distance_pct`,
+  `breakeven_threshold`, `breakeven_buffer` as factory kwargs (defaults emit the exact
+  pre-change overrides dict). Regression evidence: HyperGrowth's live prod config produces
+  bit-identical backtest results before/after on the exit-geometry F1–F3 exam folds
+  (31/-2.8818%/PF 0.662, 46/-6.6430%/0.528, 70/-11.5577%/0.446 — full float precision,
+  including per-trade P&L sequences).
+- **Feature-flag observability: vol-target sizing + circuit-breaker dry_run (#964)**: two flags
+  under paper-trading evaluation were structurally unobservable — nothing DB-durable recorded
+  whether they ever did anything, blocking their promote/kill verdicts. Now (a)
+  `VolatilityTargetSizer` records every sizing decision (base size → adjusted size, multiplier,
+  realized ATR percentile, target percentile, plus an explicit pass-through marker when no vol
+  signal exists) and `Strategy` merges it into `TradingDecision.risk_metrics`, which the live
+  engine already persists per candle into `strategy_executions.reasons`
+  (`risk_vol_target_*` entries); (b) an `account_circuit_breakers=dry_run` would-have-tripped
+  event now writes a `system_events` row (new `EventType.CIRCUIT_BREAKER_DRY_RUN`,
+  severity=warning, component=risk, honest `alert_sent=false`) once per trip episode, in
+  addition to the ephemeral stdout log. Instrumentation only — no change to actual sizing or
+  breaker enforcement. Alembic migration `0013_widen_event_type` widens
+  `system_events.event_type` varchar(18→23) for the new value (mirrors 0009).
 - **Real manual kill-switch (#922)**: `atb live-control halt --env production|staging|development
   [--reason "..."]` and `atb live-control resume` now exist and are REAL. Halt durably upserts a
   `system_halt` row in the target environment's new `system_control_flags` table; the running

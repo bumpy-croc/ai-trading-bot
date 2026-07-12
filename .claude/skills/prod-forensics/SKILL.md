@@ -21,9 +21,11 @@ psql "$URL"
 SET default_transaction_read_only = on;
 ```
 
-- `railway ssh` / `railway run` are policy-denied (LESSONS §3). The variables-read + local psql
-  path is the allowed route; the prod-variables dump may still prompt — that's correct, get the
-  human OK. Same recipe for staging via `-e staging`.
+- `railway ssh` / `railway run` are policy-denied (LESSONS §3), and so is `railway domain` — it's
+  get-or-create, not a read, and created an unauthorized public domain when run "to check a URL"
+  (2026-07-08 incident, GH #941). The variables-read + local psql path is the allowed route; the
+  prod-variables dump may still prompt — that's correct, get the human OK. Same recipe for staging
+  via `-e staging`.
 - Logs are NOT a historical source: `railway logs` serves only the current deployment and
   `--since` never reaches prior containers (#913 lesson). History lives in Postgres:
   `strategy_executions`, `system_events`, `reconciliation_audit_events`, `orders`, `trades`.

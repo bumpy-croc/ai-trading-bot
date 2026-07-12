@@ -888,7 +888,7 @@ class Strategy:
         regime: RegimeContext | None,
     ) -> dict[str, float]:
         """Calculate risk-related metrics"""
-        return {
+        metrics = {
             "risk_position_size": risk_position_size,
             "final_position_size": final_position_size,
             "position_size_ratio": (
@@ -899,6 +899,29 @@ class Strategy:
             "signal_strength": signal.strength,
             "regime_confidence": regime.confidence if regime else 0.0,
         }
+        metrics.update(self._position_sizer_metrics())
+        return metrics
+
+    def _position_sizer_metrics(self) -> dict[str, float]:
+        """Sizing-decision evidence from the position sizer (e.g. vol targeting).
+
+        Merged into ``risk_metrics`` so the engines persist it to
+        ``strategy_executions`` — durable proof of whether an adjusting sizer
+        actually changed the size. Defensive: sizers are duck-typed and
+        observability must never break a trading decision.
+        """
+        getter = getattr(self.position_sizer, "get_last_sizing_metrics", None)
+        if not callable(getter):
+            return {}
+        try:
+            return {
+                key: float(value)
+                for key, value in getter().items()
+                if isinstance(value, int | float) and not isinstance(value, bool)
+            }
+        except Exception as e:
+            self.logger.debug("Position sizer metrics unavailable: %s", e)
+            return {}
 
     def _create_decision_metadata(
         self,
