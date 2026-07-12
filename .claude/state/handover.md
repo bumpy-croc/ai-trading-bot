@@ -1,3 +1,23 @@
+# ✅ SUPERSEDED (~18:30 UTC same day) — quota reset; every banner item below COMPLETED
+
+The limit reset and the session resumed. Everything the quota banner listed as unfinished was
+completed later the same day — see log.md [D-2026-07-12-03] and [D-2026-07-12-04]:
+- **exit-round-2: DONE** — NO-GO all 6 arms (PR #1012 merged, issue #1013). Exit-design thread
+  CLOSED across both rounds (12 arms). tp_06 recommended closed, not "needs more data".
+- **Staging soak: DONE** — all 5 boot checks PASS (PR #1011 sync, deploy 87b6aca9).
+- **PROD PROMOTE: DONE** — soaked SHA 51a1dbb5 promoted via PR #1014 (merge bf7f45cb, deploy
+  db605330). All 5 prod boot checks PASS (one note: alembic stamp stale 0012 vs 0013,
+  schema correct — agenda'd). #994/#996/#1001 safety wave is LIVE IN PROD. 24-48h watch running.
+- **Merge queue: CLEARED** — #1000, #1004, #1006, #1008, #992, #1010, #1012 all merged;
+  post-soak merges deliberately EXCLUDED from the promote (next promote after their own soak).
+- **#990 short-suppression promoted to active lever**: observability PR #1016 (gauntlet passed,
+  merging), counterfactual backtest lane running (pinned via #1006 --model-as-of).
+- New follow-ups filed: #1015 (LIVE inference-scope enforcement), #1013 (regime-conditioned exits).
+
+The quota banner is preserved below for the historical record.
+
+---
+
 # ⚠️ SESSION ENDED ON QUOTA LIMIT (~16:30 UTC / 17:30 London) — corrections below
 
 Several background agents were KILLED mid-work by the session limit. What actually landed vs. what I optimistically marked "will complete":
