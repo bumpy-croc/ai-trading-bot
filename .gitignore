@@ -50,3 +50,4 @@ cache/*
 .claude/statusline.cjs
 .gemini-reviews/
 .agent-active
+scripts/research/.cache/

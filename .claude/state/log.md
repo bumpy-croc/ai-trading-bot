@@ -514,4 +514,41 @@ Ranked shortlist for next phase: (1) multi-scale realized vol/range from own cac
 calendar features, (3) BTC->ETH cross-asset (already-cached BTC data), (4) funding rate, (5) basis/
 premium proxy, (6) Fear & Greed. Deferred: OI, long/short ratio, on-chain flows, DXY/SPX/NDX macro,
 BTC dominance, social volume -- unobtainable at needed depth or weak evidence.
-Ref: GH #959 (research issue, state:researching), PR #958 (docs/input-audit -> develop).
+Ref: GH #959 (research issue, state:researching), PR #958 (docs/input-audit -> develop, merged
+9e7ea5e8).
+
+---
+
+## 2026-07-12 10:45 · track-record · quant-researcher
+Experiment #967: LINEAR INPUT-SCREENING (Lane A, Phase 1) -- does any of the input-candidates
+audit's (#959, PR #958) 6 shortlisted alternative-input classes show a linearly-detectable
+next-bar directional edge over the price-only feature contract? -> REJECTED, no arm graduates.
+Evidence: docs/research/experiments/2026-07-12_input-screening-linear.md
+Preregistered (folds/thresholds/graduation rule locked before any scoring run) then ran: logistic
+regression on next-bar direction, PriceOnlyFeatureExtractor(120) contract (same as the
+target-redesign tournament's linear baseline), F1/F2/F3 walk-forward folds identical to that
+tournament, 7 arms (price-only control + realized-vol/range, calendar, BTC cross-asset, funding
+rate, basis/premium, Fear&Greed, all-combined). Pre-committed graduation rule (McNemar-significant
+at Bonferroni alpha=0.05/7~=0.0071 on >=2/3 folds AND avg DA improvement >=0.5pp) fails for EVERY
+arm on EVERY count -- zero folds reach Bonferroni significance for any arm (best single-fold
+p=0.0384, calendar/F3, itself in the WRONG direction and still non-significant after correction);
+largest average delta is funding_rate at +0.37pp, still short of the +0.5pp bar. All CPU-only,
+seconds-per-fit, 24 fits total (~9min wall-clock once BLAS threads were capped at 4 to stop
+oversubscription against the exit-geometry lane's concurrent process -- an uncapped first attempt
+ran 29min/620%CPU with zero progress and was killed, no result from it used).
+Validity check (arm 0 vs the target-redesign tournament's reported linear-baseline DA): replicates
+within the pre-committed +/-2pp tolerance on F1 (-1.30pp) and F2 (-0.51pp), MISSES on F3 (-2.39pp)
+-- disclosed as a non-replication (method necessarily differs: logistic-on-direction vs the
+tournament's unrecoverable LinearRegression-on-continuous-target script, an explicitly
+pre-approved substitution per this experiment's own dispatch brief), does not invalidate the
+internal arm-vs-control comparisons (same control/method/run for every arm).
+Reading: converges with the four-tournament pattern (window #898, architecture #939,
+target-redesign, now this linear input screen) -- no lever tried so far moves ETHUSDT 1h
+next-bar directional accuracy meaningfully past its ~51-53% ceiling. Named risk NOT resolved here:
+a linear detector can only find linearly-separable signal; several candidates' own literature
+support (funding-rate crowding, HAR-RV volatility) is about regime/vol structure, not linear
+direction -- a nonlinear re-screen of the same 6 classes is the natural next falsification test
+before fully retiring the "new information sources" lever, cheaper than the full deep-model
+tournament. No src/ change, no live-affecting decision -- nothing for risk-officer to stress-test.
+Ref: issue #967 (closed), PR #969, docs/research/2026-07-12_input-candidates-audit.md (PR #958,
+merged 9e7ea5e8).
