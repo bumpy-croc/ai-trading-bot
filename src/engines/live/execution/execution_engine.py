@@ -31,22 +31,9 @@ from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 from src.trading.precision import quantize_to_step
+from src.trading.symbols.factory import base_asset_from_symbol
 
 logger = logging.getLogger(__name__)
-
-
-def _base_asset_from_symbol(symbol: str) -> str:
-    """Best-effort base asset for ``symbol`` by stripping a known quote suffix.
-
-    Fallback only — prefer the exchange-authoritative ``base_asset`` from
-    ``get_symbol_info`` when available. Quotes are checked longest-first so e.g.
-    ``ETHUSDT`` resolves to ``ETH``. Returns ``symbol`` unchanged when no known
-    quote matches.
-    """
-    for quote in ("USDT", "BUSD", "USDC", "USD"):
-        if symbol.endswith(quote) and len(symbol) > len(quote):
-            return symbol[: -len(quote)]
-    return symbol
 
 
 @dataclass
@@ -712,7 +699,7 @@ class LiveExecutionEngine:
                 # Fail-closed: reject short on any lookup error.
                 use_margin = getattr(self.exchange_interface, "is_margin_mode", False) is True
                 if use_margin:
-                    base_asset = _base_asset_from_symbol(symbol)
+                    base_asset = base_asset_from_symbol(symbol)
                     try:
                         balance = self.exchange_interface.get_balance(base_asset)
                     except Exception as e:
@@ -1039,7 +1026,7 @@ class LiveExecutionEngine:
         if self.exchange_interface is None:
             return None
 
-        base_asset = _base_asset_from_symbol(symbol)
+        base_asset = base_asset_from_symbol(symbol)
         try:
             balance = self.exchange_interface.get_balance(base_asset)
             return float(balance.free) if balance is not None else None

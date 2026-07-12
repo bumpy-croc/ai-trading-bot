@@ -27,9 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   short-cover BUY intentionally keeps the nearest snap and no base cap — it is
   funded from quote and must repay the full base borrow; flooring it would
   strand interest-accruing borrow dust. Balance-lookup failures degrade to
-  uncapped-but-floored so a transient API error never blocks an exit. The same
-  hazard in the emergency-close sites (entry coordinator, recovery reconciler)
-  is tracked in #989.
+  uncapped-but-floored so a transient API error never blocks an exit. Backtest
+  closes intentionally skip the cap/floor — there is no exchange fee-haircut or
+  -2010 mechanic to model, so applying it would only diverge from live parity.
+  The shared quote-suffix helper moved to `src.trading.symbols.factory`
+  (`base_asset_from_symbol`) so the exchange and execution layers size closes
+  against the same base asset. The same hazard in the emergency-close sites
+  (entry coordinator, recovery reconciler) is tracked in #989.
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*
