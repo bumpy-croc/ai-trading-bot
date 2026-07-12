@@ -47,7 +47,6 @@ class LiveStartupEngineState(Protocol):
     trading_session_id: int | None
     _recovered_inactive_session_id: int | None
     _pending_balance_correction: bool
-    _pending_corrected_balance: float | None
     _orphan_sweep_cooldown: dict[str, float]
     _balance_lock: threading.Lock
     main_thread: threading.Thread | None
@@ -336,7 +335,6 @@ class LiveStartupSequencer:
         state = self._state
         # Perform account synchronization if available
         state._pending_balance_correction = False
-        state._pending_corrected_balance = None
         if state.account_synchronizer and state.enable_live_trading:
             try:
                 logger.info("🔄 Performing initial account synchronization...")
@@ -357,7 +355,6 @@ class LiveStartupSequencer:
                         with state._balance_lock:
                             state.current_balance = corrected_balance
                             state._pending_balance_correction = True
-                            state._pending_corrected_balance = corrected_balance
                         logger.info(
                             "💰 Balance corrected from exchange: $%.2f",
                             corrected_balance,
@@ -401,12 +398,16 @@ class LiveStartupSequencer:
                 getattr(state, "_pending_balance_correction", False)
                 and state.trading_session_id is not None
             ):
-                corrected_balance = state._pending_corrected_balance
+                # Persist the CURRENT in-memory balance, not the pre-reconcile
+                # snapshot: reconciliation (which runs between the exchange sync
+                # and this persist) may legitimately adjust current_balance, and
+                # writing the stale snapshot would diverge the DB row from
+                # memory — the next restart recovers the wrong balance.
+                corrected_balance = state.current_balance
                 state.db_manager.update_balance(
                     corrected_balance, "account_sync", "system", state.trading_session_id
                 )
                 state._pending_balance_correction = False
-                state._pending_corrected_balance = None
                 logger.info("💰 Balance corrected in database: $%.2f", corrected_balance)
             elif getattr(state, "_pending_balance_correction", False):
                 # Balance correction was pending but no session ID available
@@ -414,7 +415,6 @@ class LiveStartupSequencer:
                     "⚠️ Balance correction pending but no trading session ID available - skipping database update"
                 )
                 state._pending_balance_correction = False
-                state._pending_corrected_balance = None
 
     def start_runtime_services(self, symbol: str, timeframe: str) -> None:
         """Start the order tracker, periodic reconciler, and WebSocket streams."""
