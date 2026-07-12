@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import pandas as pd
@@ -47,6 +47,7 @@ from src.prediction.distribution_stats import FrozenDistribution, percentile_ran
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.prediction.models.registry import PredictionModelRegistry
+from src.regime.detector import RegimeDetector
 from src.regime.enhanced_detector import EnhancedRegimeDetector
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
@@ -507,6 +508,9 @@ class MetaLabelExamSignalGenerator(SignalGenerator):
         # so the two can never diverge again (see meta_labels.py docstring).
         self._resolved_history: deque[tuple[int, int, bool]] = deque(maxlen=resolved_history_maxlen)
         self._regime_detector = EnhancedRegimeDetector()
+        # Once-per-frame regime annotation cache -- see _regime_frame.
+        self._regime_annotated: pd.DataFrame | None = None
+        self._regime_annotated_source: Any = None
         self._cost_calculator = CostCalculator()
         self._bundle = self._load_bundle()
         # generate_signal has side effects (fire registration/resolution);
@@ -605,6 +609,37 @@ class MetaLabelExamSignalGenerator(SignalGenerator):
     def _rolling_hit_rate(self) -> float:
         return resolution_ordered_hit_rate(list(self._resolved_history), HIT_RATE_LOOKBACK_FIRES)
 
+    def _regime_frame(self, df: Any) -> Any:
+        """The frame detect_regime should read: annotated ONCE per frame.
+
+        Training's build_meta_label_features annotates the corpus once with
+        FRESH detector state (#955); letting detect_regime re-annotate here
+        per fired bar was both O(n_bars) per fire and a train/serve skew
+        channel -- the reused detector's warm hysteresis state can relabel
+        early bars differently from the fresh-state annotation the
+        classifier was trained on. Annotation is row-causal (all rolling
+        windows are trailing), so reading row ``index`` from a full-frame
+        annotation never leaks forward bars into the current signal.
+
+        Frames already carrying the regime columns are used as-is; the
+        cached annotation is invalidated when the frame object changes OR
+        grows in place (a live engine appending bars to the same object).
+        """
+        if "regime_label" in df.columns:
+            return df
+        if self._regime_annotated_source is not df or (
+            self._regime_annotated is not None and len(self._regime_annotated) != len(df)
+        ):
+            # Fresh detector state per annotation, cloned config -- matches
+            # training's annotate-once semantics exactly (a reused
+            # RegimeDetector carries hysteresis state across annotate calls).
+            annotation_detector = RegimeDetector(
+                replace(self._regime_detector.base_detector.config)
+            )
+            self._regime_annotated = annotation_detector.annotate(df.copy())
+            self._regime_annotated_source = df
+        return self._regime_annotated
+
     def _realized_volatility(self, df: Any, index: int) -> float:
         """Causal 48-bar trailing realized volatility, ending at `index`."""
         window_start = max(0, index - REALIZED_VOL_WINDOW_BARS)
@@ -658,7 +693,7 @@ class MetaLabelExamSignalGenerator(SignalGenerator):
 
         timestamp = df.index[index]
         session_sin, session_cos = _session_cyclical_encoding(pd.Timestamp(timestamp))
-        regime_ctx = self._regime_detector.detect_regime(df, index)
+        regime_ctx = self._regime_detector.detect_regime(self._regime_frame(df), index)
         predicted_return_magnitude = abs(
             float(primary_signal.metadata.get("predicted_return", 0.0))
         )
