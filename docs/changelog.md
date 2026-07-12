@@ -47,8 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   threshold within the first N hours of entry. One stateless implementation serves both
   engines (backtest `ExitHandler` and `LiveExitHandler` — the #948 barrier-touch pattern):
   the window MFE is recomputed from candle history at each evaluation (entry bar excluded,
-  window frozen at entry+N hours), so live restarts cannot corrupt state, and insufficient
-  history never cuts. MFE here is deliberately raw price excursion, NOT the sized/fee-adjusted
+  window frozen at entry+N hours), so live restarts cannot corrupt state, and unknowable
+  windows never cut (insufficient history, data gaps, and empty windows all HOLD). Both
+  engines fail fast at start/run time if the window is not strictly longer than one bar and
+  a whole multiple of the traded timeframe (`EarlyCutPolicy.validate_for_timeframe`), and
+  the window MFE that triggered a cut is persisted (backtest `Trade.metadata
+  ["early_cut_window_mfe_pct"]`; live `strategy_executions.reasons`) so exam output carries
+  the MFE-capture metric. Live fires on wall clock vs backtest bar close — tracked as #977.
+  MFE here is deliberately raw price excursion, NOT the sized/fee-adjusted
   `MFEMAETracker`/DB `trades.mfe` values (writer path known-corrupted per #966 — untouched
   and not reused). Config channels: strategy `get_risk_overrides()["early_cut"]`,
   `RiskParameters.early_cut`, and hyper_growth factory kwargs

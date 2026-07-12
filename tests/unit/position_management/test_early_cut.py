@@ -49,7 +49,7 @@ def _make_df(
         freq="1h",
         tz="UTC" if tz_aware else None,
     )
-    closes = [(h + lo) / 2 for h, lo in zip(highs, lows)]
+    closes = [(h + lo) / 2 for h, lo in zip(highs, lows, strict=False)]
     return pd.DataFrame(
         {"open": closes, "high": highs, "low": lows, "close": closes, "volume": 1000.0},
         index=index,
@@ -147,8 +147,10 @@ class TestComputeWindowRawMfe:
         )
         assert mfe is None
 
-    def test_empty_window_is_zero_mfe(self) -> None:
-        # Data covers entry but no bar falls strictly inside the window.
+    def test_empty_window_returns_none(self) -> None:
+        # Review #976 F1: data covers entry but NO bar falls strictly inside
+        # the window — the true window MFE is unknowable and must NOT be
+        # fabricated as 0.0 (which would cut every position).
         df = _make_df(highs=[100.8], lows=[99.5])
         mfe = compute_window_raw_mfe(
             df,
@@ -157,7 +159,36 @@ class TestComputeWindowRawMfe:
             entry_time=ENTRY_TIME,
             window_end=ENTRY_TIME + timedelta(hours=3),
         )
-        assert mfe == 0.0
+        assert mfe is None
+
+    def test_data_gap_spanning_window_returns_none(self) -> None:
+        # Review #976 F1 repro: entry bar present, next bar only AFTER the
+        # window end (data gap) with a huge favorable high — window MFE is
+        # unknowable, must hold rather than fabricate 0%.
+        index = pd.DatetimeIndex(
+            [
+                ENTRY_TIME.replace(tzinfo=None),
+                ENTRY_TIME.replace(tzinfo=None) + timedelta(hours=5),
+            ]
+        )
+        df = pd.DataFrame(
+            {
+                "open": [100.0, 120.0],
+                "high": [100.8, 130.0],
+                "low": [99.5, 119.0],
+                "close": [100.0, 125.0],
+                "volume": 1000.0,
+            },
+            index=index,
+        )
+        mfe = compute_window_raw_mfe(
+            df,
+            side="long",
+            entry_price=ENTRY_PRICE,
+            entry_time=ENTRY_TIME,
+            window_end=ENTRY_TIME + timedelta(hours=3),
+        )
+        assert mfe is None
 
     def test_invalid_entry_price_returns_none(self) -> None:
         for bad in (0.0, -1.0, float("nan")):
@@ -307,3 +338,94 @@ class TestCheckEarlyCutConditions:
             df=_df_below_threshold(),
         )
         assert decision.should_exit is True
+
+    def test_window_equal_to_bar_interval_never_cuts(self) -> None:
+        """Review #976 F1 repro: window == bar interval on 1h bars leaves ZERO
+        bars strictly inside (entry, entry+1h) — the old 0.0 fabrication cut
+        every position at entry+1h even at +9% MFE. Must hold."""
+        policy = EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=1)
+        df = _make_df(
+            highs=[100.8, 109.0, 109.5],  # +9% favorable move
+            lows=[99.5, 100.0, 100.0],
+        )
+        decision = policy.check_early_cut_conditions(
+            side="long",
+            entry_price=ENTRY_PRICE,
+            entry_time=ENTRY_TIME,
+            now_time=ENTRY_TIME + timedelta(hours=1),
+            df=df,
+        )
+        assert decision.should_exit is False
+        assert decision.window_mfe_pct is None
+
+    def test_data_gap_spanning_window_never_cuts(self) -> None:
+        policy = _policy()
+        index = pd.DatetimeIndex(
+            [
+                ENTRY_TIME.replace(tzinfo=None),
+                ENTRY_TIME.replace(tzinfo=None) + timedelta(hours=5),
+            ]
+        )
+        df = pd.DataFrame(
+            {
+                "open": [100.0, 120.0],
+                "high": [100.8, 130.0],
+                "low": [99.5, 119.0],
+                "close": [100.0, 125.0],
+                "volume": 1000.0,
+            },
+            index=index,
+        )
+        decision = policy.check_early_cut_conditions(
+            side="long",
+            entry_price=ENTRY_PRICE,
+            entry_time=ENTRY_TIME,
+            now_time=ENTRY_TIME + timedelta(hours=5),
+            df=df,
+        )
+        assert decision.should_exit is False
+        assert decision.window_mfe_pct is None
+
+
+class TestValidateForTimeframe:
+    """Review #976 F1/F2: reject window sizes that cannot work on the
+    traded timeframe at config-build time, before any money moves."""
+
+    def test_window_equal_to_bar_interval_rejected(self) -> None:
+        policy = EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=1)
+        with pytest.raises(ValueError, match="evaluation_window_hours"):
+            policy.validate_for_timeframe("1h")
+
+    def test_window_smaller_than_bar_interval_rejected(self) -> None:
+        policy = EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=2)
+        with pytest.raises(ValueError, match="evaluation_window_hours"):
+            policy.validate_for_timeframe("4h")
+
+    def test_non_multiple_window_rejected(self) -> None:
+        # Review #976 F2: non-bar-aligned windows can diverge live vs
+        # backtest (forming boundary bar) — rejected outright.
+        policy = EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=1.5)
+        with pytest.raises(ValueError, match="whole multiple"):
+            policy.validate_for_timeframe("1h")
+        policy6 = EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=6)
+        with pytest.raises(ValueError, match="whole multiple"):
+            policy6.validate_for_timeframe("4h")
+
+    def test_valid_windows_accepted(self) -> None:
+        EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=18).validate_for_timeframe(
+            "1h"
+        )
+        EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=8).validate_for_timeframe(
+            "4h"
+        )
+        EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=2).validate_for_timeframe(
+            "1h"
+        )
+        EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=0.5).validate_for_timeframe(
+            "15m"
+        )
+
+    def test_unrecognized_timeframe_rejected(self) -> None:
+        policy = EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=18)
+        with pytest.raises(ValueError, match="timeframe"):
+            policy.validate_for_timeframe("bogus")

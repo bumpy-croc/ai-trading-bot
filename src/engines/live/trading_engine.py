@@ -1244,6 +1244,12 @@ class LiveTradingEngine:
         Delegated to LiveStartupSequencer; the capital-critical bootstrap ordering
         lives there (#486).
         """
+        # Fail fast on a mis-sized early-cut window (#976 review F1/F2):
+        # refuse to start rather than trade with a policy that can never
+        # evaluate (window <= bar) or diverges from backtest (non-aligned).
+        if self.early_cut_policy is not None:
+            self.early_cut_policy.validate_for_timeframe(timeframe)
+
         self.startup_sequencer.run(
             symbol,
             timeframe=timeframe,

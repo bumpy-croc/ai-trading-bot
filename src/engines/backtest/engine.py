@@ -955,7 +955,17 @@ class Backtester:
 
         Returns:
             Dictionary with backtest results including metrics and trades.
+
+        Raises:
+            ValueError: If a configured early-cut policy cannot work on the
+                requested timeframe (window not strictly longer than one bar,
+                or not a whole multiple of it).
         """
+        # Fail fast on a mis-sized early-cut window (#976 review F1/F2) —
+        # before the try block so nothing can swallow the config error.
+        if self.early_cut_policy is not None:
+            self.early_cut_policy.validate_for_timeframe(timeframe)
+
         try:
             # Pin BLAS/OpenMP thread pools to 1 for the duration of the run so
             # the backtest is bit-reproducible: multi-threaded parallel float
@@ -1425,6 +1435,16 @@ class Backtester:
 
             self.balance += net_pnl
             self.trades.append(completed_trade)
+
+            # Persist the window MFE that triggered an early cut so exam
+            # output carries the MFE-capture metric (#976 review).
+            if exit_check.is_early_cut and exit_check.early_cut_window_mfe_pct is not None:
+                try:
+                    completed_trade.metadata["early_cut_window_mfe_pct"] = float(
+                        exit_check.early_cut_window_mfe_pct
+                    )
+                except (AttributeError, TypeError, ValueError):
+                    logger.debug("Could not stash early_cut_window_mfe_pct on completed trade")
 
             # Sum entry + exit fees / slippage for record_trade so the
             # PerformanceTracker total_fees_paid metric matches live's

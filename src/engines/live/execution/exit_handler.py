@@ -71,6 +71,10 @@ class LiveExitCheck:
     should_exit: bool
     exit_reason: str = ""
     limit_price: float | None = None  # For SL/TP pricing
+    # Window MFE observed by the early-cut policy (raw price fraction), when
+    # it evaluated this cycle. Surfaced into strategy_executions reasons by
+    # the exit coordinator for observability (#976 review).
+    early_cut_window_mfe_pct: float | None = None
 
 
 @dataclass
@@ -336,6 +340,7 @@ class LiveExitHandler:
         # MFE early-cut (shared policy — identical logic in backtest).
         hit_early_cut = False
         early_cut_reason: str | None = None
+        early_cut_window_mfe: float | None = None
         if self.early_cut_policy is not None and df is not None:
             try:
                 early_cut_decision = self.early_cut_policy.check_early_cut_conditions(
@@ -347,6 +352,7 @@ class LiveExitHandler:
                 )
                 hit_early_cut = early_cut_decision.should_exit
                 early_cut_reason = early_cut_decision.reason
+                early_cut_window_mfe = early_cut_decision.window_mfe_pct
             except (TypeError, ValueError, AttributeError) as e:
                 logger.warning(
                     "Early-cut check failed for %s: %s",
@@ -358,36 +364,44 @@ class LiveExitHandler:
             exit_signal or hit_stop_loss or hit_take_profit or hit_time_exit or hit_early_cut
         )
         if not should_exit:
-            return LiveExitCheck(should_exit=False)
+            return LiveExitCheck(
+                should_exit=False,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
+            )
 
         if hit_stop_loss:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason="Stop loss",
                 limit_price=position.stop_loss,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
             )
         if hit_take_profit:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason="Take profit",
                 limit_price=position.take_profit,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
             )
         if hit_time_exit:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason=time_reason or "Time exit",
                 limit_price=None,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
             )
         if hit_early_cut:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason=early_cut_reason or "Early cut",
                 limit_price=None,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
             )
         return LiveExitCheck(
             should_exit=True,
             exit_reason=signal_reason,
             limit_price=None,
+            early_cut_window_mfe_pct=early_cut_window_mfe,
         )
 
     def execute_exit(

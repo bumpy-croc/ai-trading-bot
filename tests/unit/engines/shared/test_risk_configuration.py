@@ -240,6 +240,21 @@ class TestBuildTrailingStopPolicyExistingBehavior:
         # No trailing_distance_pct key -> params fallback (unchanged).
         assert policy.trailing_distance_pct == DEFAULT_TRAILING_DISTANCE_PCT
 
+    @pytest.mark.fast
+    def test_params_zero_breakeven_threshold_preserved(self):
+        """Review #976 arch nit 1: a params breakeven_threshold of exactly
+        0.0 is preserved as 0.0 (old or-chain semantics: `None or 0.0`
+        evaluates to 0.0), not silently upgraded to the default."""
+        params = _default_params()
+        params.breakeven_threshold = 0.0
+        strategy = _StrategyWithOverrides(
+            {"trailing_stop": {"activation_threshold": 0.03, "trailing_distance_pct": 0.015}}
+        )
+        policy = build_trailing_stop_policy(strategy, _RiskManager(params))
+
+        assert policy is not None
+        assert policy.breakeven_threshold == 0.0
+
 
 class TestBuildTrailingStopPolicyExpressibility:
     """#971: config must be able to genuinely control trailing/breakeven."""

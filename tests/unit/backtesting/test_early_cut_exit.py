@@ -29,7 +29,7 @@ ENTRY_PRICE = 100.0
 
 def _make_df(highs: list[float], lows: list[float]) -> pd.DataFrame:
     index = pd.date_range(start=ENTRY_TIME.replace(tzinfo=None), periods=len(highs), freq="1h")
-    closes = [(h + lo) / 2 for h, lo in zip(highs, lows)]
+    closes = [(h + lo) / 2 for h, lo in zip(highs, lows, strict=False)]
     return pd.DataFrame(
         {"open": closes, "high": highs, "low": lows, "close": closes, "volume": 1000.0},
         index=index,
@@ -104,6 +104,9 @@ class TestBacktestEarlyCut:
         assert result.is_early_cut is True
         assert result.exit_reason.startswith("Early cut")
         assert result.exit_price == float(df["close"].iloc[3])
+        # Observability (#976 review): the window MFE that triggered the cut
+        # is surfaced on the result. Hand-computed: 1.9%.
+        assert result.early_cut_window_mfe_pct == pytest.approx(0.019)
 
     def test_no_cut_when_mfe_reached_threshold(self) -> None:
         df = _make_df(
@@ -241,11 +244,13 @@ def _build_scripted_strategy():
     from src.strategies.components import (
         EnhancedRegimeDetector,
         PositionSizer,
-        RiskManager as ComponentRiskManager,
         Signal,
         SignalDirection,
         SignalGenerator,
         Strategy,
+    )
+    from src.strategies.components import (
+        RiskManager as ComponentRiskManager,
     )
 
     class _OneEntrySignalGenerator(SignalGenerator):
@@ -363,9 +368,7 @@ class TestEndToEndEarlyCut:
         from src.risk.risk_manager import RiskParameters
 
         backtester, results = self._run(
-            RiskParameters(
-                early_cut={"mfe_threshold_pct": 0.02, "evaluation_window_hours": 3}
-            )
+            RiskParameters(early_cut={"mfe_threshold_pct": 0.02, "evaluation_window_hours": 3})
         )
 
         assert results["total_trades"] == 1
@@ -373,6 +376,9 @@ class TestEndToEndEarlyCut:
         assert trade.exit_reason.startswith("Early cut")
         held = trade.exit_time - trade.entry_time
         assert held == timedelta(hours=3)
+        # Observability (#976 review): exam output carries the window MFE
+        # that triggered the cut (flat series => exactly 0.0).
+        assert trade.metadata["early_cut_window_mfe_pct"] == 0.0
 
     def test_without_policy_trade_survives(self) -> None:
         """Control arm: same data, no early_cut config => the position is
@@ -383,3 +389,45 @@ class TestEndToEndEarlyCut:
 
         assert results["total_trades"] == 0
         assert backtester.position_tracker.current_trade is not None
+
+
+class TestRunTimeframeValidation:
+    """Review #976 F1/F2: a mis-sized window must fail fast at run() time,
+    not silently become a cut-everything (old) or never-cut (new) policy."""
+
+    def _backtester(self, window_hours: float):
+        from src.engines.backtest.engine import Backtester
+        from src.risk.risk_manager import RiskParameters
+
+        index = pd.date_range(start="2024-01-01", periods=10, freq="1h")
+        df = pd.DataFrame(
+            {"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1000.0},
+            index=index,
+        )
+        return Backtester(
+            strategy=_build_scripted_strategy(),
+            data_provider=_FlatDataProvider(df),
+            risk_parameters=RiskParameters(
+                early_cut={"mfe_threshold_pct": 0.02, "evaluation_window_hours": window_hours}
+            ),
+            initial_balance=1000.0,
+            log_to_database=False,
+        )
+
+    def test_window_equal_to_bar_interval_rejected_at_run(self) -> None:
+        backtester = self._backtester(window_hours=1)
+        with pytest.raises(ValueError, match="evaluation_window_hours"):
+            backtester.run(
+                symbol="TESTUSDT",
+                timeframe="1h",
+                start=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+
+    def test_non_multiple_window_rejected_at_run(self) -> None:
+        backtester = self._backtester(window_hours=1.5)
+        with pytest.raises(ValueError, match="whole multiple"):
+            backtester.run(
+                symbol="TESTUSDT",
+                timeframe="1h",
+                start=datetime(2024, 1, 1, tzinfo=UTC),
+            )

@@ -161,12 +161,14 @@ def build_trailing_stop_policy(
             cfg, "trailing_distance_atr_mult", params.trailing_atr_multiplier if params else None
         )
 
-        # Breakeven settings. _UNSET (nothing configured anywhere) maps to the
-        # DEFAULT_* constants at construction — matching the previous
-        # or-chain, where a falsy params value also fell through to defaults.
+        # Breakeven settings. _UNSET (no cfg key AND no params value) maps to
+        # the DEFAULT_* constants at construction — matching the previous
+        # or-chain, where only a None params value fell through to defaults;
+        # a params value of 0.0 is preserved as 0.0 (which TrailingStopPolicy
+        # treats as breakeven disabled).
         params_be = params.breakeven_threshold if params else None
         breakeven_threshold = _resolve_cfg_value(
-            cfg, "breakeven_threshold", params_be if params_be else _UNSET
+            cfg, "breakeven_threshold", params_be if params_be is not None else _UNSET
         )
         params_bb = params.breakeven_buffer if params else None
         breakeven_buffer = _resolve_cfg_value(

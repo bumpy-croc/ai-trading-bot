@@ -83,6 +83,10 @@ class ExitCheckResult:
     is_time_limit: bool = False
     is_early_cut: bool = False
     is_signal: bool = False
+    # Window MFE observed by the early-cut policy (raw price fraction), when
+    # it evaluated this bar. Persisted to Trade.metadata on an early-cut exit
+    # so exam output carries the MFE-capture metric (#976 review).
+    early_cut_window_mfe_pct: float | None = None
 
 
 @dataclass
@@ -649,6 +653,7 @@ class ExitHandler:
         # Check MFE early-cut (shared policy — identical logic in live).
         hit_early_cut = False
         early_cut_reason: str | None = None
+        early_cut_window_mfe: float | None = None
         if self.early_cut_policy is not None and df is not None:
             try:
                 current_time = candle.name if hasattr(candle, "name") else datetime.now(UTC)
@@ -663,6 +668,7 @@ class ExitHandler:
                 )
                 hit_early_cut = early_cut_decision.should_exit
                 early_cut_reason = early_cut_decision.reason
+                early_cut_window_mfe = early_cut_decision.window_mfe_pct
             except (TypeError, ValueError, AttributeError) as e:
                 logger.warning("Early-cut check failed: %s", e)
 
@@ -703,6 +709,7 @@ class ExitHandler:
             is_early_cut=hit_early_cut and not (hit_stop_loss or hit_take_profit or hit_time_limit),
             is_signal=exit_signal
             and not (hit_stop_loss or hit_take_profit or hit_time_limit or hit_early_cut),
+            early_cut_window_mfe_pct=early_cut_window_mfe,
         )
 
     def _check_runtime_exit(

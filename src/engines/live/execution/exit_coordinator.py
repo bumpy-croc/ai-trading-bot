@@ -232,6 +232,14 @@ class LiveExitCoordinator:
                     f"entry_price_{position.entry_price:.2f}",
                 ]
 
+                # Window MFE seen by the early-cut policy, when it evaluated —
+                # DB-durable via strategy_executions.reasons (#976 review).
+                # isinstance (not `is not None`): tests inject MagicMock exit
+                # checks whose attributes are truthy non-numerics.
+                early_cut_window_mfe = getattr(exit_check, "early_cut_window_mfe_pct", None)
+                if isinstance(early_cut_window_mfe, int | float):
+                    log_reasons.append(f"early_cut_window_mfe_{early_cut_window_mfe:.6f}")
+
                 # Add regime context if available from TradingDecision
                 if (
                     decision_for_exit

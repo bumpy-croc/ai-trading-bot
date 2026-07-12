@@ -57,6 +57,30 @@ class EarlyCutDecision:
     window_mfe_pct: float | None = None
 
 
+def _timeframe_to_hours(timeframe: str) -> float | None:
+    """Convert a timeframe string (``15m``, ``1h``, ``4h``, ``1d``, ``1w``)
+    to hours. Returns None when unrecognized. Mirrors the unit conventions
+    of ``CachedDataProvider._get_timeframe_timedelta``."""
+    if not timeframe or not isinstance(timeframe, str):
+        return None
+    try:
+        unit = timeframe[-1].lower()
+        value = int(timeframe[:-1]) if len(timeframe) > 1 else 1
+    except (ValueError, TypeError):
+        return None
+    if value <= 0:
+        return None
+    if unit == "m":
+        return value / 60.0
+    if unit == "h":
+        return float(value)
+    if unit == "d":
+        return value * 24.0
+    if unit == "w":
+        return value * 24.0 * 7.0
+    return None
+
+
 def _as_index_timestamp(dt: datetime, index: pd.Index) -> pd.Timestamp:
     """Normalize a datetime to the tz-awareness of ``index`` (UTC semantics).
 
@@ -91,10 +115,12 @@ def compute_window_raw_mfe(
         window_end: End of the evaluation window (exclusive).
 
     Returns:
-        Max favorable excursion as a decimal fraction (floored at 0.0), 0.0
-        when no bar falls inside the window, or None when it cannot be
-        computed — invalid entry price, empty data, or history that does not
-        reach back to the entry (the caller must treat None as "do not cut").
+        Max favorable excursion as a decimal fraction (floored at 0.0), or
+        None when it cannot be computed — invalid entry price, empty data,
+        history that does not reach back to the entry, or a window that
+        contains no bars at all (data gap, or a window no longer than the
+        bar interval). The caller must treat None as "do not cut": a
+        fabricated 0% from unknowable data would flatten every position.
 
     Raises:
         ValueError: If ``side`` is not "long" or "short".
@@ -117,7 +143,9 @@ def compute_window_raw_mfe(
 
     window = df[(index > entry_ts) & (index < end_ts)]
     if window.empty:
-        return 0.0
+        # No bar inside the window (data gap, or window <= bar interval):
+        # the true excursion is unknowable — never fabricate 0% (#976 F1).
+        return None
 
     if side == "long":
         extreme = float(window["high"].max())
@@ -163,6 +191,50 @@ class EarlyCutPolicy:
             raise ValueError(
                 f"evaluation_window_hours must be a positive finite number, "
                 f"got {self.evaluation_window_hours!r}"
+            )
+
+    def validate_for_timeframe(self, timeframe: str) -> None:
+        """Reject window sizes that cannot work on the traded timeframe.
+
+        Engines call this before trading starts (#976 review F1/F2):
+
+        - A window no longer than one bar leaves ZERO bars strictly inside
+          ``(entry, entry + window)`` — every evaluation would be
+          unknowable, silently disabling the policy the config asked for.
+        - A window that is not a whole multiple of the bar interval makes
+          live (forming boundary bar) and backtest (completed bar) see
+          different window contents — a latent parity divergence.
+
+        Args:
+            timeframe: Bar interval string, e.g. ``"15m"``, ``"1h"``, ``"4h"``.
+
+        Raises:
+            ValueError: If the timeframe is unrecognized, the window is not
+                strictly longer than one bar, or the window is not a whole
+                multiple of the bar interval.
+        """
+        bar_hours = _timeframe_to_hours(timeframe)
+        if bar_hours is None:
+            raise ValueError(
+                f"Cannot validate early-cut evaluation window: unrecognized "
+                f"timeframe {timeframe!r} (expected e.g. '15m', '1h', '4h', '1d')"
+            )
+        if self.evaluation_window_hours <= bar_hours:
+            raise ValueError(
+                f"early_cut evaluation_window_hours="
+                f"{self.evaluation_window_hours:g} must be strictly longer "
+                f"than one {timeframe} bar ({bar_hours:g}h): a window this "
+                f"short contains no completed bars, so the window MFE is "
+                f"never computable and the policy cannot work"
+            )
+        ratio = self.evaluation_window_hours / bar_hours
+        if abs(ratio - round(ratio)) > 1e-9:
+            raise ValueError(
+                f"early_cut evaluation_window_hours="
+                f"{self.evaluation_window_hours:g} must be a whole multiple "
+                f"of the {timeframe} bar interval ({bar_hours:g}h): "
+                f"non-bar-aligned windows evaluate a forming bar in live but "
+                f"a completed bar in backtest, breaking parity"
             )
 
     def check_early_cut_conditions(

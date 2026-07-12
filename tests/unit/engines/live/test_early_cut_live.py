@@ -26,7 +26,7 @@ ENTRY_PRICE = 100.0
 
 def _make_df(highs: list[float], lows: list[float], start: datetime) -> pd.DataFrame:
     index = pd.date_range(start=start.replace(tzinfo=None), periods=len(highs), freq="1h")
-    closes = [(h + lo) / 2 for h, lo in zip(highs, lows)]
+    closes = [(h + lo) / 2 for h, lo in zip(highs, lows, strict=False)]
     return pd.DataFrame(
         {"open": closes, "high": highs, "low": lows, "close": closes, "volume": 1000.0},
         index=index,
@@ -62,9 +62,7 @@ class TestLiveEarlyCut:
             lows=[99.5, 99.8, 100.1, 100.0, 100.0],
             start=entry_time,
         )
-        handler = _make_handler(
-            EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3)
-        )
+        handler = _make_handler(EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3))
 
         result = handler.check_exit_conditions(
             position=_position(entry_time),
@@ -76,6 +74,8 @@ class TestLiveEarlyCut:
         assert result.should_exit is True
         assert result.exit_reason.startswith("Early cut")
         assert result.limit_price is None
+        # Observability (#976 review): window MFE surfaced. Hand-computed: 1.9%.
+        assert result.early_cut_window_mfe_pct == pytest.approx(0.019)
 
     def test_holds_before_window_elapses(self) -> None:
         entry_time = datetime.now(UTC) - timedelta(hours=2)
@@ -84,9 +84,7 @@ class TestLiveEarlyCut:
             lows=[99.5, 99.8, 100.1],
             start=entry_time,
         )
-        handler = _make_handler(
-            EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3)
-        )
+        handler = _make_handler(EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3))
 
         result = handler.check_exit_conditions(
             position=_position(entry_time),
@@ -104,9 +102,7 @@ class TestLiveEarlyCut:
             lows=[99.5, 99.8, 100.1, 100.0, 100.0],
             start=entry_time,
         )
-        handler = _make_handler(
-            EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3)
-        )
+        handler = _make_handler(EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3))
 
         result = handler.check_exit_conditions(
             position=_position(entry_time),
@@ -126,9 +122,7 @@ class TestLiveEarlyCut:
             lows=[99.9, 99.9, 99.9],
             start=entry_time + timedelta(hours=5),
         )
-        handler = _make_handler(
-            EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3)
-        )
+        handler = _make_handler(EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3))
 
         result = handler.check_exit_conditions(
             position=_position(entry_time),
@@ -146,9 +140,7 @@ class TestLiveEarlyCut:
             lows=[99.5, 99.8, 99.9, 100.0, 94.0],
             start=entry_time,
         )
-        handler = _make_handler(
-            EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3)
-        )
+        handler = _make_handler(EarlyCutPolicy(mfe_threshold_pct=0.02, evaluation_window_hours=3))
         position = _position(entry_time)
         position.stop_loss = 95.0
 
@@ -173,3 +165,41 @@ class TestLiveEarlyCut:
             candle_low=100.0,
         )
         assert result.should_exit is False
+
+
+class TestLiveStartTimeframeValidation:
+    """Review #976 F1/F2: the live engine must refuse to start with an
+    early-cut window that cannot work on the traded timeframe."""
+
+    def _engine(self, window_hours: float):
+        from unittest.mock import MagicMock, patch
+
+        from src.engines.live.trading_engine import LiveTradingEngine
+        from src.risk.risk_manager import RiskParameters
+        from src.strategies.ml_basic import create_ml_basic_strategy
+
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
+            engine = LiveTradingEngine(
+                strategy=create_ml_basic_strategy(),
+                data_provider=MagicMock(),
+                initial_balance=1000.0,
+                risk_parameters=RiskParameters(
+                    early_cut={
+                        "mfe_threshold_pct": 0.02,
+                        "evaluation_window_hours": window_hours,
+                    }
+                ),
+            )
+        engine.startup_sequencer = Mock()
+        return engine
+
+    def test_start_rejects_window_equal_to_bar_interval(self) -> None:
+        engine = self._engine(window_hours=1)
+        with pytest.raises(ValueError, match="evaluation_window_hours"):
+            engine.start("BTCUSDT", timeframe="1h")
+        engine.startup_sequencer.run.assert_not_called()
+
+    def test_start_accepts_valid_window(self) -> None:
+        engine = self._engine(window_hours=18)
+        engine.start("BTCUSDT", timeframe="1h")
+        engine.startup_sequencer.run.assert_called_once()
