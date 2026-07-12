@@ -46,7 +46,12 @@ def factory_accepts_symbol(factory: Callable[..., Any]) -> bool:
     )
 
 
-def call_strategy_factory(factory: Callable[..., Any], *, symbol: str | None = None) -> "Strategy":
+def call_strategy_factory(
+    factory: Callable[..., Any],
+    *,
+    symbol: str | None = None,
+    model_version: str | None = None,
+) -> "Strategy":
     """Invoke a strategy factory, threading the trading symbol when supported.
 
     Runners (live and backtest) must construct strategies through this helper
@@ -54,9 +59,34 @@ def call_strategy_factory(factory: Callable[..., Any], *, symbol: str | None = N
     selection — otherwise a strategy silently scores with the default
     (BTCUSDT) model. Factories without a ``symbol`` parameter (e.g.
     chaos_test) are called unchanged.
+
+    ``model_version`` is the backtest harness's point-in-time model pin
+    (GH #988). Unlike ``symbol``, it is threaded only to factories that
+    declare an explicit ``model_version`` parameter — never through
+    ``**kwargs`` (a factory forwarding unknown kwargs elsewhere would crash
+    or, worse, silently drop the pin). A pin the factory cannot honor
+    raises so a "pinned" run can never silently score with ``latest``.
+
+    Raises:
+        ValueError: ``model_version`` was requested but the factory has no
+            explicit ``model_version`` parameter.
     """
-    if symbol is None:
-        return factory()
-    if factory_accepts_symbol(factory):
-        return factory(symbol=symbol)
-    return factory()
+    kwargs: dict[str, Any] = {}
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        parameters = None
+
+    if model_version is not None:
+        if parameters is None or "model_version" not in parameters:
+            raise ValueError(
+                f"Strategy factory {getattr(factory, '__name__', factory)!r} does not "
+                f"support model_version pinning — refusing to run a 'pinned' backtest "
+                f"that would silently resolve 'latest' instead."
+            )
+        kwargs["model_version"] = model_version
+
+    if symbol is not None and factory_accepts_symbol(factory):
+        kwargs["symbol"] = symbol
+
+    return factory(**kwargs)

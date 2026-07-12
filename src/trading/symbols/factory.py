@@ -13,6 +13,20 @@ Add more exchanges as needed.
 import re
 
 
+def base_asset_from_symbol(symbol: str) -> str:
+    """Best-effort base asset for ``symbol`` by stripping a known quote suffix.
+
+    Fallback only — prefer the exchange-authoritative ``base_asset`` from
+    ``get_symbol_info`` when available. Quotes are checked longest-first so e.g.
+    ``ETHUSDT`` resolves to ``ETH``. Returns ``symbol`` unchanged when no known
+    quote matches.
+    """
+    for quote in ("USDT", "BUSD", "USDC", "USD"):
+        if symbol.endswith(quote) and len(symbol) > len(quote):
+            return symbol[: -len(quote)]
+    return symbol
+
+
 class SymbolFactory:
     @staticmethod
     def to_exchange_symbol(symbol: str, exchange: str) -> str:

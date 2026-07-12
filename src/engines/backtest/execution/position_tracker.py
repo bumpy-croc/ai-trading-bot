@@ -58,15 +58,11 @@ class PositionTracker:
 
         Args:
             mfe_mae_precision: Decimal precision for MFE/MAE calculations.
-            fee_rate: Fee rate for cost-adjusted MFE/MAE and partial exits.
-            slippage_rate: Slippage rate for cost-adjusted MFE/MAE and partial exits.
+            fee_rate: Fee rate for partial exits.
+            slippage_rate: Slippage rate for partial exits.
         """
         self.current_trade: ActiveTrade | None = None
-        self.mfe_mae_tracker = MFEMAETracker(
-            precision_decimals=mfe_mae_precision,
-            fee_rate=fee_rate,
-            slippage_rate=slippage_rate,
-        )
+        self.mfe_mae_tracker = MFEMAETracker(precision_decimals=mfe_mae_precision)
         # Shared executor for consistent partial exit calculations
         self._partial_exit_executor = PartialExitExecutor(
             fee_rate=fee_rate,
@@ -132,7 +128,6 @@ class PositionTracker:
                 entry_price=float(self.current_trade.entry_price),
                 current_price=float(current_price),
                 side=side_str,
-                position_fraction=float(self.current_trade.size),
                 current_time=current_time,
             )
         except Exception as e:

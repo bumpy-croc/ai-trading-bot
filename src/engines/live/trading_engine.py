@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import queue
 import signal
@@ -1004,7 +1005,9 @@ class LiveTradingEngine:
             max_filled_price_deviation=self.max_filled_price_deviation,
             # Close-only mode must block ALL exposure increases, including
             # scale-ins; read at call time so mid-session trips take effect.
-            close_only_provider=lambda: self._close_only_mode,
+            # The gate re-assesses the drawdown guard on read so a breach
+            # realized earlier in the SAME iteration blocks the scale-in too.
+            close_only_provider=self._refresh_drawdown_gate,
             # Manual kill-switch (#922): scale-ins share the engine's halt state.
             system_halt=self._system_halt,
         )
@@ -1101,11 +1104,12 @@ class LiveTradingEngine:
             return self.risk_manager.params
 
         try:
-            # Calculate dynamic risk adjustments
-            perf_metrics = self.performance_tracker.get_metrics()
+            # Calculate dynamic risk adjustments from the durable session peak
+            # (#845 peak-reset class: the in-memory tracker peak re-anchors to
+            # the depressed balance on restart and disarms the throttle).
             adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
                 current_balance=self.current_balance,
-                peak_balance=perf_metrics.peak_balance or self.current_balance,
+                peak_balance=self._durable_peak_balance() or self.current_balance,
                 session_id=self.trading_session_id,
             )
 
@@ -2136,6 +2140,50 @@ class LiveTradingEngine:
         """
         self._drawdown_enforcer.check()
         self._circuit_breaker_enforcer.check()
+
+    def _refresh_drawdown_gate(self) -> bool:
+        """Re-assess the max-drawdown hard cap at an exposure-increase chokepoint.
+
+        The loop-level ``_check_max_drawdown`` runs AFTER entry evaluation, so
+        on the bar that crosses the cap a fresh entry would execute before
+        close-only latched (one-iteration leak, 2026-07-12 risk audit P1).
+        Entry evaluation, ``execute_entry_locked``, the legacy short path, and
+        the scale-in gate call this first — mirroring the #807 in-line
+        circuit-breaker gate — so the cap binds on the SAME iteration.
+
+        Returns the (possibly just-latched) close-only flag, making it usable
+        directly as the exit handler's ``close_only_provider``.
+        """
+        self._drawdown_enforcer.check_before_new_risk()
+        return self._close_only_mode
+
+    def _durable_peak_balance(self) -> float:
+        """Peak balance for drawdown-based risk throttling, durable across restarts.
+
+        The graduated dynamic-risk throttle must measure drawdown from the
+        same baseline as the max-drawdown hard cap. The in-memory
+        PerformanceTracker peak re-anchors to the (possibly depressed) current
+        balance on restart, which silently disarmed the throttle exactly when
+        it should bind (#845 peak-reset class). The drawdown guard's peak is
+        seeded from the durable ``account_history`` session max, so it
+        survives restarts; take the max with the tracker peak and the current
+        balance so the throttle never measures from a LOWER peak than either
+        source. Until the guard seeds (first gate/loop check at boot) this
+        degrades to the in-memory behavior.
+        """
+        peak = 0.0
+        for candidate in (
+            self._drawdown_enforcer.guard.peak_balance,
+            self.performance_tracker.get_metrics().peak_balance,
+            self.current_balance,
+        ):
+            try:
+                value = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > peak:
+                peak = value
+        return peak
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""

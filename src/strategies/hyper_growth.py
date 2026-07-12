@@ -190,6 +190,7 @@ def create_hyper_growth_strategy(
     breakeven_buffer: float = 0.008,
     early_cut_mfe_threshold_pct: float | None = None,
     early_cut_evaluation_window_hours: float | None = None,
+    model_version: str | None = None,
 ) -> Strategy:
     """Create hyper-growth strategy targeting high annual returns.
 
@@ -237,18 +238,29 @@ def create_hyper_growth_strategy(
         early_cut_evaluation_window_hours: Early-cut evaluation window in
             hours from entry. Must be set together with
             ``early_cut_mfe_threshold_pct``.
+        model_version: Pin ML predictions to this exact registry version
+            instead of resolving ``latest`` — the backtest harness's
+            point-in-time pin (GH #988). Only valid with
+            ``signal_source="ml"`` (momentum runs no model).
 
     Returns:
         Configured Strategy instance.
 
     Raises:
-        ValueError: If exactly one of the two early-cut kwargs is provided.
+        ValueError: If exactly one of the two early-cut kwargs is provided,
+            or if ``model_version`` is combined with ``signal_source="momentum"``.
     """
     if (early_cut_mfe_threshold_pct is None) != (early_cut_evaluation_window_hours is None):
         raise ValueError(
             "early_cut_mfe_threshold_pct and early_cut_evaluation_window_hours "
             "must be provided together (both set to enable the early cut, "
             "both None to disable it)"
+        )
+    if signal_source == "momentum" and model_version is not None:
+        raise ValueError(
+            "model_version cannot be combined with signal_source='momentum': "
+            "the momentum generator runs no ML model, so a pinned model "
+            "version would silently not be honored."
         )
     # #805: hyper_growth targets high returns via leverage/aggressive sizing and
     # is NOT recommended in a bear/high-vol regime, where exposure is the primary
@@ -277,7 +289,7 @@ def create_hyper_growth_strategy(
         # silently returns 0.0 on every bar — which the generator converts to
         # predicted_return = -1.0 (a constant SELL sentinel, not a prediction).
         signal_generator = MLBasicSignalGenerator(
-            name=f"{name}_signals", model_type="basic", symbol=symbol
+            name=f"{name}_signals", model_type="basic", symbol=symbol, model_version=model_version
         )
 
     risk_manager = FlatRiskManager(

@@ -6,7 +6,6 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 
-from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
 from src.performance.metrics import Side, pnl_percent
 
 logger = logging.getLogger(__name__)
@@ -14,7 +13,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MFEMetrics:
-    mfe: float = 0.0  # decimal fraction relative to entry (sized if fraction provided)
+    """Raw price excursion extremes relative to entry.
+
+    ``mfe``/``mae`` are unsized price moves as decimal fractions
+    (e.g. +0.05 = +5%), gross of fees and slippage, and always consistent
+    with their ``mfe_price``/``mae_price`` companions:
+    ``mfe == pnl_percent(entry_price, mfe_price, side)``.
+    """
+
+    mfe: float = 0.0
     mae: float = 0.0
     mfe_price: float | None = None
     mae_price: float | None = None
@@ -26,30 +33,21 @@ class MFEMAETracker:
     """
     Tracks Maximum Favorable/Adverse Excursion for positions.
 
-    Values are stored as decimal fractions relative to entry (e.g., +0.05 = +5%).
-    The position fraction can be applied for sized returns via `position_fraction`.
-    MFE/MAE metrics account for exit fees and slippage to reflect achievable profit/loss.
+    Values are RAW price excursions relative to entry, stored as decimal
+    fractions (e.g., +0.05 = +5%). No position sizing and no fee/slippage
+    adjustment is applied — that keeps ``mfe``/``mae`` in the same units as
+    ``trades.pnl_percent`` and derivable from the ``mfe_price``/``mae_price``
+    companion columns. Consumers that need sized or cost-netted excursions
+    apply ``trades.size`` and the shared cost calculator themselves.
 
     Thread Safety:
-        This class is thread-safe for concurrent access to different position keys.
-        The same position key should not be updated concurrently from multiple threads.
+        This class is thread-safe for concurrent access to different position
+        keys. The same position key should not be updated concurrently from
+        multiple threads.
     """
 
-    def __init__(
-        self,
-        precision_decimals: int = 8,
-        fee_rate: float = DEFAULT_FEE_RATE,
-        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
-    ):
-        # Validate fee and slippage rates to prevent financial calculation corruption
-        if fee_rate < 0 or not math.isfinite(fee_rate):
-            raise ValueError(f"fee_rate must be non-negative and finite, got {fee_rate}")
-        if slippage_rate < 0 or not math.isfinite(slippage_rate):
-            raise ValueError(f"slippage_rate must be non-negative and finite, got {slippage_rate}")
-
+    def __init__(self, precision_decimals: int = 8):
         self.precision_decimals = precision_decimals
-        self.fee_rate = fee_rate
-        self.slippage_rate = slippage_rate
         # In-memory cache keyed by position_id or order_id
         self._cache: dict[str | int, MFEMetrics] = {}
         # Lock protects _cache from concurrent write operations
@@ -60,44 +58,24 @@ class MFEMAETracker:
         entry_price: float,
         current_price: float,
         side: str | Side,
-        position_fraction: float = 1.0,
-        as_sized: bool = True,
-        fee_rate: float = DEFAULT_FEE_RATE,
-        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> tuple[float, float]:
-        """Return current excursion (mfe_candidate, mae_candidate) as decimal fractions.
+        """Return current excursion (mfe_candidate, mae_candidate).
 
-        If `as_sized` is True, returns sized PnL fractions using `position_fraction`.
-        Net MFE/MAE accounts for exit fees and slippage to reflect achievable profit/loss.
+        Both candidates are raw price moves from entry as decimal fractions:
+        a favorable move yields (move, 0.0), an adverse move (0.0, move).
         """
         # Validate prices to prevent NaN/Infinity propagation in MFE/MAE calculations
         if not math.isfinite(entry_price) or entry_price <= 0:
             return 0.0, 0.0
         if not math.isfinite(current_price) or current_price <= 0:
             return 0.0, 0.0
-        # Validate position_fraction to prevent NaN/negative corruption
-        if not math.isfinite(position_fraction) or position_fraction < 0:
-            return 0.0, 0.0
 
         side_enum = side if isinstance(side, Side) else Side(side)
 
-        # Calculate gross price movement
-        move = pnl_percent(
-            entry_price, current_price, side_enum, position_fraction if as_sized else 1.0
-        )
+        move = pnl_percent(entry_price, current_price, side_enum)
 
-        # Calculate exit costs as percentage of position value
-        # For MFE: subtract costs since they reduce achievable profit
-        # For MAE: add costs since they worsen losses
-        exit_cost_rate = fee_rate + slippage_rate
-
-        # Adjust for costs to get net achievable excursion
-        net_move = move - exit_cost_rate if as_sized else move
-
-        # Positive move contributes to MFE candidate; negative to MAE candidate
-        # Check move direction BEFORE applying exit costs to avoid counting costs alone as MAE
-        mfe_cand = max(0.0, net_move) if move > 0 else 0.0
-        mae_cand = min(0.0, net_move) if move < 0 else 0.0
+        mfe_cand = move if move > 0 else 0.0
+        mae_cand = move if move < 0 else 0.0
 
         return mfe_cand, mae_cand
 
@@ -107,7 +85,6 @@ class MFEMAETracker:
         entry_price: float,
         current_price: float,
         side: str | Side,
-        position_fraction: float,
         current_time: datetime,
     ) -> MFEMetrics:
         """Update rolling MFE/MAE for a position and return the updated metrics."""
@@ -119,9 +96,6 @@ class MFEMAETracker:
             entry_price=entry_price,
             current_price=current_price,
             side=side,
-            position_fraction=position_fraction,
-            fee_rate=self.fee_rate,
-            slippage_rate=self.slippage_rate,
         )
 
         # Update cache with lock to prevent race conditions

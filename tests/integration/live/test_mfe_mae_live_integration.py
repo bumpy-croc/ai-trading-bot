@@ -122,7 +122,6 @@ def test_live_engine_records_mfe_mae():
         entry_price=entry_price,
         current_price=entry_price * 1.03,  # +3% move
         side=position.side.value,
-        position_fraction=float(position.size),
         current_time=datetime.now(UTC),
     )
     engine.live_position_tracker.mfe_mae_tracker.update_position_metrics(
@@ -130,7 +129,6 @@ def test_live_engine_records_mfe_mae():
         entry_price=entry_price,
         current_price=entry_price * 0.97,  # -3% move
         side=position.side.value,
-        position_fraction=float(position.size),
         current_time=datetime.now(UTC),
     )
 
@@ -154,6 +152,15 @@ def test_live_engine_records_mfe_mae():
     assert "mfe" in t0 and "mae" in t0
     mfe = float(t0.get("mfe") or 0.0)
     mae = float(t0.get("mae") or 0.0)
-    # Expect sign consistency: MFE >= 0, MAE <= 0
-    assert mfe >= 0.0
-    assert mae <= 0.0
+    # Raw unsized price excursion: the simulated +3%/-3% moves round-trip
+    # through the DB unchanged (regression for the sized/fee-netted writer
+    # that stored size * move - costs and disagreed with mfe_price/mae_price).
+    assert mfe == pytest.approx(0.03, rel=1e-6)
+    assert mae == pytest.approx(-0.03, rel=1e-6)
+
+    # Stored fractions must agree with their own price companions.
+    entry = float(t0["entry_price"])
+    assert float(t0["mfe_price"]) == pytest.approx(entry * 1.03)
+    assert float(t0["mae_price"]) == pytest.approx(entry * 0.97)
+    assert mfe == pytest.approx((float(t0["mfe_price"]) - entry) / entry)
+    assert mae == pytest.approx((float(t0["mae_price"]) - entry) / entry)
