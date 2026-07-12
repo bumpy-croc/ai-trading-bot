@@ -622,3 +622,37 @@ diversification, and the live-parity gap, not further feature-set expansion with
 classes. No src/ change, no live-affecting decision -- nothing for risk-officer to stress-test.
 Ref: docs/research/experiments/2026-07-12_input-screening-linear.md (prior screen), PR (opening
 now).
+
+---
+
+## 2026-07-12 · decision · daemon(PM) [D-2026-07-12-02]
+Synthesis: `docs/research/2026-07-12_returns-levers-synthesis.md` rolls up the day's full research
+program for the Board. FIVE independent experiments (window #898, architecture #939 -- unmerged,
+flagged as a doc-hygiene gap, see synthesis header --, target-redesign #933/#957, linear input
+screen #967/#969, nonlinear input re-screen PR #973) converge on one structural finding: ETHUSDT/1h
+next-bar directional accuracy has a ~51-53% ceiling that training window, model architecture,
+target/label design, and six alternative-input classes (tested twice, linear + nonlinear detector)
+all fail to move. Every tournament's L2 money exam nets PF <1.0 on every entrant/fold regardless of
+lever -- at current CostCalculator defaults (fee 0.1%/slippage 0.05% per side, never disabled),
+a 1-3pp DA edge over coinflip does not clear round-trip transaction costs. Formally retired: 5 of 6
+input classes (both detector families), target reformulation, architecture search, window curation,
+stop-tightening (subset of exit geometry, from #970/#971's honest-engine rerun). Levers ranked:
+(a) exit/trade-management round 2 -- confirmed #1 but sharpened: tp_06 is the ONLY directionally-
+positive result in the whole program (all 3 folds) yet not significant (p=0.81-0.94, n=28-70/fold);
+true MFE-conditioned/trailing fix blocked on GH #971 (open, src/ change, money-path review required).
+(b) BTCUSDT/symbol diversification -- confirmed #2, currently a scoping question (native BTCUSDT
+model exists, but no L1/L2 exam run yet -- diversification of a net-negative edge compounds losses
+same as gains, must be scoped honestly before any capital-allocation read). (c) live-vs-backtest
+parity gap -- ELEVATED above PM's tentative #3: live-trade-review (12 trades, sample-size-capped)
+found matched backtest 6 trades/-0.78% vs live 12 trades/+9%, 2x trade-count + sign-flipped return,
+outside the charter's 15% parity band; if this generalizes it revises how every other result in this
+program should be read, not just one more lever. (d) btc_cross regime-conditional lead-lag --
+confirmed #4, narrower than framed (1 of 3 folds significant, correctly not graduating). (e) 4h/1d
+timeframe -- confirmed #5, genuinely untested (not falsified), cheapest opportunistic next probe.
+Next-session sequence (docs/research/2026-07-12_returns-levers-synthesis.md S4): BTCUSDT scoping
+exam + parity-gap sizing pass first (cheap, no prerequisites), tp_06 bigger-sample follow-up
+(startable now, no src/ change needed), GH #971 build (multi-session, risk-officer required),
+btc_cross regime prereg and timeframe probe deferred/opportunistic.
+Evidence: docs/research/2026-07-12_returns-levers-synthesis.md (cites all six source docs directly,
+no new numbers computed).
+Ref: PR (docs/returns-levers-synthesis -> develop, opening now).
