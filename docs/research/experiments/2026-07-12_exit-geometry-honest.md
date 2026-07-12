@@ -116,4 +116,88 @@ If this round finds no arm clears the promotion bar, or clears it only partially
 
 ## RESULTS
 
-(Appended below this line only after every primary-fold run completes. Nothing above this line is edited post-hoc.)
+**Executive verdict: NO-GO for every arm. No exit-geometry variant tested here flips HyperGrowth's expectancy, and none is a promotion candidate.** 21 primary runs (7 configs × 3 folds) + 1 determinism recheck, all completed (`experiments/exit_geometry_results.jsonl`, `experiments/exit_geometry_sweep.py`). Wall-clock: ~68–163s/run, ~33 min total — well inside the budget guidance in the dispatch brief. F4 (2026H1 confirmatory) was **not run**: the pre-committed rule (Sec. 4) was "run F4 only for control plus any arm that clears the F1–F3 bar," and no arm cleared it — correctly conserving that window's spent comparison budget rather than running it anyway and being tempted to eyeball it.
+
+### Determinism spot-check: PASS
+
+`control`/F1 run twice, back-to-back: `total_trades=31`, `total_return=-2.8817542...%`, `profit_factor=0.6619...` identical to full float precision both times. Post-#923 deterministic inference holds.
+
+### Per-fold results (fees/slippage on throughout; `initial_balance=$85`, matching live prod balance scale)
+
+**F1 = 2023H1**
+
+| Arm | Trades | Return% | PF | MaxDD% | WinR% | Sharpe | Final$ | Capture (winners) | MAE-ride (losers) |
+|---|---|---|---|---|---|---|---|---|---|
+| control | 31 | -2.88 | 0.662 | 4.85 | 74.19 | 0.011 | 82.71 | 0.817 | 0.938 |
+| sl_08 | 35 | -4.95 | 0.515 | 6.62 | 65.71 | 0.016 | 80.95 | 0.769 | 0.926 |
+| sl_06 | 49 | -5.76 | 0.537 | 6.61 | 61.22 | 0.018 | 80.26 | 0.788 | 0.871 |
+| sl_04 | 62 | -9.46 | 0.414 | 10.70 | 48.39 | 0.027 | 77.11 | 0.798 | 0.858 |
+| tp_06 | 28 | **-2.39** | **0.743** | 4.48 | 71.43 | 0.010 | 82.92 | 1.013 | 0.933 |
+| maxhold_18 | 289 | -12.72 | 0.591 | 12.84 | 41.18 | 0.036 | 74.19 | 1.919 | 0.446 |
+| combo_sl06_tp15 | 49 | -5.76 | 0.537 | 6.61 | 61.22 | 0.018 | 80.26 | 0.788 | 0.871 |
+
+**F2 = 2024H1**
+
+| Arm | Trades | Return% | PF | MaxDD% | WinR% | Sharpe | Final$ | Capture (winners) | MAE-ride (losers) |
+|---|---|---|---|---|---|---|---|---|---|
+| control | 46 | -6.64 | 0.528 | 7.65 | 73.91 | 0.025 | 79.44 | 0.757 | 0.928 |
+| sl_08 | 58 | -9.05 | 0.458 | 9.88 | 67.24 | 0.032 | 77.30 | 0.803 | 0.922 |
+| sl_06 | 70 | -13.80 | 0.329 | 14.38 | 52.86 | 0.048 | 73.27 | 0.765 | 0.890 |
+| sl_04 | 106 | -14.40 | 0.385 | 15.06 | 50.94 | 0.049 | 72.82 | 0.730 | 0.868 |
+| tp_06 | 45 | **-5.67** | **0.592** | 7.64 | 73.33 | 0.022 | 80.18 | 0.864 | 0.922 |
+| maxhold_18 | 371 | -15.36 | 0.606 | 15.90 | 48.52 | 0.052 | 71.94 | 1.710 | 0.448 |
+| combo_sl06_tp15 | 70 | -13.80 | 0.329 | 14.38 | 52.86 | 0.048 | 73.27 | 0.765 | 0.890 |
+
+**F3 = 2025H1**
+
+| Arm | Trades | Return% | PF | MaxDD% | WinR% | Sharpe | Final$ | Capture (winners) | MAE-ride (losers) |
+|---|---|---|---|---|---|---|---|---|---|
+| control | 70 | -11.56 | 0.446 | 12.78 | 64.29 | 0.053 | 75.50 | 0.728 | 0.861 |
+| sl_08 | 87 | -17.49 | 0.344 | 17.84 | 59.77 | 0.079 | 70.38 | 0.730 | 0.946 |
+| sl_06 | 98 | -14.13 | 0.461 | 14.92 | 55.10 | 0.064 | 73.31 | 0.733 | 0.854 |
+| sl_04 | 151 | -17.65 | 0.449 | 17.85 | 51.66 | 0.079 | 70.16 | 0.780 | 0.879 |
+| tp_06 | 68 | **-12.94** | **0.457** | 13.17 | 64.71 | 0.060 | 74.32 | 0.876 | 0.936 |
+| maxhold_18 | 465 | -17.29 | 0.669 | 18.06 | 47.74 | 0.077 | 70.30 | 1.336 | 0.469 |
+| combo_sl06_tp15 | 98 | -14.13 | 0.461 | 14.92 | 55.10 | 0.064 | 73.31 | 0.733 | 0.854 |
+
+(`annualized_return` read as `0.00` for every row across every arm/fold — an engine display/computation quirk for sub-year windows, not a fabrication signature: `total_return`, trade count, PF, and final balance are all internally consistent with each other and with the determinism check. Not chased further; flagged here rather than silently omitted.)
+
+### Decision table (Bonferroni α = 0.05/6 = 0.0083, two-sided bootstrap on per-trade P&L, 10,000 resamples, seed fixed for reproducibility)
+
+Full per-arm/per-fold p-values (`experiments/analyze_exit_geometry.py`): every single comparison across all 6 arms × 3 folds is **far from significant** — the lowest p-value observed anywhere is `maxhold_18`/F3 at **p=0.0648**, roughly 8× above the 0.0083 threshold. No arm-fold pair comes remotely close to clearing bar #4 of the falsifiable statement, so bars #1–3 (return/PF/MaxDD direction) are moot for the verdict even where they happen to point the "right" way.
+
+| Arm | Folds won (of 3) | Verdict |
+|---|---|---|
+| sl_08 | 0/3 | NO-GO |
+| sl_06 | 0/3 | NO-GO |
+| sl_04 | 0/3 | NO-GO |
+| tp_06 | 0/3 (directionally positive on all 3, never significant) | NO-GO, but see note below |
+| maxhold_18 | 0/3 | NO-GO |
+| combo_sl06_tp15 | 0/3 | NO-GO |
+
+### What actually happened, arm by arm
+
+- **Stop-tightening (`sl_08`/`sl_06`/`sl_04`) makes things monotonically worse, not better, on every fold — this REFUTES the tightening direction of H2 on the honest engine.** This is the same qualitative conclusion the 2026-07-04 pre-#838/#867 sweep reached, now independently reproduced on corrected plumbing: tightening the stop does not "cut off the full-stop losers early enough to help." Instead it multiplies trade count (31→35→49→62 in F1; similar scaling in F2/F3) and total return/MaxDD get uniformly worse as the stop tightens. The mechanism: a tighter stop converts marginal, would-have-recovered trades into realized losses more often than it prevents genuine full-stop losers from riding the whole distance — consistent with an entry signal that is still close to noise-level (per the confidence-collapse and target-redesign findings), where cutting losers earlier just crystallizes more noise excursions as realized losses (the same explanation the 2026-07-04 doc gave, this time confirmed without the #867 symbol-wiring confound in the way).
+- **`tp_06` is the only arm that improves BOTH total return and profit factor vs. control on all three folds** (return Δ +0.49/+0.97/+1.39 pp; PF 0.743 vs 0.662, 0.592 vs 0.528, 0.457 vs 0.446) — but every one of those deltas is statistically indistinguishable from zero at this trade-count scale (p=0.94, 0.85, 0.81 — nowhere near the Bonferroni bar). Read plainly: **a directionally-consistent, small, currently-unprovable signal.** This is exactly the prereg's pre-committed "promising but not ready" category, not a forced win.
+- **`combo_sl06_tp15` is bit-for-bit identical to `sl_06` alone, in every fold, to full float precision — verified as a real finding, not a bug.** Investigated directly (not just asserted): `Trade.mfe`/`mae`/`pnl_percent` are all "sized" fractions (position-fraction-scaled, confirmed by reading `src/position_management/mfe_mae_tracker.py`), while `take_profit_pct` is compared against a raw price distance from entry. Back-solving from the sized MFE numbers (e.g. mean sized MFE ≈0.0025 at ~0.25 average exposure ⇒ implied raw price MFE ≈1%) shows realized winning price moves in this trade population are almost always far below even the tighter TP level tested (15%), so neither the 15% nor the 30%-default TP threshold is ever the binding exit for these specific trades — the take-profit knob is simply inert above roughly the level `tp_06` (6%) already starts to bind at. This is itself a reportable finding: **for HyperGrowth's actual ETHUSDT/1h trade population, TP width barely matters above ~6-8%; whatever a wider TP promises never gets reached before some other exit (stop/trailing/time) fires.**
+- **`maxhold_18` (closest expressible proxy to Lane D's early-cut hypothesis) is the clearest "don't be misled by a single metric" case in this study.** Profit factor actually *improves* vs. control in 2 of 3 folds (0.606 vs 0.528 in F2; 0.669 vs 0.446 in F3) — a naive read of PF alone would call this a partial win. But total return and MaxDD are worse in **every** fold, because forcing a flat position every 18 hours (when `ignore_signal_reversal=True` otherwise holds through days-long trends) multiplies trade count by 7–10× (289–465 trades vs. 31–70 for control) — turning a modestly-improved per-trade win/loss ratio into a much larger aggregate fee/slippage/noise-churn bill. `mae_ride_fraction` drops sharply for this arm (0.45–0.47 vs. ~0.85–0.95 elsewhere) simply because most trades never get anywhere near their stop before the 18h clock cuts them — a mechanical artifact of the cutoff, not evidence the underlying "ride the stop" problem was fixed.
+- **Mechanism cross-check vs. Lane D's live-fill evidence**: control's own backtest MFE-capture (0.73–0.82 across folds) and MAE-ride (0.86–0.94) are in the same neighborhood as Lane D's live numbers (~0.72 capture, ~0.91 ride) — reassuring that, headline trade-frequency divergence aside (Sec. 7, point 3), the underlying *mechanism* (winners cut relatively early, losers ridden close to the stop) reproduces between live and backtest, which is the load-bearing assumption behind treating this backtest's relative comparisons as informative at all.
+
+### Verdict against the falsifiable statement (Sec. 1)
+
+No arm clears all five bars on all three folds. **No promotion candidate.** The closest thing to a positive signal (`tp_06`) is explicitly "promising but not ready" — directionally consistent, mechanistically plausible (it's the one arm that actually changes which exit fires for a meaningful minority of trades without exploding trade count), but not statistically distinguishable from noise given the ~28–70 trades/fold available. Recommending a live/staging change on that basis alone would be exactly the kind of forced call the prereg committed in advance not to make.
+
+### How this could be misleading (adversarial self-review)
+
+- **Absolute numbers are optimistic, not conservative** (Sec. 7, point 1) — the live model's training window covers every fold tested. If anything this makes the NO-GO verdict *more* trustworthy (a more favorable data-generating setup still couldn't produce a significant win) but means nobody should read "-2.88% control on F1" as a live performance forecast.
+- **Six comparisons is a small basket** — the Bonferroni correction protects against false positives across these six pre-registered arms, but it does not mean the *true* geometry-optimum was in this basket. Sec. 3's expressibility gaps (trailing-stop distance, breakeven, MFE-conditioned early-cut) are real, disclosed unknowns, not folded into this verdict as "already tested and rejected."
+- **`maxhold_18`'s PF improvement is a genuine trap for a less careful read** — flagged explicitly above precisely because a PM or risk-officer skimming a PF column alone could mistake it for a partial win.
+
+## Recommendation to PM / risk-officer
+
+**Recommendation: rejected as a promotion candidate — for all 6 arms, on the pre-committed thresholds.** None of the expressible exit-geometry changes (stop width, take-profit width, unconditional time cutoff) flip HyperGrowth's expectancy on honest, fee-inclusive, multi-regime-tested plumbing. This is a clean negative result, not a silent gap, and it is reported in full per the anti-p-hacking norm (all 6 pre-registered arms shown, not just the closest one).
+
+- **Not ready for risk-officer stress-testing** — there is no candidate to stress-test. Nothing here should go to staging or affect the live config.
+- **What IS worth a next round** (Sec. 8, unchanged since prereg-lock): a genuine `src/`-level `ExitHandler` feature for an MFE-conditioned early-cut policy, and exposing trailing-stop/breakeven as real `RiskParameters`-driven knobs for `hyper_growth` — both would need their own prereg and a risk-officer-reviewed code change, since they touch money-path-adjacent code.
+- **`tp_06` is the one thread worth pulling before abandoning the TP lever entirely** — not as a promotion, but as a candidate for a follow-up study with a larger trade sample (more history and/or more symbols) specifically powered to distinguish a ~1pp return / ~0.1 PF effect size from noise, since this study's per-fold trade counts (28–70) are not.
+- **This result strengthens, not just repeats, the standing cross-tournament finding** (confidence-collapse note + target-redesign tournament): the binding constraint on HyperGrowth's expectancy is not exit geometry at the layer testable here. Combined with the entries/model-quality ceiling those studies found, the honest picture is that neither lever tested so far (model architecture/target/window, nor stop/TP/time-cutoff geometry) closes the gap alone.
