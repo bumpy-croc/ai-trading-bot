@@ -1128,6 +1128,18 @@ class MLBasicSignalGenerator(SignalGenerator):
                 else:
                     result = self.prediction_engine.predict(window_df)
             except (KeyError, ValueError):
+                # Never fall back to default resolution when pinned —
+                # scoring with a different model is exactly the confound the
+                # pin exists to prevent (GH #988). Degrade to HOLD instead.
+                if self._pinned_bundle_key is not None:
+                    self._model_symbol = None
+                    logger.error(
+                        "MLBasicSignalGenerator: pinned model %s lookup failed at "
+                        "index %d — holding (refusing unpinned fallback)",
+                        self._pinned_bundle_key,
+                        index,
+                    )
+                    return None
                 # Fall back to default registry resolution if explicit lookup fails
                 result = self.prediction_engine.predict(window_df)
 

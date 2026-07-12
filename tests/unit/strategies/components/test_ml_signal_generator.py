@@ -1122,6 +1122,31 @@ class TestMLBasicSignalGeneratorModelVersionPin:
 
     @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
     @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_pinned_lookup_failure_holds_instead_of_unpinned_fallback(
+        self, mock_config_class, mock_engine_class
+    ):
+        """If the pinned lookup fails at predict time, degrade to HOLD —
+        never re-predict with default (latest) resolution."""
+        mock_engine, _ = self._mock_engine(mock_engine_class)
+        mock_engine.predict.side_effect = KeyError(self.PINNED_KEY)
+
+        generator = MLBasicSignalGenerator(
+            symbol="BTCUSDT",
+            model_type="basic",
+            timeframe="1h",
+            model_version=self.PINNED_VERSION,
+        )
+        df = self.create_test_dataframe(150)
+
+        prediction = generator._get_ml_prediction(df, 130)
+
+        assert prediction is None
+        # Exactly one attempt, with the pinned key — no unpinned retry.
+        mock_engine.predict.assert_called_once()
+        assert mock_engine.predict.call_args.kwargs["model_name"] == self.PINNED_KEY
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
     def test_pinned_key_reported_in_parameters(self, mock_config_class, mock_engine_class):
         """The pin must be visible in logged/serialized parameters."""
         self._mock_engine(mock_engine_class)
