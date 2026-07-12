@@ -34,6 +34,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   revisits; both branches now escalate like their startup twins — CRITICAL
   log plus a paged `system_events` row (`RECONCILE_DB_CLOSE_FAILED`,
   `alert=True`).
+- **Market full-close SELL capped to holdings and floor-snapped (-2010 class)**
+  (2026-07-12 execution audit, Finding 2): the live full-close path derived its
+  SELL quantity from notional and snapped it round-to-NEAREST with no free-base
+  cap, so a long-close SELL could round UP above actual holdings (the entry
+  BUY's fee is deducted from the base fill: held 0.049975 vs derived 0.050000)
+  → Binance definitively rejects with -2010 → the close FAILS while the resting
+  stop is already cancelled (#710), leaving the position briefly unprotected
+  (backstopped only by `_reprotect_position` + the reconciler).
+  `LiveExecutionEngine._close_live_order` now mirrors the stop-loss SELL guard
+  (`BinanceProvider.place_stop_loss_order`): a closing SELL is capped at the
+  free base balance and its lot snap FLOORS (then `quantize_to_step`, LESSONS
+  §1.1); zero free base aborts the submit instead of guaranteeing a reject. A
+  short-cover BUY intentionally keeps the nearest snap and no base cap — it is
+  funded from quote and must repay the full base borrow; flooring it would
+  strand interest-accruing borrow dust. Balance-lookup failures degrade to
+  uncapped-but-floored so a transient API error never blocks an exit. Backtest
+  closes intentionally skip the cap/floor — there is no exchange fee-haircut or
+  -2010 mechanic to model, so applying it would only diverge from live parity.
+  The shared quote-suffix helper moved to `src.trading.symbols.factory`
+  (`base_asset_from_symbol`) so the exchange and execution layers size closes
+  against the same base asset. The same hazard in the emergency-close sites
+  (entry coordinator, recovery reconciler) is tracked in #989.
 - **`trades.mfe`/`mae` written in corrupted units** (#966): `MFEMAETracker`
   persisted sized, fee-netted values (`size × move − (fee+slippage)`) into
   `trades.mfe`/`mae` and `positions.mfe`/`mae` while the `mfe_price`/
