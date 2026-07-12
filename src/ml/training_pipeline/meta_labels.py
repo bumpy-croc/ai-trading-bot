@@ -27,9 +27,12 @@ resolved yet as of "now."
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -48,6 +51,11 @@ if TYPE_CHECKING:
 REALIZED_VOL_WINDOW_BARS = 48
 HIT_RATE_LOOKBACK_FIRES = 20
 _HOURS_PER_DAY = 24.0
+
+# At the measured ~200 bars/sec steady-state inference rate (#955), 1000
+# bars is a checkpoint roughly every 5 seconds -- cheap enough to be the
+# default whenever a checkpoint path is supplied.
+FIRE_GENERATION_CHECKPOINT_EVERY_BARS = 1000
 
 _VALID_DIRECTIONS = frozenset({1, -1})
 
@@ -71,10 +79,73 @@ class PrimarySignalRecord:
     predicted_return: float
 
 
+def _load_fire_generation_checkpoint(
+    checkpoint_path: Path, start: int, total_bars: int
+) -> tuple[list[PrimarySignalRecord], int] | None:
+    """Load a prior run's progress, or None if no checkpoint exists yet.
+
+    Returns:
+        (records so far, first index still to evaluate).
+
+    Raises:
+        ValueError: the checkpoint was recorded against a different corpus
+            (start index or bar count mismatch) -- resuming from it would
+            splice fires from two different windows into one training set.
+    """
+    if not checkpoint_path.exists():
+        return None
+    state = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    if state.get("start_index") != start or state.get("total_bars") != total_bars:
+        raise ValueError(
+            f"checkpoint at {checkpoint_path} was recorded for a different corpus "
+            f"(checkpoint start_index={state.get('start_index')}, "
+            f"total_bars={state.get('total_bars')}; this run has start_index={start}, "
+            f"total_bars={total_bars}) -- delete it or point at the right file"
+        )
+    records = [
+        PrimarySignalRecord(
+            index=int(record["index"]),
+            direction=int(record["direction"]),
+            predicted_return=float(record["predicted_return"]),
+        )
+        for record in state["records"]
+    ]
+    return records, int(state["last_completed_index"]) + 1
+
+
+def _write_fire_generation_checkpoint(
+    checkpoint_path: Path,
+    start: int,
+    total_bars: int,
+    last_completed_index: int,
+    records: Sequence[PrimarySignalRecord],
+) -> None:
+    """Persist progress crash-safely: write a temp file, then atomically rename."""
+    state = {
+        "start_index": start,
+        "total_bars": total_bars,
+        "last_completed_index": last_completed_index,
+        "records": [
+            {
+                "index": record.index,
+                "direction": record.direction,
+                "predicted_return": record.predicted_return,
+            }
+            for record in records
+        ],
+    }
+    tmp_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(state), encoding="utf-8")
+    os.replace(tmp_path, checkpoint_path)
+
+
 def run_primary_signal_forward(
     signal_generator: SignalGenerator,
     df: pd.DataFrame,
     start_index: int | None = None,
+    *,
+    checkpoint_path: str | Path | None = None,
+    checkpoint_every_bars: int = FIRE_GENERATION_CHECKPOINT_EVERY_BARS,
 ) -> list[PrimarySignalRecord]:
     """Run a primary SignalGenerator forward over df, recording every fire.
 
@@ -83,26 +154,67 @@ def run_primary_signal_forward(
     points." Reuses the SignalGenerator interface directly (generate_signal)
     rather than reimplementing prediction logic.
 
+    Long corpora (~47k bars at ~200 bars/sec) run for the better part of an
+    hour, and task-lifetime caps killed uncheckpointed passes twice during
+    the #933 tournament (#955 defect 2) -- so progress can optionally be
+    checkpointed: every ``checkpoint_every_bars`` completed bars, the fires
+    so far and the last completed bar index are written to
+    ``checkpoint_path`` (temp file + atomic rename). A rerun pointed at the
+    same checkpoint resumes after the last completed bar instead of
+    reprocessing from the start.
+
     Args:
         signal_generator: The primary (incumbent) SignalGenerator instance.
         df: OHLCV DataFrame to run forward over.
         start_index: First index to evaluate. Defaults to
             ``signal_generator.warmup_period``.
+        checkpoint_path: Optional JSON file to persist/resume progress
+            through. The file is left in place after a completed run (a
+            rerun then returns its fires without reprocessing); the caller
+            owns cleanup.
+        checkpoint_every_bars: Completed bars between checkpoint writes.
+            Only meaningful with ``checkpoint_path``.
 
     Returns:
         A list of PrimarySignalRecord, one per non-HOLD bar, in order.
+
+    Raises:
+        ValueError: ``checkpoint_every_bars`` < 1, or the checkpoint file
+            belongs to a different corpus (see
+            ``_load_fire_generation_checkpoint``).
     """
     start = start_index if start_index is not None else signal_generator.warmup_period
     records: list[PrimarySignalRecord] = []
-    for index in range(start, len(df)):
+    resume_from = start
+
+    checkpoint = Path(checkpoint_path) if checkpoint_path is not None else None
+    if checkpoint is not None:
+        if checkpoint_every_bars < 1:
+            raise ValueError(f"checkpoint_every_bars must be >= 1, got {checkpoint_every_bars}")
+        loaded = _load_fire_generation_checkpoint(checkpoint, start, len(df))
+        if loaded is not None:
+            records, resume_from = loaded
+
+    bars_since_checkpoint = 0
+    for index in range(resume_from, len(df)):
         signal = signal_generator.generate_signal(df, index)
-        if signal.direction == SignalDirection.HOLD:
-            continue
-        direction = 1 if signal.direction == SignalDirection.BUY else -1
-        predicted_return = float(signal.metadata.get("predicted_return", 0.0))
-        records.append(
-            PrimarySignalRecord(index=index, direction=direction, predicted_return=predicted_return)
-        )
+        if signal.direction != SignalDirection.HOLD:
+            direction = 1 if signal.direction == SignalDirection.BUY else -1
+            predicted_return = float(signal.metadata.get("predicted_return", 0.0))
+            records.append(
+                PrimarySignalRecord(
+                    index=index, direction=direction, predicted_return=predicted_return
+                )
+            )
+        bars_since_checkpoint += 1
+        if checkpoint is not None and bars_since_checkpoint >= checkpoint_every_bars:
+            _write_fire_generation_checkpoint(checkpoint, start, len(df), index, records)
+            bars_since_checkpoint = 0
+
+    if checkpoint is not None and resume_from < len(df):
+        # Final checkpoint marks the run complete -- a rerun against the same
+        # file returns these fires without re-evaluating any bar.
+        _write_fire_generation_checkpoint(checkpoint, start, len(df), len(df) - 1, records)
     return records
 
 
@@ -350,7 +462,10 @@ def build_meta_label_features(
             fired_signals) -- typically resolve_fired_trade()'s output with
             unresolved (None) fires already filtered out by the caller.
         regime_detector: Reused EnhancedRegimeDetector instance; a fresh one
-            is created if not supplied.
+            is created if not supplied. If ``df`` already carries the regime
+            annotation columns (``regime_label`` et al., from
+            ``RegimeDetector.annotate``), it is used as-is with no further
+            annotation pass.
         realized_vol_window: Trailing bars for realized volatility (default 48).
         hit_rate_lookback: Trailing eligible PRIOR fires for rolling hit-rate
             (default 20).
@@ -373,6 +488,12 @@ def build_meta_label_features(
     detector = regime_detector or EnhancedRegimeDetector()
     realized_vol = _realized_volatility_series(df["close"], realized_vol_window)
 
+    # detect_regime re-annotates the ENTIRE frame on every call when the
+    # regime columns are absent -- per-fire that is O(n_fires * n_bars) and
+    # made real (~46k-fire x ~47k-bar) corpora infeasible (#955). Annotate
+    # once here; detect_regime sees the columns and skips its own pass.
+    regime_df = df if "regime_label" in df.columns else detector.base_detector.annotate(df.copy())
+
     rows: list[dict[str, Any]] = []
     for position, fire in enumerate(fired_signals):
         # Only prior fires that had RESOLVED by this fire's own index are
@@ -392,7 +513,7 @@ def build_meta_label_features(
         timestamp = df.index[fire.index]
         session_sin, session_cos = _session_cyclical_encoding(pd.Timestamp(timestamp))
 
-        regime = detector.detect_regime(df, fire.index)
+        regime = detector.detect_regime(regime_df, fire.index)
 
         rows.append(
             {
@@ -538,6 +659,7 @@ def encode_meta_label_features_for_training(
 
 
 __all__ = [
+    "FIRE_GENERATION_CHECKPOINT_EVERY_BARS",
     "HIT_RATE_LOOKBACK_FIRES",
     "META_LABEL_FEATURE_ORDER",
     "REALIZED_VOL_WINDOW_BARS",
