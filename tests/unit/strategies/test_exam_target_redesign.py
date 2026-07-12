@@ -32,7 +32,7 @@ from src.strategies.components.exam_signal_generator import (
     SmoothedReturnExamSignalGenerator,
 )
 from src.strategies.exam_target_redesign import (
-    _MODEL_VERSION_OVERRIDE_ENV_VAR,
+    MODEL_VERSION_OVERRIDE_ENV_VAR,
     create_exam_binary_direction_strategy,
     create_exam_meta_label_strategy,
     create_exam_smoothed_return_strategy,
@@ -239,28 +239,28 @@ class TestPerEntrantExamStrategyFactories:
         assert strategy.signal_generator.model_name is None
 
     def test_binary_direction_pins_model_version_via_env_var(self, monkeypatch):
-        monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
+        monkeypatch.setenv(MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
 
         strategy = create_exam_binary_direction_strategy(symbol="ETHUSDT", timeframe="4h")
 
         assert strategy.signal_generator.model_name == "ETHUSDT:4h:price:2026-01-01_1h_v1"
 
     def test_triple_barrier_pins_model_version_via_env_var(self, monkeypatch):
-        monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
+        monkeypatch.setenv(MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
 
         strategy = create_exam_triple_barrier_strategy(symbol="BTCUSDT", timeframe="1h")
 
         assert strategy.signal_generator.model_name == "BTCUSDT:1h:price:2026-01-01_1h_v1"
 
     def test_smoothed_return_pins_model_version_via_env_var(self, monkeypatch):
-        monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
+        monkeypatch.setenv(MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
 
         strategy = create_exam_smoothed_return_strategy(symbol="BTCUSDT", timeframe="1h")
 
         assert strategy.signal_generator.model_name == "BTCUSDT:1h:price:2026-01-01_1h_v1"
 
     def test_env_var_unset_leaves_model_name_none(self, monkeypatch):
-        monkeypatch.delenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, raising=False)
+        monkeypatch.delenv(MODEL_VERSION_OVERRIDE_ENV_VAR, raising=False)
 
         strategy = create_exam_binary_direction_strategy()
 
@@ -328,7 +328,7 @@ class TestCreateExamMetaLabelStrategy:
         assert strategy.signal_generator.min_confidence == pytest.approx(0.7)
 
     def test_pins_model_version_via_env_var(self, monkeypatch):
-        monkeypatch.setenv(_MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
+        monkeypatch.setenv(MODEL_VERSION_OVERRIDE_ENV_VAR, "2026-01-01_1h_v1")
         with patch("src.strategies.exam_target_redesign.MLBasicSignalGenerator"):
             strategy = create_exam_meta_label_strategy(symbol="BTCUSDT", timeframe="1h")
 

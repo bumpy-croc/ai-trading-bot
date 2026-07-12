@@ -2555,6 +2555,90 @@ class TestPartialSLFillQuantityCalculation:
         assert call_kwargs.kwargs["quantity"] == pytest.approx(0.15)
 
 
+# ---------- Startup Quantity Correction vs Partial-Exit State ----------
+
+
+class TestQuantityCorrectionPreservesPartialExit:
+    """A >1% entry-fill quantity mismatch on a recovered position recomputes
+    size from the ORIGINAL entry fill — it must not re-inflate ``current_size``
+    past the partial-exit reduction (audit 2026-07-12 F3): the final close
+    would then be sized to the full position instead of the remainder."""
+
+    @staticmethod
+    def _filled_entry(mock_exchange, filled_qty):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=filled_qty
+        )
+        mock_exchange.get_order.return_value = order
+
+    def test_correction_preserves_partial_exit_fraction(self, reconciler, mock_exchange):
+        """50% partially exited + 5% fill mismatch → current_size stays at 50%
+        of the corrected size, so the final close sells the remaining half."""
+        # Stored: qty 0.02 @ 50000 on entry_balance 10000 → size 0.1.
+        # Half exited: current_size 0.05. Exchange says the entry actually
+        # filled 0.021 (5% more) → corrected full size 0.105.
+        pos = MockPosition(
+            quantity=0.02,
+            size=0.1,
+            original_size=0.1,
+            current_size=0.05,
+            partial_exits_taken=1,
+            entry_balance=10000.0,
+        )
+        self._filled_entry(mock_exchange, filled_qty=0.021)
+
+        reconciler.reconcile_position(pos)
+
+        assert pos.quantity == pytest.approx(0.021)
+        assert pos.size == pytest.approx(0.105)
+        assert pos.original_size == pytest.approx(0.105)
+        # The partial-exit reduction survives: 50% of the corrected size,
+        # NOT the full 0.105.
+        assert pos.current_size == pytest.approx(0.0525)
+
+    def test_correction_without_partial_exits_sets_full_size(self, reconciler, mock_exchange):
+        """No partial exits → current_size tracks the corrected full size."""
+        pos = MockPosition(
+            quantity=0.02,
+            size=0.1,
+            original_size=0.1,
+            current_size=0.1,
+            entry_balance=10000.0,
+        )
+        self._filled_entry(mock_exchange, filled_qty=0.021)
+
+        reconciler.reconcile_position(pos)
+
+        assert pos.size == pytest.approx(0.105)
+        assert pos.original_size == pytest.approx(0.105)
+        assert pos.current_size == pytest.approx(0.105)
+
+    def test_correction_with_fully_exited_position_keeps_zero_current_size(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """current_size 0 (fully drained by partials) must stay 0 — not be
+        re-inflated — and must not be persisted (the persist helper rejects
+        non-positive values)."""
+        pos = MockPosition(
+            quantity=0.02,
+            size=0.1,
+            original_size=0.1,
+            current_size=0.0,
+            partial_exits_taken=2,
+            entry_balance=10000.0,
+        )
+        self._filled_entry(mock_exchange, filled_qty=0.021)
+
+        result = reconciler.reconcile_position(pos)
+
+        assert pos.current_size == pytest.approx(0.0)
+        assert pos.size == pytest.approx(0.105)
+        # Correction survived (no ValueError rollback from persisting 0).
+        assert any(c.field == "quantity" for c in result.corrections)
+
+
 # ---------- Periodic SL Placement for Unprotected Positions ----------
 
 
@@ -3944,6 +4028,88 @@ class TestPeriodicExternalCloseTradeRow:
             c for c in on_event.call_args_list if c.kwargs.get("error_code") == "RECONCILE_HIGH"
         ]
         assert high_events, f"expected RECONCILE_HIGH, got {on_event.call_args_list}"
+
+    @staticmethod
+    def _db_close_failed_events(on_event):
+        return [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "RECONCILE_DB_CLOSE_FAILED"
+        ]
+
+    def test_spot_external_close_db_close_failure_escalates_critical(self, mock_exchange):
+        """Popped from the tracker but the DB row stays OPEN → memory/DB
+        divergence the periodic loop never revisits (it iterates the tracker).
+        Must page via a CRITICAL system_event like the startup twin
+        (_verify_asset_holdings), not fail silently (audit 2026-07-12 F5)."""
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        _db_id, tracker, pos = self._seed(db, side="long")
+        db.close_position = MagicMock(return_value=False)  # swallowed DB error -> False
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5200.0)
+            if asset == "USDT"
+            else MockBalance(asset="BTC", total=0.0, free=0.0, locked=0.0)
+        )
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 52000.0
+        on_event = MagicMock()
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            data_provider=data_provider,
+            on_event=on_event,
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.order_id not in tracker.positions  # popped
+        events = self._db_close_failed_events(on_event)
+        assert events, f"expected RECONCILE_DB_CLOSE_FAILED, got {on_event.call_args_list}"
+        assert events[0].kwargs.get("severity") == "critical"
+        assert events[0].kwargs.get("alert") is True
+
+    def test_margin_external_close_db_close_failure_escalates_critical(self, mock_exchange):
+        """Margin twin of the spot escalation: a failed DB close after the
+        tracker pop must page, mirroring _remove_phantom_position's CRITICAL
+        (audit 2026-07-12 F5)."""
+        from tests.mocks import MockDatabaseManager
+
+        db = MockDatabaseManager()
+        _db_id, tracker, pos = self._seed(db, side="short")
+        db.close_position = MagicMock(return_value=False)
+
+        mock_exchange.get_order.side_effect = self._order_side_effect()
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=0.0)  # short closed
+        mock_exchange.get_balance.side_effect = lambda asset: MockBalance(asset=asset, total=0.0)
+        data_provider = MagicMock()
+        data_provider.get_current_price.return_value = 48000.0
+        on_event = MagicMock()
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=tracker,
+            db_manager=db,
+            session_id=1,
+            interval=60,
+            use_margin=True,
+            data_provider=data_provider,
+            on_event=on_event,
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.order_id not in tracker.positions  # popped
+        assert len(db._trades) == 0  # audit Trade row still gated on db_closed
+        events = self._db_close_failed_events(on_event)
+        assert events, f"expected RECONCILE_DB_CLOSE_FAILED, got {on_event.call_args_list}"
+        assert events[0].kwargs.get("severity") == "critical"
+        assert events[0].kwargs.get("alert") is True
 
 
 def test_remove_phantom_position_writes_audit(reconciler, mock_db):

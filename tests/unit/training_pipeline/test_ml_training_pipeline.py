@@ -421,6 +421,69 @@ class TestRunMetaLabelPipeline:
         assert result.success is False
         assert "fire" in result.metadata.get("error", "").lower()
 
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_fire_generation_checkpoint_wired_by_default(
+        self, mock_download, mock_signal_cls, tmp_path
+    ):
+        """#955 defect 2's motivating call site: the real meta_label
+        training run's fire generation (the ~60-min uncheckpointed pass
+        that task-lifetime caps killed twice) must be checkpoint-protected
+        by default, with the checkpoint under the run's data dir and
+        removed after a successful run (crash-recovery artifact, not a
+        cache -- a completed checkpoint must never silently reuse fires
+        across primary-model retrains)."""
+        from pathlib import Path
+
+        from src.ml.training_pipeline.meta_labels import (
+            run_primary_signal_forward as real_run_primary_signal_forward,
+        )
+
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path)
+
+        captured: dict = {}
+
+        def spy(signal_generator, df, start_index=None, **kwargs):
+            captured.update(kwargs)
+            return real_run_primary_signal_forward(signal_generator, df, start_index, **kwargs)
+
+        with patch("src.ml.training_pipeline.pipeline.run_primary_signal_forward", side_effect=spy):
+            result = run_training_pipeline(ctx)
+
+        assert result.success is True
+        checkpoint_path = captured.get("checkpoint_path")
+        assert checkpoint_path is not None
+        checkpoint_path = Path(checkpoint_path)
+        assert ctx.paths.data_dir in checkpoint_path.parents
+        assert not checkpoint_path.exists()  # removed after success
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_fire_generation_checkpoint_disableable_via_config(
+        self, mock_download, mock_signal_cls, tmp_path
+    ):
+        from src.ml.training_pipeline.meta_labels import (
+            run_primary_signal_forward as real_run_primary_signal_forward,
+        )
+
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path, meta_label_fire_checkpoint_dir=None)
+
+        captured: dict = {}
+
+        def spy(signal_generator, df, start_index=None, **kwargs):
+            captured.update(kwargs)
+            return real_run_primary_signal_forward(signal_generator, df, start_index, **kwargs)
+
+        with patch("src.ml.training_pipeline.pipeline.run_primary_signal_forward", side_effect=spy):
+            result = run_training_pipeline(ctx)
+
+        assert result.success is True
+        assert captured.get("checkpoint_path") is None
+
 
 @pytest.mark.fast
 @pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")

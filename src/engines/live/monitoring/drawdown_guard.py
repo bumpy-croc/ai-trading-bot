@@ -12,6 +12,12 @@ the legacy duck-typed short path and any direct caller), and scale-ins. Exits,
 partial exits, stop-loss management, and reconciliation keep running. It never
 liquidates anything — it only stops new risk.
 
+Because the loop-level check runs AFTER entry evaluation, each of those
+chokepoints ALSO re-assesses the guard in-line via ``check_before_new_risk``
+(through the engine's ``_refresh_drawdown_gate``) so a breach realized earlier
+in the same iteration — e.g. a stop-loss fill — blocks that iteration's entry
+instead of leaking one bar of fresh exposure (2026-07-12 risk audit P1).
+
 Peak-equity source: the AUTHORITATIVE baseline is the ``account_history``
 session max (active session plus the recovered inactive session on clean
 restarts), recomputed on boot so a restart cannot reset the drawdown baseline
@@ -313,10 +319,33 @@ class MaxDrawdownEnforcer:
 
     def check(self) -> None:
         """Assess current drawdown; enforce the hard cap on breach."""
+        self._run_check(count_seed_deferral=True)
+
+    def check_before_new_risk(self) -> None:
+        """In-line pre-order variant of :meth:`check` for exposure chokepoints.
+
+        The loop-level check runs AFTER entry evaluation, so on the bar that
+        crosses the cap a fresh entry would execute before close-only latches
+        (one-iteration leak). Entry evaluation, the ``execute_entry_locked``
+        chokepoint, and the scale-in gate call this first — mirroring the
+        #807 in-line circuit-breaker gate — so the cap binds on the SAME
+        iteration, including the first iteration after a mid-breach restart.
+
+        Identical enforcement, but a deferred seeding attempt is NOT counted
+        against ``MAX_SEED_ATTEMPTS``: the bounded current-balance fallback
+        stays owned by the once-per-iteration loop check, so several
+        chokepoint calls per iteration cannot burn through the deferral
+        budget prematurely.
+        """
+        self._run_check(count_seed_deferral=False)
+
+    def _run_check(self, *, count_seed_deferral: bool) -> None:
         state = self._state
         try:
             balance = float(state.current_balance)
-            if not self._guard.seeded and not self._try_seed(balance):
+            if not self._guard.seeded and not self._try_seed(
+                balance, count_deferral=count_seed_deferral
+            ):
                 return  # seeding deferred (DB/session not ready); retry next cycle
             assessment = self._guard.observe(balance)
         except Exception as e:
@@ -366,14 +395,16 @@ class MaxDrawdownEnforcer:
                 exc_info=True,
             )
 
-    def _try_seed(self, balance: float) -> bool:
+    def _try_seed(self, balance: float, *, count_deferral: bool = True) -> bool:
         """Seed the peak baseline; the DB session max is AUTHORITATIVE.
 
         Returns False when seeding must be deferred to the next loop cycle
         (session id not resolved yet, or the account_history read failed).
         After ``MAX_SEED_ATTEMPTS`` deferrals the guard falls back to the
         current balance with a WARNING so the cap is never left unarmed
-        indefinitely.
+        indefinitely. With ``count_deferral=False`` (the in-line pre-order
+        gate) a failed attempt defers without consuming that budget and can
+        never trigger the fallback — only the loop check arms it.
 
         The in-memory PerformanceTracker peak is deliberately NOT a seed
         candidate: it can initialize from the CONFIGURED initial balance,
@@ -388,7 +419,8 @@ class MaxDrawdownEnforcer:
             self._guard.seed_peak(balance)
             return True
 
-        self._seed_attempts += 1
+        if count_deferral:
+            self._seed_attempts += 1
         session_id = state.trading_session_id
         db_read_ok = False
         db_peak: float | None = None
@@ -419,7 +451,7 @@ class MaxDrawdownEnforcer:
                 )
 
         if not db_read_ok:
-            if self._seed_attempts < MAX_SEED_ATTEMPTS:
+            if not count_deferral or self._seed_attempts < MAX_SEED_ATTEMPTS:
                 return False
             logger.warning(
                 "Max-drawdown guard: no successful account_history read after %d "

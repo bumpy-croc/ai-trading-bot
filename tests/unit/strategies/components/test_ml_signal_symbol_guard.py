@@ -188,6 +188,7 @@ class TestMissingModelFailFast:
         assert "ETHUSDT" in message
         assert "BTCUSDT:1h:basic:v1" in message
         assert "FEATURE_ALLOW_CROSS_SYMBOL_MODEL" in message
+        assert "atb live-control train --symbol ETHUSDT" in message
 
     @patch(ENGINE_PATH)
     @patch(CONFIG_PATH)
@@ -203,8 +204,13 @@ class TestMissingModelFailFast:
         assert generator._cross_symbol_bundle_key == "BTCUSDT:1h:basic:v1"
         critical_records = [r for r in caplog.records if r.levelno == logging.CRITICAL]
         assert len(critical_records) == 1
-        assert "ETHUSDT" in critical_records[0].getMessage()
-        assert "BTCUSDT" in critical_records[0].getMessage()
+        message = critical_records[0].getMessage()
+        assert "ETHUSDT" in message
+        assert "BTCUSDT" in message
+        # The banner must be actionable: name the missing native bundle and
+        # the exact remediation command (#872).
+        assert "no ETHUSDT/basic/1h model" in message
+        assert "atb live-control train --symbol ETHUSDT" in message
 
     @patch(ENGINE_PATH)
     @patch(CONFIG_PATH)
