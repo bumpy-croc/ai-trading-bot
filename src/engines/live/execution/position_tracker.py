@@ -101,19 +101,15 @@ class LivePositionTracker:
             db_manager: Database manager for persistence (optional).
             mfe_mae_precision: Decimal precision for MFE/MAE calculations.
             mfe_mae_update_frequency: Seconds between MFE/MAE DB persists.
-            fee_rate: Fee rate for cost-adjusted MFE/MAE and partial exits.
-            slippage_rate: Slippage rate for cost-adjusted MFE/MAE and partial exits.
+            fee_rate: Fee rate for partial exits.
+            slippage_rate: Slippage rate for partial exits.
         """
         self._positions: dict[str, LivePosition] = {}
         self._position_db_ids: dict[str, int | None] = {}
         # Protects concurrent access from OrderTracker callbacks and main trading loop
         self._positions_lock = threading.Lock()
         self.db_manager = db_manager
-        self.mfe_mae_tracker = MFEMAETracker(
-            precision_decimals=mfe_mae_precision,
-            fee_rate=fee_rate,
-            slippage_rate=slippage_rate,
-        )
+        self.mfe_mae_tracker = MFEMAETracker(precision_decimals=mfe_mae_precision)
         self._mfe_mae_update_frequency = mfe_mae_update_frequency
         self._last_mfe_mae_persist: datetime | None = None
         # Shared executor for consistent partial exit calculations
@@ -531,7 +527,6 @@ class LivePositionTracker:
                 current_price=float(current_price),
                 # __post_init__ guarantees side is a PositionSide enum.
                 side=cast(PositionSide, position.side).value,
-                position_fraction=float(position.size),
                 current_time=now,
             )
 

@@ -94,6 +94,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now source `LiveTradingEngine._durable_peak_balance()` — max(guard's
   durable session peak, tracker peak, current balance) — so the throttle and
   the hard cap measure drawdown from the same baseline.
+- **`trades.mfe`/`mae` written in corrupted units** (#966): `MFEMAETracker`
+  persisted sized, fee-netted values (`size × move − (fee+slippage)`) into
+  `trades.mfe`/`mae` and `positions.mfe`/`mae` while the `mfe_price`/
+  `mae_price` companions held raw extreme prices — the columns disagreed
+  with their own companions by a non-constant ~10-23x factor (varies with
+  per-trade position size; #838 units-drift family), and small favorable
+  excursions were erased entirely whenever `size × move < fee + slippage`.
+  The tracker now records raw unsized price excursion from entry (decimal
+  fraction), always derivable from the `_price` companions. Readers are
+  era-defensive: `DatabaseManager` serializers and the monitoring
+  dashboard's raw-SQL positions path re-derive pre-fix rows from the
+  companions via `DatabaseManager.excursion_or_stored()`; the dashboard now
+  renders MFE/MAE as percentages (was: fractions formatted as USD).
+  Historical prod rows left untouched — backfill/NULL is a separate
+  human-approved operation (migration note on #966). (#992)
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*

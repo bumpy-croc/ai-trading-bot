@@ -195,7 +195,10 @@ class Trade(Base):
     exchange = Column(String(50), default="binance")
     timeframe = Column(String(10))
 
-    # MFE/MAE for completed trades (percent decimals, e.g., 0.05 = +5%)
+    # MFE/MAE for completed trades: raw unsized price excursion from entry as a
+    # decimal fraction (0.05 = +5%), always consistent with mfe_price/mae_price.
+    # Prod rows written before 2026-07 hold sized, fee-netted values instead —
+    # derive from the _price companions for those (see DatabaseManager readers).
     mfe = Column(Numeric(18, 8), default=0.0)
     mae = Column(Numeric(18, 8), default=0.0)
     mfe_price = Column(Numeric(18, 8))
@@ -285,7 +288,8 @@ class Position(Base):
         Mapped[Decimal | float | None], Column(Numeric(18, 8), default=0.0)
     )
 
-    # Rolling MFE/MAE for active positions (percent decimals)
+    # Rolling MFE/MAE for active positions: raw unsized price excursion from
+    # entry as a decimal fraction, consistent with mfe_price/mae_price.
     mfe: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8), default=0.0))
     mae: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8), default=0.0))
     mfe_price: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
