@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from src.prediction import PredictionResult
+from src.prediction.models.exceptions import ModelNotAvailableError
 from src.regime.detector import TrendLabel, VolLabel
 from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
 from src.strategies.components.regime_context import RegimeContext
@@ -975,3 +976,188 @@ class TestErroredPredictionResultHandling:
         ok = generator.generate_signal(df, 131)
         assert ok.metadata.get("reason") != "prediction_failed"
         assert "timed_out" not in ok.metadata
+
+
+class TestMLBasicSignalGeneratorModelVersionPin:
+    """Point-in-time model pinning for the backtest harness (GH #988).
+
+    A pinned generator must score every bar with the exact pinned version,
+    never whatever `latest` resolves to at invocation time — and must fail
+    fast at construction when the pin cannot be honored.
+    """
+
+    PINNED_VERSION = "2026-01-01_1h_v1"
+    PINNED_KEY = f"BTCUSDT:1h:basic:{PINNED_VERSION}"
+    LATEST_KEY = "BTCUSDT:1h:basic:2026-06-01_1h_v1"
+
+    def create_test_dataframe(self, length=150):
+        """Create test DataFrame with OHLCV data"""
+        dates = pd.date_range("2023-01-01", periods=length, freq="1h")
+        np.random.seed(42)
+        prices = 50000 * (1 + np.random.normal(0, 0.02, length)).cumprod()
+        return pd.DataFrame(
+            {
+                "open": prices,
+                "high": prices * 1.01,
+                "low": prices * 0.99,
+                "close": prices,
+                "volume": np.random.uniform(1000, 10000, length),
+            },
+            index=dates,
+        )
+
+    def _mock_engine(self, mock_engine_class, *, pinned_bundle=True):
+        """Build a mocked PredictionEngine whose registry knows both a
+        latest bundle (via select_bundle) and the pinned version (via
+        get_bundle_by_key)."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+
+        mock_registry = MagicMock()
+        latest_bundle = MagicMock()
+        latest_bundle.key = self.LATEST_KEY
+        latest_bundle.symbol = "BTCUSDT"
+        mock_registry.select_bundle.return_value = latest_bundle
+        if pinned_bundle:
+            versioned_bundle = MagicMock()
+            versioned_bundle.key = self.PINNED_KEY
+            versioned_bundle.symbol = "BTCUSDT"
+            mock_registry.get_bundle_by_key.return_value = versioned_bundle
+        else:
+            mock_registry.get_bundle_by_key.return_value = None
+        mock_registry.list_bundles.return_value = [latest_bundle]
+        mock_engine.model_registry = mock_registry
+
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
+        mock_result.price = 51000.0
+        mock_engine.predict.return_value = mock_result
+        mock_engine_class.return_value = mock_engine
+        return mock_engine, mock_registry
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_pinned_version_resolves_bundle_at_init(self, mock_config_class, mock_engine_class):
+        """A valid pin resolves to a full bundle key at construction."""
+        _, mock_registry = self._mock_engine(mock_engine_class)
+
+        generator = MLBasicSignalGenerator(
+            symbol="BTCUSDT",
+            model_type="basic",
+            timeframe="1h",
+            model_version=self.PINNED_VERSION,
+        )
+
+        assert generator.pinned_model_key == self.PINNED_KEY
+        mock_registry.get_bundle_by_key.assert_called_once_with(self.PINNED_KEY)
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_missing_pinned_version_raises_at_init(self, mock_config_class, mock_engine_class):
+        """A pin the registry cannot find must fail fast, not degrade."""
+        self._mock_engine(mock_engine_class, pinned_bundle=False)
+
+        with pytest.raises(ModelNotAvailableError) as excinfo:
+            MLBasicSignalGenerator(
+                symbol="BTCUSDT",
+                model_type="basic",
+                timeframe="1h",
+                model_version="2099-01-01_1h_v9",
+            )
+
+        assert "2099-01-01_1h_v9" in str(excinfo.value)
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_pin_with_degraded_engine_raises_at_init(self, mock_config_class, mock_engine_class):
+        """Engine init failure must not silently produce an unpinned run."""
+        mock_engine_class.side_effect = RuntimeError("engine init failed")
+
+        with pytest.raises(ModelNotAvailableError):
+            MLBasicSignalGenerator(
+                symbol="BTCUSDT",
+                model_type="basic",
+                timeframe="1h",
+                model_version=self.PINNED_VERSION,
+            )
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_pinned_key_takes_precedence_over_registry_latest(
+        self, mock_config_class, mock_engine_class
+    ):
+        """Predictions must be scored with the pinned key, not latest."""
+        mock_engine, mock_registry = self._mock_engine(mock_engine_class)
+
+        generator = MLBasicSignalGenerator(
+            symbol="BTCUSDT",
+            model_type="basic",
+            timeframe="1h",
+            model_version=self.PINNED_VERSION,
+        )
+        df = self.create_test_dataframe(150)
+
+        generator._get_ml_prediction(df, 130)
+
+        mock_engine.predict.assert_called_once()
+        assert mock_engine.predict.call_args.kwargs["model_name"] == self.PINNED_KEY
+        # Latest resolution is bypassed entirely at prediction time.
+        mock_registry.select_bundle.assert_not_called()
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_unpinned_generator_uses_registry_latest(self, mock_config_class, mock_engine_class):
+        """Zero behavior change without a pin: latest still wins."""
+        mock_engine, mock_registry = self._mock_engine(mock_engine_class)
+
+        generator = MLBasicSignalGenerator(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+        df = self.create_test_dataframe(150)
+
+        generator._get_ml_prediction(df, 130)
+
+        assert generator.pinned_model_key is None
+        assert mock_engine.predict.call_args.kwargs["model_name"] == self.LATEST_KEY
+        mock_registry.get_bundle_by_key.assert_not_called()
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_pinned_lookup_failure_holds_instead_of_unpinned_fallback(
+        self, mock_config_class, mock_engine_class
+    ):
+        """If the pinned lookup fails at predict time, degrade to HOLD —
+        never re-predict with default (latest) resolution."""
+        mock_engine, _ = self._mock_engine(mock_engine_class)
+        mock_engine.predict.side_effect = KeyError(self.PINNED_KEY)
+
+        generator = MLBasicSignalGenerator(
+            symbol="BTCUSDT",
+            model_type="basic",
+            timeframe="1h",
+            model_version=self.PINNED_VERSION,
+        )
+        df = self.create_test_dataframe(150)
+
+        prediction = generator._get_ml_prediction(df, 130)
+
+        assert prediction is None
+        # Exactly one attempt, with the pinned key — no unpinned retry.
+        mock_engine.predict.assert_called_once()
+        assert mock_engine.predict.call_args.kwargs["model_name"] == self.PINNED_KEY
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_pinned_key_reported_in_parameters(self, mock_config_class, mock_engine_class):
+        """The pin must be visible in logged/serialized parameters."""
+        self._mock_engine(mock_engine_class)
+
+        generator = MLBasicSignalGenerator(
+            symbol="BTCUSDT",
+            model_type="basic",
+            timeframe="1h",
+            model_version=self.PINNED_VERSION,
+        )
+
+        params = generator.get_parameters()
+        assert params["model_version"] == self.PINNED_VERSION
+        assert params["pinned_model_key"] == self.PINNED_KEY

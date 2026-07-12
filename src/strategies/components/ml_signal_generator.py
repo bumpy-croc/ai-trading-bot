@@ -588,6 +588,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         long_entry_threshold: float | None = None,
         short_entry_threshold: float | None = None,
         confidence_multiplier: float | None = None,
+        model_version: str | None = None,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -602,6 +603,13 @@ class MLBasicSignalGenerator(SignalGenerator):
             long_entry_threshold: Minimum predicted return for long entry.
             short_entry_threshold: Maximum predicted return for short entry.
             confidence_multiplier: Scales |predicted_return| → confidence.
+            model_version: Pin every prediction to this exact registry
+                version (e.g. ``2026-07-04_22h_v1``) instead of resolving
+                ``latest`` — the backtest harness's point-in-time pin
+                (GH #988). Construction fails fast when the version does
+                not exist. Never set on the live trading path, which must
+                always follow ``latest``; only an explicit caller argument
+                can pin (no ambient env/config override).
         """
         super().__init__(name)
 
@@ -655,6 +663,12 @@ class MLBasicSignalGenerator(SignalGenerator):
         self._model_symbol: str | None = None
         self._cross_symbol_bundle_key: str | None = None
         self._symbol_guard_log_ts: dict[str, float] = {}
+
+        # Point-in-time version pin (backtest harness only). Resolved to a
+        # full bundle key by _validate_model_availability, which fails fast
+        # when the pin cannot be honored.
+        self.model_version = model_version
+        self._pinned_bundle_key: str | None = None
 
         # Initialize feature pipeline
         self._setup_feature_pipeline()
@@ -736,8 +750,19 @@ class MLBasicSignalGenerator(SignalGenerator):
         not shipped yet.
         """
         if self._registry is None:
+            if self.model_version:
+                # A pinned run degrading to HOLD-only would silently produce
+                # a zero-trade "comparison" — refuse instead.
+                raise ModelNotAvailableError(
+                    f"Model version pin {self.model_version!r} requested but the "
+                    f"prediction engine/model registry failed to initialize — "
+                    f"a pinned run must fail fast rather than run unpinned."
+                )
             # Engine degraded/unavailable — prediction path already fails
             # safe (returns None → HOLD), so nothing to validate against.
+            return
+        if self.model_version:
+            self._resolve_pinned_bundle(self._registry)
             return
         try:
             self._registry.select_bundle(
@@ -787,6 +812,38 @@ class MLBasicSignalGenerator(SignalGenerator):
             self.model_type,
             self.model_timeframe,
             self.symbol,
+        )
+
+    @property
+    def pinned_model_key(self) -> str | None:
+        """Full bundle key the generator is pinned to, or None when unpinned."""
+        return self._pinned_bundle_key
+
+    def _resolve_pinned_bundle(self, registry: "PredictionModelRegistry") -> None:
+        """Resolve ``model_version`` to a full bundle key, failing fast.
+
+        ``get_bundle_by_key`` is the one registry path that can load a
+        non-latest version (lazily, exam/backtest-only — the live path only
+        ever calls ``select_bundle``). A pin that cannot be resolved raises
+        instead of degrading: scoring with the wrong model is exactly the
+        confound this pin exists to prevent (GH #988).
+        """
+        key = f"{self.symbol}:{self.model_timeframe}:{self.model_type}:{self.model_version}"
+        bundle = registry.get_bundle_by_key(key)
+        if bundle is None:
+            available = self._available_bundle_keys()
+            raise ModelNotAvailableError(
+                f"Pinned model version not found: {key}. Check the version directory "
+                f"exists under the registry and its metadata timeframe matches "
+                f"{self.model_timeframe!r}. Loaded bundles: {', '.join(available) or 'none'}."
+            )
+        self._pinned_bundle_key = key
+        self._model_symbol = bundle.symbol
+        logger.warning(
+            "MODEL VERSION PINNED: scoring %s with %s — 'latest' resolution is "
+            "bypassed for this run (point-in-time backtest pin)",
+            self.symbol,
+            key,
         )
 
     def _available_bundle_keys(self) -> list[str]:
@@ -1012,7 +1069,13 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Try to select bundle using registry
             selected_bundle_key = None
             resolved_model_symbol: str | None = None
-            if self._cross_symbol_bundle_key is not None:
+            if self._pinned_bundle_key is not None:
+                # Point-in-time pin (backtest harness): the exact version
+                # was resolved and validated at construction — never
+                # re-resolve "latest" mid-run.
+                selected_bundle_key = self._pinned_bundle_key
+                resolved_model_symbol = self._model_symbol
+            elif self._cross_symbol_bundle_key is not None:
                 # Startup explicitly opted into substitution via
                 # FEATURE_ALLOW_CROSS_SYMBOL_MODEL — score with the pinned
                 # bundle and keep reminding the operator.
@@ -1065,6 +1128,18 @@ class MLBasicSignalGenerator(SignalGenerator):
                 else:
                     result = self.prediction_engine.predict(window_df)
             except (KeyError, ValueError):
+                # Never fall back to default resolution when pinned —
+                # scoring with a different model is exactly the confound the
+                # pin exists to prevent (GH #988). Degrade to HOLD instead.
+                if self._pinned_bundle_key is not None:
+                    self._model_symbol = None
+                    logger.error(
+                        "MLBasicSignalGenerator: pinned model %s lookup failed at "
+                        "index %d — holding (refusing unpinned fallback)",
+                        self._pinned_bundle_key,
+                        index,
+                    )
+                    return None
                 # Fall back to default registry resolution if explicit lookup fails
                 result = self.prediction_engine.predict(window_df)
 
@@ -1148,6 +1223,8 @@ class MLBasicSignalGenerator(SignalGenerator):
                 "long_entry_threshold": self.long_entry_threshold,
                 "short_entry_threshold": self.short_entry_threshold,
                 "confidence_multiplier": self.confidence_multiplier,
+                "model_version": self.model_version,
+                "pinned_model_key": self._pinned_bundle_key,
             }
         )
         return params
