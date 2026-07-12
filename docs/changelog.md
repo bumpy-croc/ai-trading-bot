@@ -38,6 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so degraded live decisions are attributable in the database. Closes #913.
 
 ### Added
+- **Feature-flag observability: vol-target sizing + circuit-breaker dry_run (#964)**: two flags
+  under paper-trading evaluation were structurally unobservable — nothing DB-durable recorded
+  whether they ever did anything, blocking their promote/kill verdicts. Now (a)
+  `VolatilityTargetSizer` records every sizing decision (base size → adjusted size, multiplier,
+  realized ATR percentile, target percentile, plus an explicit pass-through marker when no vol
+  signal exists) and `Strategy` merges it into `TradingDecision.risk_metrics`, which the live
+  engine already persists per candle into `strategy_executions.reasons`
+  (`risk_vol_target_*` entries); (b) an `account_circuit_breakers=dry_run` would-have-tripped
+  event now writes a `system_events` row (new `EventType.CIRCUIT_BREAKER_DRY_RUN`,
+  severity=warning, component=risk, honest `alert_sent=false`) once per trip episode, in
+  addition to the ephemeral stdout log. Instrumentation only — no change to actual sizing or
+  breaker enforcement. Alembic migration `0013_widen_event_type` widens
+  `system_events.event_type` varchar(18→23) for the new value (mirrors 0009).
 - **Real manual kill-switch (#922)**: `atb live-control halt --env production|staging|development
   [--reason "..."]` and `atb live-control resume` now exist and are REAL. Halt durably upserts a
   `system_halt` row in the target environment's new `system_control_flags` table; the running

@@ -11,8 +11,8 @@ from src.engines.live.strategy_runtime import StrategyRuntimeCoordinator
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import Strategy
-from src.strategies.components.position_sizer import PositionSizer
-from src.strategies.components.regime_context import RegimeContext
+from src.strategies.components.position_sizer import PositionSizer, VolatilityTargetSizer
+from src.strategies.components.regime_context import RegimeContext, TrendLabel, VolLabel
 from src.strategies.components.risk_manager import MarketData, Position, RiskManager
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
 
@@ -178,6 +178,59 @@ def test_process_candle_merges_additional_risk_context(sample_dataframe: pd.Data
     assert decision.position_size == pytest.approx(100.0)
     assert risk_manager.calls, "Risk manager should receive sizing context"
     assert risk_manager.calls[-1]["correlation_ctx"] == {"enabled": True}
+
+
+class HighVolRegimeDetector:
+    """Regime detector stub reporting a high ATR-percentile regime."""
+
+    warmup_period = 0
+
+    def get_feature_generators(self) -> list[Any]:
+        return []
+
+    def detect_regime(self, df: pd.DataFrame, index: int) -> RegimeContext:
+        return RegimeContext(
+            trend=TrendLabel.TREND_UP,
+            volatility=VolLabel.HIGH,
+            confidence=0.9,
+            duration=5,
+            strength=0.8,
+            metadata={"atr_percentile": 0.9},
+        )
+
+
+def test_process_candle_surfaces_vol_target_sizing_metrics(
+    sample_dataframe: pd.DataFrame,
+) -> None:
+    # #964: the vol-target sizing decision must land in decision.risk_metrics so
+    # the live engine persists it to strategy_executions (queryable evidence).
+    strategy = Strategy(
+        name="vol-target-strategy",
+        signal_generator=StaticSignalGenerator(),
+        risk_manager=RecordingRiskManager(),
+        position_sizer=VolatilityTargetSizer(PassthroughPositionSizer()),
+        regime_detector=HighVolRegimeDetector(),
+        enable_logging=False,
+    )
+
+    decision = strategy.process_candle(sample_dataframe, len(sample_dataframe) - 1, 1000.0)
+
+    metrics = decision.risk_metrics
+    assert metrics["vol_target_applied"] == pytest.approx(1.0)
+    assert metrics["vol_target_atr_percentile"] == pytest.approx(0.9)
+    assert metrics["vol_target_multiplier"] == pytest.approx(0.5 / 0.9)
+    assert metrics["vol_target_base_size"] == pytest.approx(100.0)
+    assert metrics["vol_target_adjusted_size"] == pytest.approx(100.0 * 0.5 / 0.9)
+
+
+def test_process_candle_risk_metrics_unchanged_without_sizer_metrics(
+    sample_dataframe: pd.DataFrame,
+) -> None:
+    strategy = _build_strategy(RecordingRiskManager())
+
+    decision = strategy.process_candle(sample_dataframe, len(sample_dataframe) - 1, 1000.0)
+
+    assert not any(key.startswith("vol_target_") for key in decision.risk_metrics)
 
 
 def test_live_engine_supplies_correlation_context(sample_dataframe: pd.DataFrame) -> None:
