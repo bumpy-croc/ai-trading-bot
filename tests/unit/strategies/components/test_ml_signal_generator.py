@@ -347,6 +347,54 @@ class TestMLSignalGenerator:
 
     @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
     @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
+    def test_symbol_parameter_default(self, mock_config_class, mock_engine_class):
+        """Test symbol parameter defaults to BTCUSDT (GH #1002)."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLSignalGenerator()
+        assert generator.symbol == "BTCUSDT"
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
+    def test_symbol_parameter_custom(self, mock_config_class, mock_engine_class):
+        """Test symbol parameter can be customized (GH #1002)."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLSignalGenerator(symbol="ETHUSDT")
+        assert generator.symbol == "ETHUSDT"
+
+        # Verify symbol is included in get_parameters output
+        params = generator.get_parameters()
+        assert params["symbol"] == "ETHUSDT"
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
+    def test_symbol_stamped_in_signal_metadata(self, mock_config_class, mock_engine_class):
+        """generate_signal metadata carries the trading symbol (GH #1002)."""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.error = None
+        mock_result.metadata = {}
+        mock_result.price = 51000.0
+        mock_engine.predict.return_value = mock_result
+        mock_engine_class.return_value = mock_engine
+
+        generator = MLSignalGenerator(symbol="ETHUSDT", sequence_length=120)
+        generator.prediction_engine = mock_engine
+        df = self.create_test_dataframe(150)
+
+        signal = generator.generate_signal(df, 130)
+
+        assert signal.metadata["symbol"] == "ETHUSDT"
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
     def test_prediction_failure_handling(self, mock_config_class, mock_engine_class):
         """Test handling of prediction failures"""
         mock_engine = MagicMock()
