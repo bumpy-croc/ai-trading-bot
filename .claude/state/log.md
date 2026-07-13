@@ -723,57 +723,6 @@ Delta shipped: live-path safety wave #994 (close-cap) + #996 (reconciliation edg
 Known benign artifact (seen on staging, expected): rolling deploy may stamp old container's end_time while the new one reuses session 20 — account_history heartbeat is the liveness truth, not is_active.
 Ref: PR #1014, PR #1011 (staging soak), GH #1001/#994/#996, deploy db605330, [D-2026-07-08-01] (previous parity promote #942/#943).
 
----
-
-## 2026-07-12 · track-record · quant-researcher [D-2026-07-12-03]
-Experiment #1013: EXIT-GEOMETRY round 2 (early-cut, trailing/breakeven ablation, tp_06 rerun) -> REJECTED, no staging-trial candidate
-Preregistered (docs/research/experiments/2026-07-12_exit-geometry-round2.md) then ran 35 backtests
-(7 configs x 5 folds: F1/F2/F3 2023-2025H1 primary + F0a/F0b 2021/2022H1 extension) + determinism
-recheck (PASS). Validity-gate work found, BEFORE any arm was read, that round 1's entire study
-(#970/#971) and PR #976's own regression-evidence table scored ETHUSDT candles with BTCUSDT's
-model, not ETHUSDT's -- ExperimentRunner._load_strategy never threads config.symbol into the
-strategy factory. Filed #997 (harness bug, fix in #1004, open) and #998 (round 1 needs
-re-verification, open) rather than silently absorbing the finding. This round's own control is a
-new, correct baseline (symbol explicitly threaded, verified via a 4-way isolation test that
-reproduces round 1's exact published number only when both the bug AND the wrong worktree are
-present). A predecessor turn's sweep process was killed mid-run by a session/quota limit; resumed
-by inspecting the partial output first (25 of 36 records already valid/complete) rather than
-assuming total loss, then running only the 2 missing arms (breakeven_only, tp_06_rerun).
-Result: NO-GO for all 6 arms against the pre-committed four-bar test (Sec 1). Every arm fails Bar 1
-outright (Bonferroni-significant return improvement on >=2 of 3 primary folds, alpha=0.05/6=0.0083)
--- 0/3 for every arm, lowest p-value anywhere is 0.09. tp_06_rerun is the only arm to pass Bar 2
-(aggregate PF + return improve, pooled across all 5 folds) -- reproduces round 1's
-directionally-positive-but-never-significant finding on an independent second sample; recommended
-as closed, not "needs more data." breakeven_only's +7.92pp aggregate return delta flagged explicitly
-as a naive-read trap (driven by 2 folds with far fewer trades than control; pooled PF worse than
-control's). Mechanism read: neither trailing-distance nor breakeven-move alone reproduces control's
-combined MFE-capture behavior; early-cut cut-precision is 42-56% (near coin-flip), only 21-37% of
-cut trades have a verifiable control-matched counterpart.
-Recommendation to PM/risk-officer: rejected as a staging-trial candidate, all 6 arms; closes the
-exit-geometry thread for now across both rounds (12 arms, 8 exam folds, 2021-2025H1) -- no
-exit/trade-management lever tested flips HyperGrowth's expectancy at a statistically defensible
-level. Any further work here needs a genuinely different mechanism (volatility/regime-conditioned
-exits), not another fixed-threshold variant.
-Ref: issue #1013, PR #1012, docs/research/experiments/2026-07-12_exit-geometry-round2.md,
-experiments/exit_geometry_round2_sweep.py + analyze_exit_geometry_round2.py +
-exit_geometry_round2_results.jsonl, issue #997/#998/#999/#977 (harness bugs filed this round),
-issue #970/#971 (round 1, whose absolute numbers/mechanism metrics this round's Sec 5.1 finding
-calls into question, tracked separately via #998).
-
-## 2026-07-12 17:35 · decision · daemon(PM)
-**[D-2026-07-12-04] PROD PROMOTE executed: main := soaked develop 51a1dbb5 (parity promote, PR #1014, merge bf7f45cb) — deploy db605330 SUCCESS, all 5 boot checks pass.**
-Decision basis (charter autonomy envelope, prod deploys autonomous): staging soak gate CLEARED — staging deploy 87b6aca9 (PR #1011) validated exactly this tree with all 5 boot checks; risk-officer conditions on #1001 met (1: peak-check cleared at $84.42, read-only prod DB 2026-07-12; 2: CI-on-merged-tree green at merge — 4 unit shards + integration + claude-review on #1014; 3: 24–48h spurious-close-only watch STARTS NOW via 6-hourly alert-monitor).
-**Soak discipline:** promoted the SOAKED commit, NOT develop HEAD. Soaked SHA = 51a1dbb5a32757c495feb77e9cbb9cdc8689514b (second parent of staging tip 87b6aca9; `git diff 51a1dbb5 origin/staging --stat` empty). PRs #1006/#992/#1008 (and later #1004/#1000/#1012) merged to develop AFTER the staging sync and were EXCLUDED (verified: promote tree vs develop HEAD differs by exactly that post-soak material, 33 files). Recipe = #942 pattern replicated: worktree at soaked commit → `git merge -s ours origin/main` history tie → tree proven identical (HEAD^{tree} == 51a1dbb5^{tree} == origin/staging^{tree}) BEFORE push → PR #1014 → merge commit (not squash). Post-merge parity proof: `git diff origin/main 51a1dbb5 --stat` empty.
-Delta shipped: live-path safety wave #994 (close-cap) + #996 (reconciliation edges) + #1001 (same-iteration drawdown gate, durable-peak throttle); supporting #976/#968/#978/#981/#948/#950/#954/#965; docs/research #943–#987 set.
-**Prod boot checks (deploy db605330-8ee2-4ace-a2b2-0b8454d9e130, commit bf7f45cb, container up 17:22:43Z):**
-1. PASS — Max-drawdown guard armed: peak=$84.42, hard cap=20.0% (session 20, account_history peak) — NOT phantom $100/$1000.
-2. PASS — zero close-only / SYSTEM_HALT / breach lines through 17:25+ (prod at ~0.016% DD; any trip would have been false).
-3. PASS — Trading loop started 17:23:15Z, ticking 60s (candle index healthy); session #20 reused, balance recovered $84.40; ETHUSDT SHORT @ $1696.83 re-adopted with stop-loss order 48135520381 tracked; reconciliation: 2 results, 0 corrections, 0 critical; no [ERRO]/[CRIT] beyond the intentional live-start countdown.
-4. PASS-WITH-NOTE — schema verification: "Schema matches SQLAlchemy models" ✅, but alembic stamp is STALE: prod current=0012, head=0013_widen_event_type (shipped via #968), "Pending revisions: 1", redundancy guard deliberately skipped (schema already matches — column already correct width). Staging by contrast ran it (current=0013, 0 pending). Functionally consistent; bookkeeping divergence only. Follow-up: stamp prod alembic_version to 0013 in a maintenance window (single-row write — NOT done now, prod DB read-only this session).
-5. PASS — HyperGrowth ETHUSDT native model; zero cross-symbol/substitution banner lines (#978's actionable banner silent).
-Known benign artifact (seen on staging, expected): rolling deploy may stamp old container's end_time while the new one reuses session 20 — account_history heartbeat is the liveness truth, not is_active.
-Ref: PR #1014, PR #1011 (staging soak), GH #1001/#994/#996, deploy db605330, [D-2026-07-08-01] (previous parity promote #942/#943).
-
 ## 2026-07-12 19:10 · track-record · quant-researcher
 Experiment (issue #990): does the SHORT-inventory guard's near-total suppression of live shorts (9L/3S vs ~50/50 signal split) cost or save returns? → leans "accidentally saving/neutral," moderate confidence, not conclusive.
 Evidence: docs/research/notes/2026-07-12_short-suppression-counterfactual.md (PR #1019).
@@ -828,3 +777,13 @@ Full review: docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hyper
 
 **Board / layer-1:** nothing this retro touches `charter.md` / `risk-limits.json`; no `risk-ratification` needed. (Open Board item unchanged: proposal 2026-07-12-01 long-only awaiting Alex on #1020.)
 Ref: PR docs/weekly-retro-2026-07-13; `.claude/LESSONS.md` §1.9–1.11/§2.7–2.8/§3; skills delegation-protocol/deploy-prod/weekly-retro; GH #1023/#1024/#1025; AGENDA.md (cleared).
+
+---
+
+## [D-2026-07-13-02] 2026-07-13 · correction · daemon(PM, human-directed)
+**Consolidated two verbatim-duplicate log entries introduced by the 2026-07-10 branch-merge interleave** (flagged in `[D-2026-07-13-01]` flag #2; human directed the correction). The `[D-2026-07-12-03]` EXIT-GEOMETRY-round-2 track-record and the `[D-2026-07-12-04]` prod-promote entry each appeared twice; each duplicate pair was **verified byte-identical** (`diff` on both blocks, IDENTICAL) before removing the second copy. Kept the first (chronologically-first) copy of each; the log now reads `...15:20 slippage → [D-03] exit-geometry → [D-2026-07-12-04] promote → 19:10 short-suppression → 20:00 risk verdict`. No entry content was altered and no other entry was touched; only the accidental second copies were excised. Post-fix invariant checked: every `[D-YYYY-MM-DD-NN]` id now has exactly one header/definition (extra string occurrences are legitimate in-body references); the earlier `[D-2026-07-08-01]`↔`[D-2026-07-08-02]` collision was already resolved by renumbering at merge time (`## 2026-07-10 note`) and is unaffected. This is a mechanical de-duplication, not a rewrite of the reasoning record — the honest-correction norm applies: this entry is the record of the edit.
+Ref: `[D-2026-07-13-01]` (retro flag #2); `.claude/state/log.md`.
+
+## [D-2026-07-13-03] 2026-07-13 · post-mortem · daemon(PM, human-directed) · risk-officer to ratify closure
+**Incident `2026-07-04T1300-P1-hypergrowth-drawdown-cap-breach`: post-mortem filled, status `open → mitigated`** (flagged in `[D-2026-07-13-01]` flag #1; human directed). `mitigated_at=2026-07-11T12:55:00Z` (guard seeded from `account_history` verified live, #851). The acute protection gap that defined the incident — no live 20% drawdown halt, drawdown input resetting on every restart, events paging nobody — is **closed and prod-verified** via the new `src/engines/live/monitoring/drawdown_guard.py` (close-only halt at the 20% hard cap + 10%/16% warning tiers, #848/#849), peak seeded from `account_history` true-equity not book value (#850/#851), same-iteration enforcement + durable-session-peak throttle (#1001), and operator alerts via `$ALERT_WEBHOOK_URL` (#855/#864) — all on `origin/main`, guard armed at every boot (peak $84.42, hard cap 20.0%). The original "20.33% live breach off a $103.82 peak" remains **withdrawn** (phantom pre-#655 book value; the incident's own CORRECTION; distilled at LESSONS §5.6). **Not closed** — closure is gated on the risk-officer's 24–48h spurious-close-only watch on #1001 (from 2026-07-12 17:35Z, ~through 2026-07-14 17:35Z) completing clean, then risk-officer/PM sets `closed`. **Tracked residuals, non-blocking:** #847 (durable cross-session peak anchor), #986 (Board risk-ratification bundle covering control-failures #2 backtest-default/#3 breaker-override), #749 (remove the now-superseded dead `check_drawdown` path), and the structural strategy expectancy (365d MaxDD breach — owned by the returns-levers program + long-only proposal #1020). Note: the four originally-named control-failure code sites were NOT individually patched — a new guard component supersedes them functionally; #749/#986 remain open as the code-hygiene cleanup.
+Ref: `.claude/state/incidents/2026-07-04T1300-P1-hypergrowth-drawdown-cap-breach.md` (post-mortem section + frontmatter); GH #848/#849/#850/#851/#1001/#864/#847/#986/#749/#1020; `[D-2026-07-12-04]` (prod-verify boot checks); `.claude/LESSONS.md` §5.6.
