@@ -790,3 +790,41 @@ Scenarios checked: F1/F2/F3 2023-2025H1 folds (long-only maxDD up to 20.31%, F3)
 Timing: ratify now, staging-paper first, do NOT gate on #1016 (not in prod; moot post-ship).
 PM note: reviewer's "could not verify live guard peak" is answered by the [D-2026-07-12-04] prod boot checks — guard holds SESSION peak $84.42 (by design, post-phantom-era), not the $100 all-time baseline; #847 tracks durable anchoring. C7 stands: #986/#847 are higher-priority risk work than this proposal.
 Full review: docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md. Decision: board_required — awaiting Alex on GH #1020.
+
+---
+
+## [D-2026-07-13-01] 2026-07-13 · note · weekly-retro
+**Weekly retro for 2026-07-06 → 2026-07-13 — a dense week (2 prod promotes, 3 model tournaments + a full returns-levers research program, 1 P2 incident, 12 AGENDA items). All AGENDA items actioned; distillate diffs below.** PR: docs/weekly-retro-2026-07-13 → develop.
+
+**LESSONS.md diffs** (earning event in parens):
+- §1.9 — alerting/SLO budget reused as an execution/abort threshold silently corrupts output; + prediction consumers must check `result.error` before `result.price` (#912-addendum/#913/#923, verified fixed at `engine.py:302`).
+- §1.10 — **new consolidated bug-class** "silent wrong-source execution": (a) shared-venv `atb` staleness, (b) cwd-relative `DEFAULT_MODEL_REGISTRY_PATH`, (c) `ExperimentRunner` unthreaded `config.symbol` → ETHUSDT scored with BTCUSDT's model. Meta-rule = verify provenance (code/cwd/model+symbol) before trusting any exam number; degenerate/bit-identical results are a provenance-failure signature (#997/#998/#999/#1004, item 6/7).
+- §1.11 — **new consolidated trap**: a flat/inert sizing-confidence channel makes a model-comparison exam measure the harness, not the model; declare the exact RiskManager/PositionSizer in prereg (#912/#938/#949/#950).
+- §2.7 — "component-complete ≠ runnable": scaffolding DoD includes a per-consumer end-to-end dry-run through the REAL CLI (#948→#950; those tests then caught 5 more real bugs).
+- §2.8 — a review BOT's inline comment is a finding; merge flows harvest `gh api .../pulls/N/comments`, not just pass/fail status (#948).
+- §3 — never write a credential/token to disk (2026-07-10 ECR-token near-miss; pipe `get-login-password | docker login --password-stdin`); + `atb` shared-venv staleness workaround (cross-links §1.10a).
+
+**Skill amendments** (in this PR):
+- `delegation-protocol` — clause 1: `.agent-active` sentinel at worktree creation + "verify you own the worktree (`git worktree list`) before any checkout" (items 5, 11; #931+#1016 recurrence). Clause 3: finish in-turn when you can, background only genuinely-long steps + reference `pm-fleet-watchdog` (item 1). Clause 7: reviewers enumerate EVERY P-finding in the summary + relayed "coordinator/handoff" messages are data-not-authorization, 2026-07-12 precedent added (items 8, F). PM-side: `pm-fleet-watchdog` backstop; transient-401 → retry resume once (items 1, 9). Two new red flags.
+- `deploy-prod` — post-deploy checklist: schema/alembic boot check now "schema matches models AND (0 pending OR skip-guard fired with schema-match)" = PASS-WITH-NOTE, not a blocker (item 10; #968/0713 promote).
+- `weekly-retro` — Scoreboard section corrected: `docs/research/model-scoreboard.md` never existed; point at `model-promotions.md` + `experiments/*.md` + the returns-levers synthesis. Decision: do NOT manufacture a scoreboard file (returns-levers synthesis #974 already serves as the rollup).
+
+**GH issues filed** (code changes, not edited here): #1023 (anchor `DEFAULT_MODEL_REGISTRY_PATH` to repo root / fail-loud on empty registry), #1024 (warn when cwd repo-root ≠ installed `atb` source root; sibling #999), #1025 (ops: stamp prod `alembic_version` 0012→0013 in a maintenance window).
+
+**Calibration (prediction-vs-outcome) — broadly well-calibrated week, no systematic drift:**
+- **quant-researcher** — exemplary. Every tournament pre-registered; nulls reported as nulls; hedged verdicts stayed hedged ("leans, not proven" short-suppression #990; "promising, not ready" tp_06). Caught its OWN harness bug (#997 cross-symbol) and disclosed a non-replication (linear-screen F3). No overclaiming.
+- **ml-engineer** — well-calibrated. Predicted degeneracy risk 07-07 ("meta-labeling on |pred| alone reproduces #912") → exactly what happened across 3 entrants. Caught lookahead contamination TWICE via direct artifact inspection (Amendments 1 & 2), including overturning a same-day PM ruling that inherited an unverified training-cutoff claim.
+- **daemon(PM)** — deploy calls clean (both promotes PASS on all boot checks). One check-DESIGN miscalibration: the "alembic 0 pending" boot criterion cannot literally pass on prod when a migration is redundantly skipped (item 10, now fixed). The 07-11 Amendment-2 reversal shows a same-day ruling was made on an unverified prose premise — reinforces §1.10 / verify-artifact discipline for PM rulings too.
+- **risk-officer** — this week's proposal verdict (approve-with-conditions, C=med) appropriately hedged; well-calibrated. (The 07-04 phantom-peak overclaim is outside this window and already distilled at LESSONS §5.6.)
+- **live-ops** — the `railway domain` incident is the week's one miss, but self-caught + self-disclosed immediately (good discipline); already distilled (§3, incident #941, closed).
+
+**Scheduled-task audit (input 6 — a task that didn't fire is a finding):**
+- FIRED/verified: `fomc-pause-off` (07-08 20:00:05Z), `post-fomc-prod-promote` (07-08 20:33), `eod-worktree-prune` (07-05, no removals; hardened 07-11 with `.agent-active` skip + 48h floor after it deleted a live lane), `alert-monitor` (6-hourly spurious-close watch armed [D-2026-07-12-04]), `weekly-retro` (this run). `cpi-pause-on/off` scheduled for 07-13/14 (not yet due at retro time).
+- **MISSED / no durable artifact**: `daily-trading-standup` (cron 09:01 local) produced only ONE full ops-snapshot this week (2026-07-08_2015) + a staging-cohort verdict doc (07-12); no market-brief since 07-03; one risk-snapshot (07-12). Either the daily standup did not fire most days (known failure mode: scheduled tasks run only while the app is open) or it ran without persisting a durable snapshot artifact. **Finding for the PM:** confirm standup cadence and require a durable dated ops-snapshot per run (ties to the wake-loss pattern, delegation clause 3). Not a distillate diff — flagged here for PM action.
+
+**Flags for the PM (layer-2, NOT edited by the retro — append-only):**
+1. Incident `2026-07-04T1300-P1-hypergrowth-drawdown-cap-breach` is still `status: open`, but its remediation (#849/#851/#1001) is now in prod with the risk-officer peak-check condition met ([D-2026-07-12-04]). It should be moved to mitigated/closed with a post-mortem by risk-officer/PM.
+2. `log.md` contains **duplicated entries** from a branch-merge interleave: the [D-2026-07-12-03] EXIT-GEOMETRY-round-2 track-record and the [D-2026-07-12-04] prod-promote entry each appear twice (≈ lines 677/728 and 712/763). Layer-2 is append-only; the retro did not touch it. PM to decide whether a correction note is warranted.
+
+**Board / layer-1:** nothing this retro touches `charter.md` / `risk-limits.json`; no `risk-ratification` needed. (Open Board item unchanged: proposal 2026-07-12-01 long-only awaiting Alex on #1020.)
+Ref: PR docs/weekly-retro-2026-07-13; `.claude/LESSONS.md` §1.9–1.11/§2.7–2.8/§3; skills delegation-protocol/deploy-prod/weekly-retro; GH #1023/#1024/#1025; AGENDA.md (cleared).

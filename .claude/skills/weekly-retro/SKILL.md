@@ -58,9 +58,15 @@ Rules for editing layer 3:
 
 ## Scoreboard + tracker updates
 
-Update `docs/research/model-scoreboard.md` rows for the week's exam results (append-only);
-verify the deployed model's row matches reality (`atb live-control list-models` / registry
-symlinks). Check the standup tripwire table is still the ratified one.
+There is no single `model-scoreboard.md` (it was never created — do not manufacture one). The
+tracker layer that DOES exist and must stay honest:
+- `docs/research/model-promotions.md` — append-only log of every `latest` symlink change (date,
+  symbol, old→new version, reason, eval numbers). Verify the deployed model's latest row matches
+  reality (`atb live-control list-models` / registry symlinks). No promotion this week ⇒ no row.
+- `docs/research/experiments/*.md` — per-tournament exam results (the week's L1/L2 numbers live
+  here, not in a central board); the current cross-tournament rollup is the latest
+  `docs/research/*returns-levers-synthesis*.md` (cites each source doc, computes no new numbers).
+- Check the standup tripwire table is still the ratified one.
 
 ## Output (the definition of done)
 

@@ -69,6 +69,64 @@ failure (looks like "none"). **Rule:** for a *safety* decision, use a **fail-CLO
 returns a distinct "unknown" (`None`) on lookup failure, and treat unknown as "an order may exist →
 skip". (See `has_open_orders`.)
 
+### 1.9 An alerting/SLO budget reused as an execution/abort threshold silently corrupts output
+`PredictionEngine` used `max_prediction_latency` — a **0.1s alerting SLO** — to *abort* inference
+and to *invalidate* completed-but-slow predictions. Under CPU contention a fraction of bars silently
+returned error results with `price=0.0`; both `_get_ml_prediction` impls read `result.price` without
+checking `result.error`, so `price=0.0` → `predicted_return=-1.0` → **SELL strength 1.0 / confidence
+1.0**. Latent LIVE risk (empirically reproduced against unmodified generator code), and the root of
+backtest **non-determinism** (identical baseline → 46 vs 55 trades run-to-run). Fixed via #923
+(`InferenceContext` LIVE/backtest split so the latency gate only applies live + a generator error
+guard); the alerting-budget comment now lives at `engine.py:302`.
+- **Rule (a):** never reuse an observability/alerting budget as a control/abort threshold — they
+  have different owners and magnitudes; the real hang guard belongs elsewhere (`OnnxRunner` already
+  carries a 30s guard, so the engine gate was a redundant double-gate on the *wrong* constant).
+- **Rule (b):** a prediction consumer MUST check `result.error` before reading `result.price` — an
+  error result's `price=0.0` is not a real price. Earned: #912 (addendum), #913, #923.
+
+### 1.10 Silent wrong-source execution — exam/backtest numbers computed against the wrong code, cwd, or model
+Three separate instances this week, one meta-class: a run produced numbers, but not from the source
+it claimed.
+- **(a) Shared-venv `atb` staleness.** The `atb` console script is an editable install pinned to
+  ONE worktree; bare `atb` from any *other* worktree silently executes that pinned worktree's code
+  (workaround + detail in §3). Sibling filed as GH #999 (script-path `sys.path` shadowing of the
+  main checkout's stale `src/`).
+- **(b) cwd-relative registry path.** `DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"`
+  (`constants.py:25`) resolves against *process cwd* — an exam launched from the wrong directory
+  silently resolved to an empty registry and produced an all-HOLD / 0-trade result that looked like
+  a real (null) finding (2026-07-11). Still unfixed — anchor to module/repo root (GH #1023).
+- **(c) unthreaded `config.symbol`.** `ExperimentRunner._load_strategy` never threaded
+  `config.symbol` into the strategy factory → the entire EXIT-GEOMETRY round 1 study (#970/#971)
+  and PR #976's own regression-evidence table scored ETHUSDT candles with **BTCUSDT's** model
+  (#997, fixed #1004; #998 re-verifies round 1).
+- **Meta-rule:** before trusting any exam/backtest number, verify its provenance — which code
+  (worktree + venv), which cwd, which model **version and symbol** actually ran. A degenerate
+  result (0 trades, all-HOLD, or **bit-identical blotters across supposedly-different inputs**) is a
+  provenance-failure *signature*, not a finding. Round 2's 4-way isolation test — which reproduced
+  round 1's exact published number ONLY when both the bug AND the wrong worktree were present — is
+  the verification pattern to copy.
+
+### 1.11 A sizing/confidence channel that silently ignores the signal makes a model-comparison exam measure the harness, not the model
+Three instances converge on one trap: the exam's P&L was invariant to the model because the money
+path never read the signal.
+- **(a)** `FlatRiskManager.calculate_position_size` (`hyper_growth.py:97-118`) returns
+  `balance × risk_fraction` with "no confidence/strength scaling" — position size is invariant to
+  an 8x `predicted_return` range, so the architecture tournament's five genuinely-different models
+  (max ONNX abs diff 0.31) produced a **bit-identical trade blotter** that looked like model
+  equivalence but was a harness-validity defect (#938). This is a *deliberate* live design choice,
+  not a bug to fix — the lesson is about **exam design**, not `hyper_growth.py`.
+- **(b)** The `"confidence_weighted"` sizer-type string reads a `"prediction_confidence"` indicator
+  **nothing in the codebase populates** → silently zeroed every trade for all four target-redesign
+  entrants until caught by the end-to-end dry-run (#949/#950; fixed to `"fixed_fraction"`).
+- **(c)** `confidence = clip(|predicted_return|×12, 0, 1)` feeds a boolean gate with
+  `adjust_for_confidence=False` → recalibration can only change *which* bars trade, never their
+  size (#912).
+- **Rule:** any exam that ranks models by P&L must first prove its sizing path *varies with the
+  signal* (sweep one model's predicted-return range and confirm position size responds), and the
+  preregistration must **declare the exact RiskManager/PositionSizer** it scores through (#938
+  implication). Ranking model quality through a flat/inert sizer is only ever a directional-sign
+  test, never a magnitude one. Earned: #912, #938, #949/#950.
+
 ---
 
 ## 2. Process mistakes I made (avoid these)
@@ -110,6 +168,27 @@ produces **zero** check runs: `pull_request`-triggered workflows run on the merg
 GitHub cannot create. Nothing fails — checks simply never appear. **Rule:** when a PR push
 shows no checks after a few minutes, check `mergeable_state` first (the base may have moved),
 rebase onto the fresh base, and force-push; don't wait on or re-trigger phantom CI.
+
+### 2.7 "Component-complete ≠ runnable" — scaffolding isn't done until each consumer runs end-to-end through the REAL CLI
+PR #948's target-tournament Phase 2 scaffolding was fully unit-tested but **not reachable
+end-to-end via any CLI entry point** — the tournament halted until #950 threaded the flags,
+registered the exam strategies, and added one non-mocked, subprocess-based dry-run acceptance test
+per consumer (`tests/integration/tournament/test_entrant_dry_runs.py`: synthetic OHLCV → train via
+the real CLI → correctly-registered/timeframed artifact → exam backtest via the real CLI with
+version pinning → ≥1 real trade). Those tests then caught **5 further real bugs** the unit suite
+could not see (most consequential: the inert `"confidence_weighted"` sizer, §1.11b). **Rule:** the
+definition-of-done for multi-piece scaffolding includes a **per-consumer end-to-end dry-run through
+the actual CLI entrypoints**, not just green unit tests. Unit-green + CLI-unreachable is not done.
+Earned: #948 → halt → #949/#950.
+
+### 2.8 A review BOT's inline comment is a finding — harvest it, don't read only its pass/fail status
+A real #838-class units bug sat as an inline `claude[bot]` comment on PR #948 while **both**
+dispatched reviewer agents missed it; the merge flow read only the bot's overall check status
+(green), so the finding was invisible until the #950 wiring round independently re-found it by
+running the code. **Rule:** every merge flow and PR-review disposition runs
+`gh api repos/OWNER/REPO/pulls/<N>/comments` and explicitly dispositions **each** bot finding — a
+bot's green summary status does **not** mean zero inline findings. (Extends CLAUDE.md's "Handling PR
+Review Comments".) Earned: #948.
 
 ---
 
@@ -194,6 +273,17 @@ rebase onto the fresh base, and force-push; don't wait on or re-trigger phantom 
   or severity is undercounted.
 - **Target prod explicitly:** `railway logs -e production -s "Trading Bot" -n 400` (env is
   `production`, the live bot service is `Trading Bot`).
+- **Never write a credential/token to a file.** An agent saved a live ECR authorization token to a
+  plaintext scratchpad file during a cloud-training pass (2026-07-10; PM caught + deleted it before
+  it persisted). **Rule:** never persist a secret to disk, scratchpad, or a logged env-var — pipe it
+  in one command: `aws ecr get-login-password --region <r> | docker login --username AWS
+  --password-stdin <registry>`. No intermediate file, no echo, no copy.
+- **Shared-venv `atb` staleness** (bug-class §1.10a): `make install` registers the `atb` console
+  script as an editable install pinned to **whichever worktree ran it** — bare `atb` from any
+  *other* worktree silently executes that pinned worktree's `src/`, not your cwd's. When running the
+  CLI from a non-primary worktree, invoke it as `PYTHONPATH=<worktree-root> python3 -m cli.__main__`
+  (or re-`make install` in the worktree, but that repins it for everyone). A warn-on-mismatch fix
+  (cwd repo-root ≠ installed source root) is GH #1024; sibling GH #999 covers the script-path variant.
 
 ---
 
