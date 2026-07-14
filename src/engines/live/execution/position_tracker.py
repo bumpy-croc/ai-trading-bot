@@ -507,6 +507,15 @@ class LivePositionTracker:
                 position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
                 position.unrealized_pnl_percent = pnl_pct * 100.0
 
+    def total_unrealized_pnl(self) -> float:
+        """Sum of unrealized P&L across all open positions, in cash terms.
+
+        Feeds true-equity reads (balance + unrealized) such as the account
+        circuit breaker. Values are the marks last written by ``update_pnl``.
+        """
+        with self._positions_lock:
+            return sum(float(p.unrealized_pnl) for p in self._positions.values())
+
     def update_mfe_mae(self, current_price: float, persist_to_db: bool = True) -> None:
         """Compute and persist rolling MFE/MAE for all active positions.
 
