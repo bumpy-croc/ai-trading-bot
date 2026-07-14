@@ -12,7 +12,7 @@ compaction) traces back to memory discipline — or its absence. Five layers, st
 
 | # | Layer | Files | Owner | Mutation rule |
 |---|-------|-------|-------|---------------|
-| 1 | **IDENTITY** | `.claude/state/charter.md`, `.claude/state/risk-limits.json` | human Board | **Read-only to all agents.** Changes only via a Board sitting (`risk-ratification` skill). Missing/TODO-laden identity blocks material decisions. |
+| 1 | **IDENTITY** | `.claude/state/charter.md`, `src/config/risk-limits.json` | human Board | **Read-only to all agents.** Changes only via a Board sitting (`risk-ratification` skill). Missing/TODO-laden identity blocks material decisions. |
 | 2 | **RECORD** | `.claude/state/log.md`, `.claude/state/incidents/`, `.claude/state/proposals/`, `docs/research/experiments/`, `docs/research/notes/`, `docs/research/model-scoreboard.md` | writing agent | **Append-only.** Corrections are NEW entries referencing the old one — never edits. Proposal/incident lifecycle moves via `status:` frontmatter, body history stays. |
 | 3 | **DISTILLATE** | `.claude/LESSONS.md`, the `.claude/skills/*/SKILL.md` files themselves (procedural memory) | daemon, via retro | **Curated and edited in place** — but routinely only by `weekly-retro` (the consolidation engine). Mid-week emergency lessons are allowed; the retro reconciles them. |
 | 4 | **WORKING STATE** | scratchpad state JSONs, `.claude/state/handover.md` | owning session | **Overwritable ephemera. Never authoritative.** Always verify against ground truth (git/gh/ps/DB) before acting on it. Safe to delete once its lane completes. |

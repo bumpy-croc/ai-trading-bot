@@ -25,8 +25,8 @@ atb db verify >/dev/null 2>&1 || echo "$ts ERROR db-unreachable" >> .claude/stat
 ```bash
 # Replace with real query. Must exit cleanly on error, not crash the heartbeat.
 current_dd=$(atb risk drawdown --json 2>/dev/null | jq -r '.current_pct // empty')
-limit=$(jq -r '.portfolio.max_drawdown_pct' .claude/state/risk-limits.json)
-warn_frac=$(jq -r '.escalation.warning_at_pct_of_limit' .claude/state/risk-limits.json)
+limit=$(jq -r '.portfolio.max_drawdown_pct' src/config/risk-limits.json)
+warn_frac=$(jq -r '.escalation.warning_at_pct_of_limit' src/config/risk-limits.json)
 
 if [ -n "$current_dd" ] && [ -n "$limit" ]; then
   warn_at=$(awk -v a="$limit" -v b="$warn_frac" 'BEGIN{print a*b}')
@@ -58,7 +58,7 @@ fi
 
 ```bash
 test -s .claude/state/charter.md     || echo "$ts ERROR charter-missing"     >> .claude/state/heartbeat.log
-test -s .claude/state/risk-limits.json || echo "$ts ERROR risk-limits-missing" >> .claude/state/heartbeat.log
+test -s src/config/risk-limits.json || echo "$ts ERROR risk-limits-missing" >> .claude/state/heartbeat.log
 ```
 
 ## External dead-man

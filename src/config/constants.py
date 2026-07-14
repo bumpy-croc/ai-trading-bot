@@ -139,7 +139,7 @@ DEFAULT_MAX_DAILY_RISK = 0.06  # 6% maximum daily risk
 DEFAULT_MAX_CORRELATED_RISK = 0.10  # 10% maximum risk for correlated positions
 DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
 # Escalation tiers as fractions of the max-drawdown limit.
-# Must match .claude/state/risk-limits.json escalation.{warning,critical}_at_pct_of_limit.
+# Must match src/config/risk-limits.json escalation.{warning,critical}_at_pct_of_limit.
 DRAWDOWN_WARNING_AT_PCT_OF_LIMIT = 0.50  # WARNING at 50% of the cap (10% drawdown at 0.20)
 DRAWDOWN_CRITICAL_AT_PCT_OF_LIMIT = 0.80  # CRITICAL at 80% of the cap (16% drawdown at 0.20)
 DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS = 900  # Min seconds between repeated drawdown-tier logs
