@@ -1,6 +1,6 @@
 # Single-Source Risk Configuration
 
-- **Status**: Proposed
+- **Status**: Accepted with Board amendments ([D-2026-07-14-04]): file moves to `src/config/risk-limits.json`; §3.7 prune-only (re-anchor rejected); §3.8 confirmed at 0.15
 - **Date**: 2026-07-14
 - **Authority**: Board directive [D-2026-07-14-02] (`.claude/state/log.md`) — backtest-live parity foremost; risk/trading variables defined in ONE place, read by ALL consumers; eliminate the risk-limits.json vs constants.py divergence *class*, not instances.
 - **Refs**: GH #986 (items 2/3/4/5), GH #1021 (ExperimentRunner clamp drift), GH #835 (startCommand loosening incident), GH #1020 (allow_shorts, interaction noted)
@@ -51,7 +51,7 @@ Every one of these is the same defect: a risk number defined somewhere other tha
 
 ### 3.1 The source: `.claude/state/risk-limits.json`, runtime-loaded
 
-**Decision**: `.claude/state/risk-limits.json` is THE source, loaded and validated at boot by a new module `src/config/risk_limits.py`. The risk/sizing entries in `constants.py` are **deleted** — not converted to re-exports.
+**Decision (as amended by [D-2026-07-14-04])**: the file MOVES to `src/config/risk-limits.json` (Board ruling, overriding the keep-in-place recommendation below) and is THE source, loaded and validated at boot by a new module `src/config/risk_limits.py`. It remains human-owned at the new location ($owner: human_board; agents never edit its values). The risk/sizing entries in `constants.py` are **deleted** — not converted to re-exports.
 
 Why this file and not a new one: it is the file the Board already ratifies, with git history, `$last_reviewed` stamps, and every governance artifact (charter, board.md, risk-ratification skill) pointing at it. The mirror problem was two homes for one number; moving the file creates a third home during transition. It already deploys (Docker `COPY . .`; `.claude` not dockerignored). Should someone dockerignore `.claude/` in the future, fail-closed boot (3.3) turns that into a loud staging-boot failure, not silent defaults.
 
@@ -105,7 +105,7 @@ A violation raises `RiskLimitLoosenedError` naming key, ratified value, attempte
 
 ### 3.7 #986 item 4 — HyperGrowth dead tiers
 
-The tiers at 0.30/0.45 (`hyper_growth.py:373`) can never fire: `MaxDrawdownGuard` latches close-only at `max_drawdown = 0.20` first (`trading_engine.py:1052-1058`). **Recommendation: prune + re-anchor inside the cap**, not prune-only. Concretely: `drawdown_thresholds: [0.10, 0.15]`, `risk_reduction_factors: [0.8, 0.5]`. Justification: prune-only (`[0.15] → 0.8`) preserves the "one 0.8 nudge then a cliff" shape the audit criticized; re-anchoring restores a genuinely graduated ramp in which every configured tier is reachable, with de-risking arriving *earlier* (a tightening — no ratification blocker, but a behavior change requiring a decision-record and a preregistered backtest comparison per the experiment-preregister protocol before merge; prune-only is the pre-committed fallback if the tightened ramp measurably degrades the strategy). The *class* fix is the loader/engine invariant from 3.2 applied to strategy overrides too: any strategy dynamic-risk threshold `>= portfolio.max_drawdown_pct` fails validation at boot/config-merge (`src/engines/shared/risk_configuration.py:45-77` is the merge seam). Dead tiers become unrepresentable, not just removed.
+The tiers at 0.30/0.45 (`hyper_growth.py:373`) can never fire: `MaxDrawdownGuard` latches close-only at `max_drawdown = 0.20` first (`trading_engine.py:1052-1058`). **Board ruling [D-2026-07-14-04]: PRUNE-ONLY** (the re-anchor recommendation below was considered and rejected; kept for the record, available as a future separate proposal). Concretely: `drawdown_thresholds: [0.10, 0.15]`, `risk_reduction_factors: [0.8, 0.5]`. Justification: prune-only (`[0.15] → 0.8`) preserves the "one 0.8 nudge then a cliff" shape the audit criticized; re-anchoring restores a genuinely graduated ramp in which every configured tier is reachable, with de-risking arriving *earlier* (a tightening — no ratification blocker, but a behavior change requiring a decision-record and a preregistered backtest comparison per the experiment-preregister protocol before merge; prune-only is the pre-committed fallback if the tightened ramp measurably degrades the strategy). The *class* fix is the loader/engine invariant from 3.2 applied to strategy overrides too: any strategy dynamic-risk threshold `>= portfolio.max_drawdown_pct` fails validation at boot/config-merge (`src/engines/shared/risk_configuration.py:45-77` is the merge seam). Dead tiers become unrepresentable, not just removed.
 
 ### 3.8 #986 item 5 — correlated risk vs exposure
 
