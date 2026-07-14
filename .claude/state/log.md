@@ -790,3 +790,15 @@ Scenarios checked: F1/F2/F3 2023-2025H1 folds (long-only maxDD up to 20.31%, F3)
 Timing: ratify now, staging-paper first, do NOT gate on #1016 (not in prod; moot post-ship).
 PM note: reviewer's "could not verify live guard peak" is answered by the [D-2026-07-12-04] prod boot checks — guard holds SESSION peak $84.42 (by design, post-phantom-era), not the $100 all-time baseline; #847 tracks durable anchoring. C7 stands: #986/#847 are higher-priority risk work than this proposal.
 Full review: docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md. Decision: board_required — awaiting Alex on GH #1020.
+
+## [D-2026-07-14-01] 2026-07-14 ~09:30 · decision · Alex (Board) via PM session
+Proposal 2026-07-12-01 (HyperGrowth/ETHUSDT long-only) APPROVED by Alex, in-session, per the PM analysis on GH #1020: conditions C1-C5 as written by risk-officer, C6 (shadow "would-have-entered-short" logging) UPGRADED from recommended to HARD, sequenced alongside the #986 risk-ratification work. Human approval source: PM chat session 2026-07-14 ("I approve your recommendations").
+Rationale: ratifies reality (live is de-facto long-only), restores backtest-live parity, risk-reducing at the margin, cleanly reversible; evidence adequate for a reversible config change (shorts lost standalone in 3/3 folds; 1/3 fold dissent noted). Not a returns unlock — parity/honesty/variance work.
+Next: implementation PR (C1 single config source both engines, C2 entry-only gating, C6 shadow events, C5 guard untouched) → gauntlet → staging-paper window (C3) → documented re-enable/kill criteria (C4) before prod.
+Ref: GH #1020, proposals/2026-07-12-01-hypergrowth-ethusdt-long-only.md, docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md
+
+## [D-2026-07-14-02] 2026-07-14 ~09:30 · decision · Alex (Board) via PM session
+GH #986 (risk-ratification bundle) decision authority DELEGATED to PM by Alex, in-session: "make solid rational, evidence based decisions for 986". PM boundary preserved: any edit to charter.md / risk-limits.json is still packaged as a diff/PR for Alex's own hand (layer-1 hard rule unchanged).
+Alex's architectural directive, verbatim intent: backtest-live parity is foremost; risk/trading variables (limits etc.) must be defined in ONE place and read from there by ALL consumers (live engine, backtest engine, agents) — eliminate the risk-limits.json vs constants.py divergence class entirely, not patch instances of it.
+Plan: (a) architecture design for single-source risk config (loader, schema, env-override policy [tighten-only], boot fail-closed validation, CI guard) — covers #986 items 2/3/5 by construction and the #1021 drift dimension; (b) staging circuit-breaker dry-run evidence pull → evidence-based arming decision for prod (#986 item 1), dry-run first; (c) #986 item 4 (dead throttle tiers) folded into the redesign.
+Ref: GH #986, GH #1021, GH #835 (startCommand override incident — motivates tighten-only env policy)
