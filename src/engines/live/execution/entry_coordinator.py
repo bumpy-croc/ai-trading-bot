@@ -33,11 +33,13 @@ from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffe
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
 from src.engines.live.execution.entry_pause import EntryPauseGate
+from src.engines.live.execution.short_suppression_monitor import ShortSuppressionMonitor
 from src.engines.live.system_halt import SystemHaltState
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
 from src.strategies.components import Strategy as ComponentStrategy
+from src.strategies.components.ml_signal_generator import SHORT_ENTRY_SUPPRESSED_KEY
 from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
 
 if TYPE_CHECKING:
@@ -164,10 +166,56 @@ class LiveEntryCoordinator:
         # Entry-pause gate (FEATURE_ENTRY_PAUSE + manual system halt) for new
         # entries; scale-ins are gated by the exit handler's own instance.
         self._entry_pause = EntryPauseGate(halt_state=system_halt)
+        # Shadow observability for long-only deployments (#1020 C6): records
+        # would-have-entered-short events when allow_shorts=False suppressed
+        # a sized short at signal generation. Live-path only by construction.
+        self._short_suppression_monitor = ShortSuppressionMonitor()
 
     def _entry_paused(self, context: str) -> bool:
         """True when a pause source suppresses new entries (rate-limit logged)."""
         return self._entry_pause.paused(context)
+
+    def _record_short_suppression_shadow(
+        self, runtime_decision: Any, symbol: str, current_price: float
+    ) -> None:
+        """Record a would-have-entered-short event for a suppressed SELL (#1020 C6).
+
+        Emits only when the counterfactual is real: the signal carries the
+        suppression marker, the strategy sized a position, and the entry
+        gates a short would have faced (no open position on the symbol,
+        concurrency capacity available) all pass. Fault-isolated — this can
+        never affect the entry decision, which was already made upstream.
+        """
+        state = self._state
+        try:
+            signal = getattr(runtime_decision, "signal", None)
+            signal_metadata = getattr(signal, "metadata", None) or {}
+            if not signal_metadata.get(SHORT_ENTRY_SUPPRESSED_KEY):
+                return
+            position_size = float(getattr(runtime_decision, "position_size", 0.0) or 0.0)
+            if position_size <= 0:
+                return
+            # Mirror execute_entry_locked's own gates so the shadow count
+            # matches what the execution path would actually have attempted.
+            if state.live_position_tracker.has_position_for_symbol(symbol):
+                return
+            max_concurrent = (
+                state.risk_manager.get_max_concurrent_positions() if state.risk_manager else 1
+            )
+            if state.live_position_tracker.position_count >= max_concurrent:
+                return
+            self._short_suppression_monitor.record_suppression(
+                symbol,
+                db_manager=state.db_manager,
+                session_id=state.trading_session_id,
+                price=current_price,
+                position_size_notional=position_size,
+                signal_strength=float(getattr(signal, "strength", 0.0) or 0.0),
+                signal_confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
+                signal_metadata=signal_metadata,
+            )
+        except Exception as e:
+            logger.warning("Short-suppression shadow event failed for %s: %s", symbol, e)
 
     def check_entry_conditions(
         self,
@@ -243,6 +291,13 @@ class LiveEntryCoordinator:
                 take_profit = entry_signal_result.take_profit
                 runtime_strength = entry_signal_result.signal_strength
                 runtime_confidence = entry_signal_result.signal_confidence
+            else:
+                # Long-only shadow observability (#1020 C6): a SELL the
+                # strategy sized but config suppressed becomes a DB-durable
+                # would-have-entered-short event. Never affects the decision.
+                self._record_short_suppression_shadow(
+                    runtime_decision, symbol, float(current_price)
+                )
         elif isinstance(state.strategy, ComponentStrategy):
             # Component-based strategy: use process_candle() for decision
             # Note: runtime_decision should already be populated if this is a component strategy
