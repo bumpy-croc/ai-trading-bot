@@ -525,6 +525,132 @@ class TestHandleBacktest:
             # File saving is tested in integration tests
 
 
+class TestStrategyMaxFractionSeeding:
+    """RiskParameters seeding from strategy `max_fraction` overrides.
+
+    The seeding now goes through the shared helper
+    (`src.engines.shared.risk_configuration.resolve_strategy_max_position_size`)
+    also used by ExperimentRunner (GH #1021) — the CLI behavior itself must be
+    identical to the original inline logic."""
+
+    _LEAVE_DEFAULT_MOCK = object()
+
+    @pytest.fixture
+    def default_args(self):
+        """Default backtest args on the provider-free --mock-data path."""
+        return argparse.Namespace(
+            strategy="ml_basic",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            days=30,
+            start=None,
+            end=None,
+            initial_balance=10000,
+            risk_per_trade=0.01,
+            max_risk_per_trade=0.02,
+            max_drawdown=0.5,
+            max_position_size=None,
+            disable_engine_sl=False,
+            use_sentiment=False,
+            no_cache=False,
+            cache_ttl=24,
+            log_to_db=False,
+            provider="binance",
+            mock_data=True,
+        )
+
+    @pytest.fixture
+    def mock_backtester(self):
+        mock = Mock()
+        mock.run.return_value = {
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "annualized_return": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe_ratio": 0.0,
+            "final_balance": 10000.0,
+            "hold_return": 0.0,
+            "trading_vs_hold_difference": 0.0,
+            "yearly_returns": {},
+        }
+        return mock
+
+    def _run_handle(self, args, mock_backtester, strategy_overrides=_LEAVE_DEFAULT_MOCK):
+        """Run _handle and return (exit_code, Backtester constructor kwargs)."""
+        with (
+            patch(
+                "src.engines.backtest.engine.Backtester", return_value=mock_backtester
+            ) as mock_backtester_class,
+            patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
+            patch("cli.commands.backtest.configure_logging"),
+            patch("cli.commands.backtest.SymbolFactory.to_exchange_symbol", return_value="BTCUSDT"),
+            patch("builtins.open", create=True),
+            patch("cli.commands.backtest.PROJECT_ROOT", Path("/tmp/test")),
+        ):
+            mock_strategy = Mock(name="ml_basic")
+            mock_strategy.get_trading_pair.return_value = "BTCUSDT"
+            if strategy_overrides is not self._LEAVE_DEFAULT_MOCK:
+                mock_strategy.get_risk_overrides.return_value = strategy_overrides
+            mock_load_strategy.return_value = mock_strategy
+
+            exit_code = _handle(args)
+
+        call_kwargs = (
+            mock_backtester_class.call_args.kwargs if mock_backtester_class.call_args else None
+        )
+        return exit_code, call_kwargs
+
+    def test_strategy_max_fraction_seeds_risk_parameters(self, default_args, mock_backtester):
+        exit_code, kwargs = self._run_handle(
+            default_args, mock_backtester, strategy_overrides={"max_fraction": 0.25}
+        )
+
+        assert exit_code == 0
+        risk_params = kwargs["risk_parameters"]
+        assert risk_params.max_position_size == 0.25
+        # The other CLI risk args flow through unchanged.
+        assert risk_params.base_risk_per_trade == 0.01
+        assert risk_params.max_risk_per_trade == 0.02
+        assert risk_params.max_drawdown == 0.5
+
+    def test_explicit_cli_flag_wins_over_strategy_override(self, default_args, mock_backtester):
+        default_args.max_position_size = 0.3
+
+        exit_code, kwargs = self._run_handle(
+            default_args, mock_backtester, strategy_overrides={"max_fraction": 0.25}
+        )
+
+        assert exit_code == 0
+        assert kwargs["risk_parameters"].max_position_size == 0.3
+
+    def test_invalid_strategy_override_value_is_ignored(self, default_args, mock_backtester):
+        from src.risk.risk_manager import RiskParameters
+
+        exit_code, kwargs = self._run_handle(
+            default_args, mock_backtester, strategy_overrides={"max_fraction": 1.5}
+        )
+
+        assert exit_code == 0
+        assert kwargs["risk_parameters"].max_position_size == (RiskParameters().max_position_size)
+
+    def test_non_dict_strategy_overrides_are_ignored(self, default_args, mock_backtester):
+        from src.risk.risk_manager import RiskParameters
+
+        # Mock default: get_risk_overrides() returns a Mock (non-dict).
+        exit_code, kwargs = self._run_handle(default_args, mock_backtester)
+
+        assert exit_code == 0
+        assert kwargs["risk_parameters"].max_position_size == (RiskParameters().max_position_size)
+
+    def test_out_of_range_explicit_flag_returns_error(self, default_args, mock_backtester):
+        default_args.max_position_size = 1.5
+
+        exit_code, _ = self._run_handle(default_args, mock_backtester)
+
+        assert exit_code == 1
+
+
 def _make_pin_registry_bundle(
     registry: Path, symbol: str, model_type: str, version: str, created_at: str
 ) -> Path:

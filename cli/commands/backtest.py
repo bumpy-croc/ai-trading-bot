@@ -253,6 +253,7 @@ def _handle(ns: argparse.Namespace) -> int:
     try:
         from src.data_providers.feargreed_provider import FearGreedProvider
         from src.engines.backtest.engine import Backtester
+        from src.engines.shared.risk_configuration import resolve_strategy_max_position_size
         from src.risk.risk_manager import RiskParameters
 
         configure_logging()
@@ -322,14 +323,13 @@ def _handle(ns: argparse.Namespace) -> int:
                     f"--max-position-size must be in (0, 1], got {ns.max_position_size}"
                 )
             risk_params_kwargs["max_position_size"] = ns.max_position_size
-        elif hasattr(strategy, "get_risk_overrides"):
+        else:
             # Honor strategy-level max_fraction (e.g., trend-following uses 95%
-            # allocation instead of the default 10% cap)
-            overrides = strategy.get_risk_overrides()
-            if isinstance(overrides, dict) and "max_fraction" in overrides:
-                max_frac = overrides["max_fraction"]
-                if isinstance(max_frac, int | float) and 0 < max_frac <= 1:
-                    risk_params_kwargs["max_position_size"] = max_frac
+            # allocation instead of the default 10% cap) via the seam shared
+            # with ExperimentRunner, so CLI and harness sizing cannot drift.
+            strategy_max_position = resolve_strategy_max_position_size(strategy)
+            if strategy_max_position is not None:
+                risk_params_kwargs["max_position_size"] = strategy_max_position
         risk_params = RiskParameters(**risk_params_kwargs)
 
         # Default to no database logging for performance, unless explicitly enabled

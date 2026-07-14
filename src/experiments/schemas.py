@@ -59,3 +59,7 @@ class ExperimentResult:
     # baseline on the headline metrics — a critical tie-breaker for
     # diagnosing dead-code overrides.
     trade_pnl_pcts: list[float] = field(default_factory=list)
+    # Resolved sizing limits the run actually enforced (from the backtester's
+    # results payload), so a clamped/defaulted max_position_size is visible
+    # in every experiment artifact instead of silently skewing a study.
+    effective_sizing: dict[str, float] = field(default_factory=dict)
