@@ -384,6 +384,35 @@ def build_partial_exit_policy(
     )
 
 
+def resolve_strategy_max_position_size(strategy: Any) -> float | None:
+    """Resolve a strategy's requested ``max_fraction`` override for seeding
+    ``RiskParameters.max_position_size``.
+
+    The single seam shared by the backtest CLI and the experiment harness so
+    the two honor strategy-declared allocation caps identically (e.g.
+    trend-following's 0.95 instead of the bare default) and can never drift
+    apart. Acceptance rules: ``get_risk_overrides()`` must return a dict with
+    a numeric ``max_fraction`` in ``(0, 1]``; anything else yields ``None``
+    (caller keeps its default). Exceptions from ``get_risk_overrides()``
+    propagate — a broken override hook must fail loud, not silently resize.
+
+    Args:
+        strategy: Strategy with an optional ``get_risk_overrides()`` method.
+
+    Returns:
+        The requested cap as a float, or None when no valid request exists.
+    """
+    if not hasattr(strategy, "get_risk_overrides"):
+        return None
+    overrides = strategy.get_risk_overrides()
+    if not isinstance(overrides, dict) or "max_fraction" not in overrides:
+        return None
+    max_fraction = overrides["max_fraction"]
+    if isinstance(max_fraction, int | float) and 0 < max_fraction <= 1:
+        return float(max_fraction)
+    return None
+
+
 def extract_risk_overrides(strategy: Any) -> dict[str, Any]:
     """Extract risk overrides from a strategy.
 
@@ -428,4 +457,5 @@ __all__ = [
     "build_early_cut_policy",
     "extract_risk_overrides",
     "get_risk_parameters",
+    "resolve_strategy_max_position_size",
 ]

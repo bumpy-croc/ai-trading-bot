@@ -285,6 +285,10 @@ class PortfolioRiskManager:
         self.positions: dict[str, dict] = {}
         self.max_concurrent_positions = max_concurrent_positions
         self._state_lock = threading.RLock()  # Protects positions and daily_risk_used
+        # (requested, cap) pairs already warned about, so a per-candle binding
+        # clamp logs once per distinct value instead of flooding. Unlocked on
+        # purpose: a racy duplicate warning is harmless.
+        self._clamp_warnings_emitted: set[tuple[float, float]] = set()
 
     def reset_daily_risk(self):
         """Reset daily risk counter to zero.
@@ -476,10 +480,13 @@ class PortfolioRiskManager:
 
         # Validate and clamp all fractions to valid ranges
         min_fraction = max(0.0, min_fraction)  # Ensure non-negative
+        requested_max_fraction = max_fraction
         max_fraction = max(
             0.0, min(max_fraction, self.params.max_position_size)
         )  # Clamp to [0, max_position_size]
         base_fraction = max(0.0, min(base_fraction, self.params.max_position_size))
+        if "max_fraction" in strategy_overrides:
+            self._warn_if_max_fraction_clamped(requested_max_fraction, max_fraction)
 
         # Ensure min_fraction <= max_fraction
         if min_fraction > max_fraction:
@@ -491,6 +498,29 @@ class PortfolioRiskManager:
             min_fraction, max_fraction = max_fraction, min_fraction
 
         return min_fraction, max_fraction, base_fraction
+
+    def _warn_if_max_fraction_clamped(self, requested: float, clamped: float) -> None:
+        """Surface a binding max_fraction clamp so it can never silently
+        under-size a strategy (both engines flow through this seam).
+
+        Emits one WARNING per distinct (requested, cap) pair — the seam runs
+        per candle, and an unchanged clamp repeated thousands of times is
+        noise, not signal.
+        """
+        cap = float(self.params.max_position_size)
+        if requested <= cap:
+            return
+        dedup_key = (requested, cap)
+        if dedup_key in self._clamp_warnings_emitted:
+            return
+        self._clamp_warnings_emitted.add(dedup_key)
+        logging.warning(
+            "Strategy requested max_fraction %.4f above the effective cap "
+            "max_position_size %.4f; position sizing clamped to %.4f",
+            requested,
+            cap,
+            clamped,
+        )
 
     def _calculate_raw_fraction(
         self,

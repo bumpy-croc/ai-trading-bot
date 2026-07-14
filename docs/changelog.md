@@ -35,6 +35,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the 22-char enum value fits the varchar(23) column from migration 0013).
   Post-ship proof: live and parity-backtest SHORT entry counts for
   HyperGrowth/ETHUSDT must be exactly 0.
+
+- **Board-ratified risk-limits loader** (#986 step 1): new
+  `src/config/risk_limits.py` loads and strictly validates the ratified
+  limits file into frozen dataclasses (`RiskLimits` composed of
+  `PortfolioLimits`/`PositionLimits`/`StopLimits`/`OperationalLimits`/
+  `EscalationPolicy`/`KillSwitchPolicy`, one typed attribute per JSON key).
+  Validation is fail-closed (`RiskLimitsError`): pinned `$schema_version`,
+  unknown/missing keys rejected, `*_pct` keys checked as decimal fractions in
+  (0, 1], and cross-field invariants (base<=max risk, stop-loss ordering,
+  dynamic tier arrays equal-length + strictly ascending + every threshold
+  below `max_drawdown_pct`). `get_risk_limits()` is the process-cached
+  accessor; there is deliberately no env-var path override. NO consumers are
+  wired yet (that is migration step 3) — a CI schema test
+  (`tests/unit/config/test_risk_limits_schema.py`) loads the real file
+  through the real loader on every PR. Per Board ruling [D-2026-07-14-04],
+  `risk-limits.json` itself moved byte-identically from `.claude/state/` to
+  `src/config/risk-limits.json` (still human-owned, `$owner: human_board`;
+  agents never edit its values) and repo references were updated.
+- **Sizing visibility for backtests and experiments** (#986 step 2, fixes the
+  silent aspect of #1021): (1) the strategy `max_fraction` seeding logic that
+  only the backtest CLI had is now a shared helper
+  (`resolve_strategy_max_position_size` in
+  `src/engines/shared/risk_configuration.py`) used by both the CLI and
+  `ExperimentRunner` — the harness now honors strategy risk overrides exactly
+  like the CLI (CLI behavior unchanged; harness runs of strategies with
+  `max_fraction` overrides now size at the requested cap instead of being
+  silently clamped to the bare 0.10 default); (2) the shared
+  `PortfolioRiskManager` sizing seam emits a structured WARNING whenever a
+  strategy-requested `max_fraction` is clamped by `max_position_size`
+  (requested, effective cap, clamped result; deduped per distinct pair);
+  (3) backtest results and `ExperimentResult` now carry an
+  `effective_sizing` payload (resolved `max_position_size`,
+  `base_risk_per_trade`, `max_risk_per_trade`) so the sizing a run actually
+  enforced is auto-reported in every artifact.
 - **DB-durable short-guard rejection events** (#990 step 4): the live
   SHORT-side margin inventory guard now writes a `system_events` row
   (`event_type=SHORT_ENTRY_BLOCKED`, component `execution`) whenever it
