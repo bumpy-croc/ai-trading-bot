@@ -2,13 +2,14 @@
 id: 2026-07-12-01-hypergrowth-ethusdt-long-only
 from: quant-researcher
 to: pm
-status: open
+status: approved
 risk_review_required: true
 risk_verdict: approve-with-conditions  # 2026-07-12 risk-officer, 7 conditions (C1-C5 hard); see docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md
 code_review_required: true
 board_required: true       # any change affecting live capital / strategy activation needs human approval per charter.md autonomy envelope
 created: 2026-07-12T18:45:00Z
-updated: 2026-07-12T20:10:00Z
+updated: 2026-07-14T09:30:00Z
+board_approval: 2026-07-14 Alex, in-session (PM chat) — C1-C5 hard as written, C6 upgraded to hard; see log.md [D-2026-07-14-01]
 ---
 
 ## Ask

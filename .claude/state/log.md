@@ -740,6 +740,34 @@ Timing: ratify now, staging-paper first, do NOT gate on #1016 (not in prod; moot
 PM note: reviewer's "could not verify live guard peak" is answered by the [D-2026-07-12-04] prod boot checks — guard holds SESSION peak $84.42 (by design, post-phantom-era), not the $100 all-time baseline; #847 tracks durable anchoring. C7 stands: #986/#847 are higher-priority risk work than this proposal.
 Full review: docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md. Decision: board_required — awaiting Alex on GH #1020.
 
+## [D-2026-07-14-01] 2026-07-14 ~09:30 · decision · Alex (Board) via PM session
+Proposal 2026-07-12-01 (HyperGrowth/ETHUSDT long-only) APPROVED by Alex, in-session, per the PM analysis on GH #1020: conditions C1-C5 as written by risk-officer, C6 (shadow "would-have-entered-short" logging) UPGRADED from recommended to HARD, sequenced alongside the #986 risk-ratification work. Human approval source: PM chat session 2026-07-14 ("I approve your recommendations").
+Rationale: ratifies reality (live is de-facto long-only), restores backtest-live parity, risk-reducing at the margin, cleanly reversible; evidence adequate for a reversible config change (shorts lost standalone in 3/3 folds; 1/3 fold dissent noted). Not a returns unlock — parity/honesty/variance work.
+Next: implementation PR (C1 single config source both engines, C2 entry-only gating, C6 shadow events, C5 guard untouched) → gauntlet → staging-paper window (C3) → documented re-enable/kill criteria (C4) before prod.
+Ref: GH #1020, proposals/2026-07-12-01-hypergrowth-ethusdt-long-only.md, docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md
+
+## [D-2026-07-14-02] 2026-07-14 ~09:30 · decision · Alex (Board) via PM session
+GH #986 (risk-ratification bundle) decision authority DELEGATED to PM by Alex, in-session: "make solid rational, evidence based decisions for 986". PM boundary preserved: any edit to charter.md / risk-limits.json is still packaged as a diff/PR for Alex's own hand (layer-1 hard rule unchanged).
+Alex's architectural directive, verbatim intent: backtest-live parity is foremost; risk/trading variables (limits etc.) must be defined in ONE place and read from there by ALL consumers (live engine, backtest engine, agents) — eliminate the risk-limits.json vs constants.py divergence class entirely, not patch instances of it.
+Plan: (a) architecture design for single-source risk config (loader, schema, env-override policy [tighten-only], boot fail-closed validation, CI guard) — covers #986 items 2/3/5 by construction and the #1021 drift dimension; (b) staging circuit-breaker dry-run evidence pull → evidence-based arming decision for prod (#986 item 1), dry-run first; (c) #986 item 4 (dead throttle tiers) folded into the redesign.
+Ref: GH #986, GH #1021, GH #835 (startCommand override incident — motivates tighten-only env policy)
+
+## [D-2026-07-14-03] 2026-07-14 ~10:15 · decision · daemon(PM)
+Circuit-breaker arming (GH #986 item 1, authority [D-2026-07-14-02]): HOLD — do NOT arm prod (dry_run or enforce) yet. Overrides the PM's stated intent (arm dry_run now) on live-ops evidence:
+(a) AccountCircuitBreaker evaluates CASH balance, blind to unrealized P&L on open positions — with HyperGrowth's low turnover (SHORT #22 open 12 days; live balance $84.40 flat while equity $83.75 and drifting) the breaker structurally cannot see the exact loss it exists to halt;
+(b) the 15% drawdown halt's peak has no restart-safe seeding — ~13 prod restarts in 30 days each silently zeroed its memory (the #845/#847 peak-reset class again).
+Rubric: ΔP=5 (arming a blind breaker = false confidence on the veto axis), ΔR=0, C=4 (artifacts: GH #986 evidence comment 2026-07-14; balance-vs-equity trace event_logger.py/position_tracker.py/account_sync.py; zero CIRCUIT_BREAKER_DRY_RUN rows staging since 07-06 with closest approach 0.50%/0.64% vs 2.5%/15%), E=2 → fix-first path adopted.
+Decision path (pre-committed): 1) fix equity-based evaluation + restart-safe peak seeding (account_history pattern per #1001) with full gauntlet; 2) also verify MaxDrawdownGuard for the same equity blindness; 3) staging dry_run ≥14 clean days → prod dry_run ≥7 clean days → enforce, criteria numeric in the #986 comment. Enforcement path itself verified sound (in-line same-iteration gate, machinery present in prod build bf7f45cb).
+Ref: GH #986 (evidence comment), GH #847, GH #845, main@bf7f45cb
+
+## [D-2026-07-14-04] 2026-07-14 ~10:45 · decision · Alex (Board) via PM session
+Board rulings on the single-source risk-config design (docs/architecture/proposals/2026-07-14_single-source-risk-config.md), Alex in-session:
+1. LOCATION: risk-limits.json MOVES to src/config/risk-limits.json (overrides design §3.1's keep-in-place recommendation). File stays human-owned ($owner: human_board, agents never edit values); move is content-byte-identical, executed by the loader PR per Alex's explicit direction; $source_of_truth_note text change still reserved for the ratification sitting. Charter.md references to the old path are layer-1 → sitting.
+2. #986 item 4 (HyperGrowth dead tiers): PRUNE-ONLY (overrides design §3.7's prune+re-anchor recommendation). Tiers [0.30, 0.45] deleted, [0.15]→0.8 unchanged, zero behavior change. The §3.7 unrepresentability invariant (strategy threshold >= max_drawdown_pct fails validation) still ships. Re-anchor idea available as a future separate proposal if ever wanted.
+3. #986 item 5 (correlated risk vs exposure): CONFIRMED — one key, ratified 0.15 adopted for both mechanisms (heuristic cap 0.10→0.15 delta accepted; 0.10 was never ratified).
+4. #986 item 3 (0.20/0.25): Alex asked for provenance + consolidation assessment before ruling — PM findings in the same session message; NEW layer-1 divergence found during the trace: charter.md:24 says max single-position exposure is 10% "(matches max_position_size_pct)" but risk-limits.json (last reviewed 2026-07-05 by Alex) says 0.20 and prod pins 0.20 — charter prose is stale; queued for the sitting.
+Ref: GH #986, PR #1028 (design), this session
+
 ---
 
 ## [D-2026-07-13-01] 2026-07-13 · note · weekly-retro

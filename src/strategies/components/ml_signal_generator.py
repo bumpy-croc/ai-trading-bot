@@ -29,6 +29,12 @@ from src.trading.symbols.factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 
+# Signal-metadata key marking a SELL whose short ENTRY opt-in was withheld by
+# a long-only deployment (``allow_shorts=False``, GH #1020). The live engine's
+# shadow observability consumes it to record "would-have-entered-short"
+# events; never present when shorts are allowed.
+SHORT_ENTRY_SUPPRESSED_KEY = "short_entry_suppressed"
+
 
 def _require_finite(name: str, value: Any) -> float:
     """Coerce ``value`` to ``float`` and reject NaN/Inf.
@@ -625,6 +631,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         short_entry_threshold: float | None = None,
         confidence_multiplier: float | None = None,
         model_version: str | None = None,
+        allow_shorts: bool = True,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -646,10 +653,21 @@ class MLBasicSignalGenerator(SignalGenerator):
                 not exist. Never set on the live trading path, which must
                 always follow ``latest``; only an explicit caller argument
                 can pin (no ambient env/config override).
+            allow_shorts: When False, SELL signals never carry the
+                ``enter_short`` opt-in, so engines never open a short —
+                ENTRY-only gating (GH #1020). The SELL direction itself is
+                preserved so signal-reversal exits of longs, stop-losses,
+                and BUY-to-cover of existing shorts are all unaffected.
+                Suppressed signals are marked with
+                :data:`SHORT_ENTRY_SUPPRESSED_KEY` for live shadow
+                observability. Deployment values resolve from
+                ``src.strategies.deployment_config`` via the strategy
+                factories.
         """
         super().__init__(name)
 
         self.sequence_length = sequence_length
+        self.allow_shorts = bool(allow_shorts)
 
         # Instance-level thresholds (experiments override these without mutating
         # class state shared across strategies). Validate finite to block
@@ -1040,9 +1058,16 @@ class MLBasicSignalGenerator(SignalGenerator):
             **self._symbol_guard_stamps(),
         }
 
-        # Enable short entries for SELL signals
+        # Enable short entries for SELL signals. Long-only deployments
+        # (allow_shorts=False, GH #1020) withhold the opt-in instead of
+        # flipping the direction: engines only open shorts on an explicit
+        # enter_short=True, while the SELL direction stays visible to exit
+        # logic (long reversal exits are never gated).
         if direction == SignalDirection.SELL:
-            metadata["enter_short"] = True
+            if self.allow_shorts:
+                metadata["enter_short"] = True
+            else:
+                metadata[SHORT_ENTRY_SUPPRESSED_KEY] = True
 
         return Signal(
             direction=direction, strength=strength, confidence=confidence, metadata=metadata
@@ -1261,6 +1286,7 @@ class MLBasicSignalGenerator(SignalGenerator):
                 "confidence_multiplier": self.confidence_multiplier,
                 "model_version": self.model_version,
                 "pinned_model_key": self._pinned_bundle_key,
+                "allow_shorts": self.allow_shorts,
             }
         )
         return params

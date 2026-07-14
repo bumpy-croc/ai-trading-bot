@@ -28,6 +28,17 @@ fed price-only inputs, which the generator converts to predicted_return=-1.0
 and emits as a constant SELL sentinel. See
 .claude/reports/hyper_growth_experiment_sweep_2026-04-17.md.
 
+Short-entry policy (GH #1020): the ETHUSDT deployment is LONG-ONLY by
+design — board-approved proposal 2026-07-12-01 codified the accidental short
+suppression found in GH #990 (short trades' standalone P&L negative in every
+counterfactual fold tested) as explicit configuration. The value lives in
+ONE place, ``src.strategies.deployment_config.LONG_ONLY_DEPLOYMENTS``, and is
+resolved here at construction so live and backtest runs of the same symbol
+always agree (risk-review condition C1). The gate is ENTRY-only: SELL
+signals lose their ``enter_short`` opt-in, while exits, stop-losses, and
+BUY-to-cover of existing shorts are never affected (condition C2). Pass
+``allow_shorts=True`` explicitly for counterfactual/research runs.
+
 Reference: docs/research/500_percent_annual_returns.md
 """
 
@@ -48,6 +59,7 @@ from src.strategies.components.leverage_manager import LeverageManager
 from src.strategies.components.position_sizer import LeveragedPositionSizer
 from src.strategies.components.regime_context import TrendLabel, VolLabel
 from src.strategies.components.risk_manager import RiskManager
+from src.strategies.deployment_config import resolve_allow_shorts
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +203,7 @@ def create_hyper_growth_strategy(
     early_cut_mfe_threshold_pct: float | None = None,
     early_cut_evaluation_window_hours: float | None = None,
     model_version: str | None = None,
+    allow_shorts: bool | None = None,
 ) -> Strategy:
     """Create hyper-growth strategy targeting high annual returns.
 
@@ -242,6 +255,14 @@ def create_hyper_growth_strategy(
             instead of resolving ``latest`` — the backtest harness's
             point-in-time pin (GH #988). Only valid with
             ``signal_source="ml"`` (momentum runs no model).
+        allow_shorts: Whether SELL signals may ENTER shorts. None (default)
+            resolves the deployment value from
+            ``src.strategies.deployment_config`` — the single config source
+            both engines read (GH #1020): False for ETHUSDT (long-only by
+            board decision), True for every other symbol. An explicit
+            True/False overrides the deployment default (research/
+            counterfactual runs). Entry-only: exits, stop-losses, and
+            BUY-to-cover of existing shorts are never gated.
 
     Returns:
         Configured Strategy instance.
@@ -271,9 +292,17 @@ def create_hyper_growth_strategy(
         "aggressive sizing amplifies drawdowns. Consider ml_adaptive with the "
         "exposure governor + vol-target sizing instead."
     )
+    # Single-source deployment resolution (GH #1020): None means "look up the
+    # (strategy, symbol) deployment value"; an explicit bool wins.
+    resolved_allow_shorts = (
+        resolve_allow_shorts("hyper_growth", symbol) if allow_shorts is None else bool(allow_shorts)
+    )
+
     # Signal generator (declared up-front: branches assign different subtypes)
     signal_generator: SignalGenerator
     if signal_source == "momentum":
+        # MomentumSignalGenerator never emits the enter_short opt-in, so the
+        # momentum branch is structurally long-only regardless of the flag.
         signal_generator = MomentumSignalGenerator(
             name=f"{name}_signals",
             momentum_entry_threshold=0.001,  # 0.1% — very sensitive
@@ -289,7 +318,11 @@ def create_hyper_growth_strategy(
         # silently returns 0.0 on every bar — which the generator converts to
         # predicted_return = -1.0 (a constant SELL sentinel, not a prediction).
         signal_generator = MLBasicSignalGenerator(
-            name=f"{name}_signals", model_type="basic", symbol=symbol, model_version=model_version
+            name=f"{name}_signals",
+            model_type="basic",
+            symbol=symbol,
+            model_version=model_version,
+            allow_shorts=resolved_allow_shorts,
         )
 
     risk_manager = FlatRiskManager(
