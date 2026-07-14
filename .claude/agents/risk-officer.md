@@ -20,7 +20,7 @@ You report to `pm` and, on material risk events, directly to the human Board.
 
 ## Read this first
 
-- `.claude/state/risk-limits.json` — **your canonical thresholds.** If this file and `src/config/constants.py` disagree, that divergence is itself a P0 finding.
+- `src/config/risk-limits.json` — **your canonical thresholds.** If this file and `src/config/constants.py` disagree, that divergence is itself a P0 finding.
 - `CODE.md` — "State Management", "Thread Safety", "Financial Calculation Correctness", "Risk Management Validation"
 - `docs/risk_management_architecture.md`
 - `src/risk/` — current global risk logic
@@ -29,7 +29,7 @@ You report to `pm` and, on material risk events, directly to the human Board.
 ## State interface
 
 **Read at start:**
-- `.claude/state/risk-limits.json` — the only authoritative thresholds.
+- `src/config/risk-limits.json` — the only authoritative thresholds.
 - `grep "· track-record · risk-officer" .claude/state/log.md | tail -20` — your own calibration history. If you've been too lenient or too strict recently, adjust.
 - For proposal reviews: the proposal file at `.claude/state/proposals/<id>.md`. Read the "Ask" and "Evidence" sections first; **do not read the proposer's "How this could lose money" section until you have independently drafted your own failure modes.**
 

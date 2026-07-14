@@ -13,10 +13,12 @@ Design notes (money-path constraints):
   ``barrier_touch`` pattern from #948) and a live restart cannot corrupt the
   running maximum.
 - **Raw price excursion**: MFE here is the raw price move from entry
-  (``(high - entry) / entry`` for longs), NOT the sized/fee-adjusted values
-  in ``MFEMAETracker`` / the DB ``trades.mfe`` column, whose writer path is
-  known-corrupted (#966). This module deliberately does not touch or reuse
-  that path.
+  (``(high - entry) / entry`` for longs), recomputed from candles rather
+  than read from ``MFEMAETracker`` / the DB ``trades.mfe`` column — the
+  stateless recompute is what gives both engines bit-identical decisions
+  and restart safety. ``MFEMAETracker`` now uses the same raw-excursion
+  units, but its running maximum is in-memory (sampled, reset on restart),
+  so it is still not a valid input for exit decisions.
 - **Entry-bar excluded**: the entry bar's extremes may predate the fill, so
   only bars strictly after ``entry_time`` count — the same convention as
   ``is_same_bar_entry`` exit protection.

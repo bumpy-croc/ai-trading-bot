@@ -11,7 +11,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **HyperGrowth/ETHUSDT is long-only by explicit configuration** (#1020,
+  board-approved proposal 2026-07-12-01): `MLBasicSignalGenerator` gains an
+  `allow_shorts` flag (default `True`) that, when `False`, withholds the
+  `enter_short` opt-in from SELL signals so neither engine ever OPENS a
+  short — ENTRY-only gating: the SELL direction is preserved, so
+  signal-reversal exits of longs, stop-losses, and BUY-to-cover of existing
+  shorts are never affected (risk-review condition C2). The deployment value
+  lives in exactly one place, `src/strategies/deployment_config.py`
+  (`LONG_ONLY_DEPLOYMENTS`), resolved by `create_hyper_growth_strategy` at
+  construction, so live runs and backtests of the same symbol always agree
+  with zero extra flags (condition C1; backtest-live parity). Pass
+  `allow_shorts=True` explicitly for counterfactual/research runs. The
+  execution engine's independent SHORT-inventory margin guard is untouched
+  (condition C5). Shadow observability (condition C6): in the LIVE path
+  only, a short the strategy sized but config suppressed writes a
+  `system_events` row (`event_type=SHORT_ENTRY_SUPPRESSED`,
+  `error_code=WOULD_ENTER_SHORT`, component `entry_coordinator`) with signal
+  metadata, bounded by the #1016 episode-dedup pattern (first + every 10th +
+  an episode-end summary carrying the TRUE total after a 2h inactivity gap)
+  and fully fault-isolated; backtests write no events. No migration needed
+  (the 22-char enum value fits the varchar(23) column from migration 0013).
+  Post-ship proof: live and parity-backtest SHORT entry counts for
+  HyperGrowth/ETHUSDT must be exactly 0.
+
+- **Board-ratified risk-limits loader** (#986 step 1): new
+  `src/config/risk_limits.py` loads and strictly validates the ratified
+  limits file into frozen dataclasses (`RiskLimits` composed of
+  `PortfolioLimits`/`PositionLimits`/`StopLimits`/`OperationalLimits`/
+  `EscalationPolicy`/`KillSwitchPolicy`, one typed attribute per JSON key).
+  Validation is fail-closed (`RiskLimitsError`): pinned `$schema_version`,
+  unknown/missing keys rejected, `*_pct` keys checked as decimal fractions in
+  (0, 1], and cross-field invariants (base<=max risk, stop-loss ordering,
+  dynamic tier arrays equal-length + strictly ascending + every threshold
+  below `max_drawdown_pct`). `get_risk_limits()` is the process-cached
+  accessor; there is deliberately no env-var path override. NO consumers are
+  wired yet (that is migration step 3) — a CI schema test
+  (`tests/unit/config/test_risk_limits_schema.py`) loads the real file
+  through the real loader on every PR. Per Board ruling [D-2026-07-14-04],
+  `risk-limits.json` itself moved byte-identically from `.claude/state/` to
+  `src/config/risk-limits.json` (still human-owned, `$owner: human_board`;
+  agents never edit its values) and repo references were updated.
+- **Sizing visibility for backtests and experiments** (#986 step 2, fixes the
+  silent aspect of #1021): (1) the strategy `max_fraction` seeding logic that
+  only the backtest CLI had is now a shared helper
+  (`resolve_strategy_max_position_size` in
+  `src/engines/shared/risk_configuration.py`) used by both the CLI and
+  `ExperimentRunner` — the harness now honors strategy risk overrides exactly
+  like the CLI (CLI behavior unchanged; harness runs of strategies with
+  `max_fraction` overrides now size at the requested cap instead of being
+  silently clamped to the bare 0.10 default); (2) the shared
+  `PortfolioRiskManager` sizing seam emits a structured WARNING whenever a
+  strategy-requested `max_fraction` is clamped by `max_position_size`
+  (requested, effective cap, clamped result; deduped per distinct pair);
+  (3) backtest results and `ExperimentResult` now carry an
+  `effective_sizing` payload (resolved `max_position_size`,
+  `base_risk_per_trade`, `max_risk_per_trade`) so the sizing a run actually
+  enforced is auto-reported in every artifact.
+- **DB-durable short-guard rejection events** (#990 step 4): the live
+  SHORT-side margin inventory guard now writes a `system_events` row
+  (`event_type=SHORT_ENTRY_BLOCKED`, component `execution`) whenever it
+  rejects a short entry — carrying symbol/side, the observed free base-asset
+  balance, the $1 dust threshold, the rejection reason
+  (`free_inventory_above_threshold` vs the fail-closed
+  `balance_lookup_error`/`balance_unavailable` branches), signal
+  strength/confidence, and an open-position snapshot. Rows are bounded per
+  rejection episode (first + every 10th + an episode-end summary carrying the
+  TRUE rejection total, written on guard pass or after a 2h inactivity gap),
+  so the confirmed 30-cycle/45-min episode class writes ~4 rows, not 30.
+  Purely additive observability: the guard's accept/reject behavior,
+  threshold, and ordering are unchanged, and event writes are fault-isolated
+  so they can never break or delay the trading decision. No migration needed
+  (the 19-char enum value fits the varchar(23) column from migration 0013).
+  Funnel query: `SELECT * FROM system_events WHERE event_type =
+  'SHORT_ENTRY_BLOCKED'` (`error_code` distinguishes rejection rows from
+  `SHORT_GUARD_EPISODE_END` summaries).
+- **Point-in-time model pinning for the backtest harness** (#988): new
+  `atb backtest` flags `--model-version` (pin an exact registry version) and
+  `--model-as-of DATE` (resolve which version was `latest` at that date from
+  bundle metadata timestamps, via `src/prediction/models/version_resolver.py`).
+  Reuses PR #950's pinning mechanism (`get_bundle_by_key` /
+  `ATB_MODEL_VERSION_OVERRIDE`); `MLBasicSignalGenerator` accepts an explicit
+  `model_version` and scores every bar with it, bypassing `latest`. Warns
+  loudly when the backtest window spans a model-promotion boundary (the
+  confound behind the 12-vs-6-trade parity gap, see
+  `docs/research/notes/2026-07-12_parity-gap-investigation.md`). Fail-closed:
+  an unhonorable pin aborts instead of silently resolving `latest`. Zero
+  behavior change when neither flag is passed; the live path cannot be pinned.
+
 ### Fixed
+- **Account circuit breakers now measure true equity and survive restarts**
+  (#986 items, per log.md [D-2026-07-14-03]; refs #845/#847/#1001 — nothing
+  armed: the `account_circuit_breakers` flag stays `off`):
+  (1) *Cash-not-equity blindness*: `AccountCircuitBreaker` was evaluated on
+  `state.current_balance`, which only moves on realized events —
+  structurally blind to an open position's unrealized loss (the exact move
+  the 2.5% daily-loss and 15% drawdown halts exist to catch) for the entire
+  holding period. Both the loop enforcer (`CircuitBreakerEnforcer.check`)
+  and the shared pre-order gate now evaluate TRUE equity =
+  `current_balance` + mark-to-market unrealized P&L of open positions (new
+  thread-safe `LivePositionTracker.total_unrealized_pnl()`). The equity
+  read is fault-isolated via one shared `BreakerEquityFeed` (used by both
+  call sites): an unavailable/non-finite/degenerate unrealized read degrades
+  explicitly to balance-only with a WARNING (logged on transition, not per
+  iteration) — never crashes the loop, never silently halts — and while
+  degraded the breaker's latch state is FROZEN: a cash reading measured
+  against equity-basis anchors may neither latch a halt (spurious
+  daily-loss latch under a winning open position) nor clear one (spurious
+  drawdown-latch clear at cash par, which would emit duplicate dry-run
+  rows on re-trip); existing latches keep reporting and halting until the
+  feed recovers. Backtest gate behavior is unchanged (no provider wired;
+  backtest evaluates entries only while flat, where equity == cash by
+  identity).
+  (2) *Restart-fragile drawdown peak*: `AccountCircuitBreaker._peak` had no
+  restart-safe seeding — every restart (~13 in the last 30 prod days)
+  silently zeroed the 15% halt's memory (the #845/#847 peak-reset class).
+  The enforcer now seeds the peak at arm time from the durable
+  `account_history` session equity max (new
+  `DatabaseManager.get_session_peak_equity`, session-scoped with the same
+  recovered-inactive-session fallback the `MaxDrawdownGuard` uses since
+  #1001) via the new `AccountCircuitBreaker.seed_peak` hook (raise-only —
+  a stale candidate can never erase observed drawdown). The daily-loss
+  baseline seed now uses the day-start snapshot's *equity* (was balance)
+  so both halts measure on the same basis. (3) *Auditable dry-run
+  evidence* (#968): `CIRCUIT_BREAKER_DRY_RUN` system_events rows and
+  trip/dry-run `risk_event` logs now carry the full measurement snapshot —
+  equity, balance, unrealized P&L, evaluation basis
+  (`equity`/`balance`/`balance_degraded`), current peak, and peak
+  provenance (`db_session_max` vs `self_anchored`) — so the staged
+  dry-run arming plan can collect valid evidence. Thresholds, flag
+  defaults, enforcement actions, and `MaxDrawdownGuard` behavior are
+  untouched.
 - **Reconciliation edge paths: offline-SL double-count, partial-exit size
   reset, silent periodic close failures** (2026-07-12 loop/state audit,
   closes #980): (1) the legacy SL-based startup fallback re-applied an
@@ -80,6 +211,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now source `LiveTradingEngine._durable_peak_balance()` — max(guard's
   durable session peak, tracker peak, current balance) — so the throttle and
   the hard cap measure drawdown from the same baseline.
+- **`trades.mfe`/`mae` written in corrupted units** (#966): `MFEMAETracker`
+  persisted sized, fee-netted values (`size × move − (fee+slippage)`) into
+  `trades.mfe`/`mae` and `positions.mfe`/`mae` while the `mfe_price`/
+  `mae_price` companions held raw extreme prices — the columns disagreed
+  with their own companions by a non-constant ~10-23x factor (varies with
+  per-trade position size; #838 units-drift family), and small favorable
+  excursions were erased entirely whenever `size × move < fee + slippage`.
+  The tracker now records raw unsized price excursion from entry (decimal
+  fraction), always derivable from the `_price` companions. Readers are
+  era-defensive: `DatabaseManager` serializers and the monitoring
+  dashboard's raw-SQL positions path re-derive pre-fix rows from the
+  companions via `DatabaseManager.excursion_or_stored()`; the dashboard now
+  renders MFE/MAE as percentages (was: fractions formatted as USD).
+  Historical prod rows left untouched — backfill/NULL is a separate
+  human-approved operation (migration note on #966). (#992)
+
+- **Inference context is scoped, not process-global** (#926, from the #923
+  review gauntlet): the live 5s inference deadline rested on an undocumented
+  one-engine-per-process invariant — `InferenceContext` was a module global
+  set by engine constructors with last-writer-wins semantics, so a
+  `Backtester` constructed inside a live process (e.g. a future in-process
+  validation gate) would silently strip the live deadline. The context is now
+  a `contextvars.ContextVar` with a composition-safe `inference_scope()`
+  context manager: `Backtester.run()` executes under a DETERMINISTIC scope
+  that restores the caller's policy on exit (constructing a Backtester no
+  longer touches the context at all), and the live trading loop pins LIVE on
+  its own thread in `_run_trading_loop` (contextvars do not cross threads).
+  Behavior is unchanged for today's single-engine processes — proven by the
+  existing suite plus a new two-engines-one-process test and a
+  DETERMINISTIC-vs-LIVE fast-path parity test.
+- **Repeated live inference timeouts now escalate instead of degrading to
+  HOLD forever** (#927, from the #923 review gauntlet): each timed-out bar
+  already degraded to HOLD with a per-bar WARNING, but
+  `PredictionEngine.health_check()` never consulted the timeout counters — a
+  permanently hung model looked healthy while the bot silently stopped
+  trading. The engine now tracks consecutive live timeouts (reset by any
+  successful inference); past a configurable threshold
+  (`PredictionConfig.inference_timeout_escalation_threshold`, default 10, env
+  `INFERENCE_TIMEOUT_ESCALATION_THRESHOLD`, 0 disables) `health_check()`
+  reports a degraded `inference` component, and the live trading loop pages
+  once per episode — CRITICAL `system_events` row
+  (`INFERENCE_TIMEOUT_ESCALATION`) + operator alert with honest `alert_sent`
+  semantics, re-armed after recovery (`INFERENCE_TIMEOUT_RECOVERED`). The
+  periodic status line now includes the timeout counters. Observability
+  only — never a trading halt: existing positions stay managed.
 - **Deterministic backtest inference; loud live timeout accounting** (#912
   side-finding): `PredictionEngine` gated every model inference behind
   `run_with_timeout(max_prediction_latency)` — a 0.1s latency-*alerting*

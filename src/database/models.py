@@ -132,6 +132,16 @@ class EventType(enum.Enum):
     # mode. Distinct from ALERT so promote/kill verdicts can count trips with a
     # single event_type filter. Requires migration 0013 (widened varchar).
     CIRCUIT_BREAKER_DRY_RUN = "CIRCUIT_BREAKER_DRY_RUN"
+    # Short entries rejected by the margin inventory guard, plus their
+    # episode-end summaries (error_code distinguishes the two). 19 chars —
+    # fits the varchar(23) column from migration 0013, no migration needed.
+    SHORT_ENTRY_BLOCKED = "SHORT_ENTRY_BLOCKED"
+    # Would-have-entered-short shadow evidence from long-only deployments
+    # (allow_shorts=False, GH #1020): the strategy sized a short but config
+    # suppressed the entry. Episode-end summaries share the type (error_code
+    # distinguishes). 22 chars — fits the varchar(23) column from migration
+    # 0013, no migration needed.
+    SHORT_ENTRY_SUPPRESSED = "SHORT_ENTRY_SUPPRESSED"
     TEST = "TEST"  # Added for verification scripts and development diagnostics
 
 
@@ -195,7 +205,10 @@ class Trade(Base):
     exchange = Column(String(50), default="binance")
     timeframe = Column(String(10))
 
-    # MFE/MAE for completed trades (percent decimals, e.g., 0.05 = +5%)
+    # MFE/MAE for completed trades: raw unsized price excursion from entry as a
+    # decimal fraction (0.05 = +5%), always consistent with mfe_price/mae_price.
+    # Prod rows written before 2026-07 hold sized, fee-netted values instead —
+    # derive from the _price companions for those (see DatabaseManager readers).
     mfe = Column(Numeric(18, 8), default=0.0)
     mae = Column(Numeric(18, 8), default=0.0)
     mfe_price = Column(Numeric(18, 8))
@@ -285,7 +298,8 @@ class Position(Base):
         Mapped[Decimal | float | None], Column(Numeric(18, 8), default=0.0)
     )
 
-    # Rolling MFE/MAE for active positions (percent decimals)
+    # Rolling MFE/MAE for active positions: raw unsized price excursion from
+    # entry as a decimal fraction, consistent with mfe_price/mae_price.
     mfe: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8), default=0.0))
     mae: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8), default=0.0))
     mfe_price: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))

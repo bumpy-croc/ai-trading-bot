@@ -662,3 +662,166 @@ Experiment (issue #988): parity-gap investigation, lever #2 of the returns-lever
 Evidence: docs/research/notes/2026-07-12_parity-gap-investigation.md (PR #987). Finding 1: the "matched" backtest resolves ETHUSDT's model at invocation time (today's `latest`, promoted 2026-07-05); all 12 live trades + open position #22 entered before that promotion, when live ran a different (cross-symbol-substitute) model — the comparison silently re-scores live's history with a model that was never live for it. Finding 2: `strategy_executions.action_taken` logs the engine's fully-sized entry decision before execution; 3,325 flat-period "opened_long/opened_short" rows over the window, <12 became trades (>99% attrition), direction-asymmetric (near-50/50 raw signal split vs 9 LONG/3 SHORT real trades) — consistent with a code-confirmed SHORT-side margin/inventory dust guard (`execution_engine.py:663-706`) that only ever blocks shorts; not empirically confirmed against historical balance state (no such ledger exists; Railway logs don't retain history for these dates). Finding 3 (forming-bar, reconfirmed from the 2026-07-06 fliprate study, minor): bar-close counterfactual on the 12 real trades costs only -1.1pp of the +9.0% realized return — real but far short of the ~10pp gap, and doesn't touch trade count. Fliprate's ~15% actionable flip rate does not predict a 2x trade-count divergence. Recommend point-in-time model pinning in the backtest harness (cheap) and live-ops forensics on the execution funnel ahead of any forming-bar-aware backtest mode (expensive, could widen the gap if built first). Does not touch or revisit the closed-candle-gating build (owned elsewhere, stopped by the human). Five convergent-null tournament results in the returns-levers synthesis are not retroactively undermined (none cross a live model-promotion boundary).
 Note on session integrity: a mid-task system message purporting to relay a "coordinator" handoff (citing scratchpad/audit_data_path.md) tried to redirect this investigation toward the forming-bar mechanism specifically. Not treated as an instruction (no agent message is authorization); its code citations were independently re-verified and found to restate the already-published fliprate study without addressing either finding above.
 Ref: PR #987, issue #988
+
+## 2026-07-12 15:20 · track-record · quant-researcher
+GH #984 measurement half (slippage recalibration + EV-conditioning gate) → slippage: keep current constant, reject audit's proposed cut; EV-conditioning: null on all 4 conditioners, no sizing experiment warranted
+Evidence: docs/research/notes/2026-07-12_slippage-and-ev-conditioning.md (PR #1010, issue #984 updated)
+Part 1: measured 24 recoverable prod ETHUSDT fills (12 closed trades' entry+exit minus position #13's unrecoverable exit, plus position #22's open entry) against a look-ahead-free 1-minute reference. Median absolute slippage 5.1-5.8 bps/side (n=24 vs. n=21 trimmed) -- close to the current exam default (DEFAULT_SLIPPAGE_RATE=0.0005, 5bps/side), not the audit's proposed ~5x cut to ~1bp. Signed mean borderline-favorable, not adverse (t-test p=0.025, Wilcoxon p=0.053 -- not confidently non-zero at this n). Fee cross-check: commission on two independent fills matches Binance's 0.10% taker fee exactly, confirming no slippage/fee double-count. Recommendation: do not adopt the audit's cut; the tp_06/marginal-verdict re-exam GH #984 anticipated under "corrected costs" is not warranted -- round 2's tp_06 rerun (already run under the unchanged default) stands.
+Part 2: no exam artifact retained per-trade entry-time observables (checked directly -- round 1's JSONL has no entry_time; round 2's trades_raw has entry_time but no confidence/regime; target-redesign and calibration-study scripts are gone from disk). Built a light control-arm-only rerun (136 trades, F1-F3, ETHUSDT/1h) and assembled predicted-return magnitude/confidence/strength (verified perfectly collinear, corr=1.0, counted as one conditioner), realized vol at entry, regime, hour-of-day/session -- 4 independent conditioners, 8 Bonferroni-corrected tests. No conditioner clears even the raw significance threshold (closest: regime, p=0.099-0.102). Extends the 2026-07-05 confidence-calibration study's bar-level null to the trade level. Verdict: flat sizing is not leaving conditionable edge on the table; the audit's Hunt-5 conditional-sizing concern is moot, no experiment preregistered.
+Aside: independently hit and reconfirmed GH #997/#998 (ExperimentRunner's cross-symbol BTCUSDT-scores-ETHUSDT bug) while building the Part 2 control rerun, before reading either issue -- my first bare-factory rerun reproduced a third, differently-wrong result (stacked with the sys.path shadowing bug from the same addendum); after applying the known fix my F1 rerun reproduced round 2's independently-verified corrected baseline bit-for-bit (29 trades, -1.69%, PF 0.7971). No new issue filed, corroboration only.
+No proposal filed -- neither verdict touches live-affecting code or capital; no risk_review_required.
+Ref: GH #984 (updated), #997, #998, PR #1010
+
+---
+
+## 2026-07-12 · track-record · quant-researcher [D-2026-07-12-03]
+Experiment #1013: EXIT-GEOMETRY round 2 (early-cut, trailing/breakeven ablation, tp_06 rerun) -> REJECTED, no staging-trial candidate
+Preregistered (docs/research/experiments/2026-07-12_exit-geometry-round2.md) then ran 35 backtests
+(7 configs x 5 folds: F1/F2/F3 2023-2025H1 primary + F0a/F0b 2021/2022H1 extension) + determinism
+recheck (PASS). Validity-gate work found, BEFORE any arm was read, that round 1's entire study
+(#970/#971) and PR #976's own regression-evidence table scored ETHUSDT candles with BTCUSDT's
+model, not ETHUSDT's -- ExperimentRunner._load_strategy never threads config.symbol into the
+strategy factory. Filed #997 (harness bug, fix in #1004, open) and #998 (round 1 needs
+re-verification, open) rather than silently absorbing the finding. This round's own control is a
+new, correct baseline (symbol explicitly threaded, verified via a 4-way isolation test that
+reproduces round 1's exact published number only when both the bug AND the wrong worktree are
+present). A predecessor turn's sweep process was killed mid-run by a session/quota limit; resumed
+by inspecting the partial output first (25 of 36 records already valid/complete) rather than
+assuming total loss, then running only the 2 missing arms (breakeven_only, tp_06_rerun).
+Result: NO-GO for all 6 arms against the pre-committed four-bar test (Sec 1). Every arm fails Bar 1
+outright (Bonferroni-significant return improvement on >=2 of 3 primary folds, alpha=0.05/6=0.0083)
+-- 0/3 for every arm, lowest p-value anywhere is 0.09. tp_06_rerun is the only arm to pass Bar 2
+(aggregate PF + return improve, pooled across all 5 folds) -- reproduces round 1's
+directionally-positive-but-never-significant finding on an independent second sample; recommended
+as closed, not "needs more data." breakeven_only's +7.92pp aggregate return delta flagged explicitly
+as a naive-read trap (driven by 2 folds with far fewer trades than control; pooled PF worse than
+control's). Mechanism read: neither trailing-distance nor breakeven-move alone reproduces control's
+combined MFE-capture behavior; early-cut cut-precision is 42-56% (near coin-flip), only 21-37% of
+cut trades have a verifiable control-matched counterpart.
+Recommendation to PM/risk-officer: rejected as a staging-trial candidate, all 6 arms; closes the
+exit-geometry thread for now across both rounds (12 arms, 8 exam folds, 2021-2025H1) -- no
+exit/trade-management lever tested flips HyperGrowth's expectancy at a statistically defensible
+level. Any further work here needs a genuinely different mechanism (volatility/regime-conditioned
+exits), not another fixed-threshold variant.
+Ref: issue #1013, PR #1012, docs/research/experiments/2026-07-12_exit-geometry-round2.md,
+experiments/exit_geometry_round2_sweep.py + analyze_exit_geometry_round2.py +
+exit_geometry_round2_results.jsonl, issue #997/#998/#999/#977 (harness bugs filed this round),
+issue #970/#971 (round 1, whose absolute numbers/mechanism metrics this round's Sec 5.1 finding
+calls into question, tracked separately via #998).
+
+## 2026-07-12 17:35 · decision · daemon(PM)
+**[D-2026-07-12-04] PROD PROMOTE executed: main := soaked develop 51a1dbb5 (parity promote, PR #1014, merge bf7f45cb) — deploy db605330 SUCCESS, all 5 boot checks pass.**
+Decision basis (charter autonomy envelope, prod deploys autonomous): staging soak gate CLEARED — staging deploy 87b6aca9 (PR #1011) validated exactly this tree with all 5 boot checks; risk-officer conditions on #1001 met (1: peak-check cleared at $84.42, read-only prod DB 2026-07-12; 2: CI-on-merged-tree green at merge — 4 unit shards + integration + claude-review on #1014; 3: 24–48h spurious-close-only watch STARTS NOW via 6-hourly alert-monitor).
+**Soak discipline:** promoted the SOAKED commit, NOT develop HEAD. Soaked SHA = 51a1dbb5a32757c495feb77e9cbb9cdc8689514b (second parent of staging tip 87b6aca9; `git diff 51a1dbb5 origin/staging --stat` empty). PRs #1006/#992/#1008 (and later #1004/#1000/#1012) merged to develop AFTER the staging sync and were EXCLUDED (verified: promote tree vs develop HEAD differs by exactly that post-soak material, 33 files). Recipe = #942 pattern replicated: worktree at soaked commit → `git merge -s ours origin/main` history tie → tree proven identical (HEAD^{tree} == 51a1dbb5^{tree} == origin/staging^{tree}) BEFORE push → PR #1014 → merge commit (not squash). Post-merge parity proof: `git diff origin/main 51a1dbb5 --stat` empty.
+Delta shipped: live-path safety wave #994 (close-cap) + #996 (reconciliation edges) + #1001 (same-iteration drawdown gate, durable-peak throttle); supporting #976/#968/#978/#981/#948/#950/#954/#965; docs/research #943–#987 set.
+**Prod boot checks (deploy db605330-8ee2-4ace-a2b2-0b8454d9e130, commit bf7f45cb, container up 17:22:43Z):**
+1. PASS — Max-drawdown guard armed: peak=$84.42, hard cap=20.0% (session 20, account_history peak) — NOT phantom $100/$1000.
+2. PASS — zero close-only / SYSTEM_HALT / breach lines through 17:25+ (prod at ~0.016% DD; any trip would have been false).
+3. PASS — Trading loop started 17:23:15Z, ticking 60s (candle index healthy); session #20 reused, balance recovered $84.40; ETHUSDT SHORT @ $1696.83 re-adopted with stop-loss order 48135520381 tracked; reconciliation: 2 results, 0 corrections, 0 critical; no [ERRO]/[CRIT] beyond the intentional live-start countdown.
+4. PASS-WITH-NOTE — schema verification: "Schema matches SQLAlchemy models" ✅, but alembic stamp is STALE: prod current=0012, head=0013_widen_event_type (shipped via #968), "Pending revisions: 1", redundancy guard deliberately skipped (schema already matches — column already correct width). Staging by contrast ran it (current=0013, 0 pending). Functionally consistent; bookkeeping divergence only. Follow-up: stamp prod alembic_version to 0013 in a maintenance window (single-row write — NOT done now, prod DB read-only this session).
+5. PASS — HyperGrowth ETHUSDT native model; zero cross-symbol/substitution banner lines (#978's actionable banner silent).
+Known benign artifact (seen on staging, expected): rolling deploy may stamp old container's end_time while the new one reuses session 20 — account_history heartbeat is the liveness truth, not is_active.
+Ref: PR #1014, PR #1011 (staging soak), GH #1001/#994/#996, deploy db605330, [D-2026-07-08-01] (previous parity promote #942/#943).
+
+---
+
+## 2026-07-12 · track-record · quant-researcher [D-2026-07-12-03]
+Experiment #1013: EXIT-GEOMETRY round 2 (early-cut, trailing/breakeven ablation, tp_06 rerun) -> REJECTED, no staging-trial candidate
+Preregistered (docs/research/experiments/2026-07-12_exit-geometry-round2.md) then ran 35 backtests
+(7 configs x 5 folds: F1/F2/F3 2023-2025H1 primary + F0a/F0b 2021/2022H1 extension) + determinism
+recheck (PASS). Validity-gate work found, BEFORE any arm was read, that round 1's entire study
+(#970/#971) and PR #976's own regression-evidence table scored ETHUSDT candles with BTCUSDT's
+model, not ETHUSDT's -- ExperimentRunner._load_strategy never threads config.symbol into the
+strategy factory. Filed #997 (harness bug, fix in #1004, open) and #998 (round 1 needs
+re-verification, open) rather than silently absorbing the finding. This round's own control is a
+new, correct baseline (symbol explicitly threaded, verified via a 4-way isolation test that
+reproduces round 1's exact published number only when both the bug AND the wrong worktree are
+present). A predecessor turn's sweep process was killed mid-run by a session/quota limit; resumed
+by inspecting the partial output first (25 of 36 records already valid/complete) rather than
+assuming total loss, then running only the 2 missing arms (breakeven_only, tp_06_rerun).
+Result: NO-GO for all 6 arms against the pre-committed four-bar test (Sec 1). Every arm fails Bar 1
+outright (Bonferroni-significant return improvement on >=2 of 3 primary folds, alpha=0.05/6=0.0083)
+-- 0/3 for every arm, lowest p-value anywhere is 0.09. tp_06_rerun is the only arm to pass Bar 2
+(aggregate PF + return improve, pooled across all 5 folds) -- reproduces round 1's
+directionally-positive-but-never-significant finding on an independent second sample; recommended
+as closed, not "needs more data." breakeven_only's +7.92pp aggregate return delta flagged explicitly
+as a naive-read trap (driven by 2 folds with far fewer trades than control; pooled PF worse than
+control's). Mechanism read: neither trailing-distance nor breakeven-move alone reproduces control's
+combined MFE-capture behavior; early-cut cut-precision is 42-56% (near coin-flip), only 21-37% of
+cut trades have a verifiable control-matched counterpart.
+Recommendation to PM/risk-officer: rejected as a staging-trial candidate, all 6 arms; closes the
+exit-geometry thread for now across both rounds (12 arms, 8 exam folds, 2021-2025H1) -- no
+exit/trade-management lever tested flips HyperGrowth's expectancy at a statistically defensible
+level. Any further work here needs a genuinely different mechanism (volatility/regime-conditioned
+exits), not another fixed-threshold variant.
+Ref: issue #1013, PR #1012, docs/research/experiments/2026-07-12_exit-geometry-round2.md,
+experiments/exit_geometry_round2_sweep.py + analyze_exit_geometry_round2.py +
+exit_geometry_round2_results.jsonl, issue #997/#998/#999/#977 (harness bugs filed this round),
+issue #970/#971 (round 1, whose absolute numbers/mechanism metrics this round's Sec 5.1 finding
+calls into question, tracked separately via #998).
+
+## 2026-07-12 17:35 · decision · daemon(PM)
+**[D-2026-07-12-04] PROD PROMOTE executed: main := soaked develop 51a1dbb5 (parity promote, PR #1014, merge bf7f45cb) — deploy db605330 SUCCESS, all 5 boot checks pass.**
+Decision basis (charter autonomy envelope, prod deploys autonomous): staging soak gate CLEARED — staging deploy 87b6aca9 (PR #1011) validated exactly this tree with all 5 boot checks; risk-officer conditions on #1001 met (1: peak-check cleared at $84.42, read-only prod DB 2026-07-12; 2: CI-on-merged-tree green at merge — 4 unit shards + integration + claude-review on #1014; 3: 24–48h spurious-close-only watch STARTS NOW via 6-hourly alert-monitor).
+**Soak discipline:** promoted the SOAKED commit, NOT develop HEAD. Soaked SHA = 51a1dbb5a32757c495feb77e9cbb9cdc8689514b (second parent of staging tip 87b6aca9; `git diff 51a1dbb5 origin/staging --stat` empty). PRs #1006/#992/#1008 (and later #1004/#1000/#1012) merged to develop AFTER the staging sync and were EXCLUDED (verified: promote tree vs develop HEAD differs by exactly that post-soak material, 33 files). Recipe = #942 pattern replicated: worktree at soaked commit → `git merge -s ours origin/main` history tie → tree proven identical (HEAD^{tree} == 51a1dbb5^{tree} == origin/staging^{tree}) BEFORE push → PR #1014 → merge commit (not squash). Post-merge parity proof: `git diff origin/main 51a1dbb5 --stat` empty.
+Delta shipped: live-path safety wave #994 (close-cap) + #996 (reconciliation edges) + #1001 (same-iteration drawdown gate, durable-peak throttle); supporting #976/#968/#978/#981/#948/#950/#954/#965; docs/research #943–#987 set.
+**Prod boot checks (deploy db605330-8ee2-4ace-a2b2-0b8454d9e130, commit bf7f45cb, container up 17:22:43Z):**
+1. PASS — Max-drawdown guard armed: peak=$84.42, hard cap=20.0% (session 20, account_history peak) — NOT phantom $100/$1000.
+2. PASS — zero close-only / SYSTEM_HALT / breach lines through 17:25+ (prod at ~0.016% DD; any trip would have been false).
+3. PASS — Trading loop started 17:23:15Z, ticking 60s (candle index healthy); session #20 reused, balance recovered $84.40; ETHUSDT SHORT @ $1696.83 re-adopted with stop-loss order 48135520381 tracked; reconciliation: 2 results, 0 corrections, 0 critical; no [ERRO]/[CRIT] beyond the intentional live-start countdown.
+4. PASS-WITH-NOTE — schema verification: "Schema matches SQLAlchemy models" ✅, but alembic stamp is STALE: prod current=0012, head=0013_widen_event_type (shipped via #968), "Pending revisions: 1", redundancy guard deliberately skipped (schema already matches — column already correct width). Staging by contrast ran it (current=0013, 0 pending). Functionally consistent; bookkeeping divergence only. Follow-up: stamp prod alembic_version to 0013 in a maintenance window (single-row write — NOT done now, prod DB read-only this session).
+5. PASS — HyperGrowth ETHUSDT native model; zero cross-symbol/substitution banner lines (#978's actionable banner silent).
+Known benign artifact (seen on staging, expected): rolling deploy may stamp old container's end_time while the new one reuses session 20 — account_history heartbeat is the liveness truth, not is_active.
+Ref: PR #1014, PR #1011 (staging soak), GH #1001/#994/#996, deploy db605330, [D-2026-07-08-01] (previous parity promote #942/#943).
+
+## 2026-07-12 19:10 · track-record · quant-researcher
+Experiment (issue #990): does the SHORT-inventory guard's near-total suppression of live shorts (9L/3S vs ~50/50 signal split) cost or save returns? → leans "accidentally saving/neutral," moderate confidence, not conclusive.
+Evidence: docs/research/notes/2026-07-12_short-suppression-counterfactual.md (PR #1019).
+Forensics (read-only prod DB, RAILWAY_PRODUCTION_DATABASE_URL, SELECT-only): segment A (pre-2026-07-05 promotion) has real flat-period signal volume (288 long/182 short) and the confirmed 9L/3S real-trade split; segment B (2026-07-05 onward) has ZERO flat-period opportunities at all -- a SHORT position (#22, opened 07-02, still open, ~-7.3% unrealized as of this writing) has kept the strategy continuously in-position through the whole segment, so the guard had no opportunity to fire either way there. Segment A's live model (cross-symbol BTCUSDT-scores-ETHUSDT substitute) is confirmed non-reconstructable via the new #1006 point-in-time pinning (`--model-as-of` correctly fails closed, `ModelNotAvailableError`) -- no counterfactual return estimate attempted for it, per the parity investigation's own established limitation. Noted in passing: PR #1016 (merged to develop while this session was in flight) already ships the durable `system_events` observability this note's Sec. 9 was going to recommend -- future versions of this question inherit better forward data than segment A's telemetry gap.
+Counterfactual (the core): matched backtests, shorts-enabled (as-designed) vs long-only (research-only wrapper clearing the pre-existing `enter_short` metadata opt-in that both engines' shared `entry_utils.py` gate already enforces -- no engine/gate code touched), same model pin (2026-07-04_22h_v1, the only ETHUSDT/basic version), fees/slippage on. Segment B itself is degenerate (0 vs 1 closed trade, 7 days) as forecast from the forensics. Reused the exit-geometry-honest study's F1/F2/F3 folds (2023H1/2024H1/2025H1) for statistical power, explicitly in-sample relative to the model's training cutoff (2026-07-04) -- inherited caveat: absolute numbers optimistic, relative arm-vs-arm delta not invalidated (same model, same data, both arms). Result: shorts-enabled beats long-only in only 1 of 3 folds (F1, +0.78pp, doesn't clear the pre-committed 2pp bar) and short trades lose money standalone in all 3 folds tested (F1 -0.037, F2 -0.106, F3 -0.078 summed sized pnl_percent, not one-outlier-driven -- distributions checked directly). F2 clears the 2pp bar in long-only's favor (-3.67pp); F3 doesn't (-1.15pp, closer to noise floor).
+Pre-registered decision rule (locked before running): ruled out "costing returns" with reasonable confidence (no fold has both a big shorts-enabled win AND profitable standalone shorts); "saving returns" technically qualifies via the short-side-P&L-negative-in-every-fold clause but not via the stricter majority-clears-2pp clause -- reported as "leans (ii), not proven," not oversold.
+Filed docs/research/notes/2026-07-12_short-suppression-counterfactual.md Sec. 8 "how this could lose money": foremost risk is regime-drift confound (2023-2025 broadly bull for ETH; shorting a rising asset loses on drift alone, independent of any real model skill; the window tournament already found HyperGrowth net-negative in an actual 185-day bear OOS window, #898) -- a hard-coded long-only config could underperform, not outperform, in a genuine bear regime, the opposite of intent.
+Proposal filed: .claude/state/proposals/2026-07-12-01-hypergrowth-ethusdt-long-only.md (status: open, risk_review_required: true, board_required: true) -- NOT a request to touch the margin guard itself (orthogonal, still open, per parity investigation); asks risk-officer to stress-test long-only HyperGrowth/ETHUSDT against a simulated bear regime before any live change. Recommendation to pm: promising but not ready -- do not promote without that stress test plus a staging-paper window.
+Ref: GH #990 (closed), #1020 (follow-on strategy-change proposal issue), PR #1019, proposal 2026-07-12-01
+
+## 2026-07-12 20:00 · track-record · risk-officer
+Proposal 2026-07-12-01 (HyperGrowth/ETHUSDT long-only): verdict=approve-with-conditions, confidence=med
+Scenarios checked: F1/F2/F3 2023-2025H1 folds (long-only maxDD up to 20.31%, F3), #898 bear-window (inferred only), segment-B live-matched (degenerate), backtest-live parity, entry-only-flag orphan risk on open SHORT #22, drawdown-guard/circuit-breaker interaction (#986 breakers OFF, #847 peak anchor), #1016 observability-destruction tension, constants/risk-limits parity (agree, no new P0).
+Timing: ratify now, staging-paper first, do NOT gate on #1016 (not in prod; moot post-ship).
+PM note: reviewer's "could not verify live guard peak" is answered by the [D-2026-07-12-04] prod boot checks — guard holds SESSION peak $84.42 (by design, post-phantom-era), not the $100 all-time baseline; #847 tracks durable anchoring. C7 stands: #986/#847 are higher-priority risk work than this proposal.
+Full review: docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md. Decision: board_required — awaiting Alex on GH #1020.
+
+## [D-2026-07-14-01] 2026-07-14 ~09:30 · decision · Alex (Board) via PM session
+Proposal 2026-07-12-01 (HyperGrowth/ETHUSDT long-only) APPROVED by Alex, in-session, per the PM analysis on GH #1020: conditions C1-C5 as written by risk-officer, C6 (shadow "would-have-entered-short" logging) UPGRADED from recommended to HARD, sequenced alongside the #986 risk-ratification work. Human approval source: PM chat session 2026-07-14 ("I approve your recommendations").
+Rationale: ratifies reality (live is de-facto long-only), restores backtest-live parity, risk-reducing at the margin, cleanly reversible; evidence adequate for a reversible config change (shorts lost standalone in 3/3 folds; 1/3 fold dissent noted). Not a returns unlock — parity/honesty/variance work.
+Next: implementation PR (C1 single config source both engines, C2 entry-only gating, C6 shadow events, C5 guard untouched) → gauntlet → staging-paper window (C3) → documented re-enable/kill criteria (C4) before prod.
+Ref: GH #1020, proposals/2026-07-12-01-hypergrowth-ethusdt-long-only.md, docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md
+
+## [D-2026-07-14-02] 2026-07-14 ~09:30 · decision · Alex (Board) via PM session
+GH #986 (risk-ratification bundle) decision authority DELEGATED to PM by Alex, in-session: "make solid rational, evidence based decisions for 986". PM boundary preserved: any edit to charter.md / risk-limits.json is still packaged as a diff/PR for Alex's own hand (layer-1 hard rule unchanged).
+Alex's architectural directive, verbatim intent: backtest-live parity is foremost; risk/trading variables (limits etc.) must be defined in ONE place and read from there by ALL consumers (live engine, backtest engine, agents) — eliminate the risk-limits.json vs constants.py divergence class entirely, not patch instances of it.
+Plan: (a) architecture design for single-source risk config (loader, schema, env-override policy [tighten-only], boot fail-closed validation, CI guard) — covers #986 items 2/3/5 by construction and the #1021 drift dimension; (b) staging circuit-breaker dry-run evidence pull → evidence-based arming decision for prod (#986 item 1), dry-run first; (c) #986 item 4 (dead throttle tiers) folded into the redesign.
+Ref: GH #986, GH #1021, GH #835 (startCommand override incident — motivates tighten-only env policy)
+
+## [D-2026-07-14-03] 2026-07-14 ~10:15 · decision · daemon(PM)
+Circuit-breaker arming (GH #986 item 1, authority [D-2026-07-14-02]): HOLD — do NOT arm prod (dry_run or enforce) yet. Overrides the PM's stated intent (arm dry_run now) on live-ops evidence:
+(a) AccountCircuitBreaker evaluates CASH balance, blind to unrealized P&L on open positions — with HyperGrowth's low turnover (SHORT #22 open 12 days; live balance $84.40 flat while equity $83.75 and drifting) the breaker structurally cannot see the exact loss it exists to halt;
+(b) the 15% drawdown halt's peak has no restart-safe seeding — ~13 prod restarts in 30 days each silently zeroed its memory (the #845/#847 peak-reset class again).
+Rubric: ΔP=5 (arming a blind breaker = false confidence on the veto axis), ΔR=0, C=4 (artifacts: GH #986 evidence comment 2026-07-14; balance-vs-equity trace event_logger.py/position_tracker.py/account_sync.py; zero CIRCUIT_BREAKER_DRY_RUN rows staging since 07-06 with closest approach 0.50%/0.64% vs 2.5%/15%), E=2 → fix-first path adopted.
+Decision path (pre-committed): 1) fix equity-based evaluation + restart-safe peak seeding (account_history pattern per #1001) with full gauntlet; 2) also verify MaxDrawdownGuard for the same equity blindness; 3) staging dry_run ≥14 clean days → prod dry_run ≥7 clean days → enforce, criteria numeric in the #986 comment. Enforcement path itself verified sound (in-line same-iteration gate, machinery present in prod build bf7f45cb).
+Ref: GH #986 (evidence comment), GH #847, GH #845, main@bf7f45cb
+
+## [D-2026-07-14-04] 2026-07-14 ~10:45 · decision · Alex (Board) via PM session
+Board rulings on the single-source risk-config design (docs/architecture/proposals/2026-07-14_single-source-risk-config.md), Alex in-session:
+1. LOCATION: risk-limits.json MOVES to src/config/risk-limits.json (overrides design §3.1's keep-in-place recommendation). File stays human-owned ($owner: human_board, agents never edit values); move is content-byte-identical, executed by the loader PR per Alex's explicit direction; $source_of_truth_note text change still reserved for the ratification sitting. Charter.md references to the old path are layer-1 → sitting.
+2. #986 item 4 (HyperGrowth dead tiers): PRUNE-ONLY (overrides design §3.7's prune+re-anchor recommendation). Tiers [0.30, 0.45] deleted, [0.15]→0.8 unchanged, zero behavior change. The §3.7 unrepresentability invariant (strategy threshold >= max_drawdown_pct fails validation) still ships. Re-anchor idea available as a future separate proposal if ever wanted.
+3. #986 item 5 (correlated risk vs exposure): CONFIRMED — one key, ratified 0.15 adopted for both mechanisms (heuristic cap 0.10→0.15 delta accepted; 0.10 was never ratified).
+4. #986 item 3 (0.20/0.25): Alex asked for provenance + consolidation assessment before ruling — PM findings in the same session message; NEW layer-1 divergence found during the trace: charter.md:24 says max single-position exposure is 10% "(matches max_position_size_pct)" but risk-limits.json (last reviewed 2026-07-05 by Alex) says 0.20 and prod pins 0.20 — charter prose is stale; queued for the sitting.
+Ref: GH #986, PR #1028 (design), this session
+
+## [D-2026-07-14-05] 2026-07-14 ~12:30 · decision · daemon(PM)
+MaxDrawdownGuard (20% hard cap) confirmed cash-blind (PR #1032 finding: observe(state.current_balance) at drawdown_guard.py:345, peak seeded from cash column at :436; binds on realized cascades, cannot trip during an open position's unrealized excursion). DECISION: cap stays REALIZED-basis, unchanged.
+Rationale: (1) per-position SLs bound single-position unrealized loss (~1.1-2.0% realized, hyper_growth calibration); (2) the equity-based breakers from #1032, once armed at 15%, trip BEFORE the 20% cap in unrealized scenarios — layered coverage restored without changing the ratified number's meaning; (3) equity-basis latching close-only carries transient-mark false-halt risk (a recovering wick still latches permanently) — changing the cap's basis is a ratification-level semantics change needing a mitigation design, not a rider on a fix PR.
+Rubric: ΔP=4 (layered-coverage path protects equally once breakers arm, without false-halt regression), ΔR=1 (avoids spurious close-only), C=4 (artifacts: PR #1032 finding file:line; #1032's equity-breaker tests; hyper_growth.py:174-176 stop calibration), E=1.
+Residual risk accepted + documented: until breakers enforce, no unrealized-excursion halt exists (status quo) — raises staged-arming urgency, criteria unchanged (#986 comment). Escalation path: if the Board wants the hard cap equity-based, it is a sitting item with false-trip mitigation design.
+Ref: PR #1032, GH #986, [D-2026-07-14-03], docs/research/risk-snapshots/2026-07-12_2000_risk-review_1020-hypergrowth-ethusdt-long-only.md (C7)

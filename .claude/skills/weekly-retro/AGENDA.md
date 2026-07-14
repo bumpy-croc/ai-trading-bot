@@ -46,3 +46,15 @@ becomes a diff or gets a written disposition.
 - **2026-07-07/10 — transient 401 auth failures killed agents mid-dispatch (2×).**
   Resume-with-state recovers cleanly; note as a known transient in delegation-protocol's backstop
   guidance (retry the resume once before diagnosing deeper).
+- **2026-07-12 — promote boot-check "alembic 0 pending" criterion can't literally pass on prod.**
+  0712 promote shipped migration 0013 (#968); prod's redundancy guard skipped it (schema already
+  matched models) leaving the alembic stamp stale at 0012 while staging ran it to 0013. Boot check
+  reworded ad hoc to PASS-WITH-NOTE. Decide: stamp prod in a maintenance window + amend deploy-prod
+  skill's check to "schema matches models AND (0 pending OR skip-guard fired with schema-match)".
+- **2026-07-12 — subagent built its feature branch inside the PM's worktree.** The #1016
+  (short-guard observability) engineer checked out its feature branch in the PM session worktree
+  instead of creating its own under `.claude/worktrees/` — clean outcome (everything committed)
+  but the PM's branch was silently switched. Dispatch prompts say "fresh worktree" yet this
+  recurred; consider a hard rule in delegation-protocol: agents verify `git worktree list` shows
+  their OWN path before checkout, never operate in a worktree containing another agent's
+  `.agent-active` or the PM session.

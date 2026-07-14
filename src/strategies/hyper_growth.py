@@ -28,6 +28,17 @@ fed price-only inputs, which the generator converts to predicted_return=-1.0
 and emits as a constant SELL sentinel. See
 .claude/reports/hyper_growth_experiment_sweep_2026-04-17.md.
 
+Short-entry policy (GH #1020): the ETHUSDT deployment is LONG-ONLY by
+design — board-approved proposal 2026-07-12-01 codified the accidental short
+suppression found in GH #990 (short trades' standalone P&L negative in every
+counterfactual fold tested) as explicit configuration. The value lives in
+ONE place, ``src.strategies.deployment_config.LONG_ONLY_DEPLOYMENTS``, and is
+resolved here at construction so live and backtest runs of the same symbol
+always agree (risk-review condition C1). The gate is ENTRY-only: SELL
+signals lose their ``enter_short`` opt-in, while exits, stop-losses, and
+BUY-to-cover of existing shorts are never affected (condition C2). Pass
+``allow_shorts=True`` explicitly for counterfactual/research runs.
+
 Reference: docs/research/500_percent_annual_returns.md
 """
 
@@ -48,6 +59,7 @@ from src.strategies.components.leverage_manager import LeverageManager
 from src.strategies.components.position_sizer import LeveragedPositionSizer
 from src.strategies.components.regime_context import TrendLabel, VolLabel
 from src.strategies.components.risk_manager import RiskManager
+from src.strategies.deployment_config import resolve_allow_shorts
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +202,8 @@ def create_hyper_growth_strategy(
     breakeven_buffer: float = 0.008,
     early_cut_mfe_threshold_pct: float | None = None,
     early_cut_evaluation_window_hours: float | None = None,
+    model_version: str | None = None,
+    allow_shorts: bool | None = None,
 ) -> Strategy:
     """Create hyper-growth strategy targeting high annual returns.
 
@@ -237,18 +251,37 @@ def create_hyper_growth_strategy(
         early_cut_evaluation_window_hours: Early-cut evaluation window in
             hours from entry. Must be set together with
             ``early_cut_mfe_threshold_pct``.
+        model_version: Pin ML predictions to this exact registry version
+            instead of resolving ``latest`` — the backtest harness's
+            point-in-time pin (GH #988). Only valid with
+            ``signal_source="ml"`` (momentum runs no model).
+        allow_shorts: Whether SELL signals may ENTER shorts. None (default)
+            resolves the deployment value from
+            ``src.strategies.deployment_config`` — the single config source
+            both engines read (GH #1020): False for ETHUSDT (long-only by
+            board decision), True for every other symbol. An explicit
+            True/False overrides the deployment default (research/
+            counterfactual runs). Entry-only: exits, stop-losses, and
+            BUY-to-cover of existing shorts are never gated.
 
     Returns:
         Configured Strategy instance.
 
     Raises:
-        ValueError: If exactly one of the two early-cut kwargs is provided.
+        ValueError: If exactly one of the two early-cut kwargs is provided,
+            or if ``model_version`` is combined with ``signal_source="momentum"``.
     """
     if (early_cut_mfe_threshold_pct is None) != (early_cut_evaluation_window_hours is None):
         raise ValueError(
             "early_cut_mfe_threshold_pct and early_cut_evaluation_window_hours "
             "must be provided together (both set to enable the early cut, "
             "both None to disable it)"
+        )
+    if signal_source == "momentum" and model_version is not None:
+        raise ValueError(
+            "model_version cannot be combined with signal_source='momentum': "
+            "the momentum generator runs no ML model, so a pinned model "
+            "version would silently not be honored."
         )
     # #805: hyper_growth targets high returns via leverage/aggressive sizing and
     # is NOT recommended in a bear/high-vol regime, where exposure is the primary
@@ -259,9 +292,17 @@ def create_hyper_growth_strategy(
         "aggressive sizing amplifies drawdowns. Consider ml_adaptive with the "
         "exposure governor + vol-target sizing instead."
     )
+    # Single-source deployment resolution (GH #1020): None means "look up the
+    # (strategy, symbol) deployment value"; an explicit bool wins.
+    resolved_allow_shorts = (
+        resolve_allow_shorts("hyper_growth", symbol) if allow_shorts is None else bool(allow_shorts)
+    )
+
     # Signal generator (declared up-front: branches assign different subtypes)
     signal_generator: SignalGenerator
     if signal_source == "momentum":
+        # MomentumSignalGenerator never emits the enter_short opt-in, so the
+        # momentum branch is structurally long-only regardless of the flag.
         signal_generator = MomentumSignalGenerator(
             name=f"{name}_signals",
             momentum_entry_threshold=0.001,  # 0.1% — very sensitive
@@ -277,7 +318,11 @@ def create_hyper_growth_strategy(
         # silently returns 0.0 on every bar — which the generator converts to
         # predicted_return = -1.0 (a constant SELL sentinel, not a prediction).
         signal_generator = MLBasicSignalGenerator(
-            name=f"{name}_signals", model_type="basic", symbol=symbol
+            name=f"{name}_signals",
+            model_type="basic",
+            symbol=symbol,
+            model_version=model_version,
+            allow_shorts=resolved_allow_shorts,
         )
 
     risk_manager = FlatRiskManager(

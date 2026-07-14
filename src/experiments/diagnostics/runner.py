@@ -66,6 +66,7 @@ class SignalDiagnostic:
         strategy = self.runner._load_strategy(
             cfg.strategy_name,
             factory_kwargs=cfg.factory_kwargs or None,
+            symbol=cfg.symbol,
         )
         signal_generator = getattr(strategy, "signal_generator", None)
         if signal_generator is None:

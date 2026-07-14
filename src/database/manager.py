@@ -164,6 +164,49 @@ class DatabaseManager:
         except (TypeError, ValueError, InvalidOperation):
             return default
 
+    @staticmethod
+    def _excursion_from_price(entry_price: Any, excursion_price: Any, side: Any) -> float | None:
+        """Raw price excursion (decimal fraction) implied by an MFE/MAE price companion.
+
+        ``mfe_price``/``mae_price`` have always stored the raw extreme price,
+        but ``mfe``/``mae`` rows written by the pre-2026-07 tracker hold sized,
+        fee-netted values instead of raw excursions. Re-deriving from the
+        companion keeps every row era in one unit: unsized price move from
+        entry. Returns None when the companion is absent or underivable, so
+        callers can fall back to the stored column.
+        """
+        entry = DatabaseManager._to_optional_float(entry_price)
+        price = DatabaseManager._to_optional_float(excursion_price)
+        if entry is None or price is None:
+            return None
+        if not (math.isfinite(entry) and math.isfinite(price)) or entry <= 0 or price <= 0:
+            return None
+
+        side_str = getattr(side, "value", side)
+        if not isinstance(side_str, str):
+            return None
+        side_str = side_str.lower()
+        if side_str not in ("long", "short"):
+            return None
+
+        move = (price - entry) / entry
+        return move if side_str == "long" else -move
+
+    @classmethod
+    def excursion_or_stored(
+        cls, entry_price: Any, excursion_price: Any, stored: Any, side: Any
+    ) -> float | None:
+        """Companion-derived excursion, falling back to the stored mfe/mae column.
+
+        Every reader of the ``mfe``/``mae`` columns (serializers here, raw-SQL
+        consumers like the monitoring dashboard) should go through this so
+        pre-2026-07 rows — whose stored values are sized and fee-netted — come
+        back in the same unit as current rows: raw price excursion from entry
+        as a decimal fraction.
+        """
+        derived = cls._excursion_from_price(entry_price, excursion_price, side)
+        return derived if derived is not None else cls._to_optional_float(stored, 0.0)
+
     def _is_running_unit_tests(self) -> bool:
         """Determine whether the current pytest run executes unit tests.
 
@@ -807,8 +850,10 @@ class DatabaseManager:
             session_id: Trading session ID
             quantity: Actual quantity traded
             commission: Trading commission paid
-            mfe: Maximum favorable excursion (%)
-            mae: Maximum adverse excursion (%)
+            mfe: Maximum favorable excursion — raw unsized price move from
+                entry (decimal fraction, e.g. 0.05 = +5%)
+            mae: Maximum adverse excursion — raw unsized price move from
+                entry (decimal fraction, <= 0)
             mfe_price: Price at MFE
             mae_price: Price at MAE
             mfe_time: Timestamp of MFE
@@ -1885,8 +1930,12 @@ class DatabaseManager:
                             getattr(p, "trailing_stop_price", None)
                         ),
                         "breakeven_triggered": getattr(p, "breakeven_triggered", False),
-                        "mfe": self._to_optional_float(p.mfe, 0.0),
-                        "mae": self._to_optional_float(p.mae, 0.0),
+                        # Prefer the excursion implied by the _price companion:
+                        # pre-2026-07 rows stored sized, fee-netted mfe/mae, so
+                        # the stored column is only a fallback (see
+                        # _excursion_from_price).
+                        "mfe": self.excursion_or_stored(p.entry_price, p.mfe_price, p.mfe, p.side),
+                        "mae": self.excursion_or_stored(p.entry_price, p.mae_price, p.mae, p.side),
                         "mfe_price": self._to_optional_float(p.mfe_price),
                         "mae_price": self._to_optional_float(p.mae_price),
                         "mfe_time": p.mfe_time,
@@ -2086,8 +2135,11 @@ class DatabaseManager:
                     "exit_time": t.exit_time,
                     "exit_reason": t.exit_reason,
                     "strategy": t.strategy_name,
-                    "mfe": self._to_optional_float(t.mfe, 0.0),
-                    "mae": self._to_optional_float(t.mae, 0.0),
+                    # Prefer the excursion implied by the _price companion:
+                    # pre-2026-07 rows stored sized, fee-netted mfe/mae, so the
+                    # stored column is only a fallback when no companion exists.
+                    "mfe": self.excursion_or_stored(t.entry_price, t.mfe_price, t.mfe, t.side),
+                    "mae": self.excursion_or_stored(t.entry_price, t.mae_price, t.mae, t.side),
                     "mfe_price": self._to_optional_float(t.mfe_price),
                     "mae_price": self._to_optional_float(t.mae_price),
                     "mfe_time": t.mfe_time,
@@ -2412,6 +2464,43 @@ class DatabaseManager:
             The peak balance across the session(s), or None when no snapshot
             exists yet.
         """
+        return self._get_session_peak(AccountHistory.balance, session_id, fallback_session_id)
+
+    def get_session_peak_equity(
+        self,
+        session_id: int | None = None,
+        fallback_session_id: int | None = None,
+    ) -> float | None:
+        """Get the highest account_history equity recorded for the session(s).
+
+        Re-seeds the account circuit breaker's drawdown peak after a restart
+        (#986 gap B) on the same basis the breaker evaluates: TRUE equity
+        (balance + unrealized P&L at snapshot time). Session-scoping and
+        fallback semantics mirror ``get_session_peak_balance``. Rows with a
+        NULL equity (defensive — the column is non-nullable) fall back to
+        their balance.
+
+        Args:
+            session_id: Trading session ID (defaults to the current session).
+            fallback_session_id: Prior session whose snapshots also count.
+
+        Returns:
+            The peak equity across the session(s), or None when no snapshot
+            exists yet.
+        """
+        return self._get_session_peak(
+            sa.func.coalesce(AccountHistory.equity, AccountHistory.balance),
+            session_id,
+            fallback_session_id,
+        )
+
+    def _get_session_peak(
+        self,
+        column: sa.ColumnExpressionArgument[Any],
+        session_id: int | None,
+        fallback_session_id: int | None,
+    ) -> float | None:
+        """Max of an account_history column across the session(s) (see callers)."""
         session_id = session_id or self._current_session_id
         if not session_id:
             return None
@@ -2423,7 +2512,7 @@ class DatabaseManager:
         # Use ANALYTICS timeout - one-shot boot-time read, not in the critical path
         with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
             peak = (
-                session.query(sa.func.max(AccountHistory.balance))
+                session.query(sa.func.max(column))
                 .filter(AccountHistory.session_id.in_(session_ids))
                 .scalar()
             )

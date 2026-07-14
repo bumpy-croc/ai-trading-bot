@@ -19,7 +19,7 @@ Parallelize into one batch:
 
 **Identity (layer 1):**
 - a. `.claude/state/charter.md` — unfilled TODO in mission/autonomy/escalation → STOP, page human.
-- b. `.claude/state/risk-limits.json` — the hard lines. Missing/invalid → refuse material decisions.
+- b. `src/config/risk-limits.json` — the hard lines. Missing/invalid → refuse material decisions.
 
 **Record (layer 2):**
 - c. Tail `.claude/state/log.md` (~50 lines) — recent decisions, open threads, corrections.

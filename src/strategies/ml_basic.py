@@ -67,6 +67,7 @@ def create_ml_basic_strategy(
     min_confidence_floor: float | None = None,
     stop_loss_pct: float | None = None,
     take_profit_pct: float | None = None,
+    model_version: str | None = None,
 ) -> Strategy:
     """
     Create ML Basic strategy using component composition.
@@ -89,10 +90,18 @@ def create_ml_basic_strategy(
             min_confidence gate has passed (0.0 disables).
         stop_loss_pct: Override for the stop-loss percentage.
         take_profit_pct: Override for the take-profit percentage.
+        model_version: Pin predictions to this exact registry version instead
+            of resolving ``latest`` — the backtest harness's point-in-time
+            pin (GH #988). Incompatible with ``fast_mode`` (no model runs).
 
     Returns:
         Configured Strategy instance
     """
+    if fast_mode and model_version is not None:
+        raise ValueError(
+            "model_version cannot be combined with fast_mode: fast mode disables "
+            "ML entirely, so a pinned model version would silently not be honored."
+        )
     risk_parameters = RiskParameters(
         base_risk_per_trade=DEFAULT_BASE_RISK_PER_TRADE,
         default_take_profit_pct=(
@@ -156,6 +165,7 @@ def create_ml_basic_strategy(
             long_entry_threshold=long_entry_threshold,
             short_entry_threshold=short_entry_threshold,
             confidence_multiplier=confidence_multiplier,
+            model_version=model_version,
         )
 
         risk_manager = CoreRiskAdapter(core_risk_manager)
