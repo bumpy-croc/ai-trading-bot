@@ -136,6 +136,12 @@ class EventType(enum.Enum):
     # episode-end summaries (error_code distinguishes the two). 19 chars —
     # fits the varchar(23) column from migration 0013, no migration needed.
     SHORT_ENTRY_BLOCKED = "SHORT_ENTRY_BLOCKED"
+    # Would-have-entered-short shadow evidence from long-only deployments
+    # (allow_shorts=False, GH #1020): the strategy sized a short but config
+    # suppressed the entry. Episode-end summaries share the type (error_code
+    # distinguishes). 22 chars — fits the varchar(23) column from migration
+    # 0013, no migration needed.
+    SHORT_ENTRY_SUPPRESSED = "SHORT_ENTRY_SUPPRESSED"
     TEST = "TEST"  # Added for verification scripts and development diagnostics
 
 

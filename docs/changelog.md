@@ -12,6 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **HyperGrowth/ETHUSDT is long-only by explicit configuration** (#1020,
+  board-approved proposal 2026-07-12-01): `MLBasicSignalGenerator` gains an
+  `allow_shorts` flag (default `True`) that, when `False`, withholds the
+  `enter_short` opt-in from SELL signals so neither engine ever OPENS a
+  short — ENTRY-only gating: the SELL direction is preserved, so
+  signal-reversal exits of longs, stop-losses, and BUY-to-cover of existing
+  shorts are never affected (risk-review condition C2). The deployment value
+  lives in exactly one place, `src/strategies/deployment_config.py`
+  (`LONG_ONLY_DEPLOYMENTS`), resolved by `create_hyper_growth_strategy` at
+  construction, so live runs and backtests of the same symbol always agree
+  with zero extra flags (condition C1; backtest-live parity). Pass
+  `allow_shorts=True` explicitly for counterfactual/research runs. The
+  execution engine's independent SHORT-inventory margin guard is untouched
+  (condition C5). Shadow observability (condition C6): in the LIVE path
+  only, a short the strategy sized but config suppressed writes a
+  `system_events` row (`event_type=SHORT_ENTRY_SUPPRESSED`,
+  `error_code=WOULD_ENTER_SHORT`, component `entry_coordinator`) with signal
+  metadata, bounded by the #1016 episode-dedup pattern (first + every 10th +
+  an episode-end summary carrying the TRUE total after a 2h inactivity gap)
+  and fully fault-isolated; backtests write no events. No migration needed
+  (the 22-char enum value fits the varchar(23) column from migration 0013).
+  Post-ship proof: live and parity-backtest SHORT entry counts for
+  HyperGrowth/ETHUSDT must be exactly 0.
 - **DB-durable short-guard rejection events** (#990 step 4): the live
   SHORT-side margin inventory guard now writes a `system_events` row
   (`event_type=SHORT_ENTRY_BLOCKED`, component `execution`) whenever it
