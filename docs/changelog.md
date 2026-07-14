@@ -55,11 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the shared pre-order gate now evaluate TRUE equity =
   `current_balance` + mark-to-market unrealized P&L of open positions (new
   thread-safe `LivePositionTracker.total_unrealized_pnl()`). The equity
-  read is fault-isolated: an unavailable/non-finite/degenerate unrealized
-  read degrades explicitly to balance-only with a WARNING (logged on
-  transition, not per iteration) — never crashes the loop, never silently
-  halts. Backtest gate behavior is unchanged (no provider wired; backtest
-  evaluates entries only while flat, where equity == cash by identity).
+  read is fault-isolated via one shared `BreakerEquityFeed` (used by both
+  call sites): an unavailable/non-finite/degenerate unrealized read degrades
+  explicitly to balance-only with a WARNING (logged on transition, not per
+  iteration) — never crashes the loop, never silently halts — and while
+  degraded the breaker's latch state is FROZEN: a cash reading measured
+  against equity-basis anchors may neither latch a halt (spurious
+  daily-loss latch under a winning open position) nor clear one (spurious
+  drawdown-latch clear at cash par, which would emit duplicate dry-run
+  rows on re-trip); existing latches keep reporting and halting until the
+  feed recovers. Backtest gate behavior is unchanged (no provider wired;
+  backtest evaluates entries only while flat, where equity == cash by
+  identity).
   (2) *Restart-fragile drawdown peak*: `AccountCircuitBreaker._peak` had no
   restart-safe seeding — every restart (~13 in the last 30 prod days)
   silently zeroed the 15% halt's memory (the #845/#847 peak-reset class).

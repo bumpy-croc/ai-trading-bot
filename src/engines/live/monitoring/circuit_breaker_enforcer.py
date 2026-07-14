@@ -8,9 +8,13 @@ new entries when tripped). This enforcer adds the loop-driven half:
   ``current_balance`` only moves on realized events, so a cash-fed breaker is
   structurally blind to an open position's adverse move — the exact loss it
   exists to halt — for the entire holding period. The unrealized read is
-  fault-isolated: if it is unavailable on an iteration the check degrades
-  explicitly to balance-only with a WARNING (never crashes the loop, never
-  silently halts).
+  fault-isolated via the shared ``BreakerEquityFeed``: if it is unavailable on
+  an iteration the check degrades explicitly to balance-only with a WARNING
+  (never crashes the loop, never silently halts) and the breaker's latch state
+  is FROZEN — a cash reading measured against equity-basis anchors may neither
+  latch a halt (spurious daily-loss latch under a winning open position) nor
+  clear one (spurious drawdown-latch clear at cash par) until the feed
+  recovers. Existing latches keep reporting, and halting, while frozen.
 - **Restart-safe daily baseline**: on boot it seeds the breaker's daily-loss
   baseline from the day's first ``account_history`` snapshot
   (``get_first_snapshot_of_day``, equity basis), so an intraday restart does not
@@ -46,7 +50,13 @@ from typing import TYPE_CHECKING, Protocol
 
 from src.database.models import EventType
 from src.infrastructure.logging.events import log_risk_event
-from src.risk.circuit_breaker import MODE_ACTIVE, MODE_DRY_RUN, AccountCircuitBreaker
+from src.risk.circuit_breaker import (
+    BASIS_BALANCE_DEGRADED,
+    MODE_ACTIVE,
+    MODE_DRY_RUN,
+    AccountCircuitBreaker,
+    BreakerEquityFeed,
+)
 
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
@@ -104,11 +114,10 @@ class CircuitBreakerEnforcer:
         """
         self._state = engine_state
         self._breaker = breaker
-        self._unrealized_provider = unrealized_pnl_provider
+        self._equity_feed = BreakerEquityFeed(unrealized_pnl_provider)
         self._seeded = False
         self._seed_attempts = 0
         self._halt_notified = False
-        self._equity_degraded = False
         self._peak_seed_provenance = "self_anchored"
 
     @property
@@ -124,11 +133,16 @@ class CircuitBreakerEnforcer:
 
         try:
             balance = float(state.current_balance)
-            equity, unrealized, basis = self._equity_reading(balance)
+            equity, unrealized, basis = self._equity_feed.read(balance)
             now = datetime.now(UTC)
             if not self._seeded:
                 self._try_seed(now)  # best-effort; evaluate proceeds regardless
-            decision = self._breaker.evaluate(equity, now)
+            # A degraded (cash-only) reading freezes latch transitions: it is
+            # measured against equity-basis anchors, so it may neither latch
+            # nor clear — existing latches keep reporting (and halting).
+            decision = self._breaker.evaluate(
+                equity, now, allow_transitions=basis != BASIS_BALANCE_DEGRADED
+            )
         except Exception as e:  # noqa: BLE001 - monitoring must never crash the loop
             logger.error("Circuit-breaker check failed: %s", e, exc_info=True)
             return
@@ -218,41 +232,6 @@ class CircuitBreakerEnforcer:
             logger.critical(
                 "Circuit-breaker trip handling failed after close-only: %s", e, exc_info=True
             )
-
-    def _equity_reading(self, balance: float) -> tuple[float, float, str]:
-        """Read TRUE equity for the breaker: ``(equity, unrealized, basis)``.
-
-        ``basis`` is ``"equity"`` (cash + unrealized), ``"balance"`` (no
-        provider wired), or ``"balance_degraded"`` (provider unavailable this
-        iteration — degraded explicitly with a WARNING on the transition, not
-        on every loop iteration). Never raises.
-        """
-        provider = self._unrealized_provider
-        if provider is None:
-            return balance, 0.0, "balance"
-        try:
-            unrealized = float(provider())
-            if not math.isfinite(unrealized):
-                raise ValueError(f"non-finite unrealized P&L: {unrealized}")
-            equity = balance + unrealized
-            if equity <= 0 < balance:
-                # evaluate() ignores non-positive equity entirely — surface the
-                # degenerate read instead of letting the breaker silently no-op.
-                raise ValueError(f"non-positive equity {equity} from unrealized {unrealized}")
-        except Exception as e:  # noqa: BLE001 - equity read must never crash the loop
-            if not self._equity_degraded:
-                self._equity_degraded = True
-                logger.warning(
-                    "Circuit-breaker unrealized P&L unavailable — degrading to "
-                    "balance-only evaluation (balance $%.2f): %s",
-                    balance,
-                    e,
-                )
-            return balance, 0.0, "balance_degraded"
-        if self._equity_degraded:
-            self._equity_degraded = False
-            logger.info("Circuit-breaker equity read recovered — resuming equity evaluation")
-        return equity, unrealized, "equity"
 
     def _try_seed(self, now: datetime) -> None:
         """Seed the daily baseline and drawdown peak from durable history.

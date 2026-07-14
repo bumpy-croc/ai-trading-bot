@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -58,6 +59,63 @@ MODE_OFF = "off"
 MODE_DRY_RUN = "dry_run"
 MODE_ACTIVE = "active"
 _VALID_MODES = frozenset({MODE_OFF, MODE_DRY_RUN, MODE_ACTIVE})
+
+# Measurement basis of a breaker equity reading (see BreakerEquityFeed.read).
+BASIS_EQUITY = "equity"  # cash + unrealized P&L (the intended basis)
+BASIS_BALANCE = "balance"  # no unrealized feed wired (deliberate cash-only)
+BASIS_BALANCE_DEGRADED = "balance_degraded"  # feed unavailable this reading
+
+
+class BreakerEquityFeed:
+    """Fault-isolated TRUE-equity reader shared by every breaker call site.
+
+    Wraps an unrealized-P&L provider (the live position tracker's
+    mark-to-market sum) and returns ``(equity, unrealized, basis)`` readings.
+    An unavailable, non-finite, or degenerate (equity <= 0 while cash > 0)
+    read degrades explicitly to balance-only with a WARNING on the transition
+    (INFO on recovery) — it never raises into the trading loop or entry path.
+
+    Callers must pass ``allow_transitions=(basis != BASIS_BALANCE_DEGRADED)``
+    to :meth:`AccountCircuitBreaker.evaluate`: a degraded reading is CASH
+    measured against EQUITY-basis anchors, and letting it move latch state
+    could spuriously latch the daily halt (winning open position) or
+    spuriously clear the drawdown latch (cash at par while true equity is in
+    drawdown). Keeping the degradation handling in one class means that rule
+    is implemented exactly once.
+    """
+
+    def __init__(self, unrealized_pnl_provider: Callable[[], float] | None) -> None:
+        self._provider = unrealized_pnl_provider
+        self._degraded = False
+
+    def read(self, balance: float) -> tuple[float, float, str]:
+        """Read ``(equity, unrealized, basis)`` for the given cash balance."""
+        provider = self._provider
+        if provider is None:
+            return balance, 0.0, BASIS_BALANCE
+        try:
+            unrealized = float(provider())
+            if not math.isfinite(unrealized):
+                raise ValueError(f"non-finite unrealized P&L: {unrealized}")
+            equity = balance + unrealized
+            if equity <= 0 < balance:
+                # evaluate() ignores non-positive equity entirely — surface the
+                # degenerate read instead of letting the breaker silently no-op.
+                raise ValueError(f"non-positive equity {equity} from unrealized {unrealized}")
+        except Exception as e:  # noqa: BLE001 - equity read must never crash callers
+            if not self._degraded:
+                self._degraded = True
+                logger.warning(
+                    "Circuit-breaker unrealized P&L unavailable — degrading to "
+                    "balance-only evaluation (balance $%.2f, latch state frozen): %s",
+                    balance,
+                    e,
+                )
+            return balance, 0.0, BASIS_BALANCE_DEGRADED
+        if self._degraded:
+            self._degraded = False
+            logger.info("Circuit-breaker equity read recovered — resuming equity evaluation")
+        return equity, unrealized, BASIS_EQUITY
 
 
 def _normalize_mode(value: object) -> str:
@@ -143,12 +201,22 @@ class AccountCircuitBreaker:
             self._daily_baseline = equity
             self._daily_halt_latched = False
 
-    def evaluate(self, equity: float, now: datetime) -> BreakerDecision:
+    def evaluate(
+        self, equity: float, now: datetime, *, allow_transitions: bool = True
+    ) -> BreakerDecision:
         """Update state from the latest equity and return the halt decision.
 
         Args:
             equity: Current account equity (balance + unrealized), in quote currency.
             now: Current time (UTC-aware; naive treated as UTC).
+            allow_transitions: Pass False when the reading is on a DEGRADED
+                basis (cash-only while the unrealized feed is down): the
+                breaker still evaluates and reports its EXISTING latch state,
+                but makes no state transitions — no new latches, no clears, no
+                day roll, no peak ratchet. A cash reading measured against
+                equity-basis anchors could otherwise spuriously latch the
+                daily halt (winning open position) or spuriously clear the
+                drawdown latch (cash at par while true equity is in drawdown).
 
         Returns:
             A :class:`BreakerDecision`. ``entries_blocked`` is only True in
@@ -158,26 +226,28 @@ class AccountCircuitBreaker:
         if mode == MODE_OFF or not math.isfinite(equity) or equity <= 0:
             return BreakerDecision(False, False, None, mode)
 
-        today = now.date()  # naive datetimes are treated as UTC by contract
-        self._roll_day(equity, today)
-        self._peak = max(self._peak, equity)
+        if allow_transitions:
+            today = now.date()  # naive datetimes are treated as UTC by contract
+            self._roll_day(equity, today)
+            self._peak = max(self._peak, equity)
 
         reason: str | None = None
 
         # Daily-loss halt (latches for the day once tripped).
         baseline = self._daily_baseline or equity
         daily_loss = (baseline - equity) / baseline if baseline > 0 else 0.0
-        if daily_loss >= self.daily_loss_limit:
+        if allow_transitions and daily_loss >= self.daily_loss_limit:
             self._daily_halt_latched = True
         if self._daily_halt_latched:
             reason = f"daily_loss_halt_{daily_loss:.3f}"
 
         # Drawdown halt (clears on recovery toward the peak).
         drawdown = (self._peak - equity) / self._peak if self._peak > 0 else 0.0
-        if drawdown >= self.drawdown_halt:
-            self._drawdown_halted = True
-        elif self._drawdown_halted and drawdown <= self.drawdown_recovery:
-            self._drawdown_halted = False
+        if allow_transitions:
+            if drawdown >= self.drawdown_halt:
+                self._drawdown_halted = True
+            elif self._drawdown_halted and drawdown <= self.drawdown_recovery:
+                self._drawdown_halted = False
         if self._drawdown_halted:
             reason = reason or f"drawdown_halt_{drawdown:.3f}"
 

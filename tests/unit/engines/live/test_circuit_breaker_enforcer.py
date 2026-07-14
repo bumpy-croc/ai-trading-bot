@@ -265,12 +265,15 @@ def test_unrealized_recovery_resumes_equity_evaluation(caplog):
     s = _State()
     unrealized = _Unrealized(RuntimeError("mark price unavailable"))
     enf = CircuitBreakerEnforcer(s, _breaker("active"), unrealized_pnl_provider=unrealized)
-    enf.check()  # degraded (balance-only)
-    unrealized.value = -30.0  # feed recovers with a -3% mark
+    enf.check()  # degraded (balance-only): frozen, nothing anchors
+    unrealized.value = -30.0  # feed recovers: baseline anchors at equity 970
     with caplog.at_level("INFO"):
         enf.check()
-    assert s._close_only_mode is True  # equity evaluation resumed and tripped
+    assert s._close_only_mode is False  # anchored at recovery, no loss yet
     assert any("recovered" in r.message for r in caplog.records)
+    unrealized.value = -60.0  # equity 940: a real -3.1% move vs the 970 anchor
+    enf.check()
+    assert s._close_only_mode is True  # equity evaluation resumed and tripped
 
 
 def test_non_finite_unrealized_degrades_to_balance():
@@ -316,16 +319,65 @@ def test_dry_run_event_carries_equity_numbers_and_peak_provenance():
     assert "db_session_max" in message
 
 
-def test_dry_run_event_reports_degraded_balance_basis():
+# --- degraded-basis latch freeze (#1032 fix round) -----------------------------
+# A degraded reading is CASH measured against EQUITY-basis anchors — a mixed
+# basis must never move latch state: no new latches, no clears, frozen until
+# the basis recovers.
+
+
+def test_degraded_winning_position_does_not_latch_daily_halt():
+    # Winning open position (+50) anchors the day at equity 1050; the provider
+    # then faults, collapsing the reading to cash 1000 — an apparent -4.8%
+    # "loss" that pre-fix would spuriously LATCH the daily halt for the rest
+    # of the UTC day.
+    s = _State()
+    unrealized = _Unrealized(50.0)
+    enf = CircuitBreakerEnforcer(s, _breaker("active"), unrealized_pnl_provider=unrealized)
+    enf.check()  # healthy anchor: baseline 1050
+    unrealized.value = RuntimeError("mark price unavailable")
+    enf.check()  # degraded: frozen, no latch
+    assert s._close_only_mode is False
+    assert s.events == []
+    unrealized.value = 40.0  # recovered: equity 1040, a real -0.95% (no trip)
+    enf.check()
+    assert s._close_only_mode is False
+    assert s.events == []
+
+
+def test_degraded_reading_does_not_clear_drawdown_latch_or_duplicate_rows():
+    # In-drawdown latch (equity 840 vs peak 1000 = -16%), then the provider
+    # faults and the reading jumps to cash par with the peak — pre-fix that
+    # spuriously CLEARED the latch, and the healthy re-trip wrote a duplicate
+    # dry_run row. The latch must stay frozen and the episode must stay one row.
+    s = _State()
+    unrealized = _Unrealized(0.0)
+    enf = CircuitBreakerEnforcer(
+        s,
+        _breaker("dry_run", daily_loss_limit=0.99, drawdown_halt=0.15, drawdown_recovery=0.05),
+        unrealized_pnl_provider=unrealized,
+    )
+    enf.check()  # anchor peak/baseline at 1000
+    unrealized.value = -160.0  # equity 840: -16% drawdown latches (row 1)
+    enf.check()
+    assert s.events == ["CIRCUIT_BREAKER_DRY_RUN"]
+    unrealized.value = RuntimeError("mark price unavailable")
+    enf.check()  # degraded at cash par: latch must NOT clear
+    unrealized.value = -160.0  # recovered, still in real drawdown
+    enf.check()
+    assert s.events == ["CIRCUIT_BREAKER_DRY_RUN"]  # same episode: exactly one row
+
+
+def test_degraded_realized_loss_does_not_trip_while_frozen():
+    # Mandated freeze semantics: while the basis is degraded even a realized
+    # cash move makes no latch transitions — the WARNING plus the basis field
+    # in observability surface the outage; the halt re-arms on recovery.
     s = _State()
     unrealized = _Unrealized(RuntimeError("mark price unavailable"))
     enf = CircuitBreakerEnforcer(
         s, _breaker("dry_run", daily_loss_limit=0.025), unrealized_pnl_provider=unrealized
     )
     enf.check()
-    s.current_balance = 950.0  # realized cash loss still evaluated when degraded
+    s.current_balance = 950.0  # -5% realized while degraded: frozen, no row
     enf.check()
-
-    assert s.events == ["CIRCUIT_BREAKER_DRY_RUN"]
-    (args, _kwargs) = s.event_calls[0]
-    assert "basis=balance_degraded" in args[1]
+    assert s.events == []
+    assert s._close_only_mode is False
