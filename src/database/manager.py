@@ -2464,6 +2464,43 @@ class DatabaseManager:
             The peak balance across the session(s), or None when no snapshot
             exists yet.
         """
+        return self._get_session_peak(AccountHistory.balance, session_id, fallback_session_id)
+
+    def get_session_peak_equity(
+        self,
+        session_id: int | None = None,
+        fallback_session_id: int | None = None,
+    ) -> float | None:
+        """Get the highest account_history equity recorded for the session(s).
+
+        Re-seeds the account circuit breaker's drawdown peak after a restart
+        (#986 gap B) on the same basis the breaker evaluates: TRUE equity
+        (balance + unrealized P&L at snapshot time). Session-scoping and
+        fallback semantics mirror ``get_session_peak_balance``. Rows with a
+        NULL equity (defensive — the column is non-nullable) fall back to
+        their balance.
+
+        Args:
+            session_id: Trading session ID (defaults to the current session).
+            fallback_session_id: Prior session whose snapshots also count.
+
+        Returns:
+            The peak equity across the session(s), or None when no snapshot
+            exists yet.
+        """
+        return self._get_session_peak(
+            sa.func.coalesce(AccountHistory.equity, AccountHistory.balance),
+            session_id,
+            fallback_session_id,
+        )
+
+    def _get_session_peak(
+        self,
+        column: sa.ColumnExpressionArgument[Any],
+        session_id: int | None,
+        fallback_session_id: int | None,
+    ) -> float | None:
+        """Max of an account_history column across the session(s) (see callers)."""
         session_id = session_id or self._current_session_id
         if not session_id:
             return None
@@ -2475,7 +2512,7 @@ class DatabaseManager:
         # Use ANALYTICS timeout - one-shot boot-time read, not in the critical path
         with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
             peak = (
-                session.query(sa.func.max(AccountHistory.balance))
+                session.query(sa.func.max(column))
                 .filter(AccountHistory.session_id.in_(session_ids))
                 .scalar()
             )

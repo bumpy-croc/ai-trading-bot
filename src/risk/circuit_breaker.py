@@ -23,6 +23,17 @@ mid-day restart the in-memory baseline re-anchors to current equity, which would
 disarm the daily-loss halt for the rest of that day. Callers that persist a
 daily baseline (DB) can seed it via ``seed_daily_baseline`` on boot to preserve
 the halt across restarts (full DB persistence is a follow-up, see the PR).
+The drawdown peak has the same restart fragility: it self-anchors to the first
+post-restart equity sample unless seeded from durable history via ``seed_peak``
+(the ``CircuitBreakerEnforcer`` seeds it from the ``account_history`` session
+equity max — the #845/#847 peak-reset class otherwise silently zeroes the 15%
+halt's memory on every deploy).
+
+Measurement basis: ``evaluate`` expects TRUE EQUITY (cash balance plus
+mark-to-market unrealized P&L of open positions). Cash-only input is blind to
+an open position's adverse move — the exact loss these halts exist to catch —
+so callers feed equity and degrade to balance-only explicitly (with a WARNING)
+only when the unrealized read is unavailable.
 """
 
 from __future__ import annotations
@@ -100,11 +111,30 @@ class AccountCircuitBreaker:
             return self._mode_override
         return _normalize_mode(get_flag(FEATURE_FLAG, default=MODE_OFF))
 
+    @property
+    def peak(self) -> float:
+        """Current peak equity the drawdown halt measures from."""
+        return self._peak
+
+    @property
+    def daily_baseline(self) -> float | None:
+        """Equity baseline the daily-loss halt measures from (None until anchored)."""
+        return self._daily_baseline
+
     def seed_daily_baseline(self, baseline: float, day: date) -> None:
         """Seed a persisted daily baseline on boot (restart-safety hook)."""
         if math.isfinite(baseline) and baseline > 0:
             self._daily_baseline = float(baseline)
             self._day = day
+
+    def seed_peak(self, peak: float) -> None:
+        """Seed the drawdown peak from durable history on boot (restart-safety hook).
+
+        Only ever RAISES the peak — a stale or lower candidate can never erase
+        drawdown the breaker has already observed in this process.
+        """
+        if math.isfinite(peak) and peak > self._peak:
+            self._peak = float(peak)
 
     def _roll_day(self, equity: float, today: date) -> None:
         """Re-anchor the daily baseline and clear the daily latch on a new UTC day."""

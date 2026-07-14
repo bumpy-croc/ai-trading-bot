@@ -990,7 +990,12 @@ class LiveTradingEngine:
         self._circuit_breaker = AccountCircuitBreaker(
             mode=get_flag("account_circuit_breakers", default="off")
         )
-        self.live_entry_handler.configure_circuit_breaker(self._circuit_breaker)
+        # True-equity feed (#986 gap A): the cash balance never reflects an
+        # open position's unrealized loss — the exact move the breaker halts.
+        self.live_entry_handler.configure_circuit_breaker(
+            self._circuit_breaker,
+            unrealized_pnl_provider=self.live_position_tracker.total_unrealized_pnl,
+        )
         return exposure_governor
 
     def _init_exit_handler(
@@ -1057,10 +1062,12 @@ class LiveTradingEngine:
             guard=MaxDrawdownGuard(self.risk_manager.params.max_drawdown),
         )
         # #807 follow-up: run the account circuit breaker on the loop too —
-        # restart-safe daily baseline + close-only-on-trip (dry_run/active).
+        # restart-safe daily baseline + drawdown peak (#986 gap B), true-equity
+        # evaluation (#986 gap A), and close-only-on-trip (dry_run/active).
         self._circuit_breaker_enforcer = CircuitBreakerEnforcer(
             engine_state=self,
             breaker=self._circuit_breaker,
+            unrealized_pnl_provider=self.live_position_tracker.total_unrealized_pnl,
         )
         # Manual kill-switch (#922): polls the DB `system_halt` flag at the top
         # of every loop iteration so `atb live-control halt` takes effect

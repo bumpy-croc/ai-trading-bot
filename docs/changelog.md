@@ -44,6 +44,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior change when neither flag is passed; the live path cannot be pinned.
 
 ### Fixed
+- **Account circuit breakers now measure true equity and survive restarts**
+  (#986 items, per log.md [D-2026-07-14-03]; refs #845/#847/#1001 — nothing
+  armed: the `account_circuit_breakers` flag stays `off`):
+  (1) *Cash-not-equity blindness*: `AccountCircuitBreaker` was evaluated on
+  `state.current_balance`, which only moves on realized events —
+  structurally blind to an open position's unrealized loss (the exact move
+  the 2.5% daily-loss and 15% drawdown halts exist to catch) for the entire
+  holding period. Both the loop enforcer (`CircuitBreakerEnforcer.check`)
+  and the shared pre-order gate now evaluate TRUE equity =
+  `current_balance` + mark-to-market unrealized P&L of open positions (new
+  thread-safe `LivePositionTracker.total_unrealized_pnl()`). The equity
+  read is fault-isolated: an unavailable/non-finite/degenerate unrealized
+  read degrades explicitly to balance-only with a WARNING (logged on
+  transition, not per iteration) — never crashes the loop, never silently
+  halts. Backtest gate behavior is unchanged (no provider wired; backtest
+  evaluates entries only while flat, where equity == cash by identity).
+  (2) *Restart-fragile drawdown peak*: `AccountCircuitBreaker._peak` had no
+  restart-safe seeding — every restart (~13 in the last 30 prod days)
+  silently zeroed the 15% halt's memory (the #845/#847 peak-reset class).
+  The enforcer now seeds the peak at arm time from the durable
+  `account_history` session equity max (new
+  `DatabaseManager.get_session_peak_equity`, session-scoped with the same
+  recovered-inactive-session fallback the `MaxDrawdownGuard` uses since
+  #1001) via the new `AccountCircuitBreaker.seed_peak` hook (raise-only —
+  a stale candidate can never erase observed drawdown). The daily-loss
+  baseline seed now uses the day-start snapshot's *equity* (was balance)
+  so both halts measure on the same basis. (3) *Auditable dry-run
+  evidence* (#968): `CIRCUIT_BREAKER_DRY_RUN` system_events rows and
+  trip/dry-run `risk_event` logs now carry the full measurement snapshot —
+  equity, balance, unrealized P&L, evaluation basis
+  (`equity`/`balance`/`balance_degraded`), current peak, and peak
+  provenance (`db_session_max` vs `self_anchored`) — so the staged
+  dry-run arming plan can collect valid evidence. Thresholds, flag
+  defaults, enforcement actions, and `MaxDrawdownGuard` behavior are
+  untouched.
 - **Reconciliation edge paths: offline-SL double-count, partial-exit size
   reset, silent periodic close failures** (2026-07-12 loop/state audit,
   closes #980): (1) the legacy SL-based startup fallback re-applied an

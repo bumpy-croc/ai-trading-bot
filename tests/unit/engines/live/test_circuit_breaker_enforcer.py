@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 
 
 class _State:
-    def __init__(self, balance=1000.0, day_snapshot=None, session_id=1):
+    def __init__(self, balance=1000.0, day_snapshot=None, session_id=1, session_peak_equity=None):
         self.current_balance = balance
         self.trading_session_id = session_id
         self._recovered_inactive_session_id = None
@@ -25,7 +25,11 @@ class _State:
         self.events: list[str | None] = []
         self.event_calls: list[tuple[tuple, dict]] = []
         self._day_snapshot = day_snapshot
-        self.db_manager = SimpleNamespace(get_first_snapshot_of_day=lambda **kw: self._day_snapshot)
+        self._session_peak_equity = session_peak_equity
+        self.db_manager = SimpleNamespace(
+            get_first_snapshot_of_day=lambda **kw: self._day_snapshot,
+            get_session_peak_equity=lambda **kw: self._session_peak_equity,
+        )
 
     def _enter_close_only_mode(self):
         self._close_only_mode = True
@@ -33,6 +37,18 @@ class _State:
     def _record_event(self, *args, **kwargs):
         self.events.append(kwargs.get("error_code"))
         self.event_calls.append((args, kwargs))
+
+
+class _Unrealized:
+    """Mutable unrealized-P&L stub standing in for the position tracker sum."""
+
+    def __init__(self, value=0.0):
+        self.value = value
+
+    def __call__(self):
+        if isinstance(self.value, BaseException):
+            raise self.value
+        return self.value
 
 
 def _breaker(mode, **kw):
@@ -145,10 +161,171 @@ def test_seed_deferred_until_session_ready_then_gives_up():
 def test_check_never_raises_on_bad_state():
     s = _State()
     s.db_manager = SimpleNamespace(
-        get_first_snapshot_of_day=lambda **kw: (_ for _ in ()).throw(RuntimeError("db down"))
+        get_first_snapshot_of_day=lambda **kw: (_ for _ in ()).throw(RuntimeError("db down")),
+        get_session_peak_equity=lambda **kw: None,
     )
     enf = CircuitBreakerEnforcer(s, _breaker("active"))
     enf.check()  # must not raise despite DB failure
     s.current_balance = 970.0
     enf.check()
     assert s._close_only_mode is True  # still enforces against self-anchored baseline
+
+
+# --- equity-based evaluation (#986 gap A) ------------------------------------
+
+
+def test_open_position_loss_trips_on_equity_where_cash_would_not():
+    # Cash stays flat at 1000 (unrealized P&L never touches current_balance)
+    # while an open position bleeds to -3% of equity: the breaker must trip on
+    # TRUE equity. Pre-fix, this exact scenario was structurally invisible.
+    s = _State()
+    unrealized = _Unrealized(0.0)
+    enf = CircuitBreakerEnforcer(s, _breaker("active"), unrealized_pnl_provider=unrealized)
+    enf.check()  # anchor baseline at equity 1000 (flat)
+    unrealized.value = -30.0  # open position marks -3%; cash unchanged
+    enf.check()
+    assert s._close_only_mode is True
+    assert "ACCOUNT_CIRCUIT_BREAKER_TRIP" in s.events
+
+
+def test_cash_only_control_does_not_trip_without_provider():
+    # Control for the test above: identical cash series without an equity feed
+    # never trips — proving the trip comes from the unrealized P&L.
+    s = _State()
+    enf = CircuitBreakerEnforcer(s, _breaker("active"))
+    enf.check()
+    enf.check()
+    assert s._close_only_mode is False
+
+
+def test_daily_baseline_seeds_from_snapshot_equity_not_balance():
+    # Day opened with equity 1000 (balance 950 + 50 unrealized). The daily-loss
+    # baseline must anchor to the snapshot's EQUITY: equity 970 is a -3% move
+    # against 1000 (trip) but would read as a +2.1% gain against balance 950.
+    s = _State(balance=970.0, day_snapshot=SimpleNamespace(balance=950.0, equity=1000.0))
+    enf = CircuitBreakerEnforcer(s, _breaker("active"))
+    enf.check()
+    assert s._close_only_mode is True
+
+
+# --- restart-safe peak seeding (#986 gap B) -----------------------------------
+
+
+def test_restart_reseeds_drawdown_peak_from_durable_session_max():
+    # Restart at 1000 while the durable session equity peak is 1100: a slide to
+    # 930 is a 15.5% drawdown from the true peak (trip) but only 7% from the
+    # restart-time self-anchor (silently blind, the #845/#847 class).
+    s = _State(balance=1000.0, session_peak_equity=1100.0)
+    enf = CircuitBreakerEnforcer(
+        s, _breaker("active", daily_loss_limit=0.99, drawdown_halt=0.15, drawdown_recovery=0.05)
+    )
+    enf.check()  # seeds peak 1100 from account_history
+    assert s._close_only_mode is False
+    s.current_balance = 930.0
+    enf.check()
+    assert s._close_only_mode is True
+
+
+def test_no_durable_peak_self_anchors():
+    s = _State(balance=1000.0, session_peak_equity=None)
+    enf = CircuitBreakerEnforcer(
+        s, _breaker("active", daily_loss_limit=0.99, drawdown_halt=0.15, drawdown_recovery=0.05)
+    )
+    enf.check()
+    s.current_balance = 930.0  # -7% from self-anchored 1000: below the cap
+    enf.check()
+    assert s._close_only_mode is False
+
+
+def test_peak_seed_failure_defers_then_arms_self_anchored():
+    s = _State(session_id=None)  # session not resolved: seeding must defer
+    enf = CircuitBreakerEnforcer(s, _breaker("active"))
+    for _ in range(MAX_SEED_ATTEMPTS):
+        enf.check()
+    assert enf._seeded is True
+    assert enf._peak_seed_provenance == "self_anchored"
+
+
+# --- equity-read fault isolation ----------------------------------------------
+
+
+def test_unrealized_failure_degrades_to_balance_with_warning(caplog):
+    s = _State()
+    unrealized = _Unrealized(RuntimeError("mark price unavailable"))
+    enf = CircuitBreakerEnforcer(s, _breaker("active"), unrealized_pnl_provider=unrealized)
+    with caplog.at_level("WARNING"):
+        enf.check()  # must not raise
+        enf.check()
+    assert s._close_only_mode is False  # balance alone is healthy: no halt
+    degraded_warnings = [r for r in caplog.records if "balance-only" in r.message]
+    assert len(degraded_warnings) == 1  # warn on transition, not every iteration
+
+
+def test_unrealized_recovery_resumes_equity_evaluation(caplog):
+    s = _State()
+    unrealized = _Unrealized(RuntimeError("mark price unavailable"))
+    enf = CircuitBreakerEnforcer(s, _breaker("active"), unrealized_pnl_provider=unrealized)
+    enf.check()  # degraded (balance-only)
+    unrealized.value = -30.0  # feed recovers with a -3% mark
+    with caplog.at_level("INFO"):
+        enf.check()
+    assert s._close_only_mode is True  # equity evaluation resumed and tripped
+    assert any("recovered" in r.message for r in caplog.records)
+
+
+def test_non_finite_unrealized_degrades_to_balance():
+    s = _State()
+    unrealized = _Unrealized(float("nan"))
+    enf = CircuitBreakerEnforcer(s, _breaker("active"), unrealized_pnl_provider=unrealized)
+    enf.check()
+    enf.check()
+    assert s._close_only_mode is False
+
+
+def test_non_positive_equity_degrades_to_balance(caplog):
+    # A garbage unrealized read that drives computed equity <= 0 must not feed
+    # the breaker (evaluate() would silently no-op on it) — degrade explicitly.
+    s = _State()
+    unrealized = _Unrealized(-2000.0)
+    enf = CircuitBreakerEnforcer(s, _breaker("active"), unrealized_pnl_provider=unrealized)
+    with caplog.at_level("WARNING"):
+        enf.check()
+        enf.check()
+    assert s._close_only_mode is False
+    assert any("balance-only" in r.message for r in caplog.records)
+
+
+# --- dry_run observability payload (#968) -------------------------------------
+
+
+def test_dry_run_event_carries_equity_numbers_and_peak_provenance():
+    s = _State(session_peak_equity=1100.0)
+    unrealized = _Unrealized(0.0)
+    enf = CircuitBreakerEnforcer(s, _breaker("dry_run"), unrealized_pnl_provider=unrealized)
+    enf.check()  # seed: peak 1100 (db), baseline 1000 (self-anchor)
+    unrealized.value = -30.0  # equity 970: -3% daily loss
+    enf.check()
+
+    assert s.events == ["CIRCUIT_BREAKER_DRY_RUN"]
+    (args, _kwargs) = s.event_calls[0]
+    message = args[1]
+    assert "equity $970.00" in message
+    assert "balance $1,000.00" in message
+    assert "unrealized $-30.00" in message
+    assert "peak $1,100.00" in message
+    assert "db_session_max" in message
+
+
+def test_dry_run_event_reports_degraded_balance_basis():
+    s = _State()
+    unrealized = _Unrealized(RuntimeError("mark price unavailable"))
+    enf = CircuitBreakerEnforcer(
+        s, _breaker("dry_run", daily_loss_limit=0.025), unrealized_pnl_provider=unrealized
+    )
+    enf.check()
+    s.current_balance = 950.0  # realized cash loss still evaluated when degraded
+    enf.check()
+
+    assert s.events == ["CIRCUIT_BREAKER_DRY_RUN"]
+    (args, _kwargs) = s.event_calls[0]
+    assert "basis=balance_degraded" in args[1]

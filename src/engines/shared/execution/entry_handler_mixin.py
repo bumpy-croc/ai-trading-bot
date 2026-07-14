@@ -9,6 +9,7 @@ by code review (#486, CODE.md Backtest-Live Parity).
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -45,6 +46,10 @@ class SharedEntryHandlerMixin:
     _macro_event_guard: MacroEventGuard | None = None
     # Optional account-level circuit breaker (#807). Absent/None => inert.
     _circuit_breaker: AccountCircuitBreaker | None = None
+    # Optional unrealized-P&L feed for the breaker's true-equity read (#986).
+    # Absent/None => the breaker evaluates the caller-supplied balance as-is.
+    _breaker_unrealized_provider: Callable[[], float] | None = None
+    _breaker_equity_degraded: bool = False
 
     def _extract_entry_plan(
         self,
@@ -142,9 +147,59 @@ class SharedEntryHandlerMixin:
         """Wire the #806 macro-event de-risking guard (independent of the governor)."""
         self._macro_event_guard = macro_guard
 
-    def configure_circuit_breaker(self, circuit_breaker: AccountCircuitBreaker | None) -> None:
-        """Wire the #807 account-level circuit breaker (None => inert)."""
+    def configure_circuit_breaker(
+        self,
+        circuit_breaker: AccountCircuitBreaker | None,
+        *,
+        unrealized_pnl_provider: Callable[[], float] | None = None,
+    ) -> None:
+        """Wire the #807 account-level circuit breaker (None => inert).
+
+        ``unrealized_pnl_provider`` supplies the mark-to-market unrealized P&L
+        of open positions so the breaker evaluates TRUE EQUITY (#986 gap A):
+        the live engine's cash balance never reflects an open position's loss,
+        which is the exact move the breaker exists to halt. Without a provider
+        the breaker evaluates the caller-supplied balance unchanged (backtest
+        evaluates entries only while flat, where equity == cash by identity).
+        """
         self._circuit_breaker = circuit_breaker
+        self._breaker_unrealized_provider = unrealized_pnl_provider
+        self._breaker_equity_degraded = False
+
+    def _breaker_equity(self, cash_balance: float) -> float:
+        """True equity for the breaker: cash + unrealized P&L of open positions.
+
+        Fault-isolated: an unavailable or non-finite unrealized read degrades
+        explicitly to balance-only with a WARNING (logged on transition, not
+        every call) — it never raises into the entry path and never feeds the
+        breaker a garbage equity that could spuriously halt or silently no-op.
+        """
+        provider = self._breaker_unrealized_provider
+        if provider is None:
+            return cash_balance
+        try:
+            unrealized = float(provider())
+            if not math.isfinite(unrealized):
+                raise ValueError(f"non-finite unrealized P&L: {unrealized}")
+            equity = cash_balance + unrealized
+            if equity <= 0 < cash_balance:
+                # evaluate() ignores non-positive equity entirely — surface the
+                # degenerate read instead of letting the breaker silently no-op.
+                raise ValueError(f"non-positive equity {equity} from unrealized {unrealized}")
+        except Exception as e:  # noqa: BLE001 - equity read must never break entries
+            if not self._breaker_equity_degraded:
+                self._breaker_equity_degraded = True
+                logger.warning(
+                    "Circuit-breaker equity read unavailable — degrading to "
+                    "balance-only evaluation (balance $%.2f): %s",
+                    cash_balance,
+                    e,
+                )
+            return cash_balance
+        if self._breaker_equity_degraded:
+            self._breaker_equity_degraded = False
+            logger.info("Circuit-breaker equity read recovered — resuming equity evaluation")
+        return equity
 
     def apply_pre_order_gates(
         self,
@@ -170,9 +225,13 @@ class SharedEntryHandlerMixin:
 
         # #807: account-level circuit breaker. A hard halt blocks new entries;
         # in dry_run it logs but does not block (entries_blocked stays False).
+        # Evaluated on TRUE equity (cash + unrealized, #986): the `equity`
+        # argument callers pass here is the cash balance, blind to open-position
+        # losses. Scoped to the breaker — the macro guard and exposure governor
+        # below keep their original balance basis unchanged.
         breaker = self._circuit_breaker
         if breaker is not None and now is not None:
-            decision = breaker.evaluate(equity, now)
+            decision = breaker.evaluate(self._breaker_equity(equity), now)
             if decision.entries_blocked:
                 return 0.0, f"circuit_breaker_{decision.reason}"
 

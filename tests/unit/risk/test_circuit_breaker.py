@@ -111,13 +111,43 @@ def test_seed_daily_baseline_preserves_halt_across_restart():
     assert d.entries_blocked
 
 
+# --- restart-safe peak seeding (#986 gap B) ---------------------------------
+
+
+def test_seed_peak_preserves_drawdown_halt_across_restart():
+    # Simulate a restart mid-drawdown: without seeding, the peak would
+    # self-anchor to the depressed post-restart equity and the 15% halt would
+    # silently lose its memory (the #845/#847 peak-reset class).
+    b = _breaker(daily_loss_limit=0.99)  # isolate the drawdown halt
+    b.seed_peak(1000.0)
+    d = b.evaluate(840.0, D0)  # -16% vs the durable peak, 0% vs self-anchor
+    assert d.entries_blocked
+    assert "drawdown_halt" in d.reason
+
+
+def test_seed_peak_never_lowers_existing_peak():
+    b = _breaker(daily_loss_limit=0.99)
+    b.evaluate(1000.0, D0)
+    b.seed_peak(900.0)  # stale/lower candidate must not lower the live peak
+    assert b.peak == 1000.0
+    d = b.evaluate(920.0, D0 + timedelta(hours=1))  # -8% < 15%
+    assert not d.tripped
+
+
+def test_seed_peak_rejects_garbage_candidates():
+    b = _breaker(daily_loss_limit=0.99)
+    for garbage in (float("nan"), float("inf"), -100.0, 0.0):
+        b.seed_peak(garbage)
+    assert b.peak == 0.0
+
+
 # --- pre-order gate integration --------------------------------------------
 
 
 class _Handler(SharedEntryHandlerMixin):
-    def __init__(self, breaker):
+    def __init__(self, breaker, unrealized_pnl_provider=None):
         self.configure_exposure_gate(None, None)
-        self.configure_circuit_breaker(breaker)
+        self.configure_circuit_breaker(breaker, unrealized_pnl_provider=unrealized_pnl_provider)
 
 
 def test_pre_order_gate_blocks_when_breaker_halts():
@@ -137,3 +167,50 @@ def test_pre_order_gate_passthrough_when_healthy():
     allowed, reason = h.apply_pre_order_gates(0.3, regime=None, equity=1000.0, now=D0)
     assert allowed == 0.3
     assert reason is None
+
+
+# --- pre-order gate equity basis (#986 gap A) --------------------------------
+
+
+def test_pre_order_gate_trips_on_open_position_loss_where_cash_would_not():
+    # Cash balance is flat at 1000 while an open position is down 30 (-3%
+    # true-equity daily loss): the breaker must see the mark-to-market loss.
+    b = _breaker()
+    b.evaluate(1000.0, D0)  # anchor baseline at true equity (flat)
+    h = _Handler(b, unrealized_pnl_provider=lambda: -30.0)
+    allowed, reason = h.apply_pre_order_gates(
+        0.3, regime=None, equity=1000.0, now=D0 + timedelta(hours=1)
+    )
+    assert allowed == 0.0
+    assert reason is not None and "circuit_breaker" in reason
+
+
+def test_pre_order_gate_degrades_to_balance_when_unrealized_unavailable(caplog):
+    # Fault isolation: an unreadable unrealized P&L must degrade the breaker to
+    # balance-only with an explicit WARNING — never crash, never spurious-halt.
+    def _boom():
+        raise RuntimeError("mark price unavailable")
+
+    b = _breaker()
+    b.evaluate(1000.0, D0)
+    h = _Handler(b, unrealized_pnl_provider=_boom)
+    with caplog.at_level("WARNING"):
+        allowed, reason = h.apply_pre_order_gates(
+            0.3, regime=None, equity=1000.0, now=D0 + timedelta(hours=1)
+        )
+    assert allowed == 0.3
+    assert reason is None
+    assert any("balance-only" in r.message for r in caplog.records)
+
+
+def test_pre_order_gate_degrades_on_non_finite_unrealized(caplog):
+    b = _breaker()
+    b.evaluate(1000.0, D0)
+    h = _Handler(b, unrealized_pnl_provider=lambda: float("nan"))
+    with caplog.at_level("WARNING"):
+        allowed, reason = h.apply_pre_order_gates(
+            0.3, regime=None, equity=1000.0, now=D0 + timedelta(hours=1)
+        )
+    assert allowed == 0.3
+    assert reason is None
+    assert any("balance-only" in r.message for r in caplog.records)
