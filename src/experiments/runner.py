@@ -12,6 +12,7 @@ from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
 from src.data_providers.offline import FixtureProvider, RandomWalkProvider
 from src.engines.backtest.engine import Backtester
+from src.engines.shared.risk_configuration import resolve_strategy_max_position_size
 from src.experiments.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
 from src.strategies import factory_accepts_symbol
@@ -478,9 +479,14 @@ class ExperimentRunner:
             seed=config.random_seed,
         )
 
-        risk_params = (
-            RiskParameters(**config.risk_parameters) if config.risk_parameters else RiskParameters()
-        )
+        risk_kwargs = dict(config.risk_parameters) if config.risk_parameters else {}
+        if "max_position_size" not in risk_kwargs:
+            # CLI parity: honor a strategy-declared max_fraction override via
+            # the same seam as `atb backtest`. An explicit config value wins.
+            strategy_max_position = resolve_strategy_max_position_size(strategy)
+            if strategy_max_position is not None:
+                risk_kwargs["max_position_size"] = strategy_max_position
+        risk_params = RiskParameters(**risk_kwargs)
 
         backtester = Backtester(
             strategy=strategy,
@@ -512,6 +518,7 @@ class ExperimentRunner:
             final_balance=float(results.get("final_balance", config.initial_balance)),
             session_id=results.get("session_id"),
             trade_pnl_pcts=trade_pnl_pcts,
+            effective_sizing=dict(results.get("effective_sizing") or {}),
         )
 
     def run_sweep(self, configs: list[ExperimentConfig]) -> list[ExperimentResult]:

@@ -21,7 +21,7 @@ You are the ML engineer. You handle training, evaluation, and deployment of pred
 
 **Read at start:**
 - `.claude/state/charter.md` → active symbols + any "never retire X" constraints.
-- `.claude/state/risk-limits.json` → drawdown limits a model's backtested behavior must respect.
+- `src/config/risk-limits.json` → drawdown limits a model's backtested behavior must respect.
 - `gh issue list --label type:model-promotion --state all --limit 30 --json number,title,state,labels,updatedAt` — recent model lifecycle events. Check before training to avoid duplicating a recent run.
 - `grep "· track-record · ml-engineer" .claude/state/log.md | tail -20` — your recent eval claims and whether they held up in paper.
 

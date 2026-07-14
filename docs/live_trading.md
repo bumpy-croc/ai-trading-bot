@@ -66,7 +66,7 @@ call sites and test mock points are stable while the implementations live in the
 
 ## Max-drawdown hard cap (close-only halt)
 
-The live engine enforces `portfolio.max_drawdown_pct` from `.claude/state/risk-limits.json`
+The live engine enforces `portfolio.max_drawdown_pct` from `src/config/risk-limits.json`
 (0.20, mirrored by `DEFAULT_MAX_DRAWDOWN` / `RiskParameters.max_drawdown`). On every
 trading-loop iteration `MaxDrawdownEnforcer` (`src/engines/live/monitoring/drawdown_guard.py`)
 measures the drawdown of the current balance from the **session peak balance** — the same

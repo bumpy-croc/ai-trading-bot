@@ -1600,6 +1600,16 @@ class Backtester:
             adjustments = self.entry_handler.get_dynamic_risk_adjustments()
             self.dynamic_risk_adjustments.extend(adjustments)
 
+    def _effective_sizing_report(self) -> dict[str, float]:
+        """Resolved sizing limits this run enforces — auto-reported in the
+        results payload so a clamped or defaulted cap is always visible."""
+        params = self.risk_manager.params
+        return {
+            "max_position_size": float(params.max_position_size),
+            "base_risk_per_trade": float(params.base_risk_per_trade),
+            "max_risk_per_trade": float(params.max_risk_per_trade),
+        }
+
     def _build_empty_results(self) -> dict:
         """Build results for empty data case."""
         results = {
@@ -1632,6 +1642,7 @@ class Backtester:
                 if hasattr(self, "execution_engine")
                 else {}
             ),
+            "effective_sizing": self._effective_sizing_report(),
         }
 
         # Add regime switching results
@@ -1732,6 +1743,7 @@ class Backtester:
             "trade_pnl_pcts": [
                 float(t.pnl_percent) for t in self.trades if t.pnl_percent is not None
             ],
+            "effective_sizing": self._effective_sizing_report(),
         }
 
         # Add regime switching results
