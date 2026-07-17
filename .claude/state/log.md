@@ -843,3 +843,7 @@ Sync: staging := develop tip 2f6c1fe8 via merge-commit PR #1035 (merge 3cd4ce31)
 - C3 long-only staging-paper window ([D-2026-07-14-01]): STARTED 2026-07-14 09:46 UTC, 72h → ends 2026-07-17 09:46 UTC. Proof criteria: SHORT entries == 0 in positions/trades for the window; shadow SHORT_ENTRY_SUPPRESSED events present whenever short signals occur flat; zero suppression-related errors.
 - Circuit-breaker arming clock ([D-2026-07-14-03]): 14-clean-day staging dry_run window RESTARTED 2026-07-14 09:46 UTC (prior evidence invalid — cash-basis) → day 14 completes 2026-07-28 09:46 UTC; criteria numeric in the #986 evidence comment.
 Ref: PR #1035, deploy e7c74349, GH #1030/#1032/#1034/#1036, [D-2026-07-14-01], [D-2026-07-14-03], [D-2026-07-14-04]
+
+## 2026-07-17 ~11:40 · note · daemon(PM)
+Prod entry-pause resumed (follow-up to the 2026-07-17 ~11:35 incident-adjacent entry). Sanity check first (ETH -2 to -4%/24h, BTC -1%, F&G 27 — normal drift, well under the 5% abort threshold from the pause-off procedure) → `railway variables --set FEATURE_ENTRY_PAUSE=false -e production -s "Trading Bot"` → deploy a9428c64 SUCCESS 11:35Z, clean restart 11:38-11:39Z. Session #20 continued (not a new session), balance $83.04 unchanged (no positions were open through the ~95h pause). Drawdown guard re-armed at peak $84.42/20%. No errors post-restart; last entry-pause warning logged 11:33:39Z pre-restart, none since. Prod is trading normally again as of 11:39 UTC.
+Ref: GH #1038, previous entry (stuck-pause discovery)
