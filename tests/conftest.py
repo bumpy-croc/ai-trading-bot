@@ -210,6 +210,22 @@ def pytest_collection_modifyitems(config, items):  # noqa: D401
         config._has_integration_selected = has_integration
 
 
+@pytest.fixture(autouse=True)
+def _reset_inference_context():
+    """Keep the ambient inference context from leaking across tests.
+
+    The context is a contextvar (#926), but ambient pins with no restore
+    (LiveTradingEngine's constructor, tests calling set_inference_context)
+    persist for the worker thread; without a reset, one test could change
+    timeout behavior for every later test in the same worker.
+    """
+    from src.prediction.inference_context import reset_inference_context
+
+    reset_inference_context()
+    yield
+    reset_inference_context()
+
+
 @pytest.fixture
 def sample_ohlcv_data():
     """Generate realistic OHLCV data for testing"""

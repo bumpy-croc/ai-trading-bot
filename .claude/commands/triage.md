@@ -39,7 +39,7 @@ For each proposal with reviews complete:
 ## Step 5 — Housekeeping
 
 - Proposals `status: open` > 14 days with no updates → `status: rejected` with reason "timed out".
-- Compare `mtime` on `.claude/state/risk-limits.json` vs `src/config/constants.py`. If constants is newer, open a P1 incident "risk-limits sync drift — reconcile".
+- Compare `mtime` on `src/config/risk-limits.json` vs `src/config/constants.py`. If constants is newer, open a P1 incident "risk-limits sync drift — reconcile".
 
 ## Output
 

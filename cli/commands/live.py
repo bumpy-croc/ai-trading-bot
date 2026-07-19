@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+from cli.commands.live_halt import ENV_DB_URL_VARS, halt_main, resume_main
 from cli.core.forward import forward_to_module_main
 from src.infrastructure.runtime.paths import get_project_root
 
@@ -370,9 +371,11 @@ def _control(ns: argparse.Namespace) -> int:
         print(json.dumps(status, indent=2))
         return 0
 
-    if ns.control_cmd == "emergency-stop":
-        print("🚨 EMERGENCY STOP INITIATED (simulated)")
-        return 0
+    if ns.control_cmd == "halt":
+        return halt_main(ns)
+
+    if ns.control_cmd == "resume":
+        return resume_main(ns)
 
     if ns.control_cmd == "swap-strategy":
         print(
@@ -435,8 +438,27 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_status = sub.add_parser("status", help="Show engine status")
     p_status.set_defaults(func=_control)
 
-    p_stop = sub.add_parser("emergency-stop", help="Emergency stop trading")
-    p_stop.set_defaults(func=_control)
+    halt_env_help = (
+        "Target environment; resolves the database via RAILWAY_PRODUCTION_DATABASE_URL / "
+        "RAILWAY_STAGING_DATABASE_URL / DATABASE_URL"
+    )
+    p_halt = sub.add_parser(
+        "halt",
+        help=(
+            "Manual kill-switch: durably block new entries + scale-ins in the target "
+            "environment (exits, stop-losses and reconciliation keep running)"
+        ),
+    )
+    p_halt.add_argument("--env", required=True, choices=tuple(ENV_DB_URL_VARS), help=halt_env_help)
+    p_halt.add_argument("--reason", default=None, help="Why the switch is being pulled (logged)")
+    p_halt.set_defaults(func=_control)
+
+    p_resume = sub.add_parser("resume", help="Clear the manual kill-switch (explicit, logged)")
+    p_resume.add_argument(
+        "--env", required=True, choices=tuple(ENV_DB_URL_VARS), help=halt_env_help
+    )
+    p_resume.add_argument("--reason", default=None, help="Why trading is resuming (logged)")
+    p_resume.set_defaults(func=_control)
 
     p_swap = sub.add_parser("swap-strategy", help="Hot-swap strategy (simulated)")
     p_swap.add_argument("--strategy", required=True)

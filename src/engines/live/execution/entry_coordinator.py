@@ -33,10 +33,13 @@ from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffe
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
 from src.engines.live.execution.entry_pause import EntryPauseGate
+from src.engines.live.execution.short_suppression_monitor import ShortSuppressionMonitor
+from src.engines.live.system_halt import SystemHaltState
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
 from src.strategies.components import Strategy as ComponentStrategy
+from src.strategies.components.ml_signal_generator import SHORT_ENTRY_SUPPRESSED_KEY
 from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
 
 if TYPE_CHECKING:
@@ -48,7 +51,6 @@ if TYPE_CHECKING:
     from src.engines.live.order_tracker import OrderTracker
     from src.engines.live.reconciliation import BaseAssetLockRegistry
     from src.risk.risk_manager import RiskManager
-    from src.trading.performance import PerformanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +70,6 @@ class LiveEntryEngineState(Protocol):
     trading_session_id: int | None
     strategy: Any
     risk_manager: RiskManager
-    performance_tracker: PerformanceTracker
     live_entry_handler: LiveEntryHandler
     live_position_tracker: LivePositionTracker
     stop_loss_manager: LiveStopLossManager
@@ -93,6 +94,10 @@ class LiveEntryEngineState(Protocol):
     def _send_alert(self, message: str) -> bool: ...
 
     def _enter_close_only_mode(self) -> None: ...
+
+    def _refresh_drawdown_gate(self) -> bool: ...
+
+    def _durable_peak_balance(self) -> float: ...
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict: ...
 
@@ -147,16 +152,70 @@ class LiveEntryEngineState(Protocol):
 class LiveEntryCoordinator:
     """Owns the live engine's entry decision + execution pipeline."""
 
-    def __init__(self, engine_state: LiveEntryEngineState) -> None:
-        """Bind to the engine's live state (see protocol for the surface)."""
+    def __init__(
+        self,
+        engine_state: LiveEntryEngineState,
+        system_halt: SystemHaltState | None = None,
+    ) -> None:
+        """Bind to the engine's live state (see protocol for the surface).
+
+        ``system_halt`` is the engine's shared manual kill-switch state (#922);
+        None (tests, standalone use) leaves only the feature-flag pause active.
+        """
         self._state = engine_state
-        # FEATURE_ENTRY_PAUSE gate for new entries (scale-ins are gated by the
-        # exit handler's own instance — see EntryPauseGate).
-        self._entry_pause = EntryPauseGate()
+        # Entry-pause gate (FEATURE_ENTRY_PAUSE + manual system halt) for new
+        # entries; scale-ins are gated by the exit handler's own instance.
+        self._entry_pause = EntryPauseGate(halt_state=system_halt)
+        # Shadow observability for long-only deployments (#1020 C6): records
+        # would-have-entered-short events when allow_shorts=False suppressed
+        # a sized short at signal generation. Live-path only by construction.
+        self._short_suppression_monitor = ShortSuppressionMonitor()
 
     def _entry_paused(self, context: str) -> bool:
-        """True when FEATURE_ENTRY_PAUSE suppresses new entries (rate-limit logged)."""
+        """True when a pause source suppresses new entries (rate-limit logged)."""
         return self._entry_pause.paused(context)
+
+    def _record_short_suppression_shadow(
+        self, runtime_decision: Any, symbol: str, current_price: float
+    ) -> None:
+        """Record a would-have-entered-short event for a suppressed SELL (#1020 C6).
+
+        Emits only when the counterfactual is real: the signal carries the
+        suppression marker, the strategy sized a position, and the entry
+        gates a short would have faced (no open position on the symbol,
+        concurrency capacity available) all pass. Fault-isolated — this can
+        never affect the entry decision, which was already made upstream.
+        """
+        state = self._state
+        try:
+            signal = getattr(runtime_decision, "signal", None)
+            signal_metadata = getattr(signal, "metadata", None) or {}
+            if not signal_metadata.get(SHORT_ENTRY_SUPPRESSED_KEY):
+                return
+            position_size = float(getattr(runtime_decision, "position_size", 0.0) or 0.0)
+            if position_size <= 0:
+                return
+            # Mirror execute_entry_locked's own gates so the shadow count
+            # matches what the execution path would actually have attempted.
+            if state.live_position_tracker.has_position_for_symbol(symbol):
+                return
+            max_concurrent = (
+                state.risk_manager.get_max_concurrent_positions() if state.risk_manager else 1
+            )
+            if state.live_position_tracker.position_count >= max_concurrent:
+                return
+            self._short_suppression_monitor.record_suppression(
+                symbol,
+                db_manager=state.db_manager,
+                session_id=state.trading_session_id,
+                price=current_price,
+                position_size_notional=position_size,
+                signal_strength=float(getattr(signal, "strength", 0.0) or 0.0),
+                signal_confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
+                signal_metadata=signal_metadata,
+            )
+        except Exception as e:
+            logger.warning("Short-suppression shadow event failed for %s: %s", symbol, e)
 
     def check_entry_conditions(
         self,
@@ -169,6 +228,11 @@ class LiveEntryCoordinator:
     ):
         """Check if new positions should be opened"""
         state = self._state
+
+        # In-line hard-cap gate (#807 pattern): re-assess the drawdown guard
+        # BEFORE reading close-only, so a breach realized earlier in this same
+        # iteration (e.g. a stop-loss fill) blocks this entry, not the next one.
+        state._refresh_drawdown_gate()
 
         # Close-only mode: skip all entry signals, exits/stops still active
         if state._close_only_mode:
@@ -197,7 +261,6 @@ class LiveEntryCoordinator:
         decision_signal = getattr(runtime_decision, "signal", None)
 
         if use_runtime:
-            perf_metrics = state.performance_tracker.get_metrics()
             # Pass symbol/timeframe/df/index so LiveEntryHandler can run
             # correlation control. These are required keyword args of the
             # handler's correlation guard (see LiveEntryHandler.process_runtime_decision
@@ -205,6 +268,9 @@ class LiveEntryCoordinator:
             # them, correlation_handler.apply_correlation_control is silently
             # skipped, so the live engine over-concentrates in correlated pairs
             # that the backtest engine de-risks.
+            # peak_balance comes from the engine's durable session peak (the
+            # same baseline as the hard cap), NOT the restart-resettable
+            # PerformanceTracker peak (#845 peak-reset class).
             entry_signal_result = state.live_entry_handler.process_runtime_decision(
                 runtime_decision=runtime_decision,
                 balance=state.current_balance,
@@ -214,7 +280,7 @@ class LiveEntryCoordinator:
                 timeframe=state.timeframe,
                 df=df,
                 index=current_index,
-                peak_balance=perf_metrics.peak_balance or state.current_balance,
+                peak_balance=state._durable_peak_balance() or state.current_balance,
                 trading_session_id=state.trading_session_id,
             )
             if entry_signal_result.should_enter and entry_signal_result.side is not None:
@@ -225,6 +291,13 @@ class LiveEntryCoordinator:
                 take_profit = entry_signal_result.take_profit
                 runtime_strength = entry_signal_result.signal_strength
                 runtime_confidence = entry_signal_result.signal_confidence
+            else:
+                # Long-only shadow observability (#1020 C6): a SELL the
+                # strategy sized but config suppressed becomes a DB-durable
+                # would-have-entered-short event. Never affects the decision.
+                self._record_short_suppression_shadow(
+                    runtime_decision, symbol, float(current_price)
+                )
         elif isinstance(state.strategy, ComponentStrategy):
             # Component-based strategy: use process_candle() for decision
             # Note: runtime_decision should already be populated if this is a component strategy
@@ -515,6 +588,10 @@ class LiveEntryCoordinator:
     ) -> None:
         """Execute a new trading position using shared execution modules."""
         state = self._state
+        # In-line hard-cap gate: re-assess the drawdown guard at the execution
+        # chokepoint so callers that routed around check_entry_conditions are
+        # still blocked on the breach bar itself.
+        state._refresh_drawdown_gate()
         # Defense-in-depth: refuse any entry routed around check_entry_conditions.
         # Close-only mode gates the chokepoint too, so the legacy short path and
         # any direct caller can never add exposure while halted.
@@ -951,6 +1028,8 @@ class LiveEntryCoordinator:
     ) -> None:
         """Evaluate and execute a legacy duck-typed short entry (non-runtime strategies)."""
         state = self._state
+        # In-line hard-cap gate: same-iteration enforcement for the legacy path.
+        state._refresh_drawdown_gate()
         # Close-only mode: skip legacy short evaluation, exits/stops still active
         if state._close_only_mode:
             logger.debug("Close-only mode active — skipping legacy short entry check")

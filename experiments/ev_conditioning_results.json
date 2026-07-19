@@ -1,0 +1,46 @@
+{
+  "n_trades": 136,
+  "alpha_bonferroni": 0.00625,
+  "n_tests": 8,
+  "results": [
+    {
+      "conditioner": "predicted-return magnitude / confidence / strength (collinear)",
+      "pnl_test": "spearman",
+      "pnl_stat": -0.06592719812986021,
+      "pnl_p": 0.4457197614656522,
+      "win_test": "cochran_armitage",
+      "win_stat": -0.4814750064314677,
+      "win_p": 0.6301789390785193,
+      "win_p_spearman_crosscheck": 0.4655135166275023
+    },
+    {
+      "conditioner": "realized volatility at entry",
+      "pnl_test": "spearman",
+      "pnl_stat": -0.11266638042078145,
+      "pnl_p": 0.19157328221147754,
+      "win_test": "cochran_armitage",
+      "win_stat": -1.1234416816734245,
+      "win_p": 0.26124995569049236,
+      "win_p_spearman_crosscheck": 0.3408034609635533
+    },
+    {
+      "conditioner": "regime (trend_label)",
+      "pnl_test": "kruskal_wallis",
+      "pnl_stat": 4.62456593221799,
+      "pnl_p": 0.09903489996122329,
+      "win_test": "chi_square",
+      "win_stat": 4.573630873083095,
+      "win_p": 0.1015894653674864
+    },
+    {
+      "conditioner": "hour-of-day session bucket",
+      "pnl_test": "kruskal_wallis",
+      "pnl_stat": 0.7460125319078088,
+      "pnl_p": 0.8623316055562107,
+      "win_test": "chi_square",
+      "win_stat": 1.3093670218670224,
+      "win_p": 0.7269099951157769
+    }
+  ],
+  "any_significant": 0.0
+}

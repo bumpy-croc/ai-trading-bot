@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from src.ml.cloud.config import CloudInstanceConfig, CloudStorageConfig, CloudTrainingConfig
@@ -126,6 +127,126 @@ class TestBuildJobSpec:
         spec = orchestrator._build_job_spec()
         assert spec.use_spot_instances is True
 
+    def test_build_job_spec_default_architecture_hyperparameters(
+        self, orchestrator: CloudTrainingOrchestrator
+    ) -> None:
+        """Verify default architecture selection reaches the job hyperparameters."""
+        spec = orchestrator._build_job_spec()
+        assert spec.hyperparameters["model_type"] == "cnn_lstm"
+        assert spec.hyperparameters["model_variant"] == "default"
+
+    def test_build_job_spec_custom_architecture_hyperparameters(self) -> None:
+        """Verify --model-type/--model-variant selections reach the job hyperparameters."""
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            model_type="tcn_attention",
+            model_variant="deep",
+        )
+        cloud_config = CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+        orchestrator = CloudTrainingOrchestrator(cloud_config, MagicMock())
+
+        spec = orchestrator._build_job_spec()
+
+        assert spec.hyperparameters["model_type"] == "tcn_attention"
+        assert spec.hyperparameters["model_variant"] == "deep"
+        # SageMaker requires string hyperparameter values end-to-end
+        assert spec.to_hyperparameters()["model_type"] == "tcn_attention"
+        assert spec.to_hyperparameters()["model_variant"] == "deep"
+
+    def test_build_job_spec_default_target_type_hyperparameters(
+        self, orchestrator: CloudTrainingOrchestrator
+    ) -> None:
+        """Phase 2b item 1: default target_type/target_horizon must reach
+        the job hyperparameters too (regression/1, preserving current
+        behavior for every job submitted before --target-type existed)."""
+        spec = orchestrator._build_job_spec()
+        assert spec.hyperparameters["target_type"] == "regression"
+        assert spec.hyperparameters["target_horizon"] == "1"
+
+    def test_build_job_spec_custom_target_type_hyperparameters(self) -> None:
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            model_type="tft",
+            target_type="binary_direction",
+            target_horizon=6,
+        )
+        cloud_config = CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+        orchestrator = CloudTrainingOrchestrator(cloud_config, MagicMock())
+
+        spec = orchestrator._build_job_spec()
+
+        assert spec.hyperparameters["target_type"] == "binary_direction"
+        assert spec.hyperparameters["target_horizon"] == "6"
+        # SageMaker requires string hyperparameter values end-to-end
+        assert spec.to_hyperparameters()["target_type"] == "binary_direction"
+        assert spec.to_hyperparameters()["target_horizon"] == "6"
+
+    def test_build_job_spec_default_primary_model_type_hyperparameters(
+        self, orchestrator: CloudTrainingOrchestrator
+    ) -> None:
+        """Phase 2b item 3: primary_model_type=None must round-trip through
+        the string-only hyperparameters dict as "" (SageMaker requires
+        string values; entrypoint.py::parse_hyperparameters treats "" as
+        unset)."""
+        spec = orchestrator._build_job_spec()
+        assert spec.hyperparameters["primary_model_type"] == ""
+
+    def test_build_job_spec_custom_primary_model_type_hyperparameters(self) -> None:
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            target_type="meta_label",
+            primary_model_type="basic",
+        )
+        cloud_config = CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+        orchestrator = CloudTrainingOrchestrator(cloud_config, MagicMock())
+
+        spec = orchestrator._build_job_spec()
+
+        assert spec.hyperparameters["target_type"] == "meta_label"
+        assert spec.hyperparameters["primary_model_type"] == "basic"
+
+    def test_build_job_spec_default_use_mock_data_hyperparameters(
+        self, orchestrator: CloudTrainingOrchestrator
+    ) -> None:
+        spec = orchestrator._build_job_spec()
+        assert spec.hyperparameters["use_mock_data"] == "false"
+
+    def test_build_job_spec_custom_use_mock_data_hyperparameters(self) -> None:
+        training_config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 1),
+            use_mock_data=True,
+        )
+        cloud_config = CloudTrainingConfig(
+            training_config=training_config,
+            storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
+        )
+        orchestrator = CloudTrainingOrchestrator(cloud_config, MagicMock())
+
+        spec = orchestrator._build_job_spec()
+
+        assert spec.hyperparameters["use_mock_data"] == "true"
+
 
 class TestSubmitJob:
     """Tests for submit_job method."""
@@ -174,12 +295,11 @@ class TestSubmitJob:
             cloud_config, mock_provider, s3_manager=mock_s3_manager
         )
 
-        def mock_download_func(args: MagicMock) -> int:
-            csv_path = Path(args.output_dir) / "BTCUSDT_1h_2024.csv"
-            csv_path.write_text("timestamp,open,high,low,close,volume\n2024-01-01,1,1,1,1,1")
-            return 0
-
-        with patch("cli.commands.data._download", side_effect=mock_download_func):
+        corpus = pd.DataFrame(
+            {"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0},
+            index=pd.date_range("2024-01-01", periods=24, freq="1h", tz="UTC"),
+        )
+        with patch("src.ml.training_pipeline.ingestion.load_training_corpus", return_value=corpus):
             job_id = orchestrator.submit_job()
 
         assert job_id == "job-async"
@@ -415,6 +535,15 @@ class TestPrepareTrainingData:
             storage_config=CloudStorageConfig(s3_bucket="test-bucket"),
         )
 
+    @staticmethod
+    def _corpus_frame() -> "pd.DataFrame":
+        """Small OHLCV corpus as returned by load_training_corpus."""
+        index = pd.date_range("2024-01-01", periods=24, freq="1h", tz="UTC")
+        return pd.DataFrame(
+            {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000.0},
+            index=index,
+        )
+
     def test_skips_when_s3_uri_already_set(self, cloud_config: CloudTrainingConfig) -> None:
         """Verify _prepare_training_data returns None when input_data_s3_uri is set."""
         cloud_config.input_data_s3_uri = "s3://existing-bucket/data"
@@ -426,10 +555,8 @@ class TestPrepareTrainingData:
 
         assert result is None
 
-    def test_successful_download_and_upload(
-        self, cloud_config: CloudTrainingConfig, tmp_path: Path
-    ) -> None:
-        """Verify successful download from Binance and upload to S3."""
+    def test_successful_corpus_load_and_upload(self, cloud_config: CloudTrainingConfig) -> None:
+        """Verify the single-source corpus loader feeds the S3 upload."""
         mock_provider = MagicMock()
         mock_provider.provider_name = "local"
         mock_s3_manager = MagicMock()
@@ -439,47 +566,64 @@ class TestPrepareTrainingData:
             cloud_config, mock_provider, s3_manager=mock_s3_manager
         )
 
-        # Create a mock download function that creates a CSV file in the temp dir
-        def mock_download_func(args: MagicMock) -> int:
-            # Create a CSV file in the output directory
-            csv_path = Path(args.output_dir) / "BTCUSDT_1h_2024.csv"
-            csv_path.write_text(
-                "timestamp,open,high,low,close,volume\n2024-01-01,100,101,99,100,1000"
-            )
-            return 0
-
-        with patch("cli.commands.data._download", side_effect=mock_download_func):
+        with patch(
+            "src.ml.training_pipeline.ingestion.load_training_corpus",
+            return_value=self._corpus_frame(),
+        ) as mock_corpus:
             result = orchestrator._prepare_training_data()
 
         assert result == "s3://test-bucket/data/BTCUSDT"
+        mock_corpus.assert_called_once()
+        ctx = mock_corpus.call_args.args[0]
+        assert ctx.config is cloud_config.training_config
         mock_s3_manager.upload_training_data.assert_called_once()
-        # Verify the upload was called with correct symbol and timeframe
         call_kwargs = mock_s3_manager.upload_training_data.call_args
         assert call_kwargs.kwargs["symbol"] == "BTCUSDT"
         assert call_kwargs.kwargs["timeframe"] == "1h"
 
-    def test_raises_error_when_download_fails(self, cloud_config: CloudTrainingConfig) -> None:
-        """Verify RuntimeError raised when Binance download fails."""
+    def test_uploaded_csv_has_timestamp_column(self, cloud_config: CloudTrainingConfig) -> None:
+        """The container's loader requires a 'timestamp' column in the uploaded CSV."""
+        mock_provider = MagicMock()
+        mock_provider.provider_name = "local"
+        mock_s3_manager = MagicMock()
+        uploaded: dict[str, str] = {}
+
+        def capture_upload(symbol: str, timeframe: str, data_files: list[Path]) -> str:
+            # Read inside the call: the temp dir is deleted once _prepare returns
+            uploaded["name"] = data_files[0].name
+            uploaded["header"] = data_files[0].read_text().splitlines()[0]
+            uploaded["rows"] = str(len(data_files[0].read_text().splitlines()) - 1)
+            return "s3://test-bucket/data/BTCUSDT"
+
+        mock_s3_manager.upload_training_data.side_effect = capture_upload
+
+        orchestrator = CloudTrainingOrchestrator(
+            cloud_config, mock_provider, s3_manager=mock_s3_manager
+        )
+
+        with patch(
+            "src.ml.training_pipeline.ingestion.load_training_corpus",
+            return_value=self._corpus_frame(),
+        ):
+            orchestrator._prepare_training_data()
+
+        assert uploaded["header"].startswith("timestamp,")
+        assert uploaded["rows"] == "24"
+        assert uploaded["name"] == "BTCUSDT_1h_2024-01-01_2024-12-01.csv"
+
+    def test_raises_error_when_corpus_load_fails(self, cloud_config: CloudTrainingConfig) -> None:
+        """Corpus failures propagate loudly - there is no silent fallback source."""
         mock_provider = MagicMock()
         mock_provider.provider_name = "local"
 
         orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
 
-        with patch("cli.commands.data._download", return_value=1):
-            with pytest.raises(RuntimeError, match="Failed to download training data"):
+        with patch(
+            "src.ml.training_pipeline.ingestion.load_training_corpus",
+            side_effect=RuntimeError("Training corpus for BTCUSDT 1h could not be loaded"),
+        ):
+            with pytest.raises(RuntimeError, match="could not be loaded"):
                 orchestrator._prepare_training_data()
-
-    def test_raises_error_when_no_data_files_found(self, cloud_config: CloudTrainingConfig) -> None:
-        """Verify RuntimeError raised when no CSV files found after download."""
-        mock_provider = MagicMock()
-        mock_provider.provider_name = "local"
-
-        orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
-
-        with patch("cli.commands.data._download", return_value=0):
-            with patch("pathlib.Path.glob", return_value=[]):
-                with pytest.raises(RuntimeError, match="No data files found"):
-                    orchestrator._prepare_training_data()
 
 
 class TestFindArtifactsRoot:
@@ -733,12 +877,14 @@ class TestSyncArtifactsUsesMetadataSymbol:
 
         orchestrator.provider.download_artifacts.side_effect = fake_download
 
-        with patch("src.ml.cloud.orchestrator.get_project_root", return_value=tmp_path):
+        # get_model_registry_root() (PR #950 review item 5) returns the
+        # FULL registry root directly -- unlike the old get_project_root(),
+        # nothing appends "src/ml/models" on top of it here anymore.
+        registry_root = tmp_path / "src" / "ml" / "models"
+        with patch("src.ml.cloud.orchestrator.get_model_registry_root", return_value=registry_root):
             result = orchestrator._sync_artifacts("job-1", "s3://bucket/out/model.tar.gz")
 
-        expected = (
-            tmp_path / "src" / "ml" / "models" / "ETHUSDT" / "price" / "2026-07-05_10h00m00s_v1"
-        )
+        expected = registry_root / "ETHUSDT" / "price" / "2026-07-05_10h00m00s_v1"
         assert result == expected
         assert (expected / "model.onnx").exists()
 
@@ -752,10 +898,42 @@ class TestSyncArtifactsUsesMetadataSymbol:
 
         orchestrator.provider.download_artifacts.side_effect = fake_download
 
-        with patch("src.ml.cloud.orchestrator.get_project_root", return_value=tmp_path):
+        registry_root = tmp_path / "src" / "ml" / "models"
+        with patch("src.ml.cloud.orchestrator.get_model_registry_root", return_value=registry_root):
             result = orchestrator._sync_artifacts("job-2", "s3://bucket/out/model.tar.gz")
 
         assert result.parent.parent.name == "BTCUSDT"
+
+    def test_default_registry_honors_model_registry_path_override(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """PR #950 review item 5: without patching get_model_registry_root
+        at all, MODEL_REGISTRY_PATH alone must redirect where _sync_artifacts
+        lands a trained bundle -- this is the FINAL destination every
+        trained model (cloud or local provider) reaches, so it's the one
+        code path that actually determines whether an acceptance test's
+        MODEL_REGISTRY_PATH override keeps artifacts out of the real
+        src/ml/models/ registry."""
+        monkeypatch.setenv("MODEL_REGISTRY_PATH", str(tmp_path / "isolated-registry"))
+        orchestrator = _make_orchestrator(symbol="BTCUSDT")
+
+        def fake_download(job_id: str, temp_dir: Path) -> Path:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            metadata = {
+                "symbol": "BTCUSDT",
+                "model_type": "price",
+                "version_id": "2026-07-05_10h00m00s_v1",
+            }
+            (temp_dir / "metadata.json").write_text(json.dumps(metadata))
+            (temp_dir / "model.onnx").write_text("model-bytes")
+            return temp_dir
+
+        orchestrator.provider.download_artifacts.side_effect = fake_download
+
+        result = orchestrator._sync_artifacts("job-3", "s3://bucket/out/model.tar.gz")
+
+        assert str(result).startswith(str(tmp_path / "isolated-registry"))
+        assert (result / "model.onnx").exists()
 
 
 @pytest.mark.fast

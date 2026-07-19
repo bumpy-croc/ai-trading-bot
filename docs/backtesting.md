@@ -160,6 +160,45 @@ Important flags:
 | `--risk-per-trade` / `--max-risk-per-trade` | Override `RiskParameters` for the run. |
 | `--log-to-db` | Persist the session to PostgreSQL for later inspection. |
 | `--start` / `--end` | Explicit date boundaries (override `--days`). |
+| `--model-version` | Pin ML predictions to an exact registry version (e.g. `2026-07-04_22h_v1`) instead of resolving `latest` at invocation time. |
+| `--model-as-of DATE` | Pin to whichever version was `latest` at that UTC date, resolved from bundle metadata timestamps (`src/prediction/models/version_resolver.py`). Mutually exclusive with `--model-version`. |
+
+### Point-in-time model pinning
+
+Without a pin, the backtest resolves the model through the registry's `latest`
+symlink **at invocation time** — so a backtest over a window that spans a
+model promotion silently re-scores history with a model that was never live
+for it (GH #988; this confound dominated the 2026-07-12 parity-gap
+investigation). For any live-vs-backtest comparison, pin the model that was
+actually live:
+
+```bash
+# Pin to whatever was latest when the live window started
+atb backtest hyper_growth --symbol ETHUSDT --start 2026-06-02 --end 2026-07-12 --model-as-of 2026-06-02
+
+# Or pin an explicit version id
+atb backtest ml_basic --symbol BTCUSDT --days 90 --model-version 2025-10-26_21h_v1
+```
+
+Notes:
+
+- When the backtest window spans a promotion boundary, the CLI logs a loud
+  warning mapping each window segment to the version that was live then. The
+  run is still scored with the **single** pinned version — the engine never
+  switches models mid-backtest — so treat cross-boundary comparisons with care.
+- `--model-as-of` uses each bundle's `metadata.json` `created_at` as a proxy
+  for its promotion time; the authoritative promotion record is
+  `docs/research/model-promotions.md`.
+- If no version existed at the `--model-as-of` date (live was running a
+  cross-symbol substitute), the run fails fast with an explanatory error
+  rather than picking a model that was never live.
+- A pin that cannot be honored (unknown version, timeframe mismatch, or a
+  strategy without pinning support) aborts the run — a "pinned" backtest can
+  never silently fall back to `latest`. Mainline support: `ml_basic` and
+  `hyper_growth`; exam strategies accept `--model-version` via
+  `ATB_MODEL_VERSION_OVERRIDE`.
+- The live trading path is unaffected: it always resolves `latest` and cannot
+  be pinned by env var or config.
 
 Strategies available via the CLI loader today: `ml_basic`, `ml_sentiment`, `ml_adaptive`, `ensemble_weighted`, and
 `momentum_leverage`. Add new strategies under `src/strategies` and register them in `_load_strategy` to expose them through the

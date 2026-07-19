@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from src.engines.shared.entry_utils import extract_entry_plan
 from src.engines.shared.exposure import gross_exposure_fraction
 from src.engines.shared.models import PositionSide
+from src.risk.circuit_breaker import BASIS_BALANCE, BASIS_BALANCE_DEGRADED, BreakerEquityFeed
 
 if TYPE_CHECKING:
     from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
@@ -45,6 +46,8 @@ class SharedEntryHandlerMixin:
     _macro_event_guard: MacroEventGuard | None = None
     # Optional account-level circuit breaker (#807). Absent/None => inert.
     _circuit_breaker: AccountCircuitBreaker | None = None
+    # True-equity feed for the breaker (#986); set by configure_circuit_breaker.
+    _breaker_equity_feed: BreakerEquityFeed | None = None
 
     def _extract_entry_plan(
         self,
@@ -142,9 +145,25 @@ class SharedEntryHandlerMixin:
         """Wire the #806 macro-event de-risking guard (independent of the governor)."""
         self._macro_event_guard = macro_guard
 
-    def configure_circuit_breaker(self, circuit_breaker: AccountCircuitBreaker | None) -> None:
-        """Wire the #807 account-level circuit breaker (None => inert)."""
+    def configure_circuit_breaker(
+        self,
+        circuit_breaker: AccountCircuitBreaker | None,
+        *,
+        unrealized_pnl_provider: Callable[[], float] | None = None,
+    ) -> None:
+        """Wire the #807 account-level circuit breaker (None => inert).
+
+        ``unrealized_pnl_provider`` supplies the mark-to-market unrealized P&L
+        of open positions so the breaker evaluates TRUE EQUITY (#986 gap A):
+        the live engine's cash balance never reflects an open position's loss,
+        which is the exact move the breaker exists to halt. Without a provider
+        the breaker evaluates the caller-supplied balance unchanged (backtest
+        evaluates entries only while flat, where equity == cash by identity).
+        Degradation handling (fault isolation + latch freeze) lives in the
+        shared :class:`BreakerEquityFeed`.
+        """
         self._circuit_breaker = circuit_breaker
+        self._breaker_equity_feed = BreakerEquityFeed(unrealized_pnl_provider)
 
     def apply_pre_order_gates(
         self,
@@ -170,9 +189,22 @@ class SharedEntryHandlerMixin:
 
         # #807: account-level circuit breaker. A hard halt blocks new entries;
         # in dry_run it logs but does not block (entries_blocked stays False).
+        # Evaluated on TRUE equity (cash + unrealized, #986): the `equity`
+        # argument callers pass here is the cash balance, blind to open-position
+        # losses. A degraded (cash-only) reading freezes latch transitions —
+        # existing latches still block, but a mixed-basis reading can neither
+        # latch nor clear. Scoped to the breaker — the macro guard and exposure
+        # governor below keep their original balance basis unchanged.
         breaker = self._circuit_breaker
         if breaker is not None and now is not None:
-            decision = breaker.evaluate(equity, now)
+            feed = self._breaker_equity_feed
+            if feed is not None:
+                breaker_equity, _unrealized, basis = feed.read(equity)
+            else:  # breaker wired without configure(): balance passthrough
+                breaker_equity, basis = equity, BASIS_BALANCE
+            decision = breaker.evaluate(
+                breaker_equity, now, allow_transitions=basis != BASIS_BALANCE_DEGRADED
+            )
             if decision.entries_blocked:
                 return 0.0, f"circuit_breaker_{decision.reason}"
 

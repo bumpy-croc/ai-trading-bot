@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import queue
 import signal
@@ -9,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -72,11 +74,13 @@ from src.engines.live.monitoring import (
 )
 from src.engines.live.monitoring.circuit_breaker_enforcer import CircuitBreakerEnforcer
 from src.engines.live.monitoring.drawdown_guard import MaxDrawdownEnforcer, MaxDrawdownGuard
+from src.engines.live.monitoring.system_halt_enforcer import SystemHaltEnforcer
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.startup import LiveStartupSequencer
 from src.engines.live.strategy_hot_swap import StrategyHotSwapCoordinator
 from src.engines.live.strategy_manager import StrategyManager
 from src.engines.live.strategy_runtime import StrategyRuntimeCoordinator
+from src.engines.live.system_halt import SystemHaltState
 
 # Re-exported close-accounting helpers: the exit path (now LiveExitCoordinator)
 # uses them directly, and tests import them from this module, so keep the
@@ -96,6 +100,7 @@ from src.engines.shared.models import (
 )
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.risk_configuration import (
+    build_early_cut_policy,
     build_partial_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
@@ -106,10 +111,16 @@ from src.infrastructure.logging.events import (
 )
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.early_cut import EarlyCutPolicy
 from src.position_management.macro_events import MacroEventGuard
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
+from src.prediction.inference_context import (
+    InferenceContext,
+    inference_scope,
+    set_inference_context,
+)
 from src.regime.detector import RegimeDetector
 from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
@@ -126,6 +137,7 @@ if TYPE_CHECKING:
     from src.engines.live.kline_buffer import KlineBuffer
     from src.engines.live.reconciliation import PeriodicReconciler
     from src.engines.live.user_data_processor import UserDataProcessor
+    from src.prediction.engine import PredictionEngine
     from src.strategies.components.runtime import SupportsRuntimeHooks
     from src.strategies.components.strategy import TradingDecision
 
@@ -216,6 +228,7 @@ class LiveTradingEngine:
         dynamic_risk_config: DynamicRiskConfig | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
+        early_cut_policy: EarlyCutPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = True,  # Enable by default for better profit capture
         # Execution realism parameters (parity with backtest engine)
@@ -252,6 +265,13 @@ class LiveTradingEngine:
             app config). The runner builds these explicitly; when omitted the
             engine resolves them itself (#486).
         """
+
+        # Live inference runs under a bounded latency budget so the trading
+        # loop cannot block indefinitely on a hung model; timeouts are
+        # accounted loudly (WARNING + counter + timed_out signal stamp).
+        # This pins the constructing thread only (contextvar, #926); the
+        # trading loop thread scopes itself LIVE in _run_trading_loop.
+        set_inference_context(InferenceContext.LIVE)
 
         self._validate_inputs(
             initial_balance=initial_balance,
@@ -337,8 +357,18 @@ class LiveTradingEngine:
         # outage made Postgres unresolvable and shut the live bot down).
         self.db_unreachable_since: float | None = None
         self.error_cooldown = DEFAULT_ERROR_COOLDOWN
+        # Episode latch for the consecutive-inference-timeout escalation
+        # (#927): page once when the threshold is crossed, re-arm on recovery.
+        self._inference_escalation_active = False
 
         self._init_time_exit_policy(time_exit_policy)
+
+        # MFE early-cut policy (#971): default OFF unless configured via
+        # strategy overrides or RiskParameters.early_cut. Shared builder for
+        # parity with the backtest engine.
+        self.early_cut_policy = early_cut_policy or build_early_cut_policy(
+            self.strategy, self.risk_manager
+        )
 
         # Threading
         self.main_thread: threading.Thread | None = None
@@ -414,6 +444,11 @@ class LiveTradingEngine:
         """Construct the coordinator family that owns extracted engine behaviors."""
         self._runtime_dataset = None
         self._runtime_warmup = 0
+        # Manual kill-switch (#922): one shared holder — the loop enforcer
+        # mirrors the DB `system_halt` flag into it, and the entry/scale-in
+        # gates (entry coordinator + exit handler) read it. Created first so
+        # every consumer below can bind the same instance.
+        self._system_halt = SystemHaltState()
         # Strategy-runtime state, owned by StrategyRuntimeCoordinator and assigned
         # via configure_strategy below. Declared here so the type-checker tracks
         # the attributes now that the coordinator — not an engine method — writes
@@ -437,7 +472,9 @@ class LiveTradingEngine:
         # writes engine state (balance, trackers, risk manager, session) through
         # the engine backref at call time, preserving the base-asset locking and
         # ordering of the real-money entry path (#486).
-        self.entry_coordinator = LiveEntryCoordinator(engine_state=self)
+        self.entry_coordinator = LiveEntryCoordinator(
+            engine_state=self, system_halt=self._system_halt
+        )
         self.exit_coordinator = LiveExitCoordinator(engine_state=self)
         self.dynamic_risk_coordinator = LiveDynamicRiskCoordinator(engine_state=self)
         self.loop_timing_coordinator = LiveLoopTimingCoordinator(engine_state=self)
@@ -736,7 +773,6 @@ class LiveTradingEngine:
         # session is wired; owned by LiveStartupSequencer, declared here so the
         # engine carries the attribute for the startup backref Protocol (#486).
         self._pending_balance_correction: bool = False
-        self._pending_corrected_balance: float | None = None
         # Set during start() for live trading
         self._periodic_reconciler: PeriodicReconciler | None = None
         # Shared per-base-asset cooldown for the orphaned-borrow sweep, so the
@@ -905,6 +941,12 @@ class LiveTradingEngine:
         )
         # Wire db_manager for order journaling (session_id set during start())
         self.live_execution_engine.db_manager = self.db_manager
+        # Open-position snapshot for short-guard rejection events; the
+        # positions property returns a lock-guarded copy, so this read is
+        # safe from the entry path.
+        self.live_execution_engine.position_snapshot_provider = lambda: list(
+            self.live_position_tracker.positions.values()
+        )
 
     def _init_entry_handler(self, entry_handler: LiveEntryHandler | None) -> ExposureGovernor:
         """Build the entry handler and its exposure/macro/circuit-breaker gates."""
@@ -948,7 +990,12 @@ class LiveTradingEngine:
         self._circuit_breaker = AccountCircuitBreaker(
             mode=get_flag("account_circuit_breakers", default="off")
         )
-        self.live_entry_handler.configure_circuit_breaker(self._circuit_breaker)
+        # True-equity feed (#986 gap A): the cash balance never reflects an
+        # open position's unrealized loss — the exact move the breaker halts.
+        self.live_entry_handler.configure_circuit_breaker(
+            self._circuit_breaker,
+            unrealized_pnl_provider=self.live_position_tracker.total_unrealized_pnl,
+        )
         return exposure_governor
 
     def _init_exit_handler(
@@ -974,13 +1021,22 @@ class LiveTradingEngine:
             trailing_stop_policy=self.trailing_stop_policy,
             partial_manager=partial_ops_manager,
             time_exit_policy=self.time_exit_policy,
+            early_cut_policy=self.early_cut_policy,
             use_high_low_for_stops=self.use_high_low_for_stops,
             max_position_size=self.max_position_size,
             max_filled_price_deviation=self.max_filled_price_deviation,
             # Close-only mode must block ALL exposure increases, including
             # scale-ins; read at call time so mid-session trips take effect.
-            close_only_provider=lambda: self._close_only_mode,
+            # The gate re-assesses the drawdown guard on read so a breach
+            # realized earlier in the SAME iteration blocks the scale-in too.
+            close_only_provider=self._refresh_drawdown_gate,
+            # Manual kill-switch (#922): scale-ins share the engine's halt state.
+            system_halt=self._system_halt,
         )
+        # A DI-injected handler was built without the engine's halt state —
+        # rebind so its scale-ins cannot bypass the kill-switch. Idempotent
+        # for the default handler constructed above.
+        self.live_exit_handler.bind_system_halt(self._system_halt)
         # #802 follow-up P3: scale-ins respect the same gross exposure cap as
         # entries (share the governor instance; inert unless the flag is on).
         self.live_exit_handler.configure_exposure_gate(exposure_governor)
@@ -1006,11 +1062,25 @@ class LiveTradingEngine:
             guard=MaxDrawdownGuard(self.risk_manager.params.max_drawdown),
         )
         # #807 follow-up: run the account circuit breaker on the loop too —
-        # restart-safe daily baseline + close-only-on-trip (dry_run/active).
+        # restart-safe daily baseline + drawdown peak (#986 gap B), true-equity
+        # evaluation (#986 gap A), and close-only-on-trip (dry_run/active).
         self._circuit_breaker_enforcer = CircuitBreakerEnforcer(
             engine_state=self,
             breaker=self._circuit_breaker,
+            unrealized_pnl_provider=self.live_position_tracker.total_unrealized_pnl,
         )
+        # Manual kill-switch (#922): polls the DB `system_halt` flag at the top
+        # of every loop iteration so `atb live-control halt` takes effect
+        # within one iteration — no restart needed. The priming read makes a
+        # boot fail-CLOSED: until the flag is successfully read once, the
+        # entry gates refuse new risk (an active halt row behind a dead DB
+        # cannot be traded past), while a healthy boot establishes the state
+        # here and starts trading immediately.
+        self._system_halt_enforcer = SystemHaltEnforcer(
+            engine_state=self,
+            halt_state=self._system_halt,
+        )
+        self._system_halt_enforcer.prime()
 
         # Startup recovery — session balance, persisted positions, exchange
         # reconciliation. Reads/writes engine state at call time (#486).
@@ -1058,11 +1128,12 @@ class LiveTradingEngine:
             return self.risk_manager.params
 
         try:
-            # Calculate dynamic risk adjustments
-            perf_metrics = self.performance_tracker.get_metrics()
+            # Calculate dynamic risk adjustments from the durable session peak
+            # (#845 peak-reset class: the in-memory tracker peak re-anchors to
+            # the depressed balance on restart and disarms the throttle).
             adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
                 current_balance=self.current_balance,
-                peak_balance=perf_metrics.peak_balance or self.current_balance,
+                peak_balance=self._durable_peak_balance() or self.current_balance,
                 session_id=self.trading_session_id,
             )
 
@@ -1200,6 +1271,12 @@ class LiveTradingEngine:
         Delegated to LiveStartupSequencer; the capital-critical bootstrap ordering
         lives there (#486).
         """
+        # Fail fast on a mis-sized early-cut window (#976 review F1/F2):
+        # refuse to start rather than trade with a policy that can never
+        # evaluate (window <= bar) or diverges from backtest (non-aligned).
+        if self.early_cut_policy is not None:
+            self.early_cut_policy.validate_for_timeframe(timeframe)
+
         self.startup_sequencer.run(
             symbol,
             timeframe=timeframe,
@@ -1394,7 +1471,11 @@ class LiveTradingEngine:
         and let start() turn it into a non-zero exit for an orchestrator restart (#630).
         """
         try:
-            self._trading_loop(symbol, timeframe, max_steps)
+            # The loop thread does not inherit the constructor thread's
+            # context (contextvars, #926): pin LIVE here so every prediction
+            # made by the loop runs under the bounded inference deadline.
+            with inference_scope(InferenceContext.LIVE):
+                self._trading_loop(symbol, timeframe, max_steps)
         except Exception as e:
             self._loop_crashed = True
             logger.critical("Trading loop terminated unexpectedly: %s", e, exc_info=True)
@@ -1465,6 +1546,11 @@ class LiveTradingEngine:
                 # would `continue` below before reaching them (#631).
                 self._ensure_ws_health_monitor_alive()
                 self._drain_pending_fill_exits()
+                # Manual kill-switch (#922): mirror the DB `system_halt` flag
+                # BEFORE any entry/scale-in evaluation so a halt issued via
+                # `atb live-control halt` blocks new risk in this very
+                # iteration (and on every data-outage `continue` path below).
+                self._system_halt_enforcer.check()
                 # For mock and real providers, update live data if supported.
                 # Skip when WS kline cache is active (no REST needed).
                 if not self._ws_kline_active and hasattr(self.data_provider, "update_live_data"):
@@ -1623,6 +1709,8 @@ class LiveTradingEngine:
                 self._update_performance_metrics()
                 # Enforce the portfolio max-drawdown hard cap (close-only on breach)
                 self._check_max_drawdown()
+                # Escalate persistent inference timeouts (#927, observability only)
+                self._check_inference_health()
                 self._log_periodic_account_state()
                 # Log status periodically
                 if (
@@ -2082,6 +2170,143 @@ class LiveTradingEngine:
         """
         self._drawdown_enforcer.check()
         self._circuit_breaker_enforcer.check()
+
+    def _refresh_drawdown_gate(self) -> bool:
+        """Re-assess the max-drawdown hard cap at an exposure-increase chokepoint.
+
+        The loop-level ``_check_max_drawdown`` runs AFTER entry evaluation, so
+        on the bar that crosses the cap a fresh entry would execute before
+        close-only latched (one-iteration leak, 2026-07-12 risk audit P1).
+        Entry evaluation, ``execute_entry_locked``, the legacy short path, and
+        the scale-in gate call this first — mirroring the #807 in-line
+        circuit-breaker gate — so the cap binds on the SAME iteration.
+
+        Returns the (possibly just-latched) close-only flag, making it usable
+        directly as the exit handler's ``close_only_provider``.
+        """
+        self._drawdown_enforcer.check_before_new_risk()
+        return self._close_only_mode
+
+    def _durable_peak_balance(self) -> float:
+        """Peak balance for drawdown-based risk throttling, durable across restarts.
+
+        The graduated dynamic-risk throttle must measure drawdown from the
+        same baseline as the max-drawdown hard cap. The in-memory
+        PerformanceTracker peak re-anchors to the (possibly depressed) current
+        balance on restart, which silently disarmed the throttle exactly when
+        it should bind (#845 peak-reset class). The drawdown guard's peak is
+        seeded from the durable ``account_history`` session max, so it
+        survives restarts; take the max with the tracker peak and the current
+        balance so the throttle never measures from a LOWER peak than either
+        source. Until the guard seeds (first gate/loop check at boot) this
+        degrades to the in-memory behavior.
+        """
+        peak = 0.0
+        for candidate in (
+            self._drawdown_enforcer.guard.peak_balance,
+            self.performance_tracker.get_metrics().peak_balance,
+            self.current_balance,
+        ):
+            try:
+                value = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > peak:
+                peak = value
+        return peak
+
+    def _iter_prediction_engines(self) -> Iterator[PredictionEngine]:
+        """Yield the prediction engine(s) reachable from the active strategy.
+
+        Read at call time (not captured) so hot-swaps and regime switches that
+        replace ``self.strategy`` mid-session are always reflected. Covers both
+        strategy shapes: ComponentStrategy (``strategy.signal_generator``) and
+        StrategyRuntime (``runtime.strategy.signal_generator``). Strategies
+        without an ML prediction engine yield nothing. isinstance-gated so
+        only real PredictionEngines are consulted (a mock or unrelated object
+        on the attribute path must not fabricate an escalation).
+        """
+        from src.prediction.engine import PredictionEngine  # deferred: heavy module
+
+        strategy = getattr(self, "strategy", None)
+        seen: set[int] = set()
+        for holder in (strategy, getattr(strategy, "strategy", None)):
+            generator = getattr(holder, "signal_generator", None)
+            prediction_engine = getattr(generator, "prediction_engine", None)
+            if (
+                isinstance(prediction_engine, PredictionEngine)
+                and id(prediction_engine) not in seen
+            ):
+                seen.add(id(prediction_engine))
+                yield prediction_engine
+
+    def inference_timeout_totals(self) -> tuple[int, int]:
+        """Return (total, consecutive) live inference timeouts across engines.
+
+        Fault-isolated: observability reads must never break the trading loop
+        or a status line, so any failure reports (0, 0).
+        """
+        total = 0
+        consecutive = 0
+        try:
+            for prediction_engine in self._iter_prediction_engines():
+                total += prediction_engine.inference_timeout_count
+                consecutive += prediction_engine.consecutive_inference_timeouts
+        except Exception as e:
+            logger.warning("inference timeout totals unavailable: %s", e)
+            return (0, 0)
+        return (total, consecutive)
+
+    def _check_inference_health(self) -> None:
+        """Escalate persistent live inference timeouts (#927).
+
+        Each timed-out bar already degrades to HOLD with a per-bar WARNING,
+        but a permanently hung model would otherwise look healthy while the
+        bot silently stops trading. When any prediction engine reports its
+        consecutive-timeout escalation, page once per episode (system_events
+        row + operator alert with honest ``alert_sent``); re-arm after the
+        engine recovers. Observability only — never a trading halt: existing
+        positions stay managed and no mode changes.
+        """
+        try:
+            escalated = [
+                pe for pe in self._iter_prediction_engines() if pe.timeout_escalation_active
+            ]
+            if escalated and not self._inference_escalation_active:
+                self._inference_escalation_active = True
+                worst = max(pe.consecutive_inference_timeouts for pe in escalated)
+                threshold = max(
+                    pe.config.inference_timeout_escalation_threshold for pe in escalated
+                )
+                message = (
+                    f"ML inference timed out {worst} consecutive times "
+                    f"(threshold {threshold}) — model may be hung; live signals "
+                    "are degrading to HOLD every bar. Not a trading halt: "
+                    "existing positions remain managed, but no new ML signals "
+                    "will fire until inference recovers."
+                )
+                logger.critical("🚨 %s", message)
+                self._record_event(
+                    EventType.ALERT,
+                    message,
+                    severity="critical",
+                    component="prediction",
+                    error_code="INFERENCE_TIMEOUT_ESCALATION",
+                    alert=True,
+                )
+            elif not escalated and self._inference_escalation_active:
+                self._inference_escalation_active = False
+                logger.info("✅ ML inference recovered — timeout streak broken")
+                self._record_event(
+                    EventType.WARNING,
+                    "ML inference recovered after a consecutive-timeout escalation",
+                    severity="warning",
+                    component="prediction",
+                    error_code="INFERENCE_TIMEOUT_RECOVERED",
+                )
+        except Exception as e:
+            # Observability must never propagate into the trading loop.
+            logger.warning("inference health check failed: %s", e)
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""

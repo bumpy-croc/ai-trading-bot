@@ -21,12 +21,25 @@ from src.config.constants import (
 
 if TYPE_CHECKING:
     from src.position_management.dynamic_risk import DynamicRiskConfig
+    from src.position_management.early_cut import EarlyCutPolicy
     from src.position_management.partial_manager import PartialExitPolicy
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
+
+# Sentinel distinguishing "key absent from config" (fall back to risk
+# parameters) from an explicit None (honored as-is, e.g. "no ATR distance").
+_UNSET = object()
+
+
+def _resolve_cfg_value(cfg: dict[str, Any] | None, key: str, fallback: Any) -> Any:
+    """Key-presence resolution: an explicit config key wins (even ``None``);
+    an absent key falls back to the risk-parameter value."""
+    if cfg is not None and key in cfg:
+        return cfg[key]
+    return fallback
 
 
 def merge_dynamic_risk_config(
@@ -97,6 +110,14 @@ def build_trailing_stop_policy(
 ) -> TrailingStopPolicy | None:
     """Build trailing stop policy from strategy/risk overrides.
 
+    Resolution is key-presence based (#971 expressibility): a key present in
+    the strategy's ``trailing_stop`` overrides is authoritative — including
+    an explicit ``None`` (e.g. ``"trailing_distance_atr_mult": None`` blocks
+    the risk-parameter ATR fallback, ``"breakeven_threshold": None`` disables
+    the breakeven move). A key that is absent falls back to the risk-manager
+    parameters, exactly as before. ``{"enabled": False}`` disables trailing
+    entirely (no fallback policy is built).
+
     Args:
         strategy: Strategy with optional get_risk_overrides() method.
         risk_manager: Risk manager with optional params attribute.
@@ -118,61 +139,71 @@ def build_trailing_stop_policy(
     if overrides and isinstance(overrides, dict):
         cfg = overrides.get("trailing_stop")
 
+    if cfg is not None and not isinstance(cfg, dict):
+        logger.warning("Ignoring non-dict trailing_stop config: %r", cfg)
+        cfg = None
+
+    # Explicit opt-out: the strategy/config declared trailing off.
+    if cfg is not None and cfg.get("enabled") is False:
+        return None
+
     # Get params from risk manager
     params = getattr(risk_manager, "params", None) if risk_manager else None
 
     if cfg or params:
-        # Activation threshold
-        activation = (cfg.get("activation_threshold") if cfg else None) or (
-            params.trailing_activation_threshold if params else None
+        activation = _resolve_cfg_value(
+            cfg, "activation_threshold", params.trailing_activation_threshold if params else None
+        )
+        dist_pct = _resolve_cfg_value(
+            cfg, "trailing_distance_pct", params.trailing_distance_pct if params else None
+        )
+        atr_mult = _resolve_cfg_value(
+            cfg, "trailing_distance_atr_mult", params.trailing_atr_multiplier if params else None
         )
 
-        # Trailing distance
-        dist_pct = cfg.get("trailing_distance_pct") if cfg else None
-        atr_mult = cfg.get("trailing_distance_atr_mult") if cfg else None
-        if atr_mult is None and params is not None:
-            atr_mult = params.trailing_atr_multiplier
-
-        # Breakeven settings
-        breakeven_threshold = (cfg.get("breakeven_threshold") if cfg else None) or (
-            params.breakeven_threshold if params else None
+        # Breakeven settings. _UNSET (no cfg key AND no params value) maps to
+        # the DEFAULT_* constants at construction — matching the previous
+        # or-chain, where only a None params value fell through to defaults;
+        # a params value of 0.0 is preserved as 0.0 (which TrailingStopPolicy
+        # treats as breakeven disabled).
+        params_be = params.breakeven_threshold if params else None
+        breakeven_threshold = _resolve_cfg_value(
+            cfg, "breakeven_threshold", params_be if params_be is not None else _UNSET
         )
-        breakeven_buffer = (cfg.get("breakeven_buffer") if cfg else None) or (
-            params.breakeven_buffer if params else None
+        params_bb = params.breakeven_buffer if params else None
+        breakeven_buffer = _resolve_cfg_value(
+            cfg, "breakeven_buffer", params_bb if params_bb is not None else _UNSET
+        )
+        if breakeven_buffer is None:
+            breakeven_buffer = _UNSET
+
+        # A breakeven threshold declared explicitly by the strategy config
+        # supports a breakeven-only policy (no trailing distance). Distances
+        # resolved from params alone do NOT trigger this rescue, so the
+        # pre-#971 "no distance anywhere -> no policy" outcome is preserved.
+        cfg_has_breakeven = (
+            cfg is not None
+            and "breakeven_threshold" in cfg
+            and cfg["breakeven_threshold"] is not None
         )
 
-        # Check if params have distance settings
-        params_has_distance = bool(
-            params
-            and (
-                params.trailing_distance_pct is not None
-                or params.trailing_atr_multiplier is not None
-            )
-        )
-
-        if activation and (dist_pct is not None or atr_mult is not None or params_has_distance):
+        if activation and (dist_pct is not None or atr_mult is not None or cfg_has_breakeven):
             try:
                 return TrailingStopPolicy(
                     activation_threshold=float(activation),
-                    trailing_distance_pct=(
-                        float(dist_pct)
-                        if dist_pct is not None
-                        else (
-                            float(params.trailing_distance_pct)
-                            if params and params.trailing_distance_pct is not None
-                            else None
-                        )
-                    ),
+                    trailing_distance_pct=(float(dist_pct) if dist_pct is not None else None),
                     atr_multiplier=float(atr_mult) if atr_mult is not None else None,
                     breakeven_threshold=(
-                        float(breakeven_threshold)
-                        if breakeven_threshold is not None
-                        else DEFAULT_BREAKEVEN_THRESHOLD
+                        DEFAULT_BREAKEVEN_THRESHOLD
+                        if breakeven_threshold is _UNSET
+                        else (
+                            float(breakeven_threshold) if breakeven_threshold is not None else None
+                        )
                     ),
                     breakeven_buffer=(
-                        float(breakeven_buffer)
-                        if breakeven_buffer is not None
-                        else DEFAULT_BREAKEVEN_BUFFER
+                        DEFAULT_BREAKEVEN_BUFFER
+                        if breakeven_buffer is _UNSET
+                        else float(breakeven_buffer)
                     ),
                 )
             except (TypeError, ValueError) as e:
@@ -183,6 +214,58 @@ def build_trailing_stop_policy(
                 return None
 
     return None
+
+
+def build_early_cut_policy(
+    strategy: Any,
+    risk_manager: RiskManager | None = None,
+) -> EarlyCutPolicy | None:
+    """Build the MFE-conditioned early-cut policy from strategy/risk overrides.
+
+    DEFAULT OFF: returns None unless the strategy's ``early_cut`` overrides
+    or ``RiskParameters.early_cut`` provide both ``mfe_threshold_pct`` and
+    ``evaluation_window_hours``. Strategy overrides win over risk parameters
+    (same precedence as ``time_exits``). ``{"enabled": False}`` disables the
+    policy regardless of other keys.
+
+    Args:
+        strategy: Strategy with optional get_risk_overrides() method.
+        risk_manager: Risk manager with optional params attribute.
+
+    Returns:
+        EarlyCutPolicy if a complete, valid configuration exists, else None.
+    """
+    from src.position_management.early_cut import EarlyCutPolicy
+
+    cfg = extract_risk_overrides(strategy).get("early_cut")
+
+    if cfg is None and risk_manager is not None:
+        params = getattr(risk_manager, "params", None)
+        cfg = getattr(params, "early_cut", None) if params else None
+
+    if cfg is None:
+        return None
+    if not isinstance(cfg, dict):
+        logger.warning("Ignoring non-dict early_cut config: %r", cfg)
+        return None
+    if cfg.get("enabled") is False:
+        return None
+    if "mfe_threshold_pct" not in cfg or "evaluation_window_hours" not in cfg:
+        logger.warning(
+            "Ignoring incomplete early_cut config %r: both mfe_threshold_pct "
+            "and evaluation_window_hours are required",
+            cfg,
+        )
+        return None
+
+    try:
+        return EarlyCutPolicy(
+            mfe_threshold_pct=float(cfg["mfe_threshold_pct"]),
+            evaluation_window_hours=float(cfg["evaluation_window_hours"]),
+        )
+    except (TypeError, ValueError) as e:
+        logger.warning("Failed to build EarlyCutPolicy from config %r: %s", cfg, e)
+        return None
 
 
 def build_time_exit_policy(
@@ -301,6 +384,35 @@ def build_partial_exit_policy(
     )
 
 
+def resolve_strategy_max_position_size(strategy: Any) -> float | None:
+    """Resolve a strategy's requested ``max_fraction`` override for seeding
+    ``RiskParameters.max_position_size``.
+
+    The single seam shared by the backtest CLI and the experiment harness so
+    the two honor strategy-declared allocation caps identically (e.g.
+    trend-following's 0.95 instead of the bare default) and can never drift
+    apart. Acceptance rules: ``get_risk_overrides()`` must return a dict with
+    a numeric ``max_fraction`` in ``(0, 1]``; anything else yields ``None``
+    (caller keeps its default). Exceptions from ``get_risk_overrides()``
+    propagate — a broken override hook must fail loud, not silently resize.
+
+    Args:
+        strategy: Strategy with an optional ``get_risk_overrides()`` method.
+
+    Returns:
+        The requested cap as a float, or None when no valid request exists.
+    """
+    if not hasattr(strategy, "get_risk_overrides"):
+        return None
+    overrides = strategy.get_risk_overrides()
+    if not isinstance(overrides, dict) or "max_fraction" not in overrides:
+        return None
+    max_fraction = overrides["max_fraction"]
+    if isinstance(max_fraction, int | float) and 0 < max_fraction <= 1:
+        return float(max_fraction)
+    return None
+
+
 def extract_risk_overrides(strategy: Any) -> dict[str, Any]:
     """Extract risk overrides from a strategy.
 
@@ -342,6 +454,8 @@ __all__ = [
     "build_trailing_stop_policy",
     "build_time_exit_policy",
     "build_partial_exit_policy",
+    "build_early_cut_policy",
     "extract_risk_overrides",
     "get_risk_parameters",
+    "resolve_strategy_max_position_size",
 ]

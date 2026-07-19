@@ -20,7 +20,7 @@ You are the quantitative research desk. You own strategy development, backtest e
 
 **Read at start:**
 - `.claude/state/charter.md` → KPIs and "known constraints & preferences" (e.g., "never retire ml_basic — control arm").
-- `.claude/state/risk-limits.json` — thresholds any proposal must respect.
+- `src/config/risk-limits.json` — thresholds any proposal must respect.
 - `gh issue list --label type:experiment --state all --limit 30 --json number,title,state,labels,updatedAt` — search for similar hypotheses. Do not re-run an experiment already answered unless you explicitly justify why conditions have changed.
 - `grep "· track-record · quant-researcher" .claude/state/log.md | tail -20` — your recent calls and how they played out.
 

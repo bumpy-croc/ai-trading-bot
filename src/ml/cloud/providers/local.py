@@ -165,7 +165,15 @@ class LocalProvider(CloudTrainingProvider):
             )
             from src.ml.training_pipeline.pipeline import run_training_pipeline
 
-            # Convert spec to TrainingConfig
+            # Convert spec to TrainingConfig. spec.hyperparameters carries
+            # everything that isn't a typed TrainingJobSpec field (mirrors
+            # entrypoint.py::parse_hyperparameters' defaults exactly, since
+            # this provider exists specifically to exercise the SAME CLI ->
+            # hyperparameters -> TrainingConfig path SageMaker jobs use,
+            # without AWS -- previously this dict was read from at ALL,
+            # so `atb train cloud --provider local` silently trained
+            # cnn_lstm/regression regardless of --model-type/--target-type).
+            hp = spec.hyperparameters or {}
             config = TrainingConfig(
                 symbol=spec.symbol,
                 timeframe=spec.timeframe,
@@ -174,6 +182,15 @@ class LocalProvider(CloudTrainingProvider):
                 epochs=spec.epochs,
                 batch_size=spec.batch_size,
                 sequence_length=spec.sequence_length,
+                force_sentiment=hp.get("force_sentiment", "false").lower() == "true",
+                force_price_only=hp.get("force_price_only", "false").lower() == "true",
+                mixed_precision=hp.get("mixed_precision", "true").lower() == "true",
+                model_type=hp.get("model_type", "cnn_lstm"),
+                model_variant=hp.get("model_variant", "default"),
+                target_type=hp.get("target_type", "regression"),
+                target_horizon=int(hp.get("target_horizon", "1")),
+                primary_model_type=hp.get("primary_model_type") or None,
+                use_mock_data=hp.get("use_mock_data", "false").lower() == "true",
                 # Skip plots and robustness for faster local testing
                 diagnostics=DiagnosticsOptions(
                     generate_plots=False,

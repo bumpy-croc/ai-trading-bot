@@ -28,6 +28,7 @@ from src.engines.live.execution.position_tracker import (
     LivePositionTracker,
     PositionSide,
 )
+from src.engines.live.system_halt import SystemHaltState
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -40,6 +41,7 @@ from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
 )
+from src.engines.shared.side_utils import to_side_string
 from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 from src.engines.shared.validation import (
@@ -48,6 +50,7 @@ from src.engines.shared.validation import (
 )
 
 if TYPE_CHECKING:
+    from src.position_management.early_cut import EarlyCutPolicy
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
@@ -68,6 +71,10 @@ class LiveExitCheck:
     should_exit: bool
     exit_reason: str = ""
     limit_price: float | None = None  # For SL/TP pricing
+    # Window MFE observed by the early-cut policy (raw price fraction), when
+    # it evaluated this cycle. Surfaced into strategy_executions reasons by
+    # the exit coordinator for observability (#976 review).
+    early_cut_window_mfe_pct: float | None = None
 
 
 @dataclass
@@ -104,11 +111,13 @@ class LiveExitHandler:
         risk_manager: RiskManager | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
+        early_cut_policy: EarlyCutPolicy | None = None,
         partial_manager: PartialOperationsManager | None = None,
         use_high_low_for_stops: bool = True,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
         close_only_provider: Callable[[], bool] | None = None,
+        system_halt: SystemHaltState | None = None,
     ) -> None:
         """Initialize exit handler.
 
@@ -119,6 +128,7 @@ class LiveExitHandler:
             risk_manager: Risk manager for position updates.
             trailing_stop_policy: Policy for trailing stops.
             time_exit_policy: Policy for time-based exits.
+            early_cut_policy: MFE-conditioned early-cut policy (default OFF).
             partial_manager: Unified partial operations manager.
             use_high_low_for_stops: Use candle high/low for SL/TP detection.
             max_position_size: Maximum position size for scale-ins.
@@ -126,6 +136,9 @@ class LiveExitHandler:
             close_only_provider: Reads the engine's close-only flag at call
                 time; scale-ins (exposure increases) are suppressed while it
                 returns True. Exits and partial exits are never gated.
+            system_halt: The engine's shared manual kill-switch state (#922);
+                scale-ins are suppressed while it is active. None (tests,
+                standalone use) leaves only the feature-flag pause active.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -133,6 +146,7 @@ class LiveExitHandler:
         self.risk_manager = risk_manager
         self.trailing_stop_policy = trailing_stop_policy
         self.time_exit_policy = time_exit_policy
+        self.early_cut_policy = early_cut_policy
         self.partial_manager = partial_manager
         self.use_high_low_for_stops = use_high_low_for_stops
         self.max_position_size = max_position_size
@@ -141,9 +155,10 @@ class LiveExitHandler:
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
-        # FEATURE_ENTRY_PAUSE also suppresses scale-ins (exposure increases);
-        # own instance so warnings rate-limit independently of the entry path.
-        self._entry_pause = EntryPauseGate()
+        # The entry-pause gate (FEATURE_ENTRY_PAUSE + manual system halt) also
+        # suppresses scale-ins (exposure increases); own instance so warnings
+        # rate-limit independently of the entry path.
+        self._entry_pause = EntryPauseGate(halt_state=system_halt)
         # #802 follow-up P3: optional exposure governor to cap scale-in exposure
         # (set by the engine; None => inert). Mirrors the entry handler's gate.
         self._exposure_governor: ExposureGovernor | None = None
@@ -151,6 +166,16 @@ class LiveExitHandler:
     def configure_exposure_gate(self, exposure_governor: ExposureGovernor | None) -> None:
         """Wire the #802 exposure governor so scale-ins respect the gross cap."""
         self._exposure_governor = exposure_governor
+
+    def bind_system_halt(self, system_halt: SystemHaltState | None) -> None:
+        """Rebind the scale-in gate to the engine's shared manual-halt state (#922).
+
+        A DI-injected handler is constructed before the engine (and its halt
+        state) exists, so the engine rebinds it here; scale-ins must never
+        bypass the kill-switch. Rebinding resets the gate's log rate-limit
+        only — no behavioral state is lost.
+        """
+        self._entry_pause = EntryPauseGate(halt_state=system_halt)
 
     def _build_snapshot(
         self,
@@ -258,6 +283,7 @@ class LiveExitHandler:
         candle_low: float | None = None,
         runtime_decision: Any = None,
         component_strategy: ComponentStrategy | None = None,
+        df: pd.DataFrame | None = None,
     ) -> LiveExitCheck:
         """Check all exit conditions for a position.
 
@@ -266,8 +292,10 @@ class LiveExitHandler:
         2. Stop loss
         3. Take profit
         4. Time limit
+        5. MFE early-cut (only when a policy and candle history are provided)
 
-        Exit reason priority remains: stop loss, take profit, time, strategy.
+        Exit reason priority remains: stop loss, take profit, time,
+        early-cut, strategy.
 
         Args:
             position: Position to check.
@@ -276,6 +304,8 @@ class LiveExitHandler:
             candle_low: Candle low price for realistic detection.
             runtime_decision: Decision from strategy runtime.
             component_strategy: Component strategy for exit signals.
+            df: OHLCV history covering the position's entry; required for the
+                MFE early-cut check (the check holds without it).
 
         Returns:
             LiveExitCheck with exit decision and reason.
@@ -307,32 +337,71 @@ class LiveExitHandler:
                 position.entry_time, datetime.now(UTC)
             )
 
-        should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_exit
+        # MFE early-cut (shared policy — identical logic in backtest).
+        hit_early_cut = False
+        early_cut_reason: str | None = None
+        early_cut_window_mfe: float | None = None
+        if self.early_cut_policy is not None and df is not None:
+            try:
+                early_cut_decision = self.early_cut_policy.check_early_cut_conditions(
+                    side=to_side_string(position.side),
+                    entry_price=float(position.entry_price),
+                    entry_time=position.entry_time,
+                    now_time=datetime.now(UTC),
+                    df=df,
+                )
+                hit_early_cut = early_cut_decision.should_exit
+                early_cut_reason = early_cut_decision.reason
+                early_cut_window_mfe = early_cut_decision.window_mfe_pct
+            except (TypeError, ValueError, AttributeError) as e:
+                logger.warning(
+                    "Early-cut check failed for %s: %s",
+                    position.symbol,
+                    e,
+                )
+
+        should_exit = (
+            exit_signal or hit_stop_loss or hit_take_profit or hit_time_exit or hit_early_cut
+        )
         if not should_exit:
-            return LiveExitCheck(should_exit=False)
+            return LiveExitCheck(
+                should_exit=False,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
+            )
 
         if hit_stop_loss:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason="Stop loss",
                 limit_price=position.stop_loss,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
             )
         if hit_take_profit:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason="Take profit",
                 limit_price=position.take_profit,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
             )
         if hit_time_exit:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason=time_reason or "Time exit",
                 limit_price=None,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
+            )
+        if hit_early_cut:
+            return LiveExitCheck(
+                should_exit=True,
+                exit_reason=early_cut_reason or "Early cut",
+                limit_price=None,
+                early_cut_window_mfe_pct=early_cut_window_mfe,
             )
         return LiveExitCheck(
             should_exit=True,
             exit_reason=signal_reason,
             limit_price=None,
+            early_cut_window_mfe_pct=early_cut_window_mfe,
         )
 
     def execute_exit(

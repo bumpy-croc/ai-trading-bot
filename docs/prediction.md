@@ -1,6 +1,6 @@
 # Prediction & models
 
-> **Last Updated**: 2026-01-12  
+> **Last Updated**: 2026-07-07  
 > **Related Documentation**: [Backtesting](backtesting.md), [Live trading](live_trading.md)
 
 Machine-learning inference and model lifecycle management live under `src/prediction` and `src/ml`. The goal is to keep training
@@ -99,13 +99,25 @@ Use the following knobs when running `atb train model` locally:
 - `--epochs`, `--batch-size`, and `--sequence-length` adjust hyperparameters without editing code.
 - `--skip-plots`, `--skip-robustness`, and `--skip-onnx` let you bypass the slowest diagnostics when you only need a quick experiment. Leave them off for production artifacts so the metadata and ONNX bundle stay in sync.
 - `--disable-mixed-precision` falls back to float32 math if you encounter GPU/MPS precision glitches. Mixed precision remains enabled by default when a GPU is present to speed up long jobs.
+- `--force-price-only` trains against the production price-only contract: the 5 `PriceOnlyFeatureExtractor` features (rolling causal min-max normalization) with `close_normalized` as the regression target — the same contract `atb train price` and live inference use. Bundles still land in the `price/` namespace; promotion into `basic/` stays an explicit step.
 
 The defaults remain equivalent to the legacy behavior (300 epochs, batch size 32, sequence length 120, diagnostics on, ONNX on), so unattended jobs continue to produce identical artifacts unless you override the flags explicitly.
+
+### Training data sourcing (single-source, fail-loud)
+
+Training corpora are loaded through the year-based parquet cache (`atb data prefill-cache`)
+before any network fetch; ranges missing from the cache are fetched from Binance and cached, so
+repeated runs — e.g. multi-entrant tournaments — train on identical rows without re-downloading.
+There is **no third-party fallback at training time**: if Binance/cache cannot fully cover the
+requested window (open-time boundary slack, calendar-day start check, ≥99% expected-bar
+coverage), training fails loudly instead of silently switching data sources mid-corpus (#909).
+Fix a failure by prefilling the cache, passing `--input-data-s3`, or adjusting the date range.
 
 ## Cloud training (AWS SageMaker)
 
 `atb train cloud` runs the same training pipeline on SageMaker spot GPU instances (`src/ml/cloud/`). Because Binance blocks
-AWS IPs, the CLI always downloads candles locally, uploads them to S3 as the job's data channel, and the container trains
+AWS IPs, the CLI always assembles the corpus locally (parquet cache first, Binance for gaps — see
+"Training data sourcing" above), uploads it to S3 as the job's data channel, and the container trains
 from that channel — both in blocking mode and with `--no-wait`.
 
 ```bash
@@ -115,12 +127,26 @@ atb train cloud BTCUSDT --start-date 2026-05-01 --end-date 2026-06-01 --epochs 5
 # Production-style retrain: last 365 days ending now
 atb train cloud BTCUSDT --days 365 --epochs 300
 
+# Architecture selection (tournament entrants): lstm, cnn_lstm, attention_lstm,
+# tcn, tcn_attention, tft x {default, lightweight, deep}
+atb train cloud ETHUSDT --model-type tcn_attention --model-variant deep --force-price-only
+
 # Async round trip
 atb train cloud BTCUSDT --no-wait            # uploads data, submits, prints job id
 atb train cloud-status <JOB_NAME>            # poll status
 atb train cloud-status <JOB_NAME> --sync     # download + sync bundle into the registry
 atb train cloud-list [BTCUSDT]               # list job outputs in S3 (newest first)
 ```
+
+### Model tournaments run cloud-first
+
+Architecture/model tournaments are run as **parallel SageMaker jobs, not sequential local
+training** (Board decision 2026-07-06, #918): a 5-entrant sweep costs roughly $0.10–0.50 total
+and finishes in under an hour of wall-clock time. Submit one `atb train cloud … --no-wait
+--model-type <entrant>` job per entrant with an identical fixed `--start-date`/`--end-date`
+window, then sync and evaluate the bundles. Local training remains the fallback only for
+protocol-experimental runs that need unpushed pipeline patches. Before a tournament, confirm the
+ECR image is fresh (see the rebuild note below) — the container bakes in `src/ml/training_pipeline/`.
 
 ### Namespace and promotion flow
 

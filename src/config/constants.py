@@ -7,7 +7,19 @@ DEFAULT_INITIAL_BALANCE: float = 1000  # Default starting balance in USD
 # Prediction Engine Constants
 DEFAULT_PREDICTION_HORIZONS = [1]  # Single horizon for MVP
 DEFAULT_MIN_CONFIDENCE_THRESHOLD = 0.6
-DEFAULT_MAX_PREDICTION_LATENCY = 0.1  # seconds
+# Latency ALERTING budget (seconds): exceeding it logs a WARNING in live
+# trading but never gates or substitutes a completed prediction.
+DEFAULT_MAX_PREDICTION_LATENCY = 0.1
+# Hard inference deadline (seconds) applied only in the LIVE inference
+# context so the trading loop cannot block on a hung model. CPU ONNX
+# inference measures ~30-400ms even under heavy load; 5s is headroom, not a
+# latency target. Backtests apply no deadline (determinism requirement).
+DEFAULT_LIVE_INFERENCE_TIMEOUT = 5.0
+# Consecutive live inference timeouts before the prediction engine reports
+# itself degraded and the live engine escalates (system_events row + operator
+# alert, #927). Observability only — never halts trading; existing positions
+# stay managed. 0 disables escalation.
+DEFAULT_INFERENCE_TIMEOUT_ESCALATION_THRESHOLD = 10
 # Default model registry base path (legacy flat layout). The registry also
 # auto-detects a structured subdirectory at base/models when present.
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"
@@ -127,7 +139,7 @@ DEFAULT_MAX_DAILY_RISK = 0.06  # 6% maximum daily risk
 DEFAULT_MAX_CORRELATED_RISK = 0.10  # 10% maximum risk for correlated positions
 DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
 # Escalation tiers as fractions of the max-drawdown limit.
-# Must match .claude/state/risk-limits.json escalation.{warning,critical}_at_pct_of_limit.
+# Must match src/config/risk-limits.json escalation.{warning,critical}_at_pct_of_limit.
 DRAWDOWN_WARNING_AT_PCT_OF_LIMIT = 0.50  # WARNING at 50% of the cap (10% drawdown at 0.20)
 DRAWDOWN_CRITICAL_AT_PCT_OF_LIMIT = 0.80  # CRITICAL at 80% of the cap (16% drawdown at 0.20)
 DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS = 900  # Min seconds between repeated drawdown-tier logs

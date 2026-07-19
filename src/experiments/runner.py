@@ -12,8 +12,10 @@ from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
 from src.data_providers.offline import FixtureProvider, RandomWalkProvider
 from src.engines.backtest.engine import Backtester
+from src.engines.shared.risk_configuration import resolve_strategy_max_position_size
 from src.experiments.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
+from src.strategies import factory_accepts_symbol
 from src.strategies.components import Strategy
 from src.strategies.hyper_growth import create_hyper_growth_strategy
 from src.strategies.ml_adaptive import create_ml_adaptive_strategy
@@ -63,6 +65,7 @@ class ExperimentRunner:
         self,
         strategy_name: str,
         factory_kwargs: dict[str, object] | None = None,
+        symbol: str | None = None,
     ) -> Strategy:
         """Construct a strategy, optionally passing kwargs to the factory.
 
@@ -72,6 +75,15 @@ class ExperimentRunner:
         (which is baked into the LeverageManager at construction), and
         ``min_regime_bars``. For post-construction knobs like
         ``long_entry_threshold`` use ``parameters`` overrides instead.
+
+        ``symbol`` (typically ``config.symbol``, the symbol the backtest
+        actually runs on) is auto-injected into the factory call when the
+        factory accepts a ``symbol`` parameter — mirroring the live-runner
+        and CLI backtest loaders (backtest-live parity). Without this, ML
+        strategies silently default their signal generator's symbol to
+        ``MLBasicSignalGenerator.DEFAULT_SYMBOL`` ("BTCUSDT"), scoring
+        whatever symbol the backtest runs on with the wrong model (GH #997).
+        An explicit ``symbol`` key in ``factory_kwargs`` always wins.
         """
         strategies: dict[str, Callable[..., Strategy]] = {
             "ml_basic": create_ml_basic_strategy,
@@ -83,6 +95,8 @@ class ExperimentRunner:
         if builder is None:
             raise ValueError(f"Unknown strategy: {strategy_name}")
         kwargs = dict(factory_kwargs or {})
+        if symbol is not None and "symbol" not in kwargs and factory_accepts_symbol(builder):
+            kwargs["symbol"] = symbol
         if not kwargs:
             return builder()
         try:
@@ -451,6 +465,7 @@ class ExperimentRunner:
         strategy = self._load_strategy(
             config.strategy_name,
             factory_kwargs=config.factory_kwargs or None,
+            symbol=config.symbol,
         )
         # Apply any parameter overrides for strategy-level tuning
         self._apply_parameter_overrides(strategy, config)
@@ -464,9 +479,14 @@ class ExperimentRunner:
             seed=config.random_seed,
         )
 
-        risk_params = (
-            RiskParameters(**config.risk_parameters) if config.risk_parameters else RiskParameters()
-        )
+        risk_kwargs = dict(config.risk_parameters) if config.risk_parameters else {}
+        if "max_position_size" not in risk_kwargs:
+            # CLI parity: honor a strategy-declared max_fraction override via
+            # the same seam as `atb backtest`. An explicit config value wins.
+            strategy_max_position = resolve_strategy_max_position_size(strategy)
+            if strategy_max_position is not None:
+                risk_kwargs["max_position_size"] = strategy_max_position
+        risk_params = RiskParameters(**risk_kwargs)
 
         backtester = Backtester(
             strategy=strategy,
@@ -498,6 +518,7 @@ class ExperimentRunner:
             final_balance=float(results.get("final_balance", config.initial_balance)),
             session_id=results.get("session_id"),
             trade_pnl_pcts=trade_pnl_pcts,
+            effective_sizing=dict(results.get("effective_sizing") or {}),
         )
 
     def run_sweep(self, configs: list[ExperimentConfig]) -> list[ExperimentResult]:

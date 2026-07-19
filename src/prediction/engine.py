@@ -11,6 +11,7 @@ import logging
 import math
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -39,10 +40,12 @@ from .exceptions import (
     FeatureExtractionError,
     InvalidInputError,
     ModelInferenceError,
+    ModelInferenceTimeoutError,
     ModelNotFoundError,
 )
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
+from .inference_context import InferenceContext, get_inference_context
 from .models.onnx_runner import ModelPrediction
 from .models.registry import PredictionModelRegistry, StrategyModel
 from .utils.caching import PredictionCacheManager
@@ -62,6 +65,11 @@ class PredictionResult:
     cache_hit: bool = False
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Ordered class probabilities for classification bundles, propagated
+    # from ModelPrediction.probabilities. None for every regression bundle
+    # (purely additive -- see docs/prediction.md and OnnxRunner's
+    # _process_classification_output).
+    probabilities: tuple[float, ...] | None = None
 
 
 class PredictionEngine:
@@ -128,6 +136,13 @@ class PredictionEngine:
         self._cache_hits = 0
         self._cache_misses = 0
         self._feature_extraction_time = 0.0
+        # Live-context inference timeouts (deterministic contexts never time out)
+        self._inference_timeout_count = 0
+        # Current run of back-to-back timeouts; any successful inference
+        # resets it. Past the configured threshold the engine reports itself
+        # degraded (#927) — a permanently hung model must not look healthy
+        # while every bar silently degrades to HOLD.
+        self._consecutive_timeout_count = 0
         # Track per-model inference times with bounded size to prevent memory leaks
         self._model_inference_times: dict[str, deque[float]] = {}
         # Track feature extraction times for averaging
@@ -182,34 +197,31 @@ class PredictionEngine:
             bundle = self._resolve_bundle(model_name)
             model = bundle.runner
             prepared_features = self._prepare_features_for_bundle(bundle, features, features_df)
+            final_probabilities: tuple[float, ...] | None = None
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
-                # Wrap prediction with timeout to prevent hanging on slow/hung models
-                timeout_seconds = self._get_timeout_seconds()
-                try:
-                    prediction = run_with_timeout(
-                        model.predict,
-                        args=(prepared_features,),
-                        timeout_seconds=timeout_seconds,
-                        operation_name="ML model inference",
-                    )
-                except InfraTimeoutError as timeout_err:
-                    # Prediction exceeded timeout - return error result
-                    inference_time = time.time() - start_time
-                    raise ModelInferenceError(
-                        f"Model inference timeout after {timeout_seconds}s"
-                    ) from timeout_err
+                prediction = self._run_inference(
+                    model.predict,
+                    (prepared_features,),
+                    operation_name="ML model inference",
+                )
 
                 final_price = prediction.price
                 final_conf = prediction.confidence
                 final_dir = prediction.direction
                 final_model_name = prediction.model_name
+                final_probabilities = getattr(prediction, "probabilities", None)
                 member_preds = None
                 features_used = self._count_features_used(prepared_features)
 
-                # Apply rolling MinMax denormalization if needed
-                final_price = self._apply_rolling_denormalization(final_price, bundle, data)
+                if final_probabilities is None:
+                    # Apply rolling MinMax denormalization if needed. Classification
+                    # bundles have no price to denormalize -- probabilities is the
+                    # authoritative output there (see PredictionResult.probabilities);
+                    # skipping this also avoids the finite-price guard below rejecting
+                    # a classifier's deliberate NaN price placeholder.
+                    final_price = self._apply_rolling_denormalization(final_price, bundle, data)
             else:
                 # Run all available structured runners for ensemble
                 preds = []
@@ -230,9 +242,6 @@ class PredictionEngine:
                 if not ensemble_bundles:
                     ensemble_bundles = [bundle]
 
-                # Same timeout configuration as single model
-                timeout_seconds = self._get_timeout_seconds()
-
                 for ensemble_bundle in ensemble_bundles:
                     ensemble_features = self._prepare_features_for_bundle(
                         ensemble_bundle, features, features_df
@@ -241,19 +250,13 @@ class PredictionEngine:
                         features_used = self._count_features_used(ensemble_features)
 
                     try:
-                        raw_prediction = run_with_timeout(
+                        raw_prediction = self._run_inference(
                             ensemble_bundle.runner.predict,
-                            args=(ensemble_features,),
-                            timeout_seconds=timeout_seconds,
+                            (ensemble_features,),
                             operation_name=f"Ensemble model {ensemble_bundle.key} inference",
                         )
-                    except InfraTimeoutError:
-                        # Log timeout and skip this ensemble member
-                        logger.warning(
-                            "Ensemble model %s timed out after %ss, skipping",
-                            ensemble_bundle.key,
-                            timeout_seconds,
-                        )
+                    except ModelInferenceTimeoutError:
+                        # Already counted/logged by _run_inference; skip member
                         continue
 
                     # Skip this ensemble member if denormalization fails (e.g., NaN/Inf predictions)
@@ -296,25 +299,19 @@ class PredictionEngine:
             # Calculate total inference time
             inference_time = time.time() - start_time
 
-            # Predictions that exceed max_prediction_latency should return an error result,
-            # even if the prediction completed successfully.
-            if inference_time > self.config.max_prediction_latency:
-                return PredictionResult(
-                    price=0.0,
-                    confidence=0.0,
-                    direction=0,
-                    model_name=final_model_name,
-                    timestamp=datetime.now(UTC),
-                    inference_time=inference_time,
-                    features_used=features_used,
-                    error=f"Prediction timeout after {inference_time:.3f}s (max: {self.config.max_prediction_latency}s)",
-                    metadata={
-                        "error_type": "PredictionTimeoutError",
-                        "data_length": len(data),
-                        "feature_extraction_time": feature_time,
-                        "model_inference_time": None,
-                        "config_version": self._get_config_version(),
-                    },
+            # max_prediction_latency is an ALERTING budget: a completed
+            # prediction is always returned. Only the live context raises the
+            # alert — in deterministic contexts wall-clock must not influence
+            # output or logs (backtest reproducibility).
+            if (
+                inference_time > self.config.max_prediction_latency
+                and get_inference_context() is InferenceContext.LIVE
+            ):
+                logger.warning(
+                    "Prediction latency %.3fs exceeded alert budget %.3fs (model=%s)",
+                    inference_time,
+                    self.config.max_prediction_latency,
+                    final_model_name,
                 )
 
             # Check if cache was hit (from feature pipeline)
@@ -341,6 +338,7 @@ class PredictionEngine:
                 inference_time=inference_time,
                 features_used=features_used,
                 cache_hit=cache_hit,
+                probabilities=final_probabilities,
                 metadata={
                     "data_length": len(data),
                     "feature_extraction_time": feature_time,
@@ -356,17 +354,16 @@ class PredictionEngine:
             return result
 
         except Exception as e:
-            # Calculate total time for both timeout check and error result
             total_time = time.time() - start_time
 
-            # Check for timeout but preserve original error
-            error_message = str(e)
-            error_type = type(e).__name__
-
-            if total_time > self.config.max_prediction_latency:
-                # Add timeout information to the original error message.
-                error_message = f"Prediction timeout after {total_time:.3f}s (max: {self.config.max_prediction_latency}s). Original error: {error_message}"
-                error_type = f"PredictionTimeoutError+{error_type}"
+            metadata: dict[str, Any] = {
+                "error_type": type(e).__name__,
+                "data_length": len(data) if isinstance(data, pd.DataFrame) else 0,
+            }
+            # Stamp live latency-budget timeouts so downstream consumers can
+            # attribute degraded (HOLD-substituted) decisions to timeouts.
+            if isinstance(e, ModelInferenceTimeoutError):
+                metadata["timed_out"] = True
 
             # Return error result
             return PredictionResult(
@@ -377,11 +374,8 @@ class PredictionEngine:
                 timestamp=datetime.now(UTC),
                 inference_time=total_time,
                 features_used=0,
-                error=error_message,
-                metadata={
-                    "error_type": error_type,
-                    "data_length": len(data) if isinstance(data, pd.DataFrame) else 0,
-                },
+                error=str(e),
+                metadata=metadata,
             )
 
     def predict_series(
@@ -502,25 +496,15 @@ class PredictionEngine:
         num_windows = windows.shape[0]
         preds_norm = np.empty((num_windows,), dtype=np.float32)
 
-        # Configure timeout for series prediction
-        timeout_seconds = self._get_timeout_seconds()
-
         for start in range(0, num_windows, batch_size):
             end = min(start + batch_size, num_windows)
             batch = windows[start:end]
 
-            # Wrap session.run with timeout to prevent hanging on large batches
-            try:
-                output = run_with_timeout(
-                    session.run,
-                    args=(None, {input_name: batch}),
-                    timeout_seconds=timeout_seconds,
-                    operation_name=f"Series prediction batch {start}-{end}",
-                )
-            except InfraTimeoutError as timeout_err:
-                raise ModelInferenceError(
-                    f"Series prediction batch timeout after {timeout_seconds}s"
-                ) from timeout_err
+            output = self._run_inference(
+                session.run,
+                (None, {input_name: batch}),
+                operation_name=f"Series prediction batch {start}-{end}",
+            )
 
             # Validate output before accessing
             if not output or len(output) == 0:
@@ -635,19 +619,12 @@ class PredictionEngine:
                 self._total_feature_extraction_time += feature_time
                 self._feature_extraction_count += 1
 
-                # Make prediction with pre-loaded model (with timeout protection)
-                timeout_seconds = self._get_timeout_seconds()
-                try:
-                    prediction = run_with_timeout(
-                        model.predict,
-                        args=(prepared_features,),
-                        timeout_seconds=timeout_seconds,
-                        operation_name=f"Batch prediction {i+1}/{len(data_batches)}",
-                    )
-                except InfraTimeoutError as timeout_err:
-                    raise ModelInferenceError(
-                        f"Batch prediction timeout after {timeout_seconds}s"
-                    ) from timeout_err
+                # Make prediction with pre-loaded model (live latency budget only)
+                prediction = self._run_inference(
+                    model.predict,
+                    (prepared_features,),
+                    operation_name=f"Batch prediction {i+1}/{len(data_batches)}",
+                )
 
                 # Apply rolling MinMax denormalization if needed
                 denorm_price = self._apply_rolling_denormalization(prediction.price, bundle, data)
@@ -681,6 +658,14 @@ class PredictionEngine:
 
             except Exception as e:
                 # Create error result for this batch
+                batch_metadata: dict[str, Any] = {
+                    "error_type": type(e).__name__,
+                    "batch_index": i,
+                    "batch_size": len(data_batches),
+                    "data_length": len(data) if isinstance(data, pd.DataFrame) else 0,
+                }
+                if isinstance(e, ModelInferenceTimeoutError):
+                    batch_metadata["timed_out"] = True
                 error_result = PredictionResult(
                     price=0.0,
                     confidence=0.0,
@@ -690,12 +675,7 @@ class PredictionEngine:
                     inference_time=time.time() - start_time,
                     features_used=0,
                     error=str(e),
-                    metadata={
-                        "error_type": type(e).__name__,
-                        "batch_index": i,
-                        "batch_size": len(data_batches),
-                        "data_length": len(data) if isinstance(data, pd.DataFrame) else 0,
-                    },
+                    metadata=batch_metadata,
                 )
                 results.append(error_result)
 
@@ -725,6 +705,20 @@ class PredictionEngine:
                     "loaded": True,
                     "inference_time_avg": self._get_model_avg_inference_time(bundle.key),
                 }
+        # list_bundles() only exposes "latest" per (symbol, timeframe,
+        # model_type) -- a caller pinning to a SPECIFIC, non-latest version
+        # (e.g. the TARGET-REDESIGN exam harness's fold-runner) passes that
+        # version's exact bundle.key, which won't appear above. Mirrors
+        # _resolve_bundle's identical fallback.
+        versioned_bundle = self.model_registry.get_bundle_by_key(model_name)
+        if versioned_bundle is not None:
+            return {
+                "name": versioned_bundle.key,
+                "path": getattr(versioned_bundle.runner, "model_path", None),
+                "metadata": versioned_bundle.metadata,
+                "loaded": True,
+                "inference_time_avg": self._get_model_avg_inference_time(versioned_bundle.key),
+            }
         return {}
 
     def get_performance_stats(self) -> dict[str, Any]:
@@ -756,7 +750,30 @@ class PredictionEngine:
             "model_inference_times": model_times,
             "cache_hits": self._cache_hits,
             "cache_misses": self._cache_misses,
+            "inference_timeouts": self._inference_timeout_count,
+            "consecutive_inference_timeouts": self._consecutive_timeout_count,
         }
+
+    @property
+    def inference_timeout_count(self) -> int:
+        """Total live inference timeouts this session."""
+        return self._inference_timeout_count
+
+    @property
+    def consecutive_inference_timeouts(self) -> int:
+        """Current run of back-to-back live inference timeouts."""
+        return self._consecutive_timeout_count
+
+    @property
+    def timeout_escalation_active(self) -> bool:
+        """True when consecutive timeouts have reached the escalation threshold.
+
+        Signals a likely hung/overloaded model: every bar is degrading to
+        HOLD, so operators must be paged (#927). A threshold of 0 disables
+        escalation. Cleared automatically by the next successful inference.
+        """
+        threshold = self.config.inference_timeout_escalation_threshold
+        return threshold > 0 and self._consecutive_timeout_count >= threshold
 
     def clear_caches(self) -> None:
         """Clear all caches (feature and prediction)"""
@@ -874,12 +891,77 @@ class PredictionEngine:
             health["components"]["configuration"] = {"status": "error", "error": str(e)}
             health["status"] = "degraded"
 
+        # Check live inference timeouts (#927): a permanently hung model must
+        # not report healthy while every prediction degrades to HOLD.
+        threshold = self.config.inference_timeout_escalation_threshold
+        inference_health: dict[str, Any] = {
+            "status": "healthy",
+            "inference_timeouts": self._inference_timeout_count,
+            "consecutive_timeouts": self._consecutive_timeout_count,
+            "escalation_threshold": threshold,
+        }
+        if self.timeout_escalation_active:
+            inference_health["status"] = "error"
+            inference_health["error"] = (
+                f"{self._consecutive_timeout_count} consecutive live inference "
+                f"timeouts (threshold {threshold}) — model may be hung; "
+                "predictions are degrading to no-signal every bar"
+            )
+            health["status"] = "degraded"
+        health["components"]["inference"] = inference_health
+
         return health
 
     # Private methods
-    def _get_timeout_seconds(self) -> float:
-        """Return the configured prediction timeout in seconds."""
-        return self.config.max_prediction_latency
+    def _get_timeout_seconds(self) -> float | None:
+        """Return the hard inference deadline for the current context.
+
+        ``None`` (deterministic contexts: backtest/research/training) means
+        inference is never aborted on wall-clock time — a load-dependent
+        timeout would silently change backtest results between identical
+        runs. Live trading keeps a bounded deadline so the trading loop
+        cannot block indefinitely on a hung model.
+        """
+        if get_inference_context() is InferenceContext.LIVE:
+            return self.config.live_inference_timeout
+        return None
+
+    def _run_inference(self, func: Callable[..., Any], args: tuple, operation_name: str) -> Any:
+        """Run one inference call under the current context's latency policy.
+
+        Raises:
+            ModelInferenceTimeoutError: Live context only — the call exceeded
+                the latency budget. Counted and logged loudly here so every
+                substitution is attributable.
+        """
+        timeout_seconds = self._get_timeout_seconds()
+        if timeout_seconds is None:
+            result = func(*args)
+            self._consecutive_timeout_count = 0
+            return result
+        try:
+            result = run_with_timeout(
+                func,
+                args=args,
+                timeout_seconds=timeout_seconds,
+                operation_name=operation_name,
+            )
+        except InfraTimeoutError as timeout_err:
+            self._inference_timeout_count += 1
+            self._consecutive_timeout_count += 1
+            logger.warning(
+                "%s exceeded live inference timeout of %.1fs — substituting no-signal "
+                "result (consecutive timeouts: %d, total this session: %d)",
+                operation_name,
+                timeout_seconds,
+                self._consecutive_timeout_count,
+                self._inference_timeout_count,
+            )
+            raise ModelInferenceTimeoutError(
+                f"{operation_name} timeout after {timeout_seconds}s"
+            ) from timeout_err
+        self._consecutive_timeout_count = 0
+        return result
 
     def _validate_input_data(self, data: pd.DataFrame) -> None:
         """Validate input data has required columns and sufficient length"""
@@ -1001,6 +1083,14 @@ class PredictionEngine:
             for bundle in bundles:
                 if bundle.key == model_name:
                     return bundle
+            # list_bundles() only exposes "latest" per (symbol, timeframe,
+            # model_type) -- a caller pinning to a SPECIFIC, non-latest
+            # version (e.g. the TARGET-REDESIGN exam harness's fold-runner)
+            # passes that version's exact bundle.key, which won't appear
+            # above. get_bundle_by_key searches every loaded version.
+            versioned_bundle = self.model_registry.get_bundle_by_key(model_name)
+            if versioned_bundle is not None:
+                return versioned_bundle
             raise ModelNotFoundError(f"Model '{model_name}' not found")
 
         if bundles:

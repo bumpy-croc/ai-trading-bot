@@ -3,15 +3,35 @@
 The #807 ``AccountCircuitBreaker`` is evaluated in the pre-order gate (it blocks
 new entries when tripped). This enforcer adds the loop-driven half:
 
+- **True-equity evaluation (#986 gap A)**: the breaker is fed
+  ``current_balance + unrealized P&L of open positions``, not raw cash.
+  ``current_balance`` only moves on realized events, so a cash-fed breaker is
+  structurally blind to an open position's adverse move — the exact loss it
+  exists to halt — for the entire holding period. The unrealized read is
+  fault-isolated via the shared ``BreakerEquityFeed``: if it is unavailable on
+  an iteration the check degrades explicitly to balance-only with a WARNING
+  (never crashes the loop, never silently halts) and the breaker's latch state
+  is FROZEN — a cash reading measured against equity-basis anchors may neither
+  latch a halt (spurious daily-loss latch under a winning open position) nor
+  clear one (spurious drawdown-latch clear at cash par) until the feed
+  recovers. Existing latches keep reporting, and halting, while frozen.
 - **Restart-safe daily baseline**: on boot it seeds the breaker's daily-loss
   baseline from the day's first ``account_history`` snapshot
-  (``get_first_snapshot_of_day``), so an intraday restart does not re-anchor the
-  baseline to current equity and silently disarm the daily-loss halt.
+  (``get_first_snapshot_of_day``, equity basis), so an intraday restart does not
+  re-anchor the baseline to current equity and silently disarm the daily-loss
+  halt.
+- **Restart-safe drawdown peak (#986 gap B)**: on boot it seeds the breaker's
+  drawdown peak from the durable ``account_history`` session equity max
+  (``get_session_peak_equity``), the same session-scoped pattern the
+  ``MaxDrawdownGuard`` uses since #1001 — a restart cannot silently zero the
+  15% halt's memory (the #845/#847 peak-reset class).
 - **Close-only on trip**: in ``active`` mode a trip flips the engine's existing
   **close-only mode** (new entries AND scale-ins stop; exits and stop-losses keep
   running — nothing is liquidated), matching the ``MaxDrawdownGuard`` precedent
   (the codebase deliberately does not force-liquidate into a dip). In ``dry_run``
-  it logs "would halt" and takes no action. ``off`` is fully inert.
+  it logs "would halt", writes a ``CIRCUIT_BREAKER_DRY_RUN`` ``system_events``
+  row (durable would-have-tripped evidence carrying the equity breakdown and
+  peak provenance, #968), and takes no protective action. ``off`` is fully inert.
 - **Surfacing**: a trip emits a ``risk_event`` + a CRITICAL ``system_events`` row
   so the monitoring dashboard and alerting pick it up.
 
@@ -23,12 +43,20 @@ the account unprotected.
 from __future__ import annotations
 
 import logging
+import math
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
 from src.database.models import EventType
 from src.infrastructure.logging.events import log_risk_event
-from src.risk.circuit_breaker import MODE_ACTIVE, MODE_DRY_RUN, AccountCircuitBreaker
+from src.risk.circuit_breaker import (
+    BASIS_BALANCE_DEGRADED,
+    MODE_ACTIVE,
+    MODE_DRY_RUN,
+    AccountCircuitBreaker,
+    BreakerEquityFeed,
+)
 
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
@@ -69,20 +97,35 @@ class CircuitBreakerEnforcer:
     """Runs the account circuit breaker on the trading loop."""
 
     def __init__(
-        self, engine_state: CircuitBreakerEngineState, breaker: AccountCircuitBreaker
+        self,
+        engine_state: CircuitBreakerEngineState,
+        breaker: AccountCircuitBreaker,
+        *,
+        unrealized_pnl_provider: Callable[[], float] | None = None,
     ) -> None:
+        """Bind to the engine's live state.
+
+        Args:
+            engine_state: Live engine state (see protocol for the surface).
+            breaker: The shared breaker instance (also wired to the entry gate).
+            unrealized_pnl_provider: Mark-to-market unrealized P&L of open
+                positions (the live position tracker's sum), so the breaker
+                evaluates TRUE equity. ``None`` evaluates cash balance only.
+        """
         self._state = engine_state
         self._breaker = breaker
+        self._equity_feed = BreakerEquityFeed(unrealized_pnl_provider)
         self._seeded = False
         self._seed_attempts = 0
         self._halt_notified = False
+        self._peak_seed_provenance = "self_anchored"
 
     @property
     def breaker(self) -> AccountCircuitBreaker:
         return self._breaker
 
     def check(self) -> None:
-        """Evaluate the breaker against current equity; enforce halts."""
+        """Evaluate the breaker against current TRUE equity; enforce halts."""
         state = self._state
         mode = self._breaker.mode
         if mode not in (MODE_DRY_RUN, MODE_ACTIVE):
@@ -90,10 +133,16 @@ class CircuitBreakerEnforcer:
 
         try:
             balance = float(state.current_balance)
+            equity, unrealized, basis = self._equity_feed.read(balance)
             now = datetime.now(UTC)
             if not self._seeded:
-                self._try_seed(balance, now)  # best-effort; evaluate proceeds regardless
-            decision = self._breaker.evaluate(balance, now)
+                self._try_seed(now)  # best-effort; evaluate proceeds regardless
+            # A degraded (cash-only) reading freezes latch transitions: it is
+            # measured against equity-basis anchors, so it may neither latch
+            # nor clear — existing latches keep reporting (and halting).
+            decision = self._breaker.evaluate(
+                equity, now, allow_transitions=basis != BASIS_BALANCE_DEGRADED
+            )
         except Exception as e:  # noqa: BLE001 - monitoring must never crash the loop
             logger.error("Circuit-breaker check failed: %s", e, exc_info=True)
             return
@@ -102,15 +151,50 @@ class CircuitBreakerEnforcer:
             self._halt_notified = False  # cleared (e.g. next UTC day) -> allow re-notify
             return
 
+        # Auditable measurement snapshot (#968): what was measured, from what
+        # basis, against which peak, and where that peak came from.
+        measurement = (
+            f"equity ${equity:,.2f} = balance ${balance:,.2f} "
+            f"+ unrealized ${unrealized:,.2f}, basis={basis}, "
+            f"peak ${self._breaker.peak:,.2f} [{self._peak_seed_provenance}]"
+        )
+
         if mode == MODE_DRY_RUN:
             if not self._halt_notified:
-                logger.warning(
-                    "🟡 Account circuit breaker WOULD HALT (dry_run): %s (balance $%.2f). "
-                    "Set account_circuit_breakers=active to enforce.",
-                    decision.reason,
-                    balance,
-                )
                 self._halt_notified = True
+                message = (
+                    f"Account circuit breaker WOULD HALT (dry_run): {decision.reason} "
+                    f"({measurement}). "
+                    "Set account_circuit_breakers=active to enforce."
+                )
+                logger.warning("🟡 %s", message)
+                # dry_run exists to accumulate would-have-tripped evidence for the
+                # promote/kill verdict (#964); container stdout is ephemeral, so
+                # the trip must also land in system_events. Best-effort: an
+                # observability failure never crashes the trading loop.
+                try:
+                    log_risk_event(
+                        "account_circuit_breaker_dry_run",
+                        reason=decision.reason,
+                        equity=equity,
+                        balance=balance,
+                        unrealized_pnl=unrealized,
+                        equity_basis=basis,
+                        peak=self._breaker.peak,
+                        peak_seed=self._peak_seed_provenance,
+                        mode=mode,
+                    )
+                    state._record_event(
+                        EventType.CIRCUIT_BREAKER_DRY_RUN,
+                        message,
+                        severity="warning",
+                        component="risk",
+                        error_code="CIRCUIT_BREAKER_DRY_RUN",
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.error(
+                        "Failed to record circuit-breaker dry-run event: %s", e, exc_info=True
+                    )
             return
 
         # active mode: trip close-only (protective action first, then observe).
@@ -120,7 +204,7 @@ class CircuitBreakerEnforcer:
             state._enter_close_only_mode()
             self._halt_notified = True
             message = (
-                f"ACCOUNT CIRCUIT BREAKER TRIPPED: {decision.reason} (balance ${balance:,.2f}). "
+                f"ACCOUNT CIRCUIT BREAKER TRIPPED: {decision.reason} ({measurement}). "
                 "Close-only mode in force — no new entries or scale-ins; exits and stop-losses "
                 "remain active. Operator action required to review and clear."
             )
@@ -128,7 +212,12 @@ class CircuitBreakerEnforcer:
             log_risk_event(
                 "account_circuit_breaker_trip",
                 reason=decision.reason,
+                equity=equity,
                 balance=balance,
+                unrealized_pnl=unrealized,
+                equity_basis=basis,
+                peak=self._breaker.peak,
+                peak_seed=self._peak_seed_provenance,
                 mode=mode,
             )
             state._record_event(
@@ -144,10 +233,16 @@ class CircuitBreakerEnforcer:
                 "Circuit-breaker trip handling failed after close-only: %s", e, exc_info=True
             )
 
-    def _try_seed(self, balance: float, now: datetime) -> None:
-        """Seed the daily baseline from the day's first snapshot (restart-safety).
+    def _try_seed(self, now: datetime) -> None:
+        """Seed the daily baseline and drawdown peak from durable history.
 
-        Best-effort: on any failure or missing snapshot, leaves the breaker to
+        Restart-safety (both halts): the daily baseline comes from the day's
+        first ``account_history`` snapshot (equity basis) and the drawdown peak
+        from the session's ``account_history`` equity max — the same
+        session-scoped seeding the ``MaxDrawdownGuard`` uses (#1001), including
+        the recovered-inactive-session fallback on clean restarts.
+
+        Best-effort: on any failure or missing rows, leaves the breaker to
         self-anchor from current equity. After ``MAX_SEED_ATTEMPTS`` deferrals we
         stop trying (the breaker is already self-anchored to a live baseline)."""
         state = self._state
@@ -162,18 +257,51 @@ class CircuitBreakerEnforcer:
                 target_date=now.date(),
                 fallback_session_id=getattr(state, "_recovered_inactive_session_id", None),
             )
+            session_peak = state.db_manager.get_session_peak_equity(
+                session_id=state.trading_session_id,
+                fallback_session_id=getattr(state, "_recovered_inactive_session_id", None),
+            )
         except Exception as e:  # noqa: BLE001
-            logger.warning("Circuit-breaker daily-baseline seed deferred: %s", e)
+            logger.warning("Circuit-breaker baseline/peak seed deferred: %s", e)
             if self._seed_attempts >= MAX_SEED_ATTEMPTS:
                 self._seeded = True
             return
 
-        if snapshot is not None and getattr(snapshot, "balance", None):
-            baseline = float(snapshot.balance)
-            self._breaker.seed_daily_baseline(baseline, now.date())
-            logger.info(
-                "Circuit-breaker daily baseline seeded from day-start snapshot: $%.2f",
-                baseline,
-            )
+        if snapshot is not None:
+            # Equity basis to match evaluate(); legacy/stub rows without a
+            # usable equity fall back to balance. Numeric columns load as
+            # Decimal — coerce before mixing with floats.
+            baseline = self._as_positive_float(
+                getattr(snapshot, "equity", None)
+            ) or self._as_positive_float(getattr(snapshot, "balance", None))
+            if baseline is not None:
+                self._breaker.seed_daily_baseline(baseline, now.date())
+                logger.info(
+                    "Circuit-breaker daily baseline seeded from day-start snapshot: $%.2f",
+                    baseline,
+                )
         # No snapshot for today yet (fresh day / first run) -> self-anchor is fine.
+
+        peak = self._as_positive_float(session_peak)
+        if peak is not None:
+            self._breaker.seed_peak(peak)
+            self._peak_seed_provenance = "db_session_max"
+            logger.info(
+                "Circuit-breaker drawdown peak seeded from account_history session max: $%.2f",
+                peak,
+            )
+        # No session history yet -> peak self-anchors from current equity.
         self._seeded = True
+
+    @staticmethod
+    def _as_positive_float(value: object) -> float | None:
+        """Coerce a DB-loaded numeric (possibly Decimal/None) to a finite positive float."""
+        if value is None:
+            return None
+        try:
+            result = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(result) or result <= 0:
+            return None
+        return result

@@ -419,6 +419,55 @@ def test_missing_session_defers_seeding_until_available():
 
 
 # ---------------------------------------------------------------------------
+# In-line pre-order gate: check_before_new_risk (same-iteration enforcement)
+# ---------------------------------------------------------------------------
+
+
+def test_pre_order_gate_trips_close_only_in_the_same_call():
+    """The gate runs the full assessment, so a breach realized earlier in the
+    iteration (e.g. a stop-loss fill) halts entries before they evaluate."""
+    state = _make_state(balance=80.0, db_peak=100.0)
+    enforcer = _make_enforcer(state)
+
+    enforcer.check_before_new_risk()
+
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_pre_order_gate_seeds_at_boot_so_restart_mid_breach_blocks_first_entries():
+    """The first entry evaluation happens BEFORE the first loop check, so the
+    gate must be able to seed from account_history and trip right there."""
+    state = _make_state(balance=78.0, db_peak=100.0, tracker_peak=78.0)
+    enforcer = _make_enforcer(state)  # fresh process: guard has no memory
+
+    enforcer.check_before_new_risk()
+
+    assert enforcer.guard.peak_balance == pytest.approx(100.0)
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_pre_order_gate_does_not_consume_the_seed_deferral_budget():
+    """Several chokepoint calls per iteration must not burn through the
+    bounded MAX_SEED_ATTEMPTS deferrals owned by the loop check, and the gate
+    itself never arms the current-balance fallback baseline."""
+    from src.engines.live.monitoring.drawdown_guard import MAX_SEED_ATTEMPTS
+
+    state = _make_state(balance=90.0)
+    state.db_manager.get_session_peak_balance.side_effect = RuntimeError("db down")
+    enforcer = _make_enforcer(state)
+
+    for _ in range(MAX_SEED_ATTEMPTS * 3):
+        enforcer.check_before_new_risk()
+    assert enforcer.guard.seeded is False
+
+    for _ in range(MAX_SEED_ATTEMPTS - 1):
+        enforcer.check()
+    assert enforcer.guard.seeded is False  # budget untouched by the gate calls
+    enforcer.check()
+    assert enforcer.guard.seeded is True  # loop fallback still arms the cap
+
+
+# ---------------------------------------------------------------------------
 # While tripped: entries blocked, exits/stop-loss calls pass through
 # ---------------------------------------------------------------------------
 

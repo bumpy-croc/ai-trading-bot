@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 import uuid
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from src.config.constants import (
@@ -31,8 +34,33 @@ from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 from src.trading.precision import quantize_to_step
+from src.trading.symbols.factory import base_asset_from_symbol
 
 logger = logging.getLogger(__name__)
+
+# Free base-asset value at or below this is ignorable dust for the SHORT
+# inventory guard; above it, MARGIN_BUY would sell held inventory instead of
+# borrowing, so the guard rejects the short.
+SHORT_GUARD_DUST_THRESHOLD_USD = 1.0
+# Guard rejections separated by more than this quiet gap belong to different
+# episodes. Live decision cycles run seconds-to-minutes apart (a confirmed
+# 2026-06-07 episode rejected every ~90s); two hours spans any configured
+# candle interval without merging distinct episodes.
+SHORT_GUARD_EPISODE_GAP_SECONDS = 2 * 3600.0
+# Within an episode, write the first rejection and every Nth after it so a
+# long rejection streak stays queryable without one system_events row per
+# trading cycle.
+SHORT_GUARD_EMIT_EVERY_N = 10
+
+
+@dataclass
+class _ShortGuardEpisode:
+    """One contiguous run of short-guard rejections for a base asset."""
+
+    started_at: datetime
+    last_reject_at: datetime
+    last_reject_monotonic: float
+    reject_count: int
 
 
 @dataclass
@@ -119,6 +147,19 @@ class LiveExecutionEngine:
         self.session_id: int | None = None
         self.strategy_name: str = "unknown"
 
+        # Optional callback returning open positions, used to enrich
+        # short-guard rejection events. Set by the trading engine after
+        # initialization (like db_manager); duck-typed so observability can
+        # never couple execution to the position tracker.
+        self.position_snapshot_provider: Callable[[], Iterable[object]] | None = None
+        # Short-guard rejection episodes keyed by base asset (the guard's own
+        # scope — one borrow blocks every symbol sharing the base). The lock
+        # guards the dict only; event writes happen outside it.
+        self._short_guard_lock = threading.Lock()
+        self._short_guard_episodes: dict[str, _ShortGuardEpisode] = {}
+        # Injectable clock for deterministic episode-gap tests.
+        self._monotonic: Callable[[], float] = time.monotonic
+
         # Use shared cost calculator for all fee and slippage calculations
         self._cost_calculator = CostCalculator(
             fee_rate=fee_rate,
@@ -132,6 +173,7 @@ class LiveExecutionEngine:
         error_code: str,
         *,
         severity: str = "error",
+        details: dict[str, Any] | None = None,
     ) -> None:
         """Record an execution-layer condition (order rejection / phantom-order
         UNKNOWN) in ``system_events`` so the exchange reason isn't lost to
@@ -146,11 +188,178 @@ class LiveExecutionEngine:
                 message=message,
                 severity=severity,
                 component="execution",
+                details=details,
                 session_id=self.session_id,
                 error_code=error_code,
             )
         except Exception as e:  # pragma: no cover - defensive; never break execution
             logger.warning("Failed to log execution event %s: %s", error_code, e)
+
+    def _record_short_guard_rejection(
+        self,
+        symbol: str,
+        base_asset: str,
+        *,
+        reason: str,
+        price: float,
+        free_balance: float | None,
+        free_value_usd: float | None,
+        signal_context: Mapping[str, float] | None,
+    ) -> None:
+        """Write DB-durable evidence of a short-guard rejection (#990 funnel).
+
+        Rows are bounded per episode: the first rejection and every
+        ``SHORT_GUARD_EMIT_EVERY_N``-th one, plus an episode-end summary when
+        the guard passes again or after an inactivity gap. Entirely
+        fault-isolated — the reject decision is already made and observability
+        must never break or delay it.
+        """
+        try:
+            now_monotonic = self._monotonic()
+            now_utc = datetime.now(UTC)
+            ended: _ShortGuardEpisode | None = None
+            with self._short_guard_lock:
+                episode = self._short_guard_episodes.get(base_asset)
+                if (
+                    episode is not None
+                    and now_monotonic - episode.last_reject_monotonic
+                    > SHORT_GUARD_EPISODE_GAP_SECONDS
+                ):
+                    ended = episode
+                    episode = None
+                if episode is None:
+                    episode = _ShortGuardEpisode(
+                        started_at=now_utc,
+                        last_reject_at=now_utc,
+                        last_reject_monotonic=now_monotonic,
+                        reject_count=1,
+                    )
+                    self._short_guard_episodes[base_asset] = episode
+                    emit = True
+                else:
+                    episode.reject_count += 1
+                    episode.last_reject_at = now_utc
+                    episode.last_reject_monotonic = now_monotonic
+                    emit = episode.reject_count % SHORT_GUARD_EMIT_EVERY_N == 0
+                reject_count = episode.reject_count
+                episode_started_at = episode.started_at
+
+            # DB writes stay outside the episode lock so a slow insert cannot
+            # serialize entries on other base assets.
+            if ended is not None:
+                self._emit_short_guard_episode_end(
+                    symbol, base_asset, ended, end_reason="inactivity_gap"
+                )
+            if not emit:
+                return
+            details: dict[str, Any] = {
+                "symbol": symbol,
+                "side": "short",
+                "base_asset": base_asset,
+                "reason": reason,
+                "price": float(price),
+                "free_base_balance": float(free_balance) if free_balance is not None else None,
+                "free_value_usd": float(free_value_usd) if free_value_usd is not None else None,
+                "threshold_usd": SHORT_GUARD_DUST_THRESHOLD_USD,
+                "signal": {k: float(v) for k, v in signal_context.items()}
+                if signal_context
+                else None,
+                "open_positions": self._open_position_snapshot(),
+                "episode": {
+                    "started_at": episode_started_at.isoformat(),
+                    "reject_count": reject_count,
+                },
+            }
+            message = (
+                f"Short entry blocked by inventory guard for {symbol} ({reason}): "
+                f"rejection {reject_count} of episode started "
+                f"{episode_started_at.isoformat()}"
+            )
+            self._log_execution_event(
+                EventType.SHORT_ENTRY_BLOCKED,
+                message,
+                "SHORT_ENTRY_BLOCKED",
+                severity="warning",
+                details=details,
+            )
+        except Exception as e:
+            logger.warning("Failed to record short-guard rejection for %s: %s", symbol, e)
+
+    def _note_short_guard_pass(self, symbol: str, base_asset: str) -> None:
+        """Close any active rejection episode when the guard accepts a short.
+
+        Fault-isolated: episode bookkeeping must never affect the accept path.
+        """
+        try:
+            with self._short_guard_lock:
+                ended = self._short_guard_episodes.pop(base_asset, None)
+            if ended is not None:
+                self._emit_short_guard_episode_end(
+                    symbol, base_asset, ended, end_reason="guard_pass"
+                )
+        except Exception as e:
+            logger.warning("Failed to close short-guard episode for %s: %s", symbol, e)
+
+    def _emit_short_guard_episode_end(
+        self,
+        symbol: str,
+        base_asset: str,
+        episode: _ShortGuardEpisode,
+        *,
+        end_reason: str,
+    ) -> None:
+        """Write the episode summary row carrying the TRUE rejection total.
+
+        Per-rejection rows are sampled (every Nth), so funnel counts come from
+        ``rejections_total`` here.
+        """
+        duration_s = max(0.0, (episode.last_reject_at - episode.started_at).total_seconds())
+        details = {
+            "symbol": symbol,
+            "base_asset": base_asset,
+            "end_reason": end_reason,
+            "rejections_total": episode.reject_count,
+            "episode_started_at": episode.started_at.isoformat(),
+            "episode_last_rejection_at": episode.last_reject_at.isoformat(),
+            "episode_duration_seconds": duration_s,
+        }
+        message = (
+            f"Short-guard rejection episode ended for {symbol} ({end_reason}): "
+            f"{episode.reject_count} rejection(s) over {duration_s / 60.0:.1f} min"
+        )
+        self._log_execution_event(
+            EventType.SHORT_ENTRY_BLOCKED,
+            message,
+            "SHORT_GUARD_EPISODE_END",
+            severity="warning",
+            details=details,
+        )
+
+    def _open_position_snapshot(self) -> list[dict[str, Any]] | None:
+        """Compact open-position state for guard-rejection events.
+
+        Best-effort: returns None when no provider is wired or the read
+        fails — the event row still writes without it.
+        """
+        if self.position_snapshot_provider is None:
+            return None
+        try:
+            positions = list(self.position_snapshot_provider())
+        except Exception as e:
+            logger.warning("Position snapshot for short-guard event failed: %s", e)
+            return None
+        snapshot: list[dict[str, Any]] = []
+        for pos in positions:
+            side = getattr(pos, "side", None)
+            snapshot.append(
+                {
+                    "symbol": getattr(pos, "symbol", None),
+                    "side": getattr(side, "value", side),
+                    "current_size": getattr(pos, "current_size", None),
+                    "quantity": getattr(pos, "quantity", None),
+                }
+            )
+        return snapshot
 
     @staticmethod
     def _position_side_to_str(side: PositionSide) -> str:
@@ -321,6 +530,7 @@ class LiveExecutionEngine:
         base_price: float,
         balance: float,
         liquidity: str | None = None,
+        signal_context: Mapping[str, float] | None = None,
     ) -> EntryExecutionResult:
         """Execute an entry order with fees and slippage.
 
@@ -331,6 +541,8 @@ class LiveExecutionEngine:
             base_price: Current market price.
             balance: Account balance.
             liquidity: Liquidity classification for fee and slippage handling.
+            signal_context: Optional signal metadata (strength/confidence),
+                recorded on short-guard rejection events only.
 
         Returns:
             EntryExecutionResult with execution details.
@@ -393,7 +605,11 @@ class LiveExecutionEngine:
             client_order_id: str | None = None
             if self.enable_live_trading:
                 order_id, client_order_id = self._execute_live_order(
-                    symbol, side, position_value, executed_price
+                    symbol,
+                    side,
+                    position_value,
+                    executed_price,
+                    signal_context=signal_context,
                 )
                 if not order_id:
                     return EntryExecutionResult(
@@ -628,6 +844,8 @@ class LiveExecutionEngine:
         side: PositionSide,
         value: float,
         price: float,
+        *,
+        signal_context: Mapping[str, float] | None = None,
     ) -> tuple[str | None, str | None]:
         """Execute a real market order via exchange with idempotency.
 
@@ -639,6 +857,8 @@ class LiveExecutionEngine:
             side: Position side.
             value: Order value.
             price: Expected price.
+            signal_context: Optional signal metadata (strength/confidence),
+                recorded on short-guard rejection events only.
 
         Returns:
             Tuple of (exchange_order_id, client_order_id). Both None on failure.
@@ -698,12 +918,7 @@ class LiveExecutionEngine:
                 # Fail-closed: reject short on any lookup error.
                 use_margin = getattr(self.exchange_interface, "is_margin_mode", False) is True
                 if use_margin:
-                    # Extract base asset from trading pair
-                    base_asset = symbol
-                    for quote in ("USDT", "BUSD", "USD"):
-                        if symbol.endswith(quote) and len(symbol) > len(quote):
-                            base_asset = symbol[: -len(quote)]
-                            break
+                    base_asset = base_asset_from_symbol(symbol)
                     try:
                         balance = self.exchange_interface.get_balance(base_asset)
                     except Exception as e:
@@ -714,6 +929,15 @@ class LiveExecutionEngine:
                             base_asset,
                             e,
                         )
+                        self._record_short_guard_rejection(
+                            symbol,
+                            base_asset,
+                            reason="balance_lookup_error",
+                            price=price,
+                            free_balance=None,
+                            free_value_usd=None,
+                            signal_context=signal_context,
+                        )
                         return None, None
                     if balance is None:
                         # API returned None — fail closed
@@ -723,11 +947,20 @@ class LiveExecutionEngine:
                             symbol,
                             base_asset,
                         )
+                        self._record_short_guard_rejection(
+                            symbol,
+                            base_asset,
+                            reason="balance_unavailable",
+                            price=price,
+                            free_balance=None,
+                            free_value_usd=None,
+                            signal_context=signal_context,
+                        )
                         return None, None
                     if balance.free > 0:
                         # Use the price arg already validated by caller
                         free_value = balance.free * price if price > 0 else balance.free
-                        if free_value > 1.0:  # $1 dust threshold
+                        if free_value > SHORT_GUARD_DUST_THRESHOLD_USD:
                             logger.error(
                                 "Cannot open short for %s — margin wallet holds "
                                 "%.8f %s (~$%.2f free). MARGIN_BUY would sell "
@@ -739,7 +972,19 @@ class LiveExecutionEngine:
                                 free_value,
                                 base_asset,
                             )
+                            self._record_short_guard_rejection(
+                                symbol,
+                                base_asset,
+                                reason="free_inventory_above_threshold",
+                                price=price,
+                                free_balance=balance.free,
+                                free_value_usd=free_value,
+                                signal_context=signal_context,
+                            )
                             return None, None
+                    # Guard consulted and accepted — close any open rejection
+                    # episode with its summary row.
+                    self._note_short_guard_pass(symbol, base_asset)
 
             # Generate deterministic client order ID for idempotency
             # Format: atb_{timestamp_hex}_{uuid8} (~24 chars, within Binance 36-char limit)
@@ -887,8 +1132,37 @@ class LiveExecutionEngine:
                 return None
 
             order_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-            quantity = self._normalize_quantity(symbol, quantity, position_notional)
+
+            # A closing SELL can never order more base asset than is actually free:
+            # Binance deducts the entry BUY's fee from the base fill, so the
+            # notional-derived quantity can exceed real holdings, and a nearest lot
+            # snap can round UP past them — the exchange then rejects with -2010 and
+            # the close FAILS with the resting stop already cancelled (#710). Cap at
+            # the free base balance and floor the snap so the order is always
+            # coverable (mirrors the stop-loss SELL guard in
+            # BinanceProvider.place_stop_loss_order). A closing BUY (short cover) is
+            # funded from quote and must repay the full base borrow, so it keeps the
+            # nearest snap: flooring it would strand interest-accruing borrow dust.
+            if order_side == OrderSide.SELL:
+                free_base = self._free_base_for_close(symbol)
+                if free_base is not None and free_base < quantity:
+                    logger.warning(
+                        "Close sell qty %.8f for %s exceeds free base balance %.8f "
+                        "— capping to holdings to avoid -2010.",
+                        quantity,
+                        symbol,
+                        free_base,
+                    )
+                    quantity = free_base
+                quantity = self._normalize_quantity(symbol, quantity, position_notional, floor=True)
+            else:
+                quantity = self._normalize_quantity(symbol, quantity, position_notional)
             if quantity <= 0:
+                logger.error(
+                    "Close quantity for %s is not sellable after holdings cap and lot "
+                    "sizing — aborting close attempt",
+                    symbol,
+                )
                 return None
 
             # Generate deterministic client order ID for exit order idempotency
@@ -983,8 +1257,41 @@ class LiveExecutionEngine:
             logger.error("Live order close failed: %s", e)
             return None
 
-    def _normalize_quantity(self, symbol: str, quantity: float, value: float) -> float:
-        """Normalize quantity based on exchange symbol info with robust error handling."""
+    def _free_base_for_close(self, symbol: str) -> float | None:
+        """Free base-asset balance available to a closing SELL, or None when unknown.
+
+        ``free`` is the amount available to sell — reported identically in spot and
+        margin mode, and the resting stop-loss is cancelled before the close (#710),
+        so its previously locked inventory is free again by the time this reads it.
+        A None return means the cap is skipped, never that the close is blocked: a
+        transient balance-lookup failure must not stop an exit.
+
+        The base asset comes from the quote-suffix strip rather than
+        ``get_symbol_info`` — that would add a second full exchange-info fetch to
+        the latency-sensitive close path (``_normalize_quantity`` already makes
+        one). An unrecognized quote degrades safely: the balance lookup finds no
+        such asset, returns None, and only the cap is skipped.
+        """
+        if self.exchange_interface is None:
+            return None
+
+        base_asset = base_asset_from_symbol(symbol)
+        try:
+            balance = self.exchange_interface.get_balance(base_asset)
+            return float(balance.free) if balance is not None else None
+        except Exception as e:
+            logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
+            return None
+
+    def _normalize_quantity(
+        self, symbol: str, quantity: float, value: float, *, floor: bool = False
+    ) -> float:
+        """Normalize quantity based on exchange symbol info with robust error handling.
+
+        With ``floor=True`` the lot snap rounds DOWN (for closing SELLs that must
+        never exceed holdings); the default nearest snap suits entries and
+        short-cover BUYs.
+        """
         if quantity <= 0 or self.exchange_interface is None:
             return 0.0
 
@@ -1014,7 +1321,13 @@ class LiveExecutionEngine:
         else:
             # Apply step_size rounding
             try:
-                normalized = round(quantity / step_size) * step_size
+                if floor:
+                    # +epsilon so a quantity that is mathematically an exact lot
+                    # multiple but stored a hair low (float noise) isn't truncated
+                    # a whole step down (mirrors the SL SELL guard).
+                    normalized = math.floor(quantity / step_size + 1e-9) * step_size
+                else:
+                    normalized = round(quantity / step_size) * step_size
                 if not math.isfinite(normalized):
                     logger.error(
                         "Normalization produced non-finite value for %s - keeping original",

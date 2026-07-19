@@ -29,7 +29,7 @@ Before scoring ANYTHING, read all of these. Not optional, not time-boxable, not 
 
 **State (daemon memory):**
 a. `.claude/state/charter.md` — if any `TODO` remains in mission / autonomy / escalation, STOP and ask the human to fill it.
-b. `.claude/state/risk-limits.json` — the hard lines.
+b. `src/config/risk-limits.json` — the hard lines.
 c. Tail of `.claude/state/log.md` (last ~50 lines) — recent decisions and context.
 d. `.claude/state/proposals/` and `.claude/state/incidents/` — open cards (filter `status: open` in frontmatter).
 e. `.claude/state/wakeups.jsonl` — local mirror of the Project's `Wake At` field. Process any line whose `wake_at <= now` first; that's the highest-priority work this tick. See `.claude/state/board.md` for format and discipline.
@@ -209,7 +209,7 @@ All of these mean: stop, demand evidence or mitigation, re-score.
 
 - `.claude/state/README.md` — state schema, daemon cycle
 - `.claude/state/charter.md` — Board-owned mandate (read-only to PM)
-- `.claude/state/risk-limits.json` — canonical thresholds
+- `src/config/risk-limits.json` — canonical thresholds
 - `CODE.md` — coding standards (non-negotiable)
 - `CLAUDE.md` — project overview, task routing matrix
 - `docs/project_status.md` — engineering focus

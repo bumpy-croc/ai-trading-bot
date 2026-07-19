@@ -72,6 +72,20 @@ def parse_hyperparameters(params: dict) -> dict:
         "force_sentiment": params.get("force_sentiment", "false").lower() == "true",
         "force_price_only": params.get("force_price_only", "false").lower() == "true",
         "mixed_precision": params.get("mixed_precision", "true").lower() == "true",
+        # Architecture selection; defaults match TrainingConfig so jobs submitted by
+        # older CLIs keep training the incumbent cnn_lstm architecture.
+        "model_type": params.get("model_type", "cnn_lstm"),
+        "model_variant": params.get("model_variant", "default"),
+        # Training target selection; defaults match TrainingConfig so jobs
+        # submitted by older CLIs keep training the incumbent regression target.
+        "target_type": params.get("target_type", "regression"),
+        "target_horizon": int(params.get("target_horizon", "1")),
+        # Required only when target_type == "meta_label" (entrant (a));
+        # orchestrator.py sends "" for an unset value (SageMaker
+        # hyperparameters must be strings) -- normalize back to None so
+        # TrainingConfig's own required-when-meta_label check applies.
+        "primary_model_type": params.get("primary_model_type") or None,
+        "use_mock_data": params.get("use_mock_data", "false").lower() == "true",
     }
 
 
@@ -116,11 +130,50 @@ def run_training(parsed_params: dict) -> int:
             force_sentiment=parsed_params["force_sentiment"],
             force_price_only=parsed_params["force_price_only"],
             mixed_precision=parsed_params["mixed_precision"],
+            model_type=parsed_params["model_type"],
+            model_variant=parsed_params["model_variant"],
+            target_type=parsed_params["target_type"],
+            target_horizon=parsed_params["target_horizon"],
+            primary_model_type=parsed_params.get("primary_model_type"),
+            use_mock_data=parsed_params.get("use_mock_data", False),
             diagnostics=DiagnosticsOptions(
                 generate_plots=False,  # No display in container
                 evaluate_robustness=True,
                 convert_to_onnx=True,
             ),
+        )
+
+        # Cheap, pre-flight self-consistency check ("closes the pay-then-fail
+        # class", PR #950 review): assert the TrainingConfig actually built
+        # matches what was requested in hyperparameters.json BEFORE any GPU
+        # time is spent inside run_training_pipeline. Guards against a future
+        # refactor of the constructor call above (a copy-paste error wiring
+        # the wrong source field, or a key-name desync between this file's
+        # parse_hyperparameters and orchestrator.py's _build_job_spec)
+        # silently training the WRONG target on a paid instance with no
+        # error -- entrant (d) smoothed_return shares REGRESSION task_type
+        # with the incumbent, so the #947 head-compatibility guard would NOT
+        # catch this class of drift.
+        if (
+            config.target_type != parsed_params["target_type"]
+            or config.target_horizon != parsed_params["target_horizon"]
+        ):
+            error_msg = (
+                "target_type/target_horizon mismatch after TrainingConfig "
+                f"construction: requested target_type={parsed_params['target_type']!r} "
+                f"target_horizon={parsed_params['target_horizon']!r}, but the "
+                f"constructed config has target_type={config.target_type!r} "
+                f"target_horizon={config.target_horizon!r}. Refusing to train "
+                "the wrong target."
+            )
+            logger.error(error_msg)
+            write_failure_file(error_msg)
+            return 1
+        logger.info(
+            "Target confirmed: target_type=%s target_horizon=%s "
+            "(matches hyperparameters.json request)",
+            config.target_type,
+            config.target_horizon,
         )
 
         # Override paths for SageMaker
@@ -135,6 +188,8 @@ def run_training(parsed_params: dict) -> int:
         logger.info(f"Starting training for {config.symbol}")
         logger.info(f"Data range: {start_date} to {end_date}")
         logger.info(f"Epochs: {config.epochs}, Batch size: {config.batch_size}")
+        logger.info(f"Architecture: {config.model_type} (variant: {config.model_variant})")
+        logger.info(f"Target: {config.target_type} (horizon: {config.target_horizon})")
 
         # Run training
         result = run_training_pipeline(ctx)

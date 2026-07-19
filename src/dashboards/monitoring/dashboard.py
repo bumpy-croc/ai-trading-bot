@@ -1778,15 +1778,19 @@ class MonitoringDashboard:
                                 else None
                             ),
                             "breakeven_triggered": bool(pos.get("breakeven_triggered", False)),
-                            "mfe": (
-                                self._safe_float(pos.get("mfe"))
-                                if pos.get("mfe") is not None
-                                else 0.0
+                            # Raw price excursion (decimal fraction). Derived
+                            # from the mfe_price/mae_price companions so
+                            # pre-2026-07 rows (sized, fee-netted mfe/mae)
+                            # render in the same unit as current rows.
+                            "mfe": self._safe_float(
+                                DatabaseManager.excursion_or_stored(
+                                    entry_price, pos.get("mfe_price"), pos.get("mfe"), side
+                                )
                             ),
-                            "mae": (
-                                self._safe_float(pos.get("mae"))
-                                if pos.get("mae") is not None
-                                else 0.0
+                            "mae": self._safe_float(
+                                DatabaseManager.excursion_or_stored(
+                                    entry_price, pos.get("mae_price"), pos.get("mae"), side
+                                )
                             ),
                         }
                     )

@@ -66,7 +66,7 @@ call sites and test mock points are stable while the implementations live in the
 
 ## Max-drawdown hard cap (close-only halt)
 
-The live engine enforces `portfolio.max_drawdown_pct` from `.claude/state/risk-limits.json`
+The live engine enforces `portfolio.max_drawdown_pct` from `src/config/risk-limits.json`
 (0.20, mirrored by `DEFAULT_MAX_DRAWDOWN` / `RiskParameters.max_drawdown`). On every
 trading-loop iteration `MaxDrawdownEnforcer` (`src/engines/live/monitoring/drawdown_guard.py`)
 measures the drawdown of the current balance from the **session peak balance** — the same
@@ -98,11 +98,73 @@ numbers `account_history.drawdown` is derived from.
   `risk_event`, and the alert webhook (if configured) fire once. The trip is **latched**: it
   survives balance recovery below the cap, does not re-spam, and re-trips on restart via the
   boot-time peak recompute.
+- **Same-iteration enforcement**: because the loop-level check runs after entry evaluation,
+  every exposure-increase chokepoint (entry evaluation, `execute_entry_locked`, the legacy
+  short path, the scale-in gate) also re-assesses the guard in-line via the engine's
+  `_refresh_drawdown_gate` before reading close-only — a stop-loss fill that pushes drawdown
+  to the cap blocks that same iteration's entry instead of leaking one bar of fresh exposure
+  (2026-07-12 risk audit P1). The same gate re-latches close-only immediately after a
+  `resume_trading()` issued while the breach persists, and — because it can seed the peak
+  from `account_history` — arms the guard before the first entry evaluation after a
+  mid-breach restart.
+- **Dynamic-risk throttle shares the baseline**: the graduated drawdown throttle
+  (`DynamicRiskManager`, applied to entry sizing and risk-parameter scaling) measures
+  drawdown from the engine's `_durable_peak_balance()` — the max of the guard's durable
+  session peak, the in-memory tracker peak, and the current balance — so a restart
+  mid-drawdown can no longer re-anchor the throttle to the depressed balance and disarm the
+  graduated size reductions while the hard cap still sees the real drawdown (#845 peak-reset
+  class).
 - **Clearing a trip (operator only)**: `resume_trading()` alone will not stick — the guard
   re-trips on the next iteration while the breach persists. To accept the loss and resume,
   restart with `FEATURE_MAX_DRAWDOWN_RESET_PEAK=true`, which re-baselines the peak to the
   current balance (the guard stays armed from the new baseline). **Remove the flag after the
   restart** — leaving it set re-baselines the peak on every future restart, weakening the cap.
+
+## Manual kill-switch (`atb live-control halt` / `resume`)
+
+The human/PM manual halt required by `risk-limits.json` `kill_switch.manual_trigger_command`
+(#922). One command durably puts the TARGET environment's engine into a no-new-risk state
+with **FEATURE_ENTRY_PAUSE semantics**: new entries and scale-ins are blocked; exits,
+partial exits, stop-loss management, and reconciliation keep running. Nothing is liquidated.
+
+```bash
+atb live-control halt --env production --reason "duplicate order storm"
+atb live-control resume --env production --reason "root cause fixed"
+```
+
+- **Mechanism (restartless)**: the command upserts the `system_halt` row in the target
+  environment's `system_control_flags` table (resolved from
+  `RAILWAY_PRODUCTION_DATABASE_URL` / `RAILWAY_STAGING_DATABASE_URL` / `DATABASE_URL`).
+  The running engine's `SystemHaltEnforcer`
+  (`src/engines/live/monitoring/system_halt_enforcer.py`) polls the flag at the **top of
+  every trading-loop iteration** and mirrors it into the shared gate consulted by entry
+  evaluation, the `execute_entry_locked` chokepoint, the legacy short path, and scale-ins.
+- **Latency**: command → effect is at most one loop iteration (the adaptive check interval,
+  30–300 s per `DEFAULT_MIN_CHECK_INTERVAL`/`DEFAULT_MAX_CHECK_INTERVAL`; ~2 min at prod
+  cadence). No restart/redeploy. The CLI echoes the masked resolved DB host
+  (`target: env=... db=host:port/dbname`) before mutating anything.
+- **Fallback (requires restart)**: `railway variables --set FEATURE_ENTRY_PAUSE=true` on the
+  target service — a Railway variable change triggers a redeploy, so expect ~3 minutes of
+  latency; use it only if the database write path is unavailable.
+- **Observability**: the command emits a CRITICAL `system_events` row
+  (`error_code=SYSTEM_HALT_COMMAND`) plus a webhook page (when `ALERT_WEBHOOK_URL` is set),
+  and prints the resulting account state — active session, open positions and their
+  protective stops (positions without a stop are flagged `NO STOP`). The engine emits its
+  own row when it honors the flag (`error_code=SYSTEM_HALT`; `SYSTEM_HALT_CLEARED` on
+  resume) — that second event is the proof of enforcement.
+- **Fail-safe**: a DB outage never releases an active halt (the engine keeps its last-known
+  state); halting twice is idempotent. The halt is independent of close-only mode, so
+  `resume` cannot accidentally clear a drawdown/circuit-breaker trip.
+- **Fail-closed startup**: until the engine has successfully read the flag ONCE (a priming
+  read at construction, retried every loop iteration), the entry gates treat the state as
+  halted — a reboot behind an unreachable database cannot trade past an operator halt it
+  never managed to read. A boot that cannot verify the flag pages the operator
+  (`error_code=SYSTEM_HALT_UNVERIFIED`); a healthy boot establishes the state at
+  construction and starts trading immediately. Exits/stops/reconciliation are never gated.
+- The former `emergency-stop` subcommand printed "(simulated)" and did nothing; it has been
+  removed — `halt` is the real safety command. Cancelling in-flight entry orders from an
+  out-of-process CLI would race the running engine's order tracking, so unfilled entries are
+  left to the engine's own timeout/cancel logic while the halt guarantees no new ones start.
 
 ## Position management features
 
@@ -245,7 +307,9 @@ The control surface lives under `atb live-control`:
   registry’s `latest` symlink automatically so the live engine picks up the new model.
 - `atb live-control deploy-model --model-path <staging-dir> --close-positions` – promote a staged bundle into the live strategy
   directory.
-- `atb live-control list-models` / `status` / `emergency-stop` – quick operational actions when supervising a running engine.
+- `atb live-control list-models` / `status` – quick operational reads when supervising a running engine.
+- `atb live-control halt --env <production|staging|development> [--reason "..."]` / `resume` – the manual kill-switch
+  (see "Manual kill-switch" below): durably blocks new entries + scale-ins in the target environment without a restart.
 
 ## Programmatic usage
 

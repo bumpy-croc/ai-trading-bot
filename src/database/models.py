@@ -128,6 +128,20 @@ class EventType(enum.Enum):
     WARNING = "WARNING"
     ALERT = "ALERT"
     BALANCE_ADJUSTMENT = "BALANCE_ADJUSTMENT"
+    # Would-have-tripped evidence from the account circuit breaker's dry_run
+    # mode. Distinct from ALERT so promote/kill verdicts can count trips with a
+    # single event_type filter. Requires migration 0013 (widened varchar).
+    CIRCUIT_BREAKER_DRY_RUN = "CIRCUIT_BREAKER_DRY_RUN"
+    # Short entries rejected by the margin inventory guard, plus their
+    # episode-end summaries (error_code distinguishes the two). 19 chars —
+    # fits the varchar(23) column from migration 0013, no migration needed.
+    SHORT_ENTRY_BLOCKED = "SHORT_ENTRY_BLOCKED"
+    # Would-have-entered-short shadow evidence from long-only deployments
+    # (allow_shorts=False, GH #1020): the strategy sized a short but config
+    # suppressed the entry. Episode-end summaries share the type (error_code
+    # distinguishes). 22 chars — fits the varchar(23) column from migration
+    # 0013, no migration needed.
+    SHORT_ENTRY_SUPPRESSED = "SHORT_ENTRY_SUPPRESSED"
     TEST = "TEST"  # Added for verification scripts and development diagnostics
 
 
@@ -191,7 +205,10 @@ class Trade(Base):
     exchange = Column(String(50), default="binance")
     timeframe = Column(String(10))
 
-    # MFE/MAE for completed trades (percent decimals, e.g., 0.05 = +5%)
+    # MFE/MAE for completed trades: raw unsized price excursion from entry as a
+    # decimal fraction (0.05 = +5%), always consistent with mfe_price/mae_price.
+    # Prod rows written before 2026-07 hold sized, fee-netted values instead —
+    # derive from the _price companions for those (see DatabaseManager readers).
     mfe = Column(Numeric(18, 8), default=0.0)
     mae = Column(Numeric(18, 8), default=0.0)
     mfe_price = Column(Numeric(18, 8))
@@ -281,7 +298,8 @@ class Position(Base):
         Mapped[Decimal | float | None], Column(Numeric(18, 8), default=0.0)
     )
 
-    # Rolling MFE/MAE for active positions (percent decimals)
+    # Rolling MFE/MAE for active positions: raw unsized price excursion from
+    # entry as a decimal fraction, consistent with mfe_price/mae_price.
     mfe: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8), default=0.0))
     mae: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8), default=0.0))
     mfe_price: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
@@ -630,6 +648,35 @@ class SystemEvent(Base):
     )
 
     created_at = Column(DateTime, default=utc_now)
+
+
+# Name of the manual kill-switch flag row (#922). Written by
+# `atb live-control halt` / `resume`; polled by the live trading loop.
+SYSTEM_HALT_FLAG_NAME = "system_halt"
+
+
+class SystemControlFlag(Base):
+    """Operator-set control flags the live engine polls at runtime.
+
+    One row per flag name (upserted, never appended) — the durable channel for
+    out-of-process operator commands such as the manual kill-switch
+    (``system_halt``). The audit trail of WHO flipped WHAT and WHEN lives in
+    ``system_events``; this table only holds the current state.
+    """
+
+    __tablename__ = "system_control_flags"
+
+    id: Mapped[int] = cast(Mapped[int], Column(Integer, primary_key=True))
+    name = Column(String(50), nullable=False, unique=True, index=True)
+    active: Mapped[bool] = cast(Mapped[bool], Column(Boolean, nullable=False, default=False))
+    reason: Mapped[str | None] = cast(Mapped[str | None], Column(Text))
+    # Who set it, e.g. 'cli:alex'
+    source: Mapped[str | None] = cast(Mapped[str | None], Column(String(100)))
+
+    created_at = Column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime | None] = cast(
+        Mapped[datetime | None], Column(DateTime, default=utc_now, onupdate=utc_now)
+    )
 
 
 class ReconciliationAuditEvent(Base):

@@ -1,4 +1,5 @@
 from types import MethodType
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -105,3 +106,48 @@ class TestMlBasicStrategy:
         if decision.signal.direction != SignalDirection.HOLD:
             assert decision.position_size > 0
             assert decision.position_size <= balance * 0.5  # Should not exceed 50% of balance
+
+
+class TestMlBasicModelVersionPin:
+    """Factory threads the point-in-time model pin to the signal generator (GH #988)."""
+
+    PINNED_VERSION = "2026-01-01_1h_v1"
+
+    def _mock_engine(self, mock_engine_class):
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_registry = MagicMock()
+        pinned_bundle = MagicMock()
+        pinned_bundle.key = f"BTCUSDT:1h:basic:{self.PINNED_VERSION}"
+        pinned_bundle.symbol = "BTCUSDT"
+        mock_registry.get_bundle_by_key.return_value = pinned_bundle
+        mock_engine.model_registry = mock_registry
+        mock_engine_class.return_value = mock_engine
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_factory_threads_model_version_to_signal_generator(
+        self, mock_config_class, mock_engine_class
+    ):
+        self._mock_engine(mock_engine_class)
+
+        strategy = create_ml_basic_strategy(symbol="BTCUSDT", model_version=self.PINNED_VERSION)
+
+        sg = strategy.signal_generator
+        assert sg.model_version == self.PINNED_VERSION
+        assert sg.pinned_model_key == f"BTCUSDT:1h:basic:{self.PINNED_VERSION}"
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_factory_without_model_version_leaves_generator_unpinned(
+        self, mock_config_class, mock_engine_class
+    ):
+        self._mock_engine(mock_engine_class)
+
+        strategy = create_ml_basic_strategy(symbol="BTCUSDT")
+
+        assert strategy.signal_generator.pinned_model_key is None
+
+    def test_fast_mode_rejects_model_version(self):
+        with pytest.raises(ValueError, match="model_version"):
+            create_ml_basic_strategy(fast_mode=True, model_version=self.PINNED_VERSION)

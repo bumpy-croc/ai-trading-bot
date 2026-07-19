@@ -129,3 +129,19 @@ class TestPromoteModelVersion:
 
         assert target == registry / "BTCUSDT" / "scratch" / VERSION
         assert (target / "model.onnx").exists()
+
+    def test_default_registry_root_honors_model_registry_path_override(
+        self, registry: Path, monkeypatch
+    ) -> None:
+        """PR #950 review item 5: when registry_root isn't passed explicitly
+        (the real CLI's _handle_cloud_promote never passes it), the default
+        must still honor MODEL_REGISTRY_PATH -- the same env var
+        PredictionConfig.model_registry_path reads -- so an acceptance test
+        pinning that env var redirects promotion too, not just training."""
+        monkeypatch.setenv("MODEL_REGISTRY_PATH", str(registry))
+
+        target = promote_model_version("BTCUSDT", VERSION)  # no registry_root kwarg
+
+        assert target == registry / "BTCUSDT" / "basic" / VERSION
+        assert (target / "model.onnx").exists()
+        assert (target / "model.onnx").exists()

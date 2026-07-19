@@ -61,6 +61,7 @@ from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_po
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
+    build_early_cut_policy,
     build_partial_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
@@ -71,9 +72,11 @@ from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.early_cut import EarlyCutPolicy
 from src.position_management.macro_events import MacroEventGuard
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
+from src.prediction.inference_context import InferenceContext, inference_scope
 from src.regime.detector import RegimeDetector
 from src.risk.circuit_breaker import AccountCircuitBreaker
 from src.risk.risk_manager import RiskManager, RiskParameters
@@ -182,6 +185,7 @@ class Backtester:
         legacy_stop_loss_indexing: bool = True,
         enable_engine_risk_exits: bool = True,
         time_exit_policy: TimeExitPolicy | None = None,
+        early_cut_policy: EarlyCutPolicy | None = None,
         enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
         dynamic_risk_config: DynamicRiskConfig | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
@@ -214,6 +218,8 @@ class Backtester:
             legacy_stop_loss_indexing: Use legacy SL calculation behavior.
             enable_engine_risk_exits: Enable SL/TP checks in engine.
             time_exit_policy: Policy for time-based exits.
+            early_cut_policy: MFE-conditioned early-cut policy; when None it
+                is built from strategy overrides / RiskParameters (default OFF).
             enable_dynamic_risk: Enable dynamic risk management.
             dynamic_risk_config: Configuration for dynamic risk.
             trailing_stop_policy: Policy for trailing stops.
@@ -315,6 +321,12 @@ class Backtester:
 
         self._custom_time_exit_policy = time_exit_policy is not None
         self.time_exit_policy = time_exit_policy or self._build_time_exit_policy()
+
+        # MFE early-cut policy (#971): default OFF unless configured via
+        # strategy overrides or RiskParameters.early_cut.
+        self.early_cut_policy = early_cut_policy or build_early_cut_policy(
+            self.strategy, self.risk_manager
+        )
 
         # Partial operations policy (enabled by default for parity with live engine)
         self.enable_partial_operations = bool(enable_partial_operations)
@@ -476,6 +488,7 @@ class Backtester:
             execution_model=self.execution_model,
             trailing_stop_policy=self.trailing_stop_policy,
             time_exit_policy=self.time_exit_policy,
+            early_cut_policy=self.early_cut_policy,
             partial_manager=partial_ops_manager,
             enable_engine_risk_exits=enable_engine_risk_exits,
             use_high_low_for_stops=use_high_low_for_stops,
@@ -937,7 +950,17 @@ class Backtester:
 
         Returns:
             Dictionary with backtest results including metrics and trades.
+
+        Raises:
+            ValueError: If a configured early-cut policy cannot work on the
+                requested timeframe (window not strictly longer than one bar,
+                or not a whole multiple of it).
         """
+        # Fail fast on a mis-sized early-cut window (#976 review F1/F2) —
+        # before the try block so nothing can swallow the config error.
+        if self.early_cut_policy is not None:
+            self.early_cut_policy.validate_for_timeframe(timeframe)
+
         try:
             # Pin BLAS/OpenMP thread pools to 1 for the duration of the run so
             # the backtest is bit-reproducible: multi-threaded parallel float
@@ -947,7 +970,16 @@ class Backtester:
             # (#486). ONNX Runtime keeps its own (deterministic) thread pool, so
             # inference stays multi-threaded and fast; measured wall-time is
             # neutral-to-faster since this also avoids thread oversubscription.
-            with threadpool_limits(limits=1):
+            #
+            # The inference_scope pins the prediction pipeline to its
+            # deterministic policy (no inference deadline, no latency-based
+            # substitution — #912 side-finding) for exactly this run, and
+            # restores the caller's policy on exit so a backtest hosted inside
+            # a live process can never strip the live deadline (#926).
+            with (
+                threadpool_limits(limits=1),
+                inference_scope(InferenceContext.DETERMINISTIC),
+            ):
                 # Reset all mutable state from any previous run so that reusing
                 # a Backtester instance produces correct, isolated results.
                 self._reset_run_state()
@@ -1353,6 +1385,7 @@ class Backtester:
                 current_price=current_price,
                 symbol=symbol,
                 component_strategy=self._component_strategy,
+                df=df,
             )
 
         # Log exit decision
@@ -1406,6 +1439,16 @@ class Backtester:
 
             self.balance += net_pnl
             self.trades.append(completed_trade)
+
+            # Persist the window MFE that triggered an early cut so exam
+            # output carries the MFE-capture metric (#976 review).
+            if exit_check.is_early_cut and exit_check.early_cut_window_mfe_pct is not None:
+                try:
+                    completed_trade.metadata["early_cut_window_mfe_pct"] = float(
+                        exit_check.early_cut_window_mfe_pct
+                    )
+                except (AttributeError, TypeError, ValueError):
+                    logger.debug("Could not stash early_cut_window_mfe_pct on completed trade")
 
             # Sum entry + exit fees / slippage for record_trade so the
             # PerformanceTracker total_fees_paid metric matches live's
@@ -1557,6 +1600,16 @@ class Backtester:
             adjustments = self.entry_handler.get_dynamic_risk_adjustments()
             self.dynamic_risk_adjustments.extend(adjustments)
 
+    def _effective_sizing_report(self) -> dict[str, float]:
+        """Resolved sizing limits this run enforces — auto-reported in the
+        results payload so a clamped or defaulted cap is always visible."""
+        params = self.risk_manager.params
+        return {
+            "max_position_size": float(params.max_position_size),
+            "base_risk_per_trade": float(params.base_risk_per_trade),
+            "max_risk_per_trade": float(params.max_risk_per_trade),
+        }
+
     def _build_empty_results(self) -> dict:
         """Build results for empty data case."""
         results = {
@@ -1589,6 +1642,7 @@ class Backtester:
                 if hasattr(self, "execution_engine")
                 else {}
             ),
+            "effective_sizing": self._effective_sizing_report(),
         }
 
         # Add regime switching results
@@ -1689,6 +1743,7 @@ class Backtester:
             "trade_pnl_pcts": [
                 float(t.pnl_percent) for t in self.trades if t.pnl_percent is not None
             ],
+            "effective_sizing": self._effective_sizing_report(),
         }
 
         # Add regime switching results

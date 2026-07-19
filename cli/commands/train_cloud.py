@@ -142,6 +142,70 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         help="Force price-only model (no sentiment)",
     )
     parser.add_argument(
+        "--model-type",
+        type=str,
+        default="cnn_lstm",
+        choices=[
+            "lstm",
+            "cnn_lstm",
+            "attention_lstm",
+            "tcn",
+            "tcn_attention",
+            "tft",
+            "tft_ternary",
+            "lightgbm",
+        ],
+        help="Model architecture (default: cnn_lstm). tft_ternary is the 3-class "
+        "TARGET-REDESIGN tournament entrant (c) head -- pair it with "
+        "--target-type triple_barrier. lightgbm requires the optional lightgbm "
+        "dependency (not installed by default) and is unrelated to --target-type "
+        "meta_label, which always trains a sklearn LogisticRegression.",
+    )
+    parser.add_argument(
+        "--model-variant",
+        type=str,
+        default="default",
+        choices=["default", "lightweight", "deep"],
+        help="Architecture variant (default: default)",
+    )
+    parser.add_argument(
+        "--target-type",
+        type=str,
+        default="regression",
+        choices=[
+            "regression",
+            "binary_direction",
+            "triple_barrier",
+            "smoothed_return",
+            "meta_label",
+        ],
+        help="Training target (default: regression, the incumbent next-bar price target). "
+        "TARGET-REDESIGN tournament entrants: binary_direction (b), triple_barrier (c), "
+        "smoothed_return (d), meta_label (a). meta_label requires --primary-model-type.",
+    )
+    parser.add_argument(
+        "--target-horizon",
+        type=int,
+        default=1,
+        help="Forward horizon in bars for binary_direction/smoothed_return targets "
+        "(default: 1; ignored by regression/triple_barrier).",
+    )
+    parser.add_argument(
+        "--primary-model-type",
+        type=str,
+        default=None,
+        help="Registry model_type of the primary signal to run forward when "
+        "--target-type meta_label is used (e.g. 'basic'). Required for meta_label, "
+        "ignored otherwise.",
+    )
+    parser.add_argument(
+        "--mock-data",
+        action="store_true",
+        help="Use deterministic synthetic OHLCV data instead of the real "
+        "Binance-backed corpus (mirrors `atb live --mock-data`). Test/CI use "
+        "only -- never set for a real training run.",
+    )
+    parser.add_argument(
         "--instance-type",
         type=str,
         default="ml.g4dn.xlarge",
@@ -226,6 +290,12 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         sequence_length=args.sequence_length,
         force_sentiment=args.force_sentiment,
         force_price_only=args.force_price_only,
+        model_type=args.model_type,
+        model_variant=args.model_variant,
+        target_type=args.target_type,
+        target_horizon=args.target_horizon,
+        primary_model_type=args.primary_model_type,
+        use_mock_data=args.mock_data,
         diagnostics=DiagnosticsOptions(
             generate_plots=False,  # Skip plots in cloud (no display)
             evaluate_robustness=True,
@@ -258,6 +328,8 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
     print(f"  Epochs:          {args.epochs}")
     print(f"  Batch Size:      {args.batch_size}")
     print(f"  Sequence Length: {args.sequence_length}")
+    print(f"  Architecture:    {args.model_type} ({args.model_variant})")
+    print(f"  Target:          {args.target_type} (horizon={args.target_horizon})")
     print()
     print(f"  Provider:        {provider.provider_name}")
     print(f"  Instance:        {args.instance_type}")
@@ -302,7 +374,16 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
                 print()
                 print("  Metrics:")
                 for key, value in result.metrics.items():
-                    print(f"    {key}: {value:.4f}")
+                    # Metrics can carry a non-numeric diagnostics-error
+                    # placeholder (pipeline.py's evaluation-degradation path,
+                    # e.g. {"error": "..."} when evaluate_model_performance
+                    # itself failed) -- format numerically only when
+                    # possible so a degraded-but-successful training run
+                    # doesn't crash the CLI at the final summary print.
+                    if isinstance(value, int | float) and not isinstance(value, bool):
+                        print(f"    {key}: {value:.4f}")
+                    else:
+                        print(f"    {key}: {value}")
             print("=" * 60)
             return 0
         else:

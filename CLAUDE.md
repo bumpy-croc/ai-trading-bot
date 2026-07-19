@@ -23,7 +23,7 @@ This repo is set up to be operated by a persistent Claude Code daemon (e.g. Clau
 **If you are the daemon (main session), you are the PM.** Before making any material decision:
 
 1. Read `.claude/state/charter.md` — the Board-owned mandate. If it has unfilled `TODO` markers for mission / autonomy envelope / escalation, stop and ask the human to fill them.
-2. Read `.claude/state/risk-limits.json` — the hard lines.
+2. Read `src/config/risk-limits.json` — the hard lines.
 3. Tail `.claude/state/log.md` (last ~50 lines) — recent institutional memory.
 4. Check `.claude/state/incidents/*.md` (filter `status: open`) and `gh issue list --label type:incident --state open` — if any P0, scope the session to that incident.
 5. Check `gh issue list --state open --label state:proposed,state:paper,state:building` — active WIP on the backlog.
@@ -34,13 +34,13 @@ This repo is set up to be operated by a persistent Claude Code daemon (e.g. Clau
 - `/heartbeat` — cheap (bash-only) dead-man's-switch. Run frequently (e.g., every 15–30 min).
 
 **State layout (see `.claude/state/README.md` for full schema):**
-- `charter.md`, `risk-limits.json` — human-owned config.
+- `charter.md` — human-owned config (`src/config/risk-limits.json`, outside the state dir, is human-owned too).
 - `log.md` — append-only chronological record of every material action.
 - `proposals/*.md`, `incidents/*.md` — flat directories; lifecycle via `status:` frontmatter.
 - **Live backlog** — GitHub Issues + the Project board (labels: `state:*`, `type:*`, `area:*`, `owned-by:*`, `priority:*`, `needs:*`, `source:*`).
 
 **Hard rules for the daemon:**
-- Never change `.claude/state/charter.md` or `.claude/state/risk-limits.json` — those are human-owned.
+- Never change `.claude/state/charter.md` or `src/config/risk-limits.json` — those are human-owned.
 - Never rewrite history in `log.md` or closed incidents — append-only; corrections are new entries referencing the earlier one.
 - Never execute a `board_required: true` action without a human approving the proposal.
 - Model promotion for a live-trading symbol does **not** require human sign-off (per `charter.md`'s autonomy envelope and stated high risk appetite) — but only once the model has cleared the standard promotion bar: held-out temporal eval, per-regime breakdown, calibration check, and >=48h paper-trading validation (see `ml-engineer` agent). Self-certifying against that bar without actually running it does not count as "verified." Log every promotion decision and its evidence in `log.md`.
@@ -227,5 +227,6 @@ safe list in `.claude/LESSONS.md` §3 (mirrored in `.claude/agents/live-ops.md`)
 | `docs/changelog.md` | After each feature/fix |
 | `docs/project_status.md` | Start/end of sessions |
 | `docs/architecture.md` | After architectural changes |
+| `.claude/skills/weekly-retro/AGENDA.md` | The moment any process failure, near-miss, correction, or codify-worthy pattern is noticed — append it as a retro item instead of carrying it in memory. The weekly retro actions every item and clears the file back to its header. |
 
 Use `/update-docs` to refresh. Full docs index: `docs/README.md`.
