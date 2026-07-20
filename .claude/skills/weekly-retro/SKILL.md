@@ -58,9 +58,11 @@ Rules for editing layer 3:
 
 ## Scoreboard + tracker updates
 
-Update `docs/research/model-scoreboard.md` rows for the week's exam results (append-only);
-verify the deployed model's row matches reality (`atb live-control list-models` / registry
-symlinks). Check the standup tripwire table is still the ratified one.
+Append a `docs/research/model-promotions.md` row for any `latest` symlink change this week
+(the append-only promotion log — with eval numbers; there is no separate `model-scoreboard.md`,
+the retrain task writes here too). Verify the deployed model matches reality
+(`atb live-control list-models` / registry symlinks). No promotion this week → nothing to append.
+Check the standup tripwire table is still the ratified one.
 
 ## Output (the definition of done)
 
@@ -81,3 +83,9 @@ manufacturing lessons.
 - A lesson written into two places (skill + LESSONS) — pick the right layer, link the other.
 - Skipping the prediction-vs-outcome pass because the week "went fine" — calibration drift is
   invisible exactly when things go fine.
+- **Bundling a log-consolidation or human-directed log/incident rewrite into the retro PR.** The
+  retro PR ships **distillate only** (LESSONS/skill diffs + AGENDA clear + the append-only retro
+  log entry). A destructive log rewrite conflicts on every new log append and strands the whole
+  distillate behind a merge conflict — the 2026-07-13 retro (#1026) sat CI-green but unmerged for
+  7 days because a 52-line PM-directed log-consolidation was bundled in. Log-consolidations and
+  incident post-mortems are separate PRs, reviewed on their own merits.
