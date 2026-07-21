@@ -860,3 +860,30 @@ Ref: GH #1038, cpi-pause-on/cpi-pause-off scheduled tasks, alert-monitor/daily-t
 ## 2026-07-17 ~11:40 · note · daemon(PM)
 Prod entry-pause resumed (follow-up to the 2026-07-17 ~11:35 incident-adjacent entry). Sanity check first (ETH -2 to -4%/24h, BTC -1%, F&G 27 — normal drift, well under the 5% abort threshold from the pause-off procedure) → `railway variables --set FEATURE_ENTRY_PAUSE=false -e production -s "Trading Bot"` → deploy a9428c64 SUCCESS 11:35Z, clean restart 11:38-11:39Z. Session #20 continued (not a new session), balance $83.04 unchanged (no positions were open through the ~95h pause). Drawdown guard re-armed at peak $84.42/20%. No errors post-restart; last entry-pause warning logged 11:33:39Z pre-restart, none since. Prod is trading normally again as of 11:39 UTC.
 Ref: GH #1038, previous entry (stuck-pause discovery)
+
+## [D-2026-07-20-01] 2026-07-20 ~10:45 · note · daemon(weekly-retro)
+**Weekly retro for 2026-07-13 → 2026-07-20** (episodic → semantic distillation). A quieter, ops/risk-config-focused week: the 0714 safety wave to staging (#1030 long-only, #1032 equity breakers, #1034 risk-config move), six sound decisions [D-2026-07-14-01..05]/[D-2026-07-17-01], the C3 long-only staging window SATISFIED, and one ~95h stuck-flag near-miss (zero capital risk). No new experiments (the returns-levers program closed pre-window 07-12); no model promotion (retrain blocked, see below). Delivered as ONE PR to develop.
+
+**LESSONS.md (earning event in parens):**
+- **§5.7** (new monitoring signature) — a stuck flag / frozen loop emits ZERO events, so event-stream monitors read silence as health; assert expected positive STATE (flag value, entries-per-window, fresh heartbeat) instead. Earned: 2026-07-17 stuck-`FEATURE_ENTRY_PAUSE` 95h (0 `system_events`, both standup + alert-monitor blind, caught by manual sweep); root cause GH #1038.
+
+**Skills amended (this PR):**
+- `weekly-retro/SKILL.md` — (a) new red flag: **retro PR is distillate-only**; never bundle a log-consolidation or human-directed log/incident rewrite (earning event below: #1026 stranded 7 days). (b) Scoreboard step fixed to point at the real `docs/research/model-promotions.md` (the phantom `model-scoreboard.md` never existed).
+- `model-tournament/SKILL.md` — same phantom-path fix (`model-scoreboard.md` → `model-promotions.md`).
+
+**GH issues filed (need work outside a doc edit):**
+- **#1041** (type:infra, area:ml-model, p2) — rebuild+push the ECR training image; it is 5 pipeline commits stale (#981/#954/#950/#948/#937), which correctly BLOCKED the 07-19 weekly retrain. Guardrail worked; image just needs a rebuild.
+- **#1042** (type:chore, area:infra, p3) — reconcile prod/`main` charter.md: still shows `**TODO**` for capital & active symbols; develop filled them 07-03 (6c2f0f45) but that never promoted to main. Human-owned → issue, not an edit.
+
+**AGENDA disposition (all 11 items → PR #1026, cleared this PR):** every item on the running agenda was already actioned in the 2026-07-13 retro PR **#1026** — which is **CI-green but still OPEN**, blocked by a merge conflict from a bundled 52-line PM-directed log-consolidation (this is itself the week's top process finding; earned the distillate-only red flag above). This retro does **not** reproduce #1026's reviewed distillate (double-append hazard). Per-item map: (1) wake-loss → #1026 delegation-protocol clause 3 + pm-fleet-watchdog; (2) component≠runnable → §2.7; (3) claude-bot findings → §2.8; (4) credential-to-disk → §3; (5) pruner-deleted-worktree → delegation-protocol clause 1 (.agent-active); (6) shared-venv atb → §1.10a + §3; (7) cwd-relative registry → §1.10b (GH #1023); (8) review-summary completeness → delegation-protocol clause 7; (9) transient 401 → delegation-protocol resume-with-state; (10) alembic boot-check → deploy-prod skill (GH #1025); (11) subagent-in-PM-worktree → delegation-protocol clause 1. **NEXT ACTION for the PM: resolve #1026's conflict and merge it** (or close it referencing this PR) so that distillate + its P1-drawdown incident post-mortem land — flagged on #1026 and in this PR body.
+
+**Scheduled-task audit (input 6):** `cpi-pause-on` fired 07-13 ✓; `cpi-pause-off` MISSED 07-14 (app closed) ✗ → the incident (GH #1038); `daily-trading-standup` + 6-hourly `alert-monitor` ran but were BLIND to the stuck flag ✗ (→ §5.7); `weekly-model-retrain` fired 07-19 and correctly self-ABORTED on the stale-image precondition ✓ (guardrail worked → #1041); `eod-worktree-prune` fired 07-18/19 and correctly skipped unpushed-work candidates ✓. Stale one-shots `cpi-pause-on/off` (Jul-14-specific, now past) should be cleaned — folds into #1038's "audit all one-shots."
+
+**Prediction-vs-outcome / calibration:**
+- daemon(PM) [D-2026-07-14-01] (long-only "cleanly reversible, risk-reducing, evidence adequate") → C3 staging window SATISFIED with non-degenerate shadow evidence [D-2026-07-17-01]. **Well-calibrated.**
+- daemon(PM) [D-2026-07-14-03] (HOLD arming a cash-blind breaker = "false confidence on the veto axis") → fix-first path adopted, no adverse outcome; arming clock restarted to 07-28. **Appropriately conservative.**
+- 0714 boot-check predicted all-pass → PASS-WITH-NOTE (guard-peak race caught, GH #1036 filed). **Accurate incl. the caveat.**
+- `weekly-model-retrain` agent (07-19, sonnet) — MISCALIBRATED on one read: reported the charter "incomplete/blocking" when develop's charter has been filled since 07-03; it had read the stale main-checkout charter (wrong-source, §1.10) and self-corrected via fallback. Guardrail-following good; situational read wrong. → #1042.
+
+**Board/layer-1 (risk-ratification):** none newly proposed by this retro. Pre-existing layer-1 items remain queued for the ratification sitting (charter exposure-prose drift, #986 item 3) — not retro-owned. The P1 drawdown-cap-breach incident (2026-07-04) is still `open`; its post-mortem update rides in #1026.
+Ref: PR #1026 (open, needs merge), GH #1038/#1041/#1042/#1036/#1023/#1025, [D-2026-07-14-01..05], [D-2026-07-17-01], .claude/LESSONS.md §5.7, .claude/skills/weekly-retro + model-tournament

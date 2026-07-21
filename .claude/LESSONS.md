@@ -311,3 +311,20 @@ reset (2026-06-05 / session 20).
 - **Rule:** before treating any `account_history` peak/trough as real, sanity-check that `balance`
   varies like a market-tracking value: `count(DISTINCT round(balance,4))` per month. A pinned or
   near-constant base means book value — do not compute drawdowns across it.
+
+### 5.7 A stuck flag / frozen loop emits ZERO events — assert expected STATE, not just the absence of alarms
+Prod `FEATURE_ENTRY_PAUSE` sat stuck `true` for ~95h (2026-07-13 → 07-17): a one-shot `cpi-pause-off`
+task never fired (app closed at fire time), so entries stayed disabled long past the intended window.
+The tell that every event-stream monitor **missed** it: prod wrote **0 `system_events` of any kind**
+for the full 95h, and both `daily-trading-standup` and the 6-hourly `alert-monitor` scan the event
+stream — so *silence read as health*. It was caught only by a manual status sweep.
+- **Rule:** a health check must assert **expected positive state**, not merely the absence of error
+  events. Concretely, per sweep verify: (a) `FEATURE_ENTRY_PAUSE=false` unless a live pause window is
+  logged; (b) entries-per-window is non-zero when signals fired flat (0 trades + live signals + no
+  pause = frozen, not calm); (c) `system_events` has a fresh heartbeat/tick row — an *empty* event
+  window over a period that should have produced events is itself the alarm. "No news" is a null read
+  on a possibly-dead channel, never a green light.
+- Root cause (app-dependent one-shot scheduling silently no-ops safety-relevant transitions) is
+  tracked in **GH #1038**; until it lands, treat every safety-relevant one-shot as best-effort and
+  assert its resulting state in the sweep. Earned: 2026-07-17 stuck-entry-pause (log 2026-07-17
+  ~11:35), #1038.
