@@ -20,7 +20,16 @@ checklist line, a new tripwire.
    disposition in the retro PR — never silently dropped. After actioning, **clear the file back
    to its header template in the same PR**. An empty agenda is not a skipped step: still sweep
    inputs 1–7 below; the agenda supplements the sweep, it does not replace it.
-1. **log.md** — the week's entries end to end, not just the tail.
+0b. **The previous retro's own PR — verify it MERGED, and that anything it deferred landed.**
+   `gh pr list --state merged --search "retro"` / check the branch is on `develop`. If last week's
+   retro deferred distillate to another PR, open that PR: **merged → fine; closed or still open →
+   its distillate is not on `develop` and recovering it is this retro's first job** (diff its
+   files against `develop`, re-land the distillate-only subset). Also re-check the issues the last
+   retro filed — an issue that has sat untouched for a week is itself a finding. Earned: #1026
+   closed unmerged 2026-07-21 after the 07-20 retro deliberately did not reproduce it; LESSONS §2.9.
+1. **log.md** — the week's entries end to end, not just the tail. **A week with no entries is a
+   finding, not a quiet week** — cross-check against the scheduled-task traces (input 6): if the
+   monitors ran and the log is empty, findings were surfaced and dropped (LESSONS §2.10).
 2. **Incidents + corrections** — anything opened/closed/corrected. Corrections are retro gold:
    the phantom-peak withdrawal (2026-07-04 13:55) became LESSONS §5.6 (the distinct-count check)
    — that's the pipeline working as designed.
@@ -83,6 +92,9 @@ manufacturing lessons.
 - A lesson written into two places (skill + LESSONS) — pick the right layer, link the other.
 - Skipping the prediction-vs-outcome pass because the week "went fine" — calibration drift is
   invisible exactly when things go fine.
+- **Deferring this week's distillate to a PR you don't control.** "Recorded the per-item map, the
+  other PR carries the artifacts" is how a week of lessons dies (#1026). Re-land the distillate-only
+  subset yourself and accept the duplicate-append risk — it is strictly cheaper (LESSONS §2.9).
 - **Bundling a log-consolidation or human-directed log/incident rewrite into the retro PR.** The
   retro PR ships **distillate only** (LESSONS/skill diffs + AGENDA clear + the append-only retro
   log entry). A destructive log rewrite conflicts on every new log append and strands the whole
