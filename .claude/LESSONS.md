@@ -267,6 +267,26 @@ code commit 2f6c1fe8, 2026-07-14 — everything since is docs/state).
   depth is the finding, not any individual issue.
   Earned: #1041/#1038/#1044/#1045/#1046 untouched 2026-07-27→08-10.
 
+### 2.12 A maintenance canary with no refill procedure inverts into a permanent CI tax
+`test_default_config_has_upcoming_coverage` asserts `config/macro_events.json` lists an event within
+the last 14 days — a deliberate canary from #962, whose own docstring says the guard otherwise
+*"silently stops de-risking anything."* The calendar went stale on 2026-07-14; the canary began
+failing around **07-28 and then failed every PR to `develop`**. It was a good test firing correctly,
+on time, with a message naming the file and the fix. Nothing consumed it for 12 days, because it had
+no owner and no refill procedure. Two costs, and the second is worse:
+1. the real one — 26 days with **no upcoming macro de-risk coverage on live capital** (#1053);
+2. **every** PR showed red CI, so red became the resting state and a genuinely broken PR was
+   indistinguishable from the background failure. #1048 is red solely because of this and is
+   otherwise a one-line docs change.
+- **Rule:** a canary that gates **all** PRs needs a named owner and a scheduled refill, shipped *with
+  the canary*. "It'll fail loudly and someone will fix it" is the assumption that fails — cf. §2.11.
+- **Rule:** when a repo-wide check has been red for more than a couple of days, treat "is CI red for
+  a reason unrelated to this PR?" as a first-class finding, not as noise to route around. A
+  permanently-red check is a **disabled** check.
+- **Design note:** prefer *warn* over *fail* when the staleness is in data the PR does not touch and
+  the guarded code path is itself healthy — so calendar rot cannot block unrelated work.
+  Earned: GH #1053 (found via #1048's `unit-tests (4)`), #962.
+
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
 days, `alert-monitor` 6-hourly, `staging-cohort-observer` 1–3x/day) and `log.md` gained **zero**
