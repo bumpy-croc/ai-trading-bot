@@ -251,6 +251,21 @@ recovered them.
     retro's only channel to a decision-maker is that summary; an unmerged PR queue is invisible
     everywhere else.
 
+### 2.10 A monitoring run that writes nothing durable did not happen
+Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
+days, `alert-monitor` 6-hourly, `staging-cohort-observer` 1–3x/day) and `log.md` gained **zero**
+entries. Two real findings were surfaced and then lost: staging's phantom `OPEN` position rows —
+independently re-observed **three times** (07-25T12:10Z, 07-25T20:11Z, 07-27T08:02Z) without
+escalating — and 10 days of silent zero-size decisions. Both existed only in session memory
+(claude-mem), which is **layer 4**: not swept by `/triage`, not read at PM session boot, and
+consumed by exactly one thing — the weekly retro. Detection latency was therefore a full week.
+- **Rule:** any monitoring/scheduled pass that surfaces a non-nominal finding must, **in the same
+  run**, emit a layer-2 artifact — a `log.md` append (`decision-record`), an incident file, or a GH
+  issue. A finding that lives only in the run's own summary or in session memory is not reported.
+- **Corollary:** re-observing a finding a second time is an *escalation* trigger, not a re-report;
+  if the previous run already saw it and nothing changed, that is now a process failure to name.
+  Earned: 2026-07-21→27 log silence; GH #1044, #1045, #1046.
+
 ### 2.11 Filing an issue is not delegating the work
 The 2026-07-27 retro filed #1044, #1045, #1046 and commented on #1041, #1038. Fourteen days later
 **all five had zero activity** — no owner, no comment, no branch. This was already visible once (the
@@ -286,21 +301,6 @@ no owner and no refill procedure. Two costs, and the second is worse:
 - **Design note:** prefer *warn* over *fail* when the staleness is in data the PR does not touch and
   the guarded code path is itself healthy — so calendar rot cannot block unrelated work.
   Earned: GH #1053 (found via #1048's `unit-tests (4)`), #962.
-
-### 2.10 A monitoring run that writes nothing durable did not happen
-Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
-days, `alert-monitor` 6-hourly, `staging-cohort-observer` 1–3x/day) and `log.md` gained **zero**
-entries. Two real findings were surfaced and then lost: staging's phantom `OPEN` position rows —
-independently re-observed **three times** (07-25T12:10Z, 07-25T20:11Z, 07-27T08:02Z) without
-escalating — and 10 days of silent zero-size decisions. Both existed only in session memory
-(claude-mem), which is **layer 4**: not swept by `/triage`, not read at PM session boot, and
-consumed by exactly one thing — the weekly retro. Detection latency was therefore a full week.
-- **Rule:** any monitoring/scheduled pass that surfaces a non-nominal finding must, **in the same
-  run**, emit a layer-2 artifact — a `log.md` append (`decision-record`), an incident file, or a GH
-  issue. A finding that lives only in the run's own summary or in session memory is not reported.
-- **Corollary:** re-observing a finding a second time is an *escalation* trigger, not a re-report;
-  if the previous run already saw it and nothing changed, that is now a process failure to name.
-  Earned: 2026-07-21→27 log silence; GH #1044, #1045, #1046.
 
 ---
 
