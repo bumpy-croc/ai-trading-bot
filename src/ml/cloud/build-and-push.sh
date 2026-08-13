@@ -18,7 +18,9 @@ IMAGE_TAG="${IMAGE_TAG:-latest}"
 # Validate AWS credentials
 if ! aws sts get-caller-identity > /dev/null 2>&1; then
     echo -e "${RED}❌ AWS credentials not configured${NC}"
-    echo "Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+    echo "Set AWS_PROFILE (the 'ai-trading-bot' profile holds the ECR account,"
+    echo "473535066028; the 'default' profile does NOT), or export"
+    echo "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY."
     exit 1
 fi
 
@@ -59,18 +61,39 @@ echo "This may take 5-10 minutes..."
 # Navigate to project root (where Dockerfile expects files)
 cd "$(dirname "$0")/../../.."
 
+# Capture provenance from the tree actually being built. A dirty tree is
+# allowed but must be labelled as such, otherwise the commit label would
+# claim a fidelity the image does not have.
+GIT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+GIT_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+if ! git diff --quiet HEAD -- src cli pyproject.toml 2>/dev/null; then
+    echo -e "${YELLOW}⚠️  Uncommitted changes under src/, cli/ or pyproject.toml${NC}"
+    echo "   The image will be labelled ${GIT_COMMIT:0:8}-dirty."
+    GIT_COMMIT="${GIT_COMMIT}-dirty"
+fi
+BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+COMMIT_TAG="sha-$(echo "$GIT_COMMIT" | cut -c1-8)"
+echo "Build provenance: commit=$GIT_COMMIT ref=$GIT_REF"
+echo ""
+
 # Build with BuildKit for better caching.
 # --platform linux/amd64: SageMaker instances are x86_64; a host-native arm64
 #   image (Apple Silicon) fails at pull time with "no matching manifest".
 # --provenance/--sbom false: attestation manifests turn the push into an OCI
 #   index whose extra entries SageMaker's puller cannot resolve.
+COMMIT_URI="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO_NAME}:${COMMIT_TAG}"
+
 DOCKER_BUILDKIT=1 docker build \
     -f src/ml/cloud/Dockerfile \
     --platform linux/amd64 \
     --provenance=false \
     --sbom=false \
+    --build-arg GIT_COMMIT="$GIT_COMMIT" \
+    --build-arg GIT_REF="$GIT_REF" \
+    --build-arg BUILD_DATE="$BUILD_DATE" \
     -t "$REPO_NAME:$IMAGE_TAG" \
     -t "$IMAGE_URI" \
+    -t "$COMMIT_URI" \
     --progress=plain \
     .
 
@@ -87,6 +110,9 @@ echo ""
 echo -e "${YELLOW}Step 5/5: Pushing to ECR...${NC}"
 echo "This may take several minutes..."
 docker push "$IMAGE_URI"
+# The commit-tagged copy is what makes a past build auditable after `latest`
+# has moved on; pushing only `latest` loses that history.
+docker push "$COMMIT_URI"
 echo -e "${GREEN}✅ Pushed successfully${NC}"
 echo ""
 
@@ -95,8 +121,14 @@ echo "================================================================"
 echo -e "${GREEN}🎉 Docker Image Ready for SageMaker!${NC}"
 echo "================================================================"
 echo ""
-echo "Image URI:"
+echo "Image URIs:"
 echo "  $IMAGE_URI"
+echo "  $COMMIT_URI  (immutable, commit-pinned)"
+echo ""
+echo "Built from commit: $GIT_COMMIT ($GIT_REF)"
+echo ""
+echo "Verify what is now live:"
+echo "  ./src/ml/cloud/verify-image.sh"
 echo ""
 echo "Add this to your .env file:"
 echo "  SAGEMAKER_DOCKER_IMAGE=$IMAGE_URI"

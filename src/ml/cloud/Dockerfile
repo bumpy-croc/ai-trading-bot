@@ -42,6 +42,21 @@ ENV PYTHONUNBUFFERED=1 \
     # Enable GPU memory growth
     TF_FORCE_GPU_ALLOW_GROWTH=true
 
+# Provenance stamp. Kept as the last layer so it never invalidates the
+# expensive pip/base layers. Staleness was previously inferred from the ECR
+# push timestamp, which cannot distinguish "rebuilt from develop tip" from
+# "rebuilt from an old checkout" -- these labels make the answer exact and
+# queryable without pulling the image (see verify-image.sh).
+ARG GIT_COMMIT=unknown
+ARG GIT_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.version="${GIT_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.source="https://github.com/bumpy-croc/ai-trading-bot"
+RUN printf '{"git_commit":"%s","git_ref":"%s","build_date":"%s"}\n' \
+    "$GIT_COMMIT" "$GIT_REF" "$BUILD_DATE" > /opt/ml/code/IMAGE_PROVENANCE.json
+
 # SageMaker expects the entrypoint to be at /opt/ml/code/train
 # We create a wrapper script that calls our entrypoint
 RUN echo '#!/usr/bin/env python3\nimport sys\nsys.path.insert(0, "/opt/ml/code")\nfrom src.ml.cloud.entrypoint import main\nsys.exit(main())' > /opt/ml/code/train && \
