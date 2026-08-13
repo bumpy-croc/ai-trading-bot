@@ -871,7 +871,6 @@ Ref: GH #1038, previous entry (stuck-pause discovery)
 - `weekly-retro/SKILL.md` — (a) new red flag: **retro PR is distillate-only**; never bundle a log-consolidation or human-directed log/incident rewrite (earning event below: #1026 stranded 7 days). (b) Scoreboard step fixed to point at the real `docs/research/model-promotions.md` (the phantom `model-scoreboard.md` never existed).
 - `model-tournament/SKILL.md` — same phantom-path fix (`model-scoreboard.md` → `model-promotions.md`).
 
-<<<<<<< Updated upstream
 **GH issues filed (need work outside a doc edit):**
 - **#1041** (type:infra, area:ml-model, p2) — rebuild+push the ECR training image; it is 5 pipeline commits stale (#981/#954/#950/#948/#937), which correctly BLOCKED the 07-19 weekly retrain. Guardrail worked; image just needs a rebuild.
 - **#1042** (type:chore, area:infra, p3) — reconcile prod/`main` charter.md: still shows `**TODO**` for capital & active symbols; develop filled them 07-03 (6c2f0f45) but that never promoted to main. Human-owned → issue, not an edit.
@@ -888,7 +887,7 @@ Ref: GH #1038, previous entry (stuck-pause discovery)
 
 **Board/layer-1 (risk-ratification):** none newly proposed by this retro. Pre-existing layer-1 items remain queued for the ratification sitting (charter exposure-prose drift, #986 item 3) — not retro-owned. The P1 drawdown-cap-breach incident (2026-07-04) is still `open`; its post-mortem update rides in #1026.
 Ref: PR #1026 (open, needs merge), GH #1038/#1041/#1042/#1036/#1023/#1025, [D-2026-07-14-01..05], [D-2026-07-17-01], .claude/LESSONS.md §5.7, .claude/skills/weekly-retro + model-tournament
-=======
+
 ## 2026-07-12 · verification · daemon(PM)
 **Condition 1 CLEARED (read-only prod DB):** active session 20 peak=$84.4159, current=$84.4025, 899 account_history rows since 2026-06-05, drawdown ~0.016%. Well below the ~$105.05 false-trip threshold; the $100 all-time value is the known phantom-era pre-reset book value and is NOT the guard's seed (guard seeds session-scoped per #850/#851). Promoting #1001 will not false-halt prod. Condition 2 handled at merge (changelog conflict resolved, CI re-run on merged tree). Condition 3 (24-48h watch) carried to the promote runbook.
 **Prod-promote framing:** prod is at 0.5% DD — the drawdown-gate bug only bites at 20% (nowhere near) and the close-cap bug (#994) only on a fee-haircut close (infrequent, one open position). Safety fixes are risk-REDUCING but NOT urgent → staging soak first, unhurried; prod promote deferred to a post-observation window, not rushed same-day at session tail.
@@ -897,4 +896,3 @@ Ref: PR #1026 (open, needs merge), GH #1038/#1041/#1042/#1036/#1023/#1025, [D-20
 Severity: yellow  Top anomaly: prod user-data WS REST-degraded since 2026-08-08 22:33 UTC (5d, no recovery event, no follow-up during the 3.5-week PM absence)
 Ref: docs/research/ops-snapshots/2026-08-13_1503.md
 First detailed sweep since 2026-07-21 (PM away ~3.5 weeks). Both prod (session 20) and staging (session 23) alive with clean hourly account_history heartbeats, no gaps >2h in 7d. Prod: balance $83.64/equity $83.44, 1.19% DD from peak, 1 open LONG (23d, -0.24% unrealized), 1 trade closed since 07-21 (+$0.41), positions table clean (no phantoms), no pending migrations, no SYSTEM_HALT/flags set. Staging: balance $1021.91/equity $1016.62, 1 open LONG (17d, -$5.30 unrealized), 1 trade closed since 07-21 (+$2.85), #1044 phantom-OPEN-rows still ~20 (unchanged, unfixed), #1045 zero-size-decision bug not currently reproducing (in-position, root cause still open). GH #986 circuit-breaker prod-arming decision: pre-committed 14-day staging dry_run window completed 2026-07-28, 16 days overdue, never evaluated — flagged for next triage, not urgent (DD nowhere near threshold either env). Railway CLI unauthorized this session (recurring, see MEMORY project_railway_cli_staging_auth_recurring) — could not confirm live deploy id, FEATURE_* flag values, or run the application-log signature sweep (LESSONS §5); all findings DB-only. No mutations performed. Recommend: (1) human decide on a restart to clear the prod WS degradation (live-ops not authorized to restart live-capital processes), (2) re-login Railway CLI, (3) pick up the overdue #986 verdict in next triage.
->>>>>>> Stashed changes
