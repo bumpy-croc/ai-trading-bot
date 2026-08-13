@@ -27,6 +27,12 @@ checklist line, a new tripwire.
    files against `develop`, re-land the distillate-only subset). Also re-check the issues the last
    retro filed — an issue that has sat untouched for a week is itself a finding. Earned: #1026
    closed unmerged 2026-07-21 after the 07-20 retro deliberately did not reproduce it; LESSONS §2.9.
+   **If that PR is still open: `git reset --hard origin/<its-branch>` and build this retro on top of
+   it** — this PR then supersedes it and merges whether or not the old one lands, instead of adding a
+   second stranded PR to the queue. And **if this is the second consecutive stranded retro PR, the
+   completion summary must lead with it, addressed to the human** — the retro cannot merge its own
+   output, so an unmerged queue is invisible everywhere else (LESSONS §2.9 rule (d); #1047 sat
+   `CLEAN` and unmerged for 14 days, taking §2.9/§2.10 off `develop` with it).
 1. **log.md** — the week's entries end to end, not just the tail. **A week with no entries is a
    finding, not a quiet week** — cross-check against the scheduled-task traces (input 6): if the
    monitors ran and the log is empty, findings were surfaced and dropped (LESSONS §2.10).
@@ -40,9 +46,19 @@ checklist line, a new tripwire.
    calibration is a charter review item (monthly: "review calibration of each agent"); the
    risk-officer's own calibration note (2026-07-04: "consistent, not a reversal") is the format.
 5. **Experiments** — verdicts vs their preregistered thresholds; any p-hacking drift.
-6. **Scheduled tasks** — `ls ~/.claude/scheduled-tasks` + each task's expected trace (did the
-   standup run daily? did the FOMC pause flip fire?). Tasks run only while the app is open —
-   silent non-firing is a known failure mode; a task that didn't fire is a finding.
+6. **Scheduled tasks** — audit against the **registry**, not the directory. Call
+   `mcp__scheduled-tasks__list_scheduled_tasks` and **diff it both ways** against
+   `ls ~/.claude/scheduled-tasks`: a directory with no registry entry is a **DEAD task**, and its
+   `SKILL.md` survives deregistration so it looks installed forever. (`ls` alone reported "no task
+   missed its schedule" for three consecutive retros while four tasks were dead — LESSONS §3.)
+   Then check each live task's `enabled` / `lastRunAt` **and its expected trace**: date sessions by
+   the first internal `"timestamp"` in `~/.claude/projects/<slug>/*.jsonl`, **not** by file mtime
+   (claude-mem rewrites mtimes). Three distinct failure modes, all silent:
+   - **didn't fire** — app closed (tasks run only while it's open);
+   - **deregistered** — absent from the registry entirely;
+   - **fired and died on turn 1** — grep transcripts for `may not exist or you may not have access`
+     (a stale model-provider selection); `lastRunAt` records the *attempt*, so these look healthy.
+   A task that ran but produced no artifact is a finding of the same weight as one that never fired.
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
 
 ## The distillation pass
@@ -95,6 +111,12 @@ manufacturing lessons.
 - **Deferring this week's distillate to a PR you don't control.** "Recorded the per-item map, the
   other PR carries the artifacts" is how a week of lessons dies (#1026). Re-land the distillate-only
   subset yourself and accept the duplicate-append risk — it is strictly cheaper (LESSONS §2.9).
+- **Counting a filed issue as a disposition.** An issue with no assignee and no dispatched agent is
+  a note to yourself (LESSONS §2.11) — 5/5 issues from the 07-27 retro had zero activity 14 days on.
+  Filing is still the right action for code changes; just don't report it as resolved, and escalate
+  the *queue* (N unowned, M days) as a single item once it repeats.
+- **Reporting a green scheduled-task audit from the wrong instrument** — see input 6. "All tasks
+  fired" is only sayable from the registry plus per-task artifact evidence.
 - **Bundling a log-consolidation or human-directed log/incident rewrite into the retro PR.** The
   retro PR ships **distillate only** (LESSONS/skill diffs + AGENDA clear + the append-only retro
   log entry). A destructive log rewrite conflicts on every new log append and strands the whole

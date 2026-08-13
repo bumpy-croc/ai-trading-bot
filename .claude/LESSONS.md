@@ -132,6 +132,28 @@ path never read the signal.
   logged"* as this section's live signature — and note the second defect it exposes: a zero-size
   decision must never be silent (GH #1045).
 
+### 1.12 A metadata key that switches a transform, absent, silently disables the transform
+`atb train cloud` writes a `metadata.json` **without** `price_normalization` (the local training
+path in `cli/commands/train_commands.py:280-281` is the only writer). The prediction path treats
+that key as the denormalize switch and falls through to "return as-is" when it is missing —
+`src/prediction/models/onnx_runner.py:534` (`if ...get("price_normalization"): pred =
+self._denormalize_price(pred)`) and `src/prediction/engine.py:1183` (returns unchanged when
+`method != "rolling_minmax"`). Neither raises. A model whose output is in normalized ~[0,1] space
+is then compared against real ETH prices (~$3k): every prediction wrong, every artifact
+structurally valid. Same silent-fabrication class as the pre-#838 partial-exit units bug — and
+`cloud-promote --set-latest` would have pointed a live strategy at it with no external check,
+since model promotion for a live symbol is autonomous under the charter.
+- **Rule (a):** when a metadata/config key **selects a transform**, its absence must **fail loud**
+  at load time, not fall through to identity. "Key missing → skip the step" is only safe when
+  skipping is the documented default; for a denormalization it never is.
+- **Rule (b):** when two producers write the same artifact schema (local vs cloud training), they
+  share a **writer**, not a convention. A second copy of the literal drifts silently, and the
+  consumer's fall-through hides the drift.
+- **Detection:** diff the `metadata.json` key sets of two bundles of the same task type before
+  trusting any head-to-head number. Identical `feature_schema.json` + `feature_names` does **not**
+  mean the bundles are interchangeable. Earned: GH #1049 (found during the 2026-08-09 retrain,
+  #1048 — it blocked the backtest rather than corrupting it, which is the good outcome).
+
 ---
 
 ## 2. Process mistakes I made (avoid these)
@@ -214,6 +236,20 @@ recovered them.
   reviewed distillate, diff its non-conflicting files against the target branch and confirm each one
   either landed elsewhere or is being deliberately dropped, in writing.
   Earned: #1026 (closed 2026-07-21), recovered by the 2026-07-27 retro.
+- **Rule (d) — added 2026-08-10, after this failed a third time.** Rules (a)–(c) fix *recovery* and
+  still assume someone eventually merges. They don't. #1026 closed unmerged; **#1047 (the retro that
+  wrote rules (a)–(c)) then sat `CLEAN`, CI-green, zero conflicts, unmerged for 14 days** — so
+  §2.9/§2.10 themselves were not on `develop` while the very failures they describe recurred, and
+  the standup that re-detected them on 08-03/08-04 could not have read §2.10's escalation corollary.
+  When a producer cannot merge its own output, "be more self-contained" is the wrong layer of fix:
+  it is an **ownership defect**, not a discipline defect.
+  - **Mechanical fix:** if the previous retro's PR is still open, **branch this retro off that PR's
+    head** rather than off `develop`. The new PR is then a strict superset — it merges whether or
+    not the old one lands, and git dedupes if both do. Costs one `git reset --hard origin/<branch>`.
+  - **Escalation fix:** the *second* consecutive stranded distillate PR is no longer a retro finding
+    to re-land quietly — **name it to the human in the completion summary as the top item.** The
+    retro's only channel to a decision-maker is that summary; an unmerged PR queue is invisible
+    everywhere else.
 
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
@@ -229,6 +265,42 @@ consumed by exactly one thing — the weekly retro. Detection latency was theref
 - **Corollary:** re-observing a finding a second time is an *escalation* trigger, not a re-report;
   if the previous run already saw it and nothing changed, that is now a process failure to name.
   Earned: 2026-07-21→27 log silence; GH #1044, #1045, #1046.
+
+### 2.11 Filing an issue is not delegating the work
+The 2026-07-27 retro filed #1044, #1045, #1046 and commented on #1041, #1038. Fourteen days later
+**all five had zero activity** — no owner, no comment, no branch. This was already visible once (the
+07-20 retro's "#1041 just needs a rebuild": accurate diagnosis, issue filed, still blocked at the
+next retro) and was recorded as a calibration miss rather than a rule. It is now a five-for-five
+pattern across two retros, against a backdrop of **zero code merged to `develop` in 27 days** (last
+code commit 2f6c1fe8, 2026-07-14 — everything since is docs/state).
+- **Rule:** an issue with no assignee and no dispatched agent is a **note to yourself**, not work in
+  progress. Do not count it as a disposition, and do not report it as "handled". Per this repo's
+  CLAUDE.md the intended pattern is *file the issue **and dispatch a subagent to it***; a filed-only
+  issue is half of that.
+- **Corollary:** when the same issue is still unowned at the next weekly pass, stop re-filing and
+  re-describing it — escalate the *queue* (N issues, M days, no owner) as one item. The backlog
+  depth is the finding, not any individual issue.
+  Earned: #1041/#1038/#1044/#1045/#1046 untouched 2026-07-27→08-10.
+
+### 2.12 A maintenance canary with no refill procedure inverts into a permanent CI tax
+`test_default_config_has_upcoming_coverage` asserts `config/macro_events.json` lists an event within
+the last 14 days — a deliberate canary from #962, whose own docstring says the guard otherwise
+*"silently stops de-risking anything."* The calendar went stale on 2026-07-14; the canary began
+failing around **07-28 and then failed every PR to `develop`**. It was a good test firing correctly,
+on time, with a message naming the file and the fix. Nothing consumed it for 12 days, because it had
+no owner and no refill procedure. Two costs, and the second is worse:
+1. the real one — 26 days with **no upcoming macro de-risk coverage on live capital** (#1053);
+2. **every** PR showed red CI, so red became the resting state and a genuinely broken PR was
+   indistinguishable from the background failure. #1048 is red solely because of this and is
+   otherwise a one-line docs change.
+- **Rule:** a canary that gates **all** PRs needs a named owner and a scheduled refill, shipped *with
+  the canary*. "It'll fail loudly and someone will fix it" is the assumption that fails — cf. §2.11.
+- **Rule:** when a repo-wide check has been red for more than a couple of days, treat "is CI red for
+  a reason unrelated to this PR?" as a first-class finding, not as noise to route around. A
+  permanently-red check is a **disabled** check.
+- **Design note:** prefer *warn* over *fail* when the staleness is in data the PR does not touch and
+  the guarded code path is itself healthy — so calendar rot cannot block unrelated work.
+  Earned: GH #1053 (found via #1048's `unit-tests (4)`), #962.
 
 ---
 
@@ -324,6 +396,27 @@ consumed by exactly one thing — the weekly retro. Detection latency was theref
   CLI from a non-primary worktree, invoke it as `PYTHONPATH=<worktree-root> python3 -m cli.__main__`
   (or re-`make install` in the worktree, but that repins it for everyone). A warn-on-mismatch fix
   (cwd repo-root ≠ installed source root) is GH #1024; sibling GH #999 covers the script-path variant.
+- **`ls ~/.claude/scheduled-tasks` is NOT the task list — the scheduler registry is.** The directory
+  holds a `SKILL.md` per task and **keeps it after the task is deregistered**, so a dead task looks
+  installed forever. On 2026-08-10: 19 directories, **13 registered tasks**. `alert-monitor`,
+  `staging-cohort-observer`, `eod-worktree-prune` and `pm-fleet-watchdog` had vanished from the
+  registry and last ran 2026-07-28/29 — including `alert-monitor`, the operator-alert watchdog for a
+  **live-capital** bot, dark for 12 days. Three consecutive retros audited tasks with `ls` and
+  reported "no task missed its schedule."
+  **Rule:** audit with `mcp__scheduled-tasks__list_scheduled_tasks` and **diff registry ⇄ directory
+  both ways** — a directory with no registry entry is a DEAD task; check `enabled` and `lastRunAt`,
+  not just presence. (`prune-worktrees` is a *separate live task* from the dead `eod-worktree-prune`
+  directory — don't read one as evidence for the other.) Earned: GH #1050.
+- **A persisted model-provider selection silently kills every scheduled task.** `switch-model-provider`
+  writes the model choice to settings, and scheduled runs inherit it. When the selection is
+  unavailable the run dies **on turn 1** with `There's an issue with the selected model (<id>). It
+  may not exist or you may not have access to it.` — no retry, no alert, and the transcript is ~20
+  lines so it looks like a short successful run. Cost: the **2026-08-03 weekly retro** (`glm-5.2[1m]`)
+  produced nothing and nobody noticed for a week; `daily-trading-standup` died the same way on 08-04
+  and 08-05 (`glm-4.7`).
+  **Rule:** after any provider switch, confirm the next scheduled run actually produced its artifact.
+  When auditing tasks, grep transcripts for `may not exist or you may not have access` — a fired-but-
+  died run is invisible in `lastRunAt`, which records the *attempt*. Earned: GH #1051.
 
 ---
 

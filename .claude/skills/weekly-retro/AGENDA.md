@@ -13,4 +13,6 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(none — cleared by the 2026-07-27 retro.)_
+_(none — cleared by the 2026-08-10 retro. The file was empty on arrival and stayed empty for 14
+days despite that window's findings all being agenda-worthy; see [D-2026-08-10-01] — the agents
+expected to populate it were deregistered (#1050) or died on turn 1 (#1051).)_
