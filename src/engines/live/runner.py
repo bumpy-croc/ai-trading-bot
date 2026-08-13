@@ -12,12 +12,10 @@ import os
 import sys
 
 from src.config.constants import (
-    DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_INITIAL_BALANCE,
-    DEFAULT_MAX_DRAWDOWN,
     DEFAULT_MAX_POSITION_SIZE,
-    DEFAULT_MAX_RISK_PER_TRADE,
 )
+from src.config.risk_limits import get_risk_limits
 from src.data_providers.data_provider import DataProvider
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.engines.live.config import LiveEngineSettings
@@ -130,23 +128,26 @@ def parse_args():
     parser.add_argument("--no-cache", action="store_true", help="Disable data caching")
 
     # Risk management
+    # Unset risk flags fall through to the Board-ratified values in
+    # src/config/risk-limits.json (hydrated by RiskParameters), so the file the
+    # Board signs is the value the engine runs.
     parser.add_argument(
         "--risk-per-trade",
         type=float,
-        default=DEFAULT_BASE_RISK_PER_TRADE,
-        help="Base risk per trade (0.02 = 2% of balance)",
+        default=None,
+        help="Base risk per trade (0.02 = 2% of balance). Default: ratified limit",
     )
     parser.add_argument(
         "--max-risk-per-trade",
         type=float,
-        default=DEFAULT_MAX_RISK_PER_TRADE,
-        help="Maximum risk per trade (0.03 = 3% of balance)",
+        default=None,
+        help="Maximum risk per trade (0.03 = 3% of balance). Default: ratified limit",
     )
     parser.add_argument(
         "--max-drawdown",
         type=float,
-        default=DEFAULT_MAX_DRAWDOWN,
-        help="Maximum drawdown before stopping (0.20 = 20%)",
+        default=None,
+        help="Maximum drawdown before stopping (0.20 = 20%). Default: ratified limit",
     )
 
     # Logging and monitoring
@@ -221,6 +222,19 @@ def main():
     try:
         args = parse_args()
 
+        # Fail closed on the ratified limits before any provider or exchange
+        # construction: a missing or invalid risk-limits.json must stop the
+        # engine here, never reach a venue on silent fallback values.
+        limits = get_risk_limits()
+        logger.info(
+            "Ratified risk limits loaded (schema v%s): max_drawdown=%.2f, "
+            "max_position_size=%.2f, base_risk_per_trade=%.2f",
+            limits.schema_version,
+            limits.portfolio.max_drawdown_pct,
+            limits.position.max_position_size_pct,
+            limits.position.base_risk_per_trade_pct,
+        )
+
         # Validate configuration
         if not validate_configuration(args):
             sys.exit(1)
@@ -264,11 +278,15 @@ def main():
             )
             logger.info("Continuing without sentiment analysis...")
 
-        # Set up risk parameters
+        # Set up risk parameters. Only explicitly passed flags are forwarded;
+        # omitted ones hydrate from the ratified limits.
+        risk_flag_overrides = {
+            "base_risk_per_trade": args.risk_per_trade,
+            "max_risk_per_trade": args.max_risk_per_trade,
+            "max_drawdown": args.max_drawdown,
+        }
         risk_params = RiskParameters(
-            base_risk_per_trade=args.risk_per_trade,
-            max_risk_per_trade=args.max_risk_per_trade,
-            max_drawdown=args.max_drawdown,
+            **{key: value for key, value in risk_flag_overrides.items() if value is not None}
         )
 
         # Create trading engine. Settings are resolved here (feature flags /

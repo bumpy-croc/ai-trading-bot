@@ -11,7 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`src/config/risk-limits.json` now governs the running system** (#986, design
+  §3.5 "Hydration"). The Board-ratified limits file was previously **inert**: its
+  loader (`src/config/risk_limits.py`, shipped in #1034) had zero consumers in
+  `src/`, so the values that actually drove the engines came from
+  `src/config/constants.py`. The Board ratified a file that controlled nothing,
+  and changing a limit required a code deploy. Now `RiskParameters` defaults the
+  six ratified risk-limit fields (`base_risk_per_trade`, `max_risk_per_trade`,
+  `max_position_size`, `max_daily_risk`, `max_drawdown`,
+  `max_correlated_exposure`) to a sentinel hydrated from `get_risk_limits()` in
+  `__post_init__`, so every bare `RiskParameters()` yields ratified values by
+  construction. Explicit constructor arguments still win (strategy/caller intent,
+  clamped downstream by the engines).
+- **Fail-closed boot**: the live runner, the backtest CLI, and `ExperimentRunner`
+  call `get_risk_limits()` before any provider/exchange construction. A missing,
+  unreadable, or schema-invalid limits file now stops the engine before it can
+  reach a venue, instead of silently falling back to a constant.
+- **Risk flags on the live and backtest CLIs default to `None`** ("use the
+  ratified value") instead of hardcoded literals. This retires the drifted
+  backtest defaults, which ran at **half** live risk and 2.5x live drawdown
+  tolerance: `--risk-per-trade` 0.01 -> 0.02, `--max-risk-per-trade` 0.02 -> 0.03,
+  `--max-drawdown` 0.5 -> 0.20. Live values are unchanged (constants and the
+  ratified JSON already agreed at 0.02 / 0.03 / 0.20).
+- **Live behaviour is unchanged.** The drawdown guard's cap resolves to 0.20
+  before and after (matching the deployed prod boot log `hard cap=20.0%`), and
+  the effective live position bound stays 0.20 (`railway.json` pins
+  `--max-position 0.20`). Bare-default `RiskParameters.max_position_size` moves
+  0.10 -> 0.20 as the design predicted, but no live sizing path is affected: prod's
+  entries are bounded by the engine-level `--max-position` knob, not by this field.
+
 ### Added
+- Parity tripwire tests (design §3.9.4): `RiskParameters()` must equal the
+  ratified loader values field-by-field, so any future drift between the file the
+  Board signs and the values the engines construct fails CI
+  (`tests/unit/config/test_risk_parameters_hydration.py`), plus boot-wiring and
+  fail-closed tests for the three entry points
+  (`tests/unit/config/test_risk_limits_boot_wiring.py`).
 - **HyperGrowth/ETHUSDT is long-only by explicit configuration** (#1020,
   board-approved proposal 2026-07-12-01): `MLBasicSignalGenerator` gains an
   `allow_shorts` flag (default `True`) that, when `False`, withholds the

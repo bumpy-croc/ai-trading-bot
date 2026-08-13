@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+from src.config.risk_limits import get_risk_limits
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
@@ -462,6 +463,9 @@ class ExperimentRunner:
                 )
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:
+        # Fail closed on the ratified limits before any strategy/provider setup.
+        get_risk_limits()
+
         strategy = self._load_strategy(
             config.strategy_name,
             factory_kwargs=config.factory_kwargs or None,
