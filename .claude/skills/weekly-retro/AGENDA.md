@@ -13,7 +13,4 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(none — cleared by the 2026-07-20 retro. The 11 items present here were all actioned in the
-2026-07-13 retro PR #1026, which is CI-green but still OPEN pending a merge-conflict resolution;
-see the retro log entry [D-2026-07-20-01] for the per-item map and the recommendation to
-resolve+merge #1026 so that distillate lands.)_
+_(none — cleared by the 2026-07-27 retro.)_
