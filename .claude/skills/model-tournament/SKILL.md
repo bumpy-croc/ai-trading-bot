@@ -79,7 +79,8 @@ relayed by coordinators against the filesystem/logs before acting on them.
    staging paper ≥48h before any promotion talk; a backtest win buys a trial, never a
    deployment).
 2. GitHub issue (`type:experiment`, `owned-by:quant-researcher`) + `.claude/state/log.md`
-   entry + scoreboard row (`docs/research/model-scoreboard.md` if present).
+   entry + a promotion row in `docs/research/model-promotions.md` if the tournament moves a
+   `latest` symlink (the append-only promotion log; there is no `model-scoreboard.md`).
 3. Remove the disposable worktree; delete smoke/stray model artifacts; never commit
    experiment-local pipeline patches without the PM's explicit upstreaming decision.
 
