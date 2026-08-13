@@ -7,7 +7,7 @@ import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 # Ensure project root and src are in sys.path for absolute imports
 from src.infrastructure.runtime.paths import get_project_root
@@ -251,12 +251,16 @@ def _get_date_range(args):
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
+        from src.config.risk_limits import get_risk_limits
         from src.data_providers.feargreed_provider import FearGreedProvider
         from src.engines.backtest.engine import Backtester
         from src.engines.shared.risk_configuration import resolve_strategy_max_position_size
         from src.risk.risk_manager import RiskParameters
 
         configure_logging()
+
+        # Fail closed on the ratified limits before any data-provider setup.
+        get_risk_limits()
 
         start_date, end_date = _get_date_range(ns)
 
@@ -312,10 +316,16 @@ def _handle(ns: argparse.Namespace) -> int:
             sentiment_provider = FearGreedProvider()
             logger.info("Using sentiment analysis in backtest")
 
-        risk_params_kwargs = {
+        # Only explicitly passed risk flags are forwarded; omitted ones hydrate
+        # from the ratified limits, so backtests run at live-representative risk
+        # by default instead of the literals they had drifted to.
+        risk_flag_overrides = {
             "base_risk_per_trade": ns.risk_per_trade,
             "max_risk_per_trade": ns.max_risk_per_trade,
             "max_drawdown": ns.max_drawdown,
+        }
+        risk_params_kwargs: dict[str, Any] = {
+            key: value for key, value in risk_flag_overrides.items() if value is not None
         }
         if ns.max_position_size is not None:
             if not 0 < ns.max_position_size <= 1:
@@ -488,9 +498,17 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
     )
     p.add_argument(
-        "--risk-per-trade", type=float, default=0.01, help="Risk per trade - 1 percent equals 0.01"
+        "--risk-per-trade",
+        type=float,
+        default=None,
+        help="Risk per trade - 1 percent equals 0.01. Default: ratified limit",
     )
-    p.add_argument("--max-risk-per-trade", type=float, default=0.02, help="Maximum risk per trade")
+    p.add_argument(
+        "--max-risk-per-trade",
+        type=float,
+        default=None,
+        help="Maximum risk per trade. Default: ratified limit",
+    )
     p.add_argument(
         "--use-sentiment", action="store_true", help="Use sentiment analysis in backtest"
     )
@@ -517,8 +535,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--max-drawdown",
         type=float,
-        default=0.5,
-        help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
+        default=None,
+        help="Maximum drawdown before stopping. Default: ratified limit",
     )
     p.add_argument(
         "--max-position-size",
