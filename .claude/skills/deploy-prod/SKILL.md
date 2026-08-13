@@ -64,6 +64,15 @@ railway logs -e production -s "Trading Bot" | grep -iE \
 - The intended model resolves natively — **zero cross-symbol/mismatch warnings**;
 - Open positions re-adopted with their stop-loss orders tracked;
 - Alert channel line (webhook configured, or the loud unset warning if expected).
+- **Schema/alembic check — passes when "Schema matches SQLAlchemy models" AND (`0 pending`
+  revisions OR the redundancy guard skipped a migration *because the schema already matched*).**
+  A stale alembic stamp with a matching schema is a bookkeeping divergence, **PASS-WITH-NOTE**, not
+  a failure — the criterion "alembic 0 pending" cannot literally pass on prod when a migration's
+  effect was already present, so the guard correctly no-ops and leaves the stamp behind (0712
+  promote: prod stamp 0012 vs head 0013 `widen_event_type`, #968 — schema already correct width,
+  staging by contrast ran it to 0013). Reconcile by stamping prod in a maintenance window
+  (single-row `alembic_version` write, GH #1025) — never treat schema-match + stale stamp as a
+  deploy blocker.
 
 **Gotcha:** prod REUSES its active session row across restarts — do NOT wait for a new
 `trading_sessions` row as a health signal; watch the startup banner, status ticks, and
