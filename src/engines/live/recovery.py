@@ -85,6 +85,7 @@ class RecoveryEngineState(Protocol):
     current_balance: float
     _close_only_mode: bool
     _recovered_inactive_session_id: int | None
+    _history_seed_session_id: int | None
 
     def _strategy_name(self) -> str: ...
 
@@ -145,6 +146,15 @@ class LiveSessionRecoverer:
                 return None
 
             logger.info("🔍 Found %s session #%s", source, session_id)
+
+            # Durable seeding lineage (#1036): this session holds the
+            # account_history rows the restart-safe risk seeders must baseline
+            # from. Recorded for BOTH recovery paths (reused active session and
+            # clean restart) and never cleared — unlike
+            # _recovered_inactive_session_id, whose lifetime belongs to the #668
+            # carry-forward guard, which clears it during startup before the
+            # first loop iteration runs.
+            state._history_seed_session_id = session_id
 
             # Clean restart (inactive session): remember it so start() can carry its
             # OPEN positions forward into the new session — INDEPENDENT of whether a

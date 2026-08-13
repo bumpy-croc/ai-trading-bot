@@ -19,7 +19,9 @@ new entries when tripped). This enforcer adds the loop-driven half:
   baseline from the day's first ``account_history`` snapshot
   (``get_first_snapshot_of_day``, equity basis), so an intraday restart does not
   re-anchor the baseline to current equity and silently disarm the daily-loss
-  halt.
+  halt. Which prior session holds those rows comes from ``seed_lineage`` (#1036)
+  — NOT from ``_recovered_inactive_session_id``, which startup clears before the
+  first loop iteration, so on carry-forward boots this seeding never fired.
 - **Restart-safe drawdown peak (#986 gap B)**: on boot it seeds the breaker's
   drawdown peak from the durable ``account_history`` session equity max
   (``get_session_peak_equity``), the same session-scoped pattern the
@@ -32,6 +34,12 @@ new entries when tripped). This enforcer adds the loop-driven half:
   it logs "would halt", writes a ``CIRCUIT_BREAKER_DRY_RUN`` ``system_events``
   row (durable would-have-tripped evidence carrying the equity breakdown and
   peak provenance, #968), and takes no protective action. ``off`` is fully inert.
+- **Honest seeding provenance**: the ``peak_seed`` field on every trip event is
+  one of ``db_session_max`` (seeded from durable history), ``self_anchored``
+  (nothing to seed from — a genuinely fresh account), or ``seed_unavailable``
+  (history was expected but could not be obtained; a DEFECT, logged at WARNING).
+  The third value exists because #1036 reported the first two for 30 days on
+  staging while the seeding had in fact never run.
 - **Surfacing**: a trip emits a ``risk_event`` + a CRITICAL ``system_events`` row
   so the monitoring dashboard and alerting pick it up.
 
@@ -49,6 +57,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
 from src.database.models import EventType
+from src.engines.live.monitoring.seed_lineage import (
+    PEAK_SEED_DB_SESSION_MAX,
+    PEAK_SEED_SELF_ANCHORED,
+    PEAK_SEED_UNAVAILABLE,
+    resolve_history_lineage,
+)
 from src.infrastructure.logging.events import log_risk_event
 from src.risk.circuit_breaker import (
     BASIS_BALANCE_DEGRADED,
@@ -74,6 +88,10 @@ class CircuitBreakerEngineState(Protocol):
 
     current_balance: float
     trading_session_id: int | None
+    # Durable seeding lineage (#1036): set once at recovery, never cleared.
+    # ``_recovered_inactive_session_id`` is NOT usable here — the #668
+    # carry-forward guard clears it before the first loop iteration.
+    _history_seed_session_id: int | None
     _recovered_inactive_session_id: int | None
     db_manager: DatabaseManager
     _close_only_mode: bool
@@ -118,11 +136,16 @@ class CircuitBreakerEnforcer:
         self._seeded = False
         self._seed_attempts = 0
         self._halt_notified = False
-        self._peak_seed_provenance = "self_anchored"
+        self._peak_seed_provenance = PEAK_SEED_SELF_ANCHORED
 
     @property
     def breaker(self) -> AccountCircuitBreaker:
         return self._breaker
+
+    @property
+    def peak_seed_provenance(self) -> str:
+        """Where the breaker's drawdown peak came from (see ``seed_lineage``)."""
+        return self._peak_seed_provenance
 
     def check(self) -> None:
         """Evaluate the breaker against current TRUE equity; enforce halts."""
@@ -242,29 +265,67 @@ class CircuitBreakerEnforcer:
         session-scoped seeding the ``MaxDrawdownGuard`` uses (#1001), including
         the recovered-inactive-session fallback on clean restarts.
 
-        Best-effort: on any failure or missing rows, leaves the breaker to
-        self-anchor from current equity. After ``MAX_SEED_ATTEMPTS`` deferrals we
-        stop trying (the breaker is already self-anchored to a live baseline)."""
+        Prior-session lineage comes from ``resolve_history_lineage`` (#1036),
+        NOT from ``_recovered_inactive_session_id`` — startup clears that field
+        before the first loop iteration, so on the carry-forward boot path the
+        seeder used to read an empty value and self-anchor silently.
+
+        Deferral policy: an empty-but-successful read is terminal only when no
+        prior session exists (a genuinely fresh session has nothing to seed
+        from). When history WAS expected, the empty read is the documented
+        first-snapshot race — it is retried, bounded by ``MAX_SEED_ATTEMPTS``,
+        and on exhaustion the provenance latches to ``seed_unavailable`` with a
+        WARNING. Retrying is safe because the breaker keeps evaluating while
+        unseeded: it self-anchors the peak from live equity and ``seed_peak``
+        only ever raises it."""
         state = self._state
         self._seed_attempts += 1
+        lineage = resolve_history_lineage(state)
         if state.db_manager is None or state.trading_session_id is None:
             if self._seed_attempts >= MAX_SEED_ATTEMPTS:
-                self._seeded = True  # give up; breaker self-anchors from current equity
+                self._finalize_unseeded(
+                    "trading session never resolved", lineage.describe, state.trading_session_id
+                )
             return
         try:
             snapshot = state.db_manager.get_first_snapshot_of_day(
                 session_id=state.trading_session_id,
                 target_date=now.date(),
-                fallback_session_id=getattr(state, "_recovered_inactive_session_id", None),
+                fallback_session_id=lineage.fallback_session_id,
             )
             session_peak = state.db_manager.get_session_peak_equity(
                 session_id=state.trading_session_id,
-                fallback_session_id=getattr(state, "_recovered_inactive_session_id", None),
+                fallback_session_id=lineage.fallback_session_id,
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("Circuit-breaker baseline/peak seed deferred: %s", e)
             if self._seed_attempts >= MAX_SEED_ATTEMPTS:
-                self._seeded = True
+                self._finalize_unseeded(
+                    f"account_history read kept failing ({e})",
+                    lineage.describe,
+                    state.trading_session_id,
+                )
+            return
+
+        if session_peak is None and lineage.history_expected:
+            # Durable history was expected but no row came back — the ~3s
+            # first-snapshot race, or a lost lineage. Retry rather than latch.
+            if self._seed_attempts < MAX_SEED_ATTEMPTS:
+                # Truthful while unresolved: a trip during the retry window must
+                # not report `self_anchored`, which means "nothing to seed from".
+                self._peak_seed_provenance = PEAK_SEED_UNAVAILABLE
+                logger.info(
+                    "Circuit-breaker seeding deferred: no account_history rows yet for "
+                    "session %s / %s (attempt %d/%d)",
+                    state.trading_session_id,
+                    lineage.describe,
+                    self._seed_attempts,
+                    MAX_SEED_ATTEMPTS,
+                )
+                return
+            self._finalize_unseeded(
+                "account_history returned no rows", lineage.describe, state.trading_session_id
+            )
             return
 
         if snapshot is not None:
@@ -285,13 +346,39 @@ class CircuitBreakerEnforcer:
         peak = self._as_positive_float(session_peak)
         if peak is not None:
             self._breaker.seed_peak(peak)
-            self._peak_seed_provenance = "db_session_max"
+            self._peak_seed_provenance = PEAK_SEED_DB_SESSION_MAX
             logger.info(
-                "Circuit-breaker drawdown peak seeded from account_history session max: $%.2f",
+                "Circuit-breaker drawdown peak seeded from account_history session max: "
+                "$%.2f (%s)",
                 peak,
+                lineage.describe,
             )
-        # No session history yet -> peak self-anchors from current equity.
+        else:
+            # No prior session and no rows: a genuinely fresh account. Anchoring
+            # to current equity is correct, and the provenance says so.
+            self._peak_seed_provenance = PEAK_SEED_SELF_ANCHORED
         self._seeded = True
+
+    def _finalize_unseeded(self, reason: str, lineage: str, session_id: int | None) -> None:
+        """Give up on durable seeding and record the miss honestly.
+
+        This is NOT the fresh-account self-anchor: durable history was expected
+        and could not be obtained, so both halts are now measured from the
+        post-restart equity. It must be loud and it must be visible in the
+        ``peak_seed`` provenance carried on every trip event.
+        """
+        self._seeded = True
+        self._peak_seed_provenance = PEAK_SEED_UNAVAILABLE
+        logger.warning(
+            "Circuit-breaker durable seeding FAILED after %d attempts (%s; session %s, %s) — "
+            "daily baseline and drawdown peak stay anchored to post-restart equity "
+            "(peak_seed=%s). A mid-drawdown restart is measuring from the depressed value.",
+            self._seed_attempts,
+            reason,
+            session_id,
+            lineage,
+            PEAK_SEED_UNAVAILABLE,
+        )
 
     @staticmethod
     def _as_positive_float(value: object) -> float | None:

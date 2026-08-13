@@ -19,15 +19,24 @@ in the same iteration — e.g. a stop-loss fill — blocks that iteration's entr
 instead of leaking one bar of fresh exposure (2026-07-12 risk audit P1).
 
 Peak-equity source: the AUTHORITATIVE baseline is the ``account_history``
-session max (active session plus the recovered inactive session on clean
-restarts), recomputed on boot so a restart cannot reset the drawdown baseline
-— a bot restarted mid-breach re-trips naturally on its first loop iteration.
-Fallback order is DB session max → current recovered balance; the in-memory
-PerformanceTracker peak is NEVER a seed candidate (it can initialize from the
-CONFIGURED balance — the optimistic book value that mis-seeded prod at $100
-vs true equity ~$84 on 2026-07-04). A failed DB read defers seeding to the
-next cycle (bounded by ``MAX_SEED_ATTEMPTS``) instead of latching a
-half-seeded baseline.
+session max (active session plus the prior session on clean restarts, resolved
+via ``seed_lineage``), recomputed on boot so a restart cannot reset the
+drawdown baseline — a bot restarted mid-breach re-trips naturally on its first
+loop iteration. Fallback order is DB session max → current recovered balance;
+the in-memory PerformanceTracker peak is NEVER a seed candidate (it can
+initialize from the CONFIGURED balance — the optimistic book value that
+mis-seeded prod at $100 vs true equity ~$84 on 2026-07-04). A failed DB read
+defers seeding to the next cycle (bounded by ``MAX_SEED_ATTEMPTS``) instead of
+latching a half-seeded baseline.
+
+When the durable peak is EXPECTED (a prior session exists) but the read comes
+back empty — the first-snapshot race of #1036, where the new session's opening
+``account_history`` row lands seconds after the first loop iteration — the
+guard arms provisionally from the current balance so the cap is never unarmed,
+records ``peak_seed=seed_unavailable``, and keeps retrying to ratchet the peak
+UP (``raise_peak``) until the durable value is readable or the attempt budget
+is spent. An empty read with NO prior session is a genuinely fresh account and
+self-anchors terminally, as before.
 
 Baseline policy (PM decision, 2026-07-04): the peak baseline is the peak TRUE
 equity since the last reconciled reset — i.e. session-scoped history, NOT
@@ -72,6 +81,13 @@ from src.config.constants import (
 )
 from src.config.feature_flags import is_enabled
 from src.database.models import EventType
+from src.engines.live.monitoring.seed_lineage import (
+    PEAK_SEED_DB_SESSION_MAX,
+    PEAK_SEED_SELF_ANCHORED,
+    PEAK_SEED_UNAVAILABLE,
+    HistoryLineage,
+    resolve_history_lineage,
+)
 from src.infrastructure.logging.events import log_risk_event
 
 if TYPE_CHECKING:
@@ -183,6 +199,21 @@ class MaxDrawdownGuard:
             self._peak = max(valid, default=0.0)
         self._seeded = True
 
+    def raise_peak(self, candidate: float | None) -> bool:
+        """Ratchet the peak UP from a late-arriving durable candidate (#1036).
+
+        Used when the boot-time ``account_history`` read came back empty
+        because the session's first snapshot had not landed yet: the guard arms
+        immediately from the current balance (never unarmed) and the true peak
+        is raised as soon as it becomes readable. Only ever raises — a stale or
+        lower candidate can never erase drawdown already observed.
+        """
+        value = self._as_valid(candidate)
+        if value is None or value <= self._peak:
+            return False
+        self._peak = value
+        return True
+
     @staticmethod
     def _as_valid(candidate: float | None) -> float | None:
         """Coerce a peak candidate to a finite positive float, else None."""
@@ -278,6 +309,10 @@ class DrawdownEngineState(Protocol):
 
     current_balance: float
     trading_session_id: int | None
+    # Durable seeding lineage (#1036): set once at recovery, never cleared.
+    # ``_recovered_inactive_session_id`` is NOT usable here — the #668
+    # carry-forward guard clears it before the first loop iteration.
+    _history_seed_session_id: int | None
     _recovered_inactive_session_id: int | None
     db_manager: DatabaseManager
     _close_only_mode: bool
@@ -311,11 +346,18 @@ class MaxDrawdownEnforcer:
         self._guard = guard
         self._breach_notified = False
         self._seed_attempts = 0
+        self._peak_seed_provenance = PEAK_SEED_SELF_ANCHORED
+        self._history_upgrade_pending = False
 
     @property
     def guard(self) -> MaxDrawdownGuard:
         """The underlying drawdown guard (exposed for status/diagnostics)."""
         return self._guard
+
+    @property
+    def peak_seed_provenance(self) -> str:
+        """Where the armed peak came from (see ``seed_lineage`` constants)."""
+        return self._peak_seed_provenance
 
     def check(self) -> None:
         """Assess current drawdown; enforce the hard cap on breach."""
@@ -343,10 +385,15 @@ class MaxDrawdownEnforcer:
         state = self._state
         try:
             balance = float(state.current_balance)
-            if not self._guard.seeded and not self._try_seed(
-                balance, count_deferral=count_seed_deferral
-            ):
+            was_seeded = self._guard.seeded
+            if not was_seeded and not self._try_seed(balance, count_deferral=count_seed_deferral):
                 return  # seeding deferred (DB/session not ready); retry next cycle
+            # Only on a LATER iteration: re-reading the same DB state within the
+            # iteration that just armed provisionally cannot tell us anything new.
+            if was_seeded and self._history_upgrade_pending and count_seed_deferral:
+                # Armed provisionally from the current balance; keep trying to
+                # ratchet up to the durable peak (bounded, loop-check only).
+                self._upgrade_peak_from_history()
             assessment = self._guard.observe(balance)
         except Exception as e:
             # Monitoring must never take down the trading loop.
@@ -421,6 +468,7 @@ class MaxDrawdownEnforcer:
 
         if count_deferral:
             self._seed_attempts += 1
+        lineage = resolve_history_lineage(state)
         session_id = state.trading_session_id
         db_read_ok = False
         db_peak: float | None = None
@@ -435,11 +483,11 @@ class MaxDrawdownEnforcer:
             try:
                 db_peak = state.db_manager.get_session_peak_balance(
                     session_id,
-                    fallback_session_id=state._recovered_inactive_session_id,
+                    fallback_session_id=lineage.fallback_session_id,
                 )
-                # None here means the read SUCCEEDED but the session has no
-                # snapshots yet — a fresh session legitimately baselines at
-                # the current balance.
+                # None here means the read SUCCEEDED but neither session has a
+                # snapshot yet — legitimate for a genuinely fresh session, a
+                # DEFECT (or the first-snapshot race) when history was expected.
                 db_read_ok = True
             except Exception as e:
                 logger.warning(
@@ -460,14 +508,96 @@ class MaxDrawdownEnforcer:
                 self._seed_attempts,
                 balance,
             )
+            self._arm(balance, None, session_id, lineage, PEAK_SEED_UNAVAILABLE)
+            return True
 
+        if db_peak is None and lineage.history_expected:
+            # The durable peak is expected but not readable yet (the documented
+            # first-snapshot race, or a lost lineage). Arm NOW from the current
+            # balance so the cap is never left unarmed, flag the provenance
+            # honestly, and keep ratcheting toward the durable peak.
+            self._history_upgrade_pending = True
+            self._arm(balance, None, session_id, lineage, PEAK_SEED_UNAVAILABLE)
+            return True
+
+        self._arm(
+            balance,
+            db_peak,
+            session_id,
+            lineage,
+            PEAK_SEED_DB_SESSION_MAX if db_peak is not None else PEAK_SEED_SELF_ANCHORED,
+        )
+        return True
+
+    def _arm(
+        self,
+        balance: float,
+        db_peak: float | None,
+        session_id: int | None,
+        lineage: HistoryLineage,
+        provenance: str,
+    ) -> None:
+        """Seed the guard's peak and log where the baseline came from."""
         self._guard.seed_peak(balance, db_peak)
-        logger.info(
-            "Max-drawdown guard armed: peak=$%.2f, hard cap=%.1f%% (session %s, "
-            "account_history peak %s)",
+        self._peak_seed_provenance = provenance
+        log = logger.warning if provenance == PEAK_SEED_UNAVAILABLE else logger.info
+        log(
+            "Max-drawdown guard armed: peak=$%.2f, hard cap=%.1f%% (session %s, %s, "
+            "account_history peak %s, peak_seed=%s)",
             self._guard.peak_balance,
             self._guard.max_drawdown_pct * 100,
             session_id,
+            lineage.describe,
             f"${db_peak:,.2f}" if db_peak is not None else "unavailable",
+            provenance,
         )
-        return True
+
+    def _upgrade_peak_from_history(self) -> None:
+        """Retry the durable peak read after a provisional self-anchored arm.
+
+        Bounded by the shared ``MAX_SEED_ATTEMPTS`` budget. Success ratchets the
+        peak UP (never down) and corrects the provenance; exhaustion stops the
+        retries and leaves a WARNING naming the sessions that were searched, so
+        a silently self-anchored cap is never mistaken for a seeded one.
+        """
+        state = self._state
+        self._seed_attempts += 1
+        lineage = resolve_history_lineage(state)
+        session_id = state.trading_session_id
+        db_peak: float | None = None
+        read_ok = False
+        if state.db_manager is not None and session_id is not None:
+            try:
+                db_peak = state.db_manager.get_session_peak_balance(
+                    session_id, fallback_session_id=lineage.fallback_session_id
+                )
+                read_ok = True
+            except Exception as e:
+                logger.warning("Max-drawdown guard peak upgrade read failed: %s", e)
+
+        if read_ok and db_peak is not None:
+            self._history_upgrade_pending = False
+            self._peak_seed_provenance = PEAK_SEED_DB_SESSION_MAX
+            raised = self._guard.raise_peak(db_peak)
+            logger.info(
+                "Max-drawdown guard peak seeded from account_history after a deferred "
+                "read: $%.2f (%s) — peak now $%.2f%s",
+                db_peak,
+                lineage.describe,
+                self._guard.peak_balance,
+                "" if raised else " (already higher; unchanged)",
+            )
+            return
+
+        if self._seed_attempts >= MAX_SEED_ATTEMPTS:
+            self._history_upgrade_pending = False
+            logger.warning(
+                "Max-drawdown guard: durable account_history peak never became available "
+                "after %d attempts (session %s, %s) — the cap stays anchored to the "
+                "boot balance $%.2f (peak_seed=%s)",
+                self._seed_attempts,
+                session_id,
+                lineage.describe,
+                self._guard.peak_balance,
+                PEAK_SEED_UNAVAILABLE,
+            )

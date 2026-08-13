@@ -11,6 +11,7 @@ from src.engines.live.monitoring.circuit_breaker_enforcer import (
     MAX_SEED_ATTEMPTS,
     CircuitBreakerEnforcer,
 )
+from src.engines.live.monitoring.seed_lineage import PEAK_SEED_UNAVAILABLE
 from src.risk.circuit_breaker import AccountCircuitBreaker
 
 pytestmark = pytest.mark.unit
@@ -237,13 +238,18 @@ def test_no_durable_peak_self_anchors():
     assert s._close_only_mode is False
 
 
-def test_peak_seed_failure_defers_then_arms_self_anchored():
+def test_peak_seed_failure_defers_then_reports_unavailable():
+    """A never-resolved session is a seeding MISS, not a fresh account (#1036).
+
+    ``self_anchored`` means "there was genuinely nothing to seed from"; a
+    lookup that never happened must not borrow that reassurance.
+    """
     s = _State(session_id=None)  # session not resolved: seeding must defer
     enf = CircuitBreakerEnforcer(s, _breaker("active"))
     for _ in range(MAX_SEED_ATTEMPTS):
         enf.check()
     assert enf._seeded is True
-    assert enf._peak_seed_provenance == "self_anchored"
+    assert enf.peak_seed_provenance == PEAK_SEED_UNAVAILABLE
 
 
 # --- equity-read fault isolation ----------------------------------------------

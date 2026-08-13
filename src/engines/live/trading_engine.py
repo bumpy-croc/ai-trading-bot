@@ -646,6 +646,13 @@ class LiveTradingEngine:
         # new session (#668); None when recovery took the active/crash path or
         # found no recent session.
         self._recovered_inactive_session_id: int | None = None
+        # Durable seeding lineage (#1036): the session whose account_history
+        # rows the restart-safe risk seeders (drawdown guard peak, circuit
+        # breaker baseline/peak) must baseline from. Set once by recovery and
+        # never cleared — _recovered_inactive_session_id above is cleared by
+        # the #668 carry-forward guard before the first loop iteration, which
+        # silently disarmed both seeders on carry-forward boots.
+        self._history_seed_session_id: int | None = None
 
     def _init_dynamic_risk_manager(self) -> None:
         """Build the dynamic-risk manager now that the database is available."""
