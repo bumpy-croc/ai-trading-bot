@@ -101,6 +101,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior change when neither flag is passed; the live path cannot be pinned.
 
 ### Fixed
+- **Macro-event calendar refilled through Jan 2027** (#1053): `config/macro_events.json`
+  had no event newer than 2026-07-14, so the macro de-risk guard had zero upcoming
+  coverage and its staleness canary
+  (`test_default_config_has_upcoming_coverage`) failed on every PR to `develop`
+  from 2026-07-28 onward. Appended the confirmed remaining 2026 BLS CPI releases
+  (08:30 ET) and Federal Reserve FOMC decision dates (14:00 ET on the final
+  meeting day), plus the Fed's tentative Jan 2027 meeting — UTC offsets account
+  for the 2026-11-01 EDT→EST switch. Config-only; no engine change. Nearest
+  de-risk window opens 2026-09-11T00:30Z (Aug CPI), none active at merge time.
+
 - **Account circuit breakers now measure true equity and survive restarts**
   (#986 items, per log.md [D-2026-07-14-03]; refs #845/#847/#1001 — nothing
   armed: the `account_circuit_breakers` flag stays `off`):
