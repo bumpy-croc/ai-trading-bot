@@ -13,36 +13,6 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-- **2026-07-07/10 — wake-loss pattern (6+ occurrences).** Agents end turns on background
-  waits/monitors that never fire (worst during laptop-lid sleep). Proposed rule for
-  delegation-protocol: never end a turn on a background wait you can complete synchronously
-  in-turn; if you must wait, the PM arms the backstop. Structural backstop now exists:
-  `pm-fleet-watchdog` scheduled task (hourly, fires on app relaunch) — reference it in the rule.
-- **2026-07-10 — "component-complete ≠ runnable" (PR #948 → halt → PR #950).** Well-tested
-  components that couldn't run end-to-end from the CLI halted tournament Phase 3. Rule: multi-piece
-  scaffolding's definition-of-done includes per-consumer end-to-end dry-run acceptance tests through
-  the REAL CLI entrypoints. Evidence of value: those tests then caught 4 further real bugs.
-- **2026-07-10 — claude-review bot findings ignored by process.** A real #838-class units bug sat
-  as an inline bot comment on #948 while both dispatched reviewers missed it; merge flow only read
-  the bot's pass/fail status. Rule: every merge flow harvests
-  `gh api repos/OWNER/REPO/pulls/N/comments` and dispositions each bot finding explicitly.
-- **2026-07-10 — credential written to disk.** An agent saved a live ECR authorization token to a
-  plaintext scratchpad file (PM caught + deleted). LESSONS rule: never write credentials to files;
-  pipe `aws ecr get-login-password | docker login --password-stdin` in one command.
-- **2026-07-10 — nightly pruner deleted a live agent's worktree mid-tournament.** Partially fixed:
-  `eod-worktree-prune` now hard-skips `.agent-active` sentinels + 48h age floor. Remaining: codify
-  the sentinel convention in delegation-protocol (every agent worktree gets `touch .agent-active`
-  at creation).
-- **2026-07-10 — shared-venv `atb` staleness trap.** The console script is an editable install
-  pinned to ONE worktree; bare `atb` from any other worktree silently executes that worktree's
-  code. Workaround in use: `PYTHONPATH=<worktree> python3 -m cli.__main__`. LESSONS entry + consider
-  a GH issue for a real fix (warn when cwd repo-root ≠ installed source root).
-- **2026-07-11 — cwd-relative model registry path.** `DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"`
-  resolves against process cwd → produced a silent all-HOLD/0-trade exam result from the wrong
-  directory. LESSONS entry; consider GH issue to anchor it to module/repo root.
-- **2026-07-10 — review-summary completeness.** Reviewer agents must enumerate EVERY P-level
-  finding from their findings file in the summary returned to the PM — a finding that only lives in
-  the file effectively doesn't exist for the fix round.
-- **2026-07-07/10 — transient 401 auth failures killed agents mid-dispatch (2×).**
-  Resume-with-state recovers cleanly; note as a known transient in delegation-protocol's backstop
-  guidance (retry the resume once before diagnosing deeper).
+_(none — cleared by the 2026-08-10 retro. The file was empty on arrival and stayed empty for 14
+days despite that window's findings all being agenda-worthy; see [D-2026-08-10-01] — the agents
+expected to populate it were deregistered (#1050) or died on turn 1 (#1051).)_

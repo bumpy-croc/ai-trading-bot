@@ -138,6 +138,11 @@ class PredictionEngine:
         self._feature_extraction_time = 0.0
         # Live-context inference timeouts (deterministic contexts never time out)
         self._inference_timeout_count = 0
+        # Current run of back-to-back timeouts; any successful inference
+        # resets it. Past the configured threshold the engine reports itself
+        # degraded (#927) — a permanently hung model must not look healthy
+        # while every bar silently degrades to HOLD.
+        self._consecutive_timeout_count = 0
         # Track per-model inference times with bounded size to prevent memory leaks
         self._model_inference_times: dict[str, deque[float]] = {}
         # Track feature extraction times for averaging
@@ -746,7 +751,29 @@ class PredictionEngine:
             "cache_hits": self._cache_hits,
             "cache_misses": self._cache_misses,
             "inference_timeouts": self._inference_timeout_count,
+            "consecutive_inference_timeouts": self._consecutive_timeout_count,
         }
+
+    @property
+    def inference_timeout_count(self) -> int:
+        """Total live inference timeouts this session."""
+        return self._inference_timeout_count
+
+    @property
+    def consecutive_inference_timeouts(self) -> int:
+        """Current run of back-to-back live inference timeouts."""
+        return self._consecutive_timeout_count
+
+    @property
+    def timeout_escalation_active(self) -> bool:
+        """True when consecutive timeouts have reached the escalation threshold.
+
+        Signals a likely hung/overloaded model: every bar is degrading to
+        HOLD, so operators must be paged (#927). A threshold of 0 disables
+        escalation. Cleared automatically by the next successful inference.
+        """
+        threshold = self.config.inference_timeout_escalation_threshold
+        return threshold > 0 and self._consecutive_timeout_count >= threshold
 
     def clear_caches(self) -> None:
         """Clear all caches (feature and prediction)"""
@@ -864,6 +891,25 @@ class PredictionEngine:
             health["components"]["configuration"] = {"status": "error", "error": str(e)}
             health["status"] = "degraded"
 
+        # Check live inference timeouts (#927): a permanently hung model must
+        # not report healthy while every prediction degrades to HOLD.
+        threshold = self.config.inference_timeout_escalation_threshold
+        inference_health: dict[str, Any] = {
+            "status": "healthy",
+            "inference_timeouts": self._inference_timeout_count,
+            "consecutive_timeouts": self._consecutive_timeout_count,
+            "escalation_threshold": threshold,
+        }
+        if self.timeout_escalation_active:
+            inference_health["status"] = "error"
+            inference_health["error"] = (
+                f"{self._consecutive_timeout_count} consecutive live inference "
+                f"timeouts (threshold {threshold}) — model may be hung; "
+                "predictions are degrading to no-signal every bar"
+            )
+            health["status"] = "degraded"
+        health["components"]["inference"] = inference_health
+
         return health
 
     # Private methods
@@ -890,9 +936,11 @@ class PredictionEngine:
         """
         timeout_seconds = self._get_timeout_seconds()
         if timeout_seconds is None:
-            return func(*args)
+            result = func(*args)
+            self._consecutive_timeout_count = 0
+            return result
         try:
-            return run_with_timeout(
+            result = run_with_timeout(
                 func,
                 args=args,
                 timeout_seconds=timeout_seconds,
@@ -900,16 +948,20 @@ class PredictionEngine:
             )
         except InfraTimeoutError as timeout_err:
             self._inference_timeout_count += 1
+            self._consecutive_timeout_count += 1
             logger.warning(
                 "%s exceeded live inference timeout of %.1fs — substituting no-signal "
-                "result (total timeouts this session: %d)",
+                "result (consecutive timeouts: %d, total this session: %d)",
                 operation_name,
                 timeout_seconds,
+                self._consecutive_timeout_count,
                 self._inference_timeout_count,
             )
             raise ModelInferenceTimeoutError(
                 f"{operation_name} timeout after {timeout_seconds}s"
             ) from timeout_err
+        self._consecutive_timeout_count = 0
+        return result
 
     def _validate_input_data(self, data: pd.DataFrame) -> None:
         """Validate input data has required columns and sufficient length"""

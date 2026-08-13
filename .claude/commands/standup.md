@@ -9,7 +9,7 @@ Full situational cycle. Dispatches specialists, synthesizes a Board Brief, recor
 Read (cheap, sequential):
 
 1. `.claude/state/charter.md` — if any `TODO` remains in mission / autonomy / escalation, **STOP**, print a one-line message telling the human which sections to fill, exit.
-2. `.claude/state/risk-limits.json`.
+2. `src/config/risk-limits.json`.
 3. Tail of `.claude/state/log.md` (last ~50 lines).
 4. `ls .claude/state/proposals/*.md` and `ls .claude/state/incidents/*.md`; filter `status: open` from frontmatter.
 5. Yesterday's brief if present under `docs/research/daily-briefs/` — note deltas.
@@ -22,7 +22,7 @@ Send these in ONE message as three Agent tool calls:
 
 - `market-analyst`: "Run your standard pre-market protocol for symbols listed in `.claude/state/charter.md`. Save brief to `docs/research/market-briefs/`. Return a 5-bullet summary."
 - `live-ops`: "Standard health snapshot. Save to `docs/research/ops-snapshots/`. Return severity + anomalies."
-- `risk-officer`: "Live-monitor mode. Use `.claude/state/risk-limits.json` as the canonical thresholds. Return verdict + top 3 open risks."
+- `risk-officer`: "Live-monitor mode. Use `src/config/risk-limits.json` as the canonical thresholds. Return verdict + top 3 open risks."
 
 Wait for all three.
 

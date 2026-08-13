@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -33,6 +34,7 @@ from src.strategies import (
 )
 from src.strategies.components import Strategy
 from src.strategies.exam_target_redesign import (
+    MODEL_VERSION_OVERRIDE_ENV_VAR,
     create_exam_binary_direction_strategy,
     create_exam_meta_label_strategy,
     create_exam_smoothed_return_strategy,
@@ -42,12 +44,40 @@ from src.trading.symbols.factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")
 
+# Registry model type each pinnable strategy scores with — required to
+# resolve --model-as-of (and to detect promotion boundaries) BEFORE the
+# strategy is constructed. Mirrors the model_type each factory wires into
+# its MLBasicSignalGenerator; exam strategies are absent deliberately (they
+# consume MODEL_VERSION_OVERRIDE_ENV_VAR and span several registry
+# namespaces, so --model-version is their only supported pin).
+_PINNABLE_STRATEGY_MODEL_TYPES: dict[str, str] = {
+    "ml_basic": "basic",
+    "hyper_growth": "basic",
+}
 
-def _load_strategy(strategy_name: str, symbol: str | None = None):
+# Exam-only strategies read the pin from MODEL_VERSION_OVERRIDE_ENV_VAR at
+# construction (PR #950's mechanism) instead of a model_version kwarg.
+_EXAM_STRATEGY_NAMES = frozenset(
+    {
+        "exam_binary_direction",
+        "exam_triple_barrier",
+        "exam_smoothed_return",
+        "exam_meta_label",
+    }
+)
+
+
+def _load_strategy(strategy_name: str, symbol: str | None = None, model_version: str | None = None):
     """Load a strategy by name, threading the trading symbol when supported.
 
     Mirrors the live runner (backtest-live parity): the symbol must reach ML
     signal generators so model registry selection matches the traded pair.
+
+    ``model_version`` pins ML predictions to that exact registry version
+    (GH #988): mainline factories receive it as an explicit kwarg via
+    ``call_strategy_factory`` (which refuses factories that cannot honor
+    it); exam factories pick it up from ``MODEL_VERSION_OVERRIDE_ENV_VAR``,
+    set here only for the duration of construction.
     """
     # Define available strategies with their import paths and classes
     available_strategies: dict[str, Callable[..., Strategy]] = {
@@ -76,7 +106,9 @@ def _load_strategy(strategy_name: str, symbol: str | None = None):
     try:
         builder = available_strategies.get(strategy_name)
         if builder is not None:
-            return call_strategy_factory(builder, symbol=symbol)
+            if model_version is not None and strategy_name in _EXAM_STRATEGY_NAMES:
+                return _call_exam_factory_pinned(builder, symbol, model_version)
+            return call_strategy_factory(builder, symbol=symbol, model_version=model_version)
 
         print(f"Unknown strategy: {strategy_name}")
         print(f"Available strategies: {', '.join(available_strategies.keys())}")
@@ -84,6 +116,121 @@ def _load_strategy(strategy_name: str, symbol: str | None = None):
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")
         raise
+
+
+def _call_exam_factory_pinned(
+    builder: Callable[..., Strategy], symbol: str | None, model_version: str
+) -> Strategy:
+    """Construct an exam strategy with the version pin set in its env var.
+
+    Exam factories read ``MODEL_VERSION_OVERRIDE_ENV_VAR`` at construction
+    time only, so the override is scoped to this call and restored after —
+    it must never leak into the wider process (or a later unpinned
+    construction in the same process would silently inherit the pin).
+    """
+    prior = os.environ.get(MODEL_VERSION_OVERRIDE_ENV_VAR)
+    os.environ[MODEL_VERSION_OVERRIDE_ENV_VAR] = model_version
+    try:
+        return call_strategy_factory(builder, symbol=symbol)
+    finally:
+        if prior is None:
+            os.environ.pop(MODEL_VERSION_OVERRIDE_ENV_VAR, None)
+        else:
+            os.environ[MODEL_VERSION_OVERRIDE_ENV_VAR] = prior
+
+
+def _parse_as_of(value: str) -> datetime:
+    """argparse type for --model-as-of: ISO date/datetime, naive means UTC."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid date {value!r} — use YYYY-MM-DD or an ISO 8601 datetime"
+        ) from exc
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def _resolve_model_pin(
+    ns: argparse.Namespace, start_date: datetime, end_date: datetime
+) -> str | None:
+    """Resolve --model-version/--model-as-of into a registry version id.
+
+    For --model-as-of, resolution asks "which version WAS latest at that
+    date?" using bundle metadata timestamps (see
+    ``src/prediction/models/version_resolver.py``). Either way, when the
+    backtest window spans a model-promotion boundary a loud warning maps
+    each window segment to the version that was live then — the run is
+    still pinned to ONE version (never switched mid-backtest), so segments
+    live-traded by another version are not comparable (GH #988).
+
+    Returns None when no pin was requested (zero behavior change).
+    """
+    model_version: str | None = getattr(ns, "model_version", None)
+    model_as_of: datetime | None = getattr(ns, "model_as_of", None)
+    if model_version is None and model_as_of is None:
+        return None
+
+    from src.prediction.config import PredictionConfig
+    from src.prediction.models.version_resolver import (
+        list_version_records,
+        promotion_segments,
+        resolve_version_as_of,
+    )
+
+    # Same normalization the ML signal generator applies for registry
+    # selection, so resolution looks at the directory the pin will load from.
+    registry_symbol = SymbolFactory.to_exchange_symbol(ns.symbol, "binance")
+    registry_path = PredictionConfig.from_config_manager().model_registry_path
+    model_type = _PINNABLE_STRATEGY_MODEL_TYPES.get(ns.strategy)
+
+    if model_as_of is not None:
+        if model_type is None:
+            print(
+                f"--model-as-of is not supported for strategy '{ns.strategy}': its "
+                f'registry model type is unknown, so "which version was latest at '
+                f'that date" cannot be resolved. Pass --model-version with an '
+                f"explicit version id instead."
+            )
+            raise SystemExit(1)
+        record = resolve_version_as_of(registry_path, registry_symbol, model_type, model_as_of)
+        model_version = record.version_id
+        logger.info(
+            "Resolved --model-as-of %s to %s/%s version %s (effective %s, from %s)",
+            model_as_of.isoformat(),
+            registry_symbol,
+            model_type,
+            model_version,
+            record.effective_at.isoformat(),
+            record.source,
+        )
+
+    if model_type is not None:
+        records = list_version_records(registry_path, registry_symbol, model_type)
+        segments = promotion_segments(records, start_date, end_date)
+        if len(segments) > 1:
+            segment_lines = "\n".join(
+                f"  - {segment.version_id or 'NO VERSION YET (live ran a cross-symbol substitute or no model)'}: "
+                f"{segment.start.isoformat()} -> {segment.end.isoformat()}"
+                for segment in segments
+            )
+            logger.warning(
+                "MODEL PROMOTION BOUNDARY INSIDE BACKTEST WINDOW: %d different "
+                "%s/%s model registry states between %s and %s:\n%s\n"
+                "The ENTIRE window will be scored with pinned version %s — the "
+                "backtest never switches models mid-window, so segments that "
+                "live-traded under a different version are NOT comparable to "
+                "live results (GH #988; promotion record: "
+                "docs/research/model-promotions.md).",
+                len(segments),
+                registry_symbol,
+                model_type,
+                start_date.isoformat(),
+                end_date.isoformat(),
+                segment_lines,
+                model_version,
+            )
+
+    return model_version
 
 
 def _get_date_range(args):
@@ -106,14 +253,18 @@ def _handle(ns: argparse.Namespace) -> int:
     try:
         from src.data_providers.feargreed_provider import FearGreedProvider
         from src.engines.backtest.engine import Backtester
+        from src.engines.shared.risk_configuration import resolve_strategy_max_position_size
         from src.risk.risk_manager import RiskParameters
 
         configure_logging()
 
         start_date, end_date = _get_date_range(ns)
 
-        strategy = _load_strategy(ns.strategy, symbol=ns.symbol)
+        model_version = _resolve_model_pin(ns, start_date, end_date)
+        strategy = _load_strategy(ns.strategy, symbol=ns.symbol, model_version=model_version)
         logger.info(f"Loaded strategy: {strategy.name}")
+        if model_version is not None:
+            logger.info(f"Model version pinned for this backtest: {model_version}")
 
         if getattr(ns, "mock_data", False):
             # Test-only escape hatch (mirrors `atb live --mock-data`,
@@ -172,14 +323,13 @@ def _handle(ns: argparse.Namespace) -> int:
                     f"--max-position-size must be in (0, 1], got {ns.max_position_size}"
                 )
             risk_params_kwargs["max_position_size"] = ns.max_position_size
-        elif hasattr(strategy, "get_risk_overrides"):
+        else:
             # Honor strategy-level max_fraction (e.g., trend-following uses 95%
-            # allocation instead of the default 10% cap)
-            overrides = strategy.get_risk_overrides()
-            if isinstance(overrides, dict) and "max_fraction" in overrides:
-                max_frac = overrides["max_fraction"]
-                if isinstance(max_frac, int | float) and 0 < max_frac <= 1:
-                    risk_params_kwargs["max_position_size"] = max_frac
+            # allocation instead of the default 10% cap) via the seam shared
+            # with ExperimentRunner, so CLI and harness sizing cannot drift.
+            strategy_max_position = resolve_strategy_max_position_size(strategy)
+            if strategy_max_position is not None:
+                risk_params_kwargs["max_position_size"] = strategy_max_position
         risk_params = RiskParameters(**risk_params_kwargs)
 
         # Default to no database logging for performance, unless explicitly enabled
@@ -380,5 +530,24 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--disable-engine-sl",
         action="store_true",
         help="Disable engine-level stop loss and take profit checks (strategy signals only)",
+    )
+    pin_group = p.add_mutually_exclusive_group()
+    pin_group.add_argument(
+        "--model-version",
+        default=None,
+        help="Pin ML predictions to this exact registry version (e.g. "
+        "2026-07-04_22h_v1) instead of resolving 'latest' at invocation time. "
+        "Required for honest comparisons against live windows that predate "
+        "the current 'latest' model.",
+    )
+    pin_group.add_argument(
+        "--model-as-of",
+        type=_parse_as_of,
+        default=None,
+        metavar="DATE",
+        help="Pin ML predictions to whichever registry version was 'latest' "
+        "at this UTC date/datetime (YYYY-MM-DD or ISO 8601), resolved from "
+        "bundle metadata timestamps. Warns when the backtest window spans a "
+        "model-promotion boundary.",
     )
     p.set_defaults(func=_handle)

@@ -371,8 +371,10 @@ class LiveEventLogger:
             source: Trade source (LIVE, PAPER).
             stop_loss: Stop loss price.
             take_profit: Take profit price.
-            mfe: Maximum favorable excursion.
-            mae: Maximum adverse excursion.
+            mfe: Maximum favorable excursion (raw price move from entry,
+                decimal fraction).
+            mae: Maximum adverse excursion (raw price move from entry,
+                decimal fraction, <= 0).
             mfe_price: Price at MFE.
             mae_price: Price at MAE.
             mfe_time: Time of MFE.

@@ -33,7 +33,6 @@ def test_close_position_preserves_mfe_mae_metrics() -> None:
         entry_price=position.entry_price,
         current_price=110.0,
         side=position.side.value,
-        position_fraction=position.size,
         current_time=datetime.now(UTC),
     )
 
@@ -48,7 +47,8 @@ def test_close_position_preserves_mfe_mae_metrics() -> None:
     # Assert
     assert result is not None
     assert result.mfe_mae_metrics is not None
-    assert result.mfe_mae_metrics.mfe > 0.0
+    # Raw price excursion: (110 - 100) / 100, independent of the 0.1 size.
+    assert result.mfe_mae_metrics.mfe == pytest.approx(0.10)
     assert result.mfe_mae_metrics.mfe_price == 110.0
     assert tracker.mfe_mae_tracker.get_position_metrics(order_id) is None
 
@@ -180,3 +180,31 @@ def test_close_position_with_zero_size_succeeds() -> None:
     assert result.realized_pnl == 0.0, "P&L should be zero for zero-sized position"
     assert not tracker.has_position(order_id), "Position should be removed from tracker"
     assert tracker.get_position(order_id) is None
+
+
+@pytest.mark.fast
+def test_total_unrealized_pnl_sums_open_positions() -> None:
+    """total_unrealized_pnl is the mark-to-market sum feeding the circuit breaker."""
+    tracker = LivePositionTracker()
+    assert tracker.total_unrealized_pnl() == 0.0
+
+    for order_id, side in (("cb-eq-1", PositionSide.LONG), ("cb-eq-2", PositionSide.SHORT)):
+        tracker.open_position(
+            LivePosition(
+                symbol="BTCUSDT",
+                side=side,
+                size=0.1,
+                entry_price=100.0,
+                entry_time=datetime.now(UTC),
+                entry_balance=1000.0,
+                order_id=order_id,
+            )
+        )
+    tracker.update_pnl(current_price=110.0, fallback_balance=1000.0)
+
+    positions = tracker.positions
+    expected = sum(p.unrealized_pnl for p in positions.values())
+    # Long +10% and short -10% on a 0.1 fraction of 1000 cancel out exactly,
+    # so also assert the per-position marks are non-zero (the sum is real).
+    assert any(p.unrealized_pnl != 0.0 for p in positions.values())
+    assert tracker.total_unrealized_pnl() == pytest.approx(expected)

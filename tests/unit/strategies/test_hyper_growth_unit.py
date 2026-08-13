@@ -1,5 +1,7 @@
 """Unit tests for HyperGrowth strategy components."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.strategies.components import Signal, SignalDirection
@@ -430,3 +432,39 @@ class TestHyperGrowthExitPolicyExpressibility:
         assert policy.atr_multiplier == 1.5  # params fallback leak, pinned
         assert policy.breakeven_threshold == 0.05
         assert policy.breakeven_buffer == 0.008
+
+
+class TestHyperGrowthModelVersionPin:
+    """Factory threads the point-in-time model pin to the signal generator (GH #988)."""
+
+    PINNED_VERSION = "2026-01-01_1h_v1"
+
+    def _mock_engine(self, mock_engine_class):
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_registry = MagicMock()
+        pinned_bundle = MagicMock()
+        pinned_bundle.key = f"ETHUSDT:1h:basic:{self.PINNED_VERSION}"
+        pinned_bundle.symbol = "ETHUSDT"
+        mock_registry.get_bundle_by_key.return_value = pinned_bundle
+        mock_engine.model_registry = mock_registry
+        mock_engine_class.return_value = mock_engine
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_factory_threads_model_version_to_signal_generator(
+        self, mock_config_class, mock_engine_class
+    ):
+        self._mock_engine(mock_engine_class)
+
+        strategy = create_hyper_growth_strategy(symbol="ETHUSDT", model_version=self.PINNED_VERSION)
+
+        sg = strategy.signal_generator
+        assert isinstance(sg, MLBasicSignalGenerator)
+        assert sg.pinned_model_key == f"ETHUSDT:1h:basic:{self.PINNED_VERSION}"
+
+    def test_momentum_signal_source_rejects_model_version(self):
+        with pytest.raises(ValueError, match="model_version"):
+            create_hyper_growth_strategy(
+                signal_source="momentum", model_version=self.PINNED_VERSION
+            )

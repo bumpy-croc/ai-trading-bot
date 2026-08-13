@@ -7,7 +7,7 @@ The daemon's persistent memory. Human-owned files set policy; daemon-owned files
 | File | Owner | Purpose |
 |---|---|---|
 | `charter.md` | **human** | Mandate, risk tolerance, autonomy envelope, escalation method |
-| `risk-limits.json` | **human** | Canonical risk thresholds (must match `src/config/constants.py`) |
+| `../../src/config/risk-limits.json` | **human** | Canonical risk thresholds (must match `src/config/constants.py`) — lives in `src/config/` so it ships with the code, but remains human-owned identity |
 | `log.md` | daemon | Chronological log of every material action — one scannable file |
 | `proposals/*.md` | originating agent | Active back-and-forth on changes awaiting review/approval |
 | `incidents/*.md` | any detector | Operational issues — P0 / P1 / P2 / P3 |
@@ -16,7 +16,7 @@ The daemon's persistent memory. Human-owned files set policy; daemon-owned files
 
 **Start of every `/standup` or `/triage`:**
 1. Read `charter.md` — if any `TODO` remains in mission / autonomy envelope / escalation, refuse material decisions and ask the human.
-2. Read `risk-limits.json` — know the lines.
+2. Read `src/config/risk-limits.json` — know the lines.
 3. Tail `log.md` (last ~50 lines) — remember recent activity.
 4. List `proposals/` and `incidents/`, filter `status: open` from frontmatter — see the active queue.
 
@@ -72,8 +72,8 @@ gh issue list --state open --label type:incident --json number,title,labels
 
 ## Rules
 
-- **Human-owned files never change without a Board decision.** Daemon proposes; human edits `charter.md` and `risk-limits.json`.
+- **Human-owned files never change without a Board decision.** Daemon proposes; human edits `charter.md` and `src/config/risk-limits.json`.
 - **`log.md` is append-only.** Corrections are new entries referencing the earlier one. Never edit history.
 - **Timestamps are UTC, ISO-like.** Always.
-- **Missing or invalid state blocks material decisions.** If `charter.md` or `risk-limits.json` is missing or has unfilled TODOs, daemon stops and pages the human.
+- **Missing or invalid state blocks material decisions.** If `charter.md` or `src/config/risk-limits.json` is missing or has unfilled TODOs, daemon stops and pages the human.
 - **Status is canonical in frontmatter (files) and in `state:*` labels (issues).** If they disagree, the label wins and the PM logs a cleanup.
