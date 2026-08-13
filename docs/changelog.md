@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ECR training-image provenance and verification** (#1041): the SageMaker
+  training image now stamps the git commit it was built from as an OCI label
+  (`org.opencontainers.image.revision`) plus an `IMAGE_PROVENANCE.json`, and
+  `build-and-push.sh` pushes an immutable `sha-<commit>` tag alongside
+  `latest` so past builds stay auditable. New
+  `src/ml/cloud/verify-image.sh` reads that label straight out of the ECR
+  image config — no multi-GB pull, no Docker daemon — and diffs the build
+  commit against `origin/develop` across only the paths the image bakes in
+  (`src/ml/training_pipeline/`, `src/ml/cloud/`, `cli/`, `pyproject.toml`),
+  exiting `0` current / `1` stale / `2` indeterminate. Previously freshness
+  could only be inferred from the ECR push timestamp, which cannot tell a
+  develop-tip rebuild from a rebuild of an old checkout; that proxy left
+  #1041 open for three weeks after the image had already been rebuilt.
+  `DOCKER.md` now records the `AWS_PROFILE=ai-trading-bot` requirement (the
+  `default` profile is a different account and fails with
+  `InvalidClientTokenId`) and states rebuild ownership as change-driven and
+  owned by `ml-engineer`.
 - **HyperGrowth/ETHUSDT is long-only by explicit configuration** (#1020,
   board-approved proposal 2026-07-12-01): `MLBasicSignalGenerator` gains an
   `allow_shorts` flag (default `True`) that, when `False`, withholds the

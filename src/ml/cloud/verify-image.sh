@@ -45,14 +45,16 @@ fi
 
 config_digest="$(printf '%s' "$manifest" | python3 -c 'import json,sys; print(json.load(sys.stdin)["config"]["digest"])')"
 
-# The layer download URL is pre-signed and credential-bearing: pipe it straight
-# into curl, never echo or persist it.
+# The layer download URL is pre-signed and credential-bearing. Feed it to curl
+# as a stdin config file rather than an argument: it never reaches argv (where
+# `ps` would expose it), a log, or disk.
 image_commit="$(aws ecr get-download-url-for-layer \
     --repository-name "$REPO_NAME" \
     --region "$REGION" \
     --layer-digest "$config_digest" \
     --query downloadUrl --output text \
-  | xargs -I{} curl -s {} \
+  | sed 's/^/url = "/; s/$/"/' \
+  | curl -s -K - \
   | python3 -c '
 import json, sys
 cfg = json.load(sys.stdin)
