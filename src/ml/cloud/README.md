@@ -91,13 +91,29 @@ atb train cloud-promote BTCUSDT <VERSION> --to basic [--set-latest]
 
 ## Keeping the training image fresh
 
-The ECR image bakes in `src/ml/training_pipeline/`. Rebuild and push it whenever
-feature engineering or pipeline code changes, or cloud-trained models will skew
-from current inference code:
+The ECR image bakes in `src/ml/training_pipeline/`, `src/ml/cloud/`, `cli/` and
+`pyproject.toml`. Rebuild and push it whenever any of those change, or
+cloud-trained models will skew from current inference code:
 
 ```bash
+export AWS_PROFILE=ai-trading-bot     # the 'default' profile is NOT the ECR account
 ./src/ml/cloud/build-and-push.sh
 ```
+
+Check what is live at any time — reads the image's provenance label straight
+from ECR, no multi-GB pull:
+
+```bash
+AWS_PROFILE=ai-trading-bot ./src/ml/cloud/verify-image.sh
+```
+
+Exit codes: `0` current, `1` stale (lists the missing commits), `2`
+indeterminate (unlabelled, dirty, or unreachable build commit).
+
+**Cadence and ownership:** the weekly retrain checks this precondition and
+aborts if the image is stale, so a stale image silently costs a retrain cycle.
+The `ml-engineer` owner rebuilds as part of merging any PR that touches the
+baked-in paths — not on a timer. See `DOCKER.md` for the full procedure.
 
 ## Configuration
 

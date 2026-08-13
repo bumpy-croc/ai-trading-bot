@@ -26,14 +26,22 @@ docker --version
 
 ### 2. AWS CLI Configured
 
-```bash
-# Check AWS credentials
-aws sts get-caller-identity
+The ECR repository lives in account **473535066028**, which is the
+`ai-trading-bot` profile. The `default` profile is a different account and will
+fail with `InvalidClientTokenId` — export the profile explicitly:
 
-# If not configured, set environment variables:
-export AWS_ACCESS_KEY_ID=your_key
-export AWS_SECRET_ACCESS_KEY=your_secret
-export AWS_REGION=us-east-1
+```bash
+export AWS_PROFILE=ai-trading-bot
+aws sts get-caller-identity     # expect Account: 473535066028
+```
+
+Never write credentials or ECR tokens to a file, a log, or a shell history
+entry. Always pipe the login token:
+
+```bash
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin \
+  473535066028.dkr.ecr.us-east-1.amazonaws.com
 ```
 
 ### 3. ECR Permissions
@@ -52,19 +60,21 @@ Your IAM user needs these permissions (already included if you deployed the CDK 
 ### Option 1: One-Command Build and Push
 
 ```bash
-# Navigate to project root
-cd /Users/alex/Sites/ai-trading-bot
-
-# Run the build script
+export AWS_PROFILE=ai-trading-bot
 ./src/ml/cloud/build-and-push.sh
 ```
 
 This will:
 1. ✅ Create ECR repository if it doesn't exist
 2. ✅ Authenticate with ECR
-3. ✅ Build the Docker image (~5-10 minutes)
-4. ✅ Tag and push to ECR (~3-5 minutes)
-5. ✅ Output the image URI to use
+3. ✅ Build the Docker image (~5-10 minutes), stamping the git commit it was
+   built from as an OCI label
+4. ✅ Push **two** tags (~3-5 minutes): `latest`, plus an immutable
+   `sha-<commit>` copy that keeps the build auditable after `latest` moves on
+5. ✅ Output the image URIs and the commit they came from
+
+Build from a committed tree. A dirty tree still builds, but is labelled
+`<commit>-dirty` and is not reproducible.
 
 **Expected output:**
 ```
@@ -197,20 +207,78 @@ export SAGEMAKER_DOCKER_IMAGE=473535066028.dkr.ecr.us-east-1.amazonaws.com/ai-tr
 atb train cloud BTCUSDT --provider sagemaker
 ```
 
+## Verifying What Is Live
+
+**Do not infer freshness from the ECR push timestamp.** A recent push proves
+only that *something* was pushed — not that it was built from develop tip. That
+proxy is what kept #1041 open for three weeks after the image had already been
+rebuilt.
+
+Ask the image directly instead:
+
+```bash
+AWS_PROFILE=ai-trading-bot ./src/ml/cloud/verify-image.sh
+# ./src/ml/cloud/verify-image.sh [IMAGE_TAG] [GIT_REF]   # defaults: latest, origin/develop
+```
+
+It reads the provenance label out of the ECR image config (no pull, no Docker
+daemon), then diffs that commit against the target ref across only the paths the
+image actually bakes in — `src/ml/training_pipeline/`, `src/ml/cloud/`, `cli/`,
+`pyproject.toml`. Commits touching nothing else do not make the image stale.
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Current with the target ref |
+| `1` | Stale — prints the commits the image is missing |
+| `2` | Indeterminate — unlabelled (pre-provenance), `-dirty`, or build commit unreachable |
+
+For a belt-and-braces check that the running container really holds the code,
+hash a file inside it and compare against the checkout:
+
+```bash
+docker run --rm --entrypoint python3 --platform linux/amd64 \
+  473535066028.dkr.ecr.us-east-1.amazonaws.com/ai-trading-bot-training:latest \
+  -c "import hashlib; print(hashlib.sha256(open('/opt/ml/code/src/ml/training_pipeline/pipeline.py','rb').read()).hexdigest())"
+
+shasum -a 256 src/ml/training_pipeline/pipeline.py
+```
+
 ## Updating the Image
 
 When you update training code:
 
 ```bash
-# 1. Make code changes
+# 1. Make and COMMIT code changes (the commit becomes the image's provenance)
 vim src/ml/training_pipeline/pipeline.py
+git commit -am "fix(ml): ..."
 
 # 2. Rebuild and push
+export AWS_PROFILE=ai-trading-bot
 ./src/ml/cloud/build-and-push.sh
 
-# 3. Test immediately (uses latest tag)
+# 3. Confirm the push landed
+./src/ml/cloud/verify-image.sh
+
+# 4. Test (uses latest tag)
 atb train cloud BTCUSDT --provider sagemaker --days 30 --epochs 2
 ```
+
+## Rebuild Cadence and Ownership
+
+**Owner:** the `ml-engineer` role.
+
+**Trigger — change-driven, not scheduled.** Rebuild whenever a PR merges to
+`develop` that touches any baked-in path (`src/ml/training_pipeline/`,
+`src/ml/cloud/`, `cli/`, `pyproject.toml`). Treat the rebuild as part of
+landing that PR, not as separate follow-up work: filing an issue to rebuild
+later is how this drifted five commits behind and burned two weekly retrain
+cycles (2026-07-19, 2026-07-26).
+
+**Backstop.** The weekly retrain checks this precondition and self-aborts when
+the image is stale — so drift costs a silent retrain cycle rather than
+producing a wrong model. That guardrail is the safety net, not the process:
+if it fires, the rebuild was already overdue. Run `verify-image.sh` before
+any cloud training run you care about.
 
 **Note**: SageMaker caches images. If you push with the same tag, you may need to wait 5-10 minutes for the cache to invalidate, or use a new version tag.
 
