@@ -13,6 +13,8 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(none — cleared by the 2026-08-10 retro. The file was empty on arrival and stayed empty for 14
-days despite that window's findings all being agenda-worthy; see [D-2026-08-10-01] — the agents
-expected to populate it were deregistered (#1050) or died on turn 1 (#1051).)_
+_(none — cleared by the 2026-08-17 retro. Empty on arrival for the third consecutive window, despite
+2026-08-13 producing at least four agenda-worthy items in one session — including a PM entry that
+explicitly wrote "Candidate LESSONS entry at the next retro" into `log.md` rather than here, and
+which is stranded in unmerged PR #1074. See [D-2026-08-17-01]. The one-line append that populates
+this file costs less than the log entry that substitutes for it.)_
