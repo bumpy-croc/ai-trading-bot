@@ -15,7 +15,7 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
 
 1. **Isolation.** Work in a disposable worktree from `origin/develop`
    (`git worktree add .claude/worktrees/<name> origin/develop --detach` or `-b <branch>`), then
-   immediately `touch .agent-active` in it (gitignored sentinel — the `eod-worktree-prune` nightly
+   immediately `touch .agent-active` in it (gitignored sentinel — the `prune-worktrees` nightly
    pruner hard-skips any worktree carrying it, plus a 48h age floor; it deleted a live agent's
    worktree mid-tournament before this existed, 2026-07-10). **Verify you own the worktree BEFORE
    any checkout:** `git worktree list` must show YOUR path — never `cd`/checkout inside a worktree
@@ -25,6 +25,13 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
    a cherry-pick scare and a branch-switch incident earned this), never staging/prod, never a
    shared registry's `latest` symlink. The prompt must be self-contained: paths absolute,
    context included — the agent has none of yours.
+   **Provenance clause — put this verbatim in any dispatch that runs code (GH #1070, P0):** the
+   shared venv pins `src`/`cli` to the primary checkout, which is frozen at 2026-07-04. `atb …` or
+   `python /abs/script.py` from a worktree silently runs that stale code — it produced **+114.69%
+   and -28.29% from the same backtest command**. Every invocation must be
+   `PYTHONPATH="$(pwd)" atb …` from the worktree root, and **file reads must use absolute worktree
+   paths** (a relative `grep`/`sed` resolves against a cwd that resets to the primary checkout).
+   Require the agent to state, in its report, which code path it actually executed.
 2. **Compute discipline.** Heavy jobs (training, backtests) STRICTLY SEQUENTIAL — one at a
    time machine-wide (thermal + the 0.1s-timeout non-determinism under CPU contention, #913;
    also the standing "run backtests sequentially" feedback). Expect 1.5–4x nominal durations
@@ -63,10 +70,13 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
 ## The PM side — what you owe every dispatch
 
 - **Backstop watcher on every long-running dispatch**: `run_in_background` + notify, so a lost
-  wake-up degrades to late collection, not lost work (`agent-fleet-health` has the sweep). The
-  structural backstop is the `pm-fleet-watchdog` scheduled task (hourly, fires on app relaunch) —
-  it catches lanes stranded by a wake-loss even if this session is gone. Record the lane in
-  `.claude/state/handover.md` (`session-handover`) at dispatch time.
+  wake-up degrades to late collection, not lost work (`agent-fleet-health` has the sweep). Record
+  the lane in `.claude/state/handover.md` (`session-handover`) at dispatch time.
+  **There is no longer a structural backstop:** `pm-fleet-watchdog` was retired (deliberately, GH
+  #1050) — only `prune-worktrees`, `daily-trading-standup`, `weekly-model-retrain` and `weekly-retro`
+  remain enabled. A lane stranded by a wake-loss, a kill, or **usage-limit exhaustion** (which took
+  the 08-13 prod-promote agent mid-deploy, LESSONS §3) is now recovered only by this session or the
+  next PM boot — so the handover record is the whole safety net, not a redundant one.
 - **Review gauntlet — mandatory for money-path code** (live trading, risk, reconciliation,
   margin, order execution): TWO reviewers minimum (code-reviewer + architecture-reviewer;
   risk-officer for live-affecting proposals, dispatched FRESH — adversarial rule: it forms its

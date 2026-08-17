@@ -48,16 +48,27 @@ checklist line, a new tripwire.
 5. **Experiments** — verdicts vs their preregistered thresholds; any p-hacking drift.
 6. **Scheduled tasks** — audit against the **registry**, not the directory. Call
    `mcp__scheduled-tasks__list_scheduled_tasks` and **diff it both ways** against
-   `ls ~/.claude/scheduled-tasks`: a directory with no registry entry is a **DEAD task**, and its
+   `ls ~/.claude/scheduled-tasks`: a directory with no registry entry is **NOT a live task**, and its
    `SKILL.md` survives deregistration so it looks installed forever. (`ls` alone reported "no task
-   missed its schedule" for three consecutive retros while four tasks were dead — LESSONS §3.)
+   missed its schedule" for three consecutive retros while six directories were unregistered —
+   LESSONS §3. As of 2026-08-17: 19 directories, 13 registered, **4 enabled**.)
    Then check each live task's `enabled` / `lastRunAt` **and its expected trace**: date sessions by
    the first internal `"timestamp"` in `~/.claude/projects/<slug>/*.jsonl`, **not** by file mtime
-   (claude-mem rewrites mtimes). Three distinct failure modes, all silent:
+   (claude-mem rewrites mtimes). Failure modes, all silent:
    - **didn't fire** — app closed (tasks run only while it's open);
-   - **deregistered** — absent from the registry entirely;
-   - **fired and died on turn 1** — grep transcripts for `may not exist or you may not have access`
-     (a stale model-provider selection); `lastRunAt` records the *attempt*, so these look healthy.
+   - **deregistered** — absent from the registry entirely. **This proves deregistration, not
+     failure**: on 2026-08-13 Alex confirmed all six unregistered directories were deliberate
+     retirements, after the 08-10 retro reported them as a 12-day monitoring outage. Ask before
+     calling a missing registry entry an outage (LESSONS §3);
+   - **fired and died on turn 1** — grep transcripts for BOTH `may not exist or you may not have
+     access` (stale model-provider selection, #1051) and `hit your weekly limit` / `hit your usage
+     limit` (quota exhaustion — killed the 2026-08-15 standup, and the 08-13 prod-promote agent
+     mid-deploy). `lastRunAt` records the *attempt*, so these look healthy; **treat any ~20-line
+     transcript as failed until proven otherwise**;
+   - **fired late as a catch-up, masking a missed slot** — on app reopen every overdue task fires at
+     once. Several tasks sharing a `lastRunAt` to the second (2026-08-17: three within 32ms) is a
+     catch-up batch, not punctuality. Check each `lastRunAt` against its `cronExpression` to find the
+     slot actually missed, and note that those runs execute concurrently against one repo.
    A task that ran but produced no artifact is a finding of the same weight as one that never fired.
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
 

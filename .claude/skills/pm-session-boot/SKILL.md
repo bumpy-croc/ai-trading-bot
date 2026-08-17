@@ -46,10 +46,15 @@ checkout off `main`):**
   someone's active workspace.
 
 **Boot additions:**
-- m. **Scheduled-task inventory**: `ls ~/.claude/scheduled-tasks` — know what's armed
-  (standup, alert-monitor, event-window pause flips, retrains) and check each expected firing
-  actually fired (tasks run only while the app is open — the known silent-miss mode). A pause
-  flag that should have flipped and didn't is an immediate action item.
+- m. **Scheduled-task inventory**: `mcp__scheduled-tasks__list_scheduled_tasks` — **not**
+  `ls ~/.claude/scheduled-tasks`, which keeps a directory per *retired* task and so reads as
+  installed forever (LESSONS §3). Four tasks are enabled: `daily-trading-standup`,
+  `weekly-model-retrain`, `weekly-retro`, `prune-worktrees`; `alert-monitor` and
+  `pm-fleet-watchdog` were retired 2026-07/08 (GH #1050), leaving the **daily standup as the sole
+  automated watchdog — worst-case detection latency ~24h**. Check each expected firing actually
+  fired: tasks run only while the app is open (silent miss), can die on turn 1 from a stale model
+  selection or a usage limit while `lastRunAt` still updates, and fire as a same-second batch after
+  an app reopen. A pause flag that should have flipped and didn't is an immediate action item.
 - n. **In-flight recovery (layer 4)**: read `.claude/state/handover.md` (a `session-handover`
   snapshot, if present), then scan scratchpad state JSONs + background-task outputs for
   interrupted lanes. Layer 4 is a HINT — verify each claimed lane against ground truth
