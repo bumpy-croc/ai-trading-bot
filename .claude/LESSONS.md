@@ -230,6 +230,22 @@ running the code. **Rule:** every merge flow and PR-review disposition runs
 `gh api repos/OWNER/REPO/pulls/<N>/comments` and explicitly dispositions **each** bot finding — a
 bot's green summary status does **not** mean zero inline findings. (Extends CLAUDE.md's "Handling PR
 Review Comments".) Earned: #948.
+- **Recurrence 2026-08-13, on the distillate PRs themselves — five findings, all correct, all merged
+  unaddressed.** `claude[bot]` left four inline comments on **#1052** (the weekly retro) and one on
+  **#1056**; every one was accurate and none was answered. Still standing on `develop` as a result:
+  the audit line calling `alert-monitor`/`staging-cohort-observer` **"DEREGISTERED, zero runs"** when
+  the same entry says they last ran 07-29/07-28; a `Ref:` index that omits §2.12, a section that
+  entry itself introduced; and "26 days" where the same anchor date gives **27** (fixed in §2.12
+  below by the 2026-08-17 retro). On #1056 the bot caught the **withdrawn 20.33% phantom-peak figure
+  being reused as live evidence at 15:40Z — about two hours before the PM independently self-caught
+  it** (§2.13 case 2). The control fired first and was not read.
+- **Rule (sharpened for docs/state PRs):** on a PR whose payload *is* the durable record — `log.md`,
+  LESSONS, incidents — an unresolved bot comment at merge time does not become a follow-up, it
+  becomes a **published error in the record**, and `log.md`'s append-only norm means it can then only
+  be retracted by a later entry, never edited. Resolve or explicitly reject each inline comment **in
+  the thread** before merging a distillate PR. Cost of skipping it here: three known-wrong statements
+  merged into the institutional record, and a two-hour-late correction on a Board-facing figure.
+  Earned: #1052, #1056.
 
 ### 2.9 Distillate deferred to someone else's PR is distillate lost — a lessons PR must land on its own
 The 2026-07-13 retro (PR #1026) bundled its LESSONS/skill distillate with a 52-line PM-directed
@@ -314,7 +330,9 @@ the last 14 days — a deliberate canary from #962, whose own docstring says the
 failing around **07-28 and then failed every PR to `develop`**. It was a good test firing correctly,
 on time, with a message naming the file and the fix. Nothing consumed it for 12 days, because it had
 no owner and no refill procedure. Two costs, and the second is worse:
-1. the real one — 26 days with **no upcoming macro de-risk coverage on live capital** (#1053);
+1. the real one — **27 days** (2026-07-14 → 08-10) with **no upcoming macro de-risk coverage on live
+   capital** (#1053; the "26 days" first written here was off by one against §2.11's own anchor date,
+   flagged by `claude[bot]` on #1052 and merged unaddressed — see §2.8);
 2. **every** PR showed red CI, so red became the resting state and a genuinely broken PR was
    indistinguishable from the background failure. #1048 is red solely because of this and is
    otherwise a one-line docs change.
