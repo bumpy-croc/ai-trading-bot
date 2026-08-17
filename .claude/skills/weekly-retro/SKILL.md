@@ -48,9 +48,10 @@ checklist line, a new tripwire.
 5. **Experiments** — verdicts vs their preregistered thresholds; any p-hacking drift.
 6. **Scheduled tasks** — audit against the **registry**, not the directory. Call
    `mcp__scheduled-tasks__list_scheduled_tasks` and **diff it both ways** against
-   `ls ~/.claude/scheduled-tasks`: a directory with no registry entry is a **DEAD task**, and its
+   `ls ~/.claude/scheduled-tasks`: a directory with no registry entry is **NOT a live task**, and its
    `SKILL.md` survives deregistration so it looks installed forever. (`ls` alone reported "no task
-   missed its schedule" for three consecutive retros while four tasks were dead — LESSONS §3.)
+   missed its schedule" for three consecutive retros while six directories were unregistered —
+   LESSONS §3. As of 2026-08-17: 19 directories, 13 registered, **4 enabled**.)
    Then check each live task's `enabled` / `lastRunAt` **and its expected trace**: date sessions by
    the first internal `"timestamp"` in `~/.claude/projects/<slug>/*.jsonl`, **not** by file mtime
    (claude-mem rewrites mtimes). Failure modes, all silent:
