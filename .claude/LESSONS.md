@@ -87,24 +87,33 @@ guard); the alerting-budget comment now lives at `engine.py:302`.
 ### 1.10 Silent wrong-source execution — exam/backtest numbers computed against the wrong code, cwd, or model
 Three separate instances this week, one meta-class: a run produced numbers, but not from the source
 it claimed.
-- **(a) Shared-venv `atb` staleness — the worst of the three, and it recurred at P0 (#1070).** The
-  editable install's generated finder hardcodes `MAPPING = {'cli': '/Users/alex/Sites/ai-trading-bot/cli',
-  'src': '.../src'}` as a `sys.path_hooks` entry. `atb` (a console script) and `python /abs/path/script.py`
-  both put the *script's own directory* at `sys.path[0]`, never cwd — so `import src...` from **any**
-  worktree resolves to the **primary checkout**, which is frozen on `main` at 2026-07-04 (131 commits
-  behind `origin/main` as of 2026-08-13). Only `python -c` / an interactive REPL insert `''` and pick up
-  the worktree. Demonstrated blast radius, same command, same cwd, same flags: **+114.69% / 8.74% MaxDD**
-  (silently ran the stale checkout, shorts still enabled, pre-#1020) vs **-28.29% / 31.27% MaxDD**
-  (`PYTHONPATH="$(pwd)"` forced). Sign-flipped headline, no warning, no error.
+- **(a) Shared-venv `atb` staleness — the worst of the three; filed P3, recurred at P0, now FIXED
+  (GH #1070, 2026-08-13).** The editable install's generated finder hardcodes
+  `MAPPING = {'cli': '/Users/alex/Sites/ai-trading-bot/cli', 'src': '.../src'}` — the absolute path
+  of the checkout `make install` was run from. `atb` (a console script) and
+  `python /abs/path/script.py` both put the *script's own directory* at `sys.path[0]`, never cwd, so
+  `import src...` from **any** worktree resolved to the **primary checkout**, frozen on `main` at
+  2026-07-04 (131 commits behind `origin/main` as of 2026-08-13). Only `python -c` / an interactive
+  REPL insert `''` and pick up the worktree — which is exactly why the old sanity check was useless:
+  it passed in precisely the state that was broken. Demonstrated blast radius, same command, same
+  cwd, same flags: **+114.69% / 8.74% MaxDD** (silently ran the stale checkout, shorts still enabled,
+  pre-#1020) vs **−28.29% / 31.27% MaxDD** (correct code). Sign-flipped headline, no warning, no
+  error.
   - **It is not only exams.** The 2026-08-14 `daily-trading-standup` read its ratified thresholds from
     the same stale checkout, found no `src/config/risk-limits.json` (it landed there in #1034, promoted
     to prod 08-13), reported *"the file path in this task's instructions is stale for `main`"* — the
     instructions were right and the checkout was six weeks old — and silently fell back to the retired
     `.claude/state/` copy. The values happened to match, so it read PASS. **A Board edit to the ratified
-    limits would have been invisible to the daily monitoring pass.**
-  - **Workaround (use it every time):** `PYTHONPATH="$(pwd)" atb <cmd>` from the worktree root. Sibling
-    GH #999 (script-path variant). Filed at P3 as #1024 on 2026-07-13, re-filed at **P0 as #1070** on
-    2026-08-13 after it invalidated a Board-level decision — see §2.14.
+    limits would have been invisible to the daily monitoring pass.** Under the #1070 guard that run
+    would have hard-errored instead of quietly reading six-week-old config.
+  - **Lineage:** filed at P3 as **#1024** (2026-07-13) with the ask "add a warning"; re-filed at **P0
+    as #1070** (2026-08-13) after it invalidated a Board-level decision — see §2.14. Sibling **#999**
+    covers the script-path `sys.path` shadowing variant.
+  - **Current state:** structurally fixed — a site-packages shim binds `src`/`cli` to the checkout
+    enclosing your cwd, and `src/_source_root.verify_source_root()` hard-errors on a mismatch
+    (mechanism and residual hazards in §3). `PYTHONPATH="$(pwd)" atb <cmd>` was the historical
+    workaround and still works as a belt-and-braces override; it is no longer the standing
+    requirement.
 - **(b) cwd-relative registry path.** `DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"`
   (`constants.py:25`) resolves against *process cwd* — an exam launched from the wrong directory
   silently resolved to an empty registry and produced an all-HOLD / 0-trade result that looked like
@@ -387,7 +396,8 @@ defect was to hit — the primary checkout had been frozen since 2026-07-04, so 
   **impossible or loud** (per-worktree venv; a startup assertion that resolved `src.__file__` matches
   the invoking repo root) over one that makes it *documented*.
 - **Corollary — freeze the dependent decisions, not just the defect.** [D-2026-08-13-06] correctly
-  held all strategy/risk parameter changes until #1070 lands and an affected-experiment triage runs.
+  held all strategy/risk parameter changes until #1070 landed (it has) and an affected-experiment
+  triage runs.
   When a measurement channel is found untrustworthy the live question is not "fix it?" but **"which
   already-taken decisions rest on it?"** — #1020 (long-only, live in prod since 2026-08-13) is in
   that set today.
@@ -481,19 +491,46 @@ defect was to hit — the primary checkout had been frozen since 2026-07-04, so 
   it persisted). **Rule:** never persist a secret to disk, scratchpad, or a logged env-var — pipe it
   in one command: `aws ecr get-login-password --region <r> | docker login --username AWS
   --password-stdin <registry>`. No intermediate file, no echo, no copy.
-- **Shared-venv `atb` staleness** (bug-class §1.10a — **P0, GH #1070**): the editable install pins
-  `src`/`cli` to the **primary checkout** `/Users/alex/Sites/ai-trading-bot`, which sits on `main` and
-  has been **frozen at 2026-07-04 / 131 commits behind `origin/main`**. Bare `atb` — or
-  `python /abs/path/script.py` — from *any* worktree silently executes that stale code, because both
-  put the script's own directory at `sys.path[0]`, never cwd. **Always run
-  `PYTHONPATH="$(pwd)" atb <cmd>` from the worktree root** (equivalently
-  `PYTHONPATH=<worktree-root> python3 -m cli.__main__`). Sibling GH #999 (script-path variant);
-  #1024 was the same defect filed at P3 and is superseded.
-  **The same trap catches plain shell reads:** a `grep`/`sed`/`cat` on a *relative* path runs against
-  whatever the shell's cwd is, and cwd resets to the primary checkout between calls — so a relative
-  read silently returns 2026-07-04 content. Use absolute worktree paths for every file read during a
-  worktree session (this retro tripped it while reading `.claude/LESSONS.md`: 247 lines in the primary
-  checkout vs 578 in the worktree).
+- **Shared-venv `atb` staleness — FIXED 2026-08-13, GH #1070** (bug-class §1.10a). Worth knowing the
+  mechanism, because the obvious diagnosis is wrong. `pip install -e .` writes
+  `site-packages/__editable___ai_trading_bot_0_1_0_finder.py`, whose `MAPPING` hardcodes the
+  **absolute path of the checkout `make install` was run from**, and appends it to `sys.meta_path`.
+  It is *not* a `sys.path` entry. Since `sys.meta_path` is consulted after `PathFinder`, the stale
+  mapping loses only when some `sys.path` entry already contains `src`/`cli`. That is true for
+  `python -c` and `python <repo-root>/x.py` (cwd/script dir *is* the root) and **false** for:
+  - the `atb` console script (`sys.path[0]` is `.venv/bin`), and
+  - `python experiments/x.py` (`sys.path[0]` is `experiments/`, which has no `src/`).
+
+  Hence "it worked when I checked it interactively" and broke for every real run — the pre-fix
+  sanity check passed in exactly the state that was broken. Pre-fix, the primary checkout was frozen
+  on `main` at 2026-07-04 (131 commits behind `origin/main`), so a worktree run silently executed
+  six-week-old code: the same 365d backtest returned **+114.69% / 8.74% MaxDD** and
+  **−28.29% / 31.27% MaxDD**. **Fix:** `tools/atb_worktree_shim.py`, copied into site-packages by
+  `make install` and executed from a `.pth` on every interpreter start; it resolves the checkout
+  enclosing the **cwd** and inserts a meta-path finder at position 0 binding top-level `src`/`cli`
+  there. Backstop: `src/__init__.py` calls `src._source_root.verify_source_root()`, which
+  hard-errors (`SourceRootMismatchError`) with a copy-pasteable remedy when imported-root ≠
+  cwd-root. It lives in the package `__init__` on purpose — an entry-point-by-entry-point guard
+  would have missed `python experiments/x.py`, which is precisely the shape that produced the bad
+  numbers. The guard module sits at the top level of `src` (not under `src.utils`) so importing it
+  executes no other repo module — the checkout's identity is still in question at that point.
+  **Diagnose with `python -P -c "import src; print(src.__file__)"`; keep the `-P` — plain `python -c`
+  puts cwd on `sys.path[0]`, finds your worktree's `src/`, and prints a false all-clear in exactly
+  the broken state.**
+  - **Residual hazard — the shim lives in site-packages, which is not version-controlled, so a venv
+    rebuild silently removes it.** After any rebuild: `make shim` (or
+    `python tools/install_worktree_shim.py`). Verify with
+    `python tools/install_worktree_shim.py --check`. The `verify_source_root()` guard means a missing
+    shim fails loudly rather than returning a wrong number.
+  - `PYTHONPATH="$(pwd)" atb <cmd>` from the worktree root was the historical workaround (pre-#1070)
+    and remains a valid one-off override; it is no longer required per invocation.
+  - **Still live, NOT fixed by the import guard: plain shell reads.** A `grep`/`sed`/`cat` on a
+    *relative* path runs against whatever the shell's cwd is, and cwd resets to the primary checkout
+    between tool calls — so a relative read silently returns 2026-07-04 content. Use absolute
+    worktree paths for every file read during a worktree session (the 2026-08-17 retro tripped this
+    reading `.claude/LESSONS.md`: 247 lines in the primary checkout vs 578 in the worktree).
+  - Sibling GH #999 covers the script-path shadowing variant; GH #1024 (the "just add a warning" P3
+    framing) is superseded — a warning would have been ignored exactly like the wrong number was.
 - **`ls ~/.claude/scheduled-tasks` is NOT the task list — the scheduler registry is.** The directory
   holds a `SKILL.md` per task and **keeps it after the task is deregistered**, so a retired task looks
   installed forever. On 2026-08-17: 19 directories, **13 registered tasks**, of which only **4 are
