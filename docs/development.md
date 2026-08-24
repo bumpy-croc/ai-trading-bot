@@ -203,9 +203,23 @@ make merge-drivers-check   # non-zero exit if unregistered or stale
 ```
 
 Git config lives in the shared common dir, so registering once per **clone** covers every
-linked worktree. The symptom of an unregistered driver is exactly the old behaviour — a
-conflict in `log.md` on an ordinary append. If you get one, run `make merge-drivers-check`
-before resolving by hand.
+linked worktree. The registered command is *relative* (`python3 tools/merge_append_only.py`),
+unlike the hook installer's primary-checkout rule: git runs a merge driver from the top of the
+worktree doing the merge, so a relative path always matches the code being merged, whereas an
+absolute one would pin every worktree to a single checkout — including the primary, which is
+held on the production branch and does not carry this tool at all until it ships there.
+
+Like `make hooks-check`, `make merge-drivers-check` inspects **this machine's** state, so it is
+not a CI gate: a fresh clone would fail it every run and a post-`make install` clone would pass
+it tautologically. What CI does assert is repository *content* — a unit test requires
+`.gitattributes` and the driver's own allowlist to name the same files, since a path in only
+one of them is silently inert.
+
+The symptom of an unregistered driver is exactly the old behaviour — a conflict in `log.md` on
+an ordinary append. If you get one, run `make merge-drivers-check` before resolving by hand.
+Every other failure mode degrades the same way: a missing `python3`, or a worktree on a branch
+that predates the driver, makes git fall back to ordinary conflict markers rather than to a bad
+merge.
 
 ## Strategy versioning
 

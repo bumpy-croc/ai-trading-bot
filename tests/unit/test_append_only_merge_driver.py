@@ -305,3 +305,40 @@ def test_reordered_entries_stay_separated_by_a_blank_line(repo: Path) -> None:
     git(repo, "checkout", "-q", "ours")
     assert git(repo, "merge", "theirs", "-m", "m", check=False).returncode == 0
     assert "\n\n## 2026-08-10" in (repo / LOG_PATH).read_text()
+
+
+class TestRepositoryContent:
+    """Content assertions, safe to run in CI — unlike `--check`, which reads local git config."""
+
+    ATTRIBUTES = Path(__file__).resolve().parents[2] / ".gitattributes"
+
+    def _declared_in_gitattributes(self) -> set[str]:
+        declared = set()
+        for line in self.ATTRIBUTES.read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if "merge=append-only" in line:
+                declared.add(line.split()[0])
+        return declared
+
+    def test_gitattributes_and_the_driver_allowlist_name_the_same_files(self) -> None:
+        """Either half alone is inert, so a file added to one and not the other is a bug.
+
+        Missing from `.gitattributes`: git never invokes the driver. Missing from the driver's
+        allowlist: the driver refuses and the file conflicts as before. Both fail quietly.
+        """
+        sys.path.insert(0, str(TOOLS))
+        try:
+            import merge_append_only
+        finally:
+            sys.path.pop(0)
+
+        assert self._declared_in_gitattributes() == set(merge_append_only.APPEND_ONLY_PATHS)
+
+    def test_declared_files_exist(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        for path in self._declared_in_gitattributes():
+            assert (repo_root / path).is_file(), f"{path} is declared but does not exist"
+
+    def test_changelog_is_not_union_merged(self) -> None:
+        """Explicitly pinned: it is edited in place, so it must keep conflicting."""
+        assert "docs/changelog.md" not in self._declared_in_gitattributes()

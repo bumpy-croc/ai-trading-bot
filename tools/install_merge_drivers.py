@@ -11,6 +11,12 @@ had nothing to do (GH #1077's class — a mechanism whose absence is invisible).
 from ``make install`` alongside the git-hook and worktree-shim installers, and ``--check``
 reports an unregistered or stale driver as drift.
 
+``--check`` inspects *this machine's* git config, so — like ``make hooks-check`` — it is a
+workstation check and not a CI gate: a fresh clone would fail it every run, and running it
+after ``make install`` would pass tautologically. What CI can usefully assert is repository
+content, which ``tests/unit/test_append_only_merge_driver.py`` does: `.gitattributes` and this
+tool's allowlist must name the same files.
+
 Usage:
     python tools/install_merge_drivers.py           # register / repair
     python tools/install_merge_drivers.py --check   # report drift, exit 1 if not registered
@@ -23,10 +29,22 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Registered as a *relative* command on purpose: git runs a merge driver from the top of the
-# work tree doing the merge, so a relative path follows the worktree while an absolute one
-# would pin every linked worktree to whichever checkout happened to run `make install`
-# (git config lives in the shared common dir). Stdlib-only, so bare `python3` suffices.
+# Registered as a *relative* command on purpose, and deliberately unlike the hook installer
+# (tools/install_git_hooks.py, GH #1077), which copies hook *sources* from the primary
+# checkout. The difference is that a hook is a file git copies once, while this is a command
+# git re-runs at merge time:
+#
+# * git runs a merge driver from the top of the work tree doing the merge, so a relative path
+#   resolves inside that worktree and always matches the code being merged.
+# * git config lives in the shared common dir, so an absolute path would pin every linked
+#   worktree to one checkout. Pinning to the primary checkout — the hook installer's rule —
+#   would be actively wrong here: the primary is held on the production branch, which does not
+#   carry this tool at all until this change ships to prod.
+# * If a worktree is on a branch that predates the driver, the command simply is not there,
+#   git treats the failure as "unresolved" and leaves ordinary conflict markers. Every failure
+#   mode degrades to the status quo rather than to a bad merge.
+#
+# Stdlib-only, so bare `python3` suffices (and, unlike `python`, it exists on macOS).
 DRIVERS: dict[str, dict[str, str]] = {
     "append-only": {
         "name": "Union merge for append-only records (keeps both sides, chronological)",
