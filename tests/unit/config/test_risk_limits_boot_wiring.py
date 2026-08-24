@@ -12,9 +12,18 @@ import argparse
 
 import pytest
 
-from src.config.risk_limits import get_risk_limits
+from src.config.risk_limits import RiskLimits, get_risk_limits
 
-RATIFIED = get_risk_limits()
+
+@pytest.fixture(scope="session")
+def ratified() -> RiskLimits:
+    """The Board-ratified limits.
+
+    A fixture rather than a module-level constant: a module-level call would run
+    at collection time and prime the process-wide ``lru_cache`` before any
+    fixture could control it, making test order silently load-bearing.
+    """
+    return get_risk_limits()
 
 
 def _backtest_parser() -> argparse.ArgumentParser:
@@ -30,16 +39,19 @@ class TestBacktestCliDefaultsResolveToRatified:
     """`atb backtest` with no risk flags must run at live-representative risk."""
 
     @pytest.mark.parametrize(
-        ("dest", "expected"),
+        ("dest", "section", "key"),
         [
-            ("risk_per_trade", RATIFIED.position.base_risk_per_trade_pct),
-            ("max_risk_per_trade", RATIFIED.position.max_risk_per_trade_pct),
-            ("max_drawdown", RATIFIED.portfolio.max_drawdown_pct),
+            ("risk_per_trade", "position", "base_risk_per_trade_pct"),
+            ("max_risk_per_trade", "position", "max_risk_per_trade_pct"),
+            ("max_drawdown", "portfolio", "max_drawdown_pct"),
         ],
     )
-    def test_unset_flag_resolves_to_ratified_value(self, dest: str, expected: float) -> None:
+    def test_unset_flag_resolves_to_ratified_value(
+        self, ratified: RiskLimits, dest: str, section: str, key: str
+    ) -> None:
         from src.risk.risk_manager import RiskParameters
 
+        expected = getattr(getattr(ratified, section), key)
         ns = _backtest_parser().parse_args(["backtest", "ml_basic"])
         # Unset flags are sentinels, so RiskParameters supplies the ratified value.
         assert getattr(ns, dest) is None
@@ -55,7 +67,9 @@ class TestBacktestCliDefaultsResolveToRatified:
 class TestLiveRunnerDefaultsResolveToRatified:
     """The production start command passes no risk flags — these are its values."""
 
-    def test_production_start_command_resolves_ratified_risk(self, monkeypatch) -> None:
+    def test_production_start_command_resolves_ratified_risk(
+        self, monkeypatch, ratified: RiskLimits
+    ) -> None:
         import sys
 
         from src.engines.live import runner
@@ -77,7 +91,7 @@ class TestLiveRunnerDefaultsResolveToRatified:
 
         # The live drawdown guard's cap. Confirmed against the deployed prod
         # boot log: "peak=$84.42, hard cap=20.0%".
-        assert params.max_drawdown == RATIFIED.portfolio.max_drawdown_pct == 0.20
+        assert params.max_drawdown == ratified.portfolio.max_drawdown_pct == 0.20
         assert params.base_risk_per_trade == 0.02
         assert params.max_risk_per_trade == 0.03
 
@@ -115,6 +129,36 @@ class TestEntryPointsFailClosed:
 
         with pytest.raises((RiskLimitsError, SystemExit)):
             runner.main()
+        assert loaded == [], "strategy was loaded despite invalid risk limits"
+
+    def test_backtest_cli_aborts_before_strategy_load(self, monkeypatch) -> None:
+        """`atb backtest` must fail closed too — the guard sits ahead of providers."""
+        from cli.commands import backtest as backtest_cmd
+        from src.config import risk_limits as risk_limits_module
+        from src.config.risk_limits import RiskLimitsError
+
+        def _boom() -> None:
+            raise RiskLimitsError("simulated invalid risk-limits.json")
+
+        # _handle imports get_risk_limits inside the function body, so the name
+        # must be replaced on the defining module, not on the CLI module.
+        monkeypatch.setattr(risk_limits_module, "get_risk_limits", _boom)
+
+        loaded: list[object] = []
+
+        def _record_load(*args, **kwargs):
+            loaded.append(args)
+            raise AssertionError("unreachable: the guard should have aborted first")
+
+        monkeypatch.setattr(backtest_cmd, "_load_strategy", _record_load)
+
+        # A fully defaulted namespace, so the only thing stopping the run before
+        # _load_strategy is the guard itself — an empty Namespace would abort in
+        # _get_date_range and make this assertion vacuous.
+        ns = _backtest_parser().parse_args(["backtest", "ml_basic"])
+
+        # _handle catches broadly and returns 1, so assert on the exit code.
+        assert backtest_cmd._handle(ns) == 1
         assert loaded == [], "strategy was loaded despite invalid risk limits"
 
     def test_experiment_runner_aborts_before_strategy_load(self, monkeypatch) -> None:

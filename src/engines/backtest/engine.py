@@ -30,7 +30,6 @@ from src.config.constants import (
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_HOLDING_HOURS,
-    DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_REGIME_LOOKBACK_BUFFER,
     DEFAULT_SLIPPAGE_RATE,
@@ -553,9 +552,14 @@ class Backtester:
 
     @property
     def max_position_size(self) -> float:
-        """Get max position size (backward compatibility)."""
-        if self.risk_parameters is None:
-            return DEFAULT_MAX_POSITION_SIZE  # Default for backward compatibility
+        """The position cap the entry/exit handlers actually enforce.
+
+        Reads the same source the handlers are built from
+        (``risk_manager.params``), so the reported cap cannot drift from the
+        enforced one. Before #1073 this branched on ``risk_parameters is None``
+        and reported a literal 10% while the handlers enforced whatever
+        ``RiskParameters`` resolved to.
+        """
         return self.risk_manager.params.max_position_size
 
     def _init_regime_switching(

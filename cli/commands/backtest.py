@@ -324,6 +324,9 @@ def _handle(ns: argparse.Namespace) -> int:
             "max_risk_per_trade": ns.max_risk_per_trade,
             "max_drawdown": ns.max_drawdown,
         }
+        # Values are all floats, but the annotation stays Any: narrowing it to
+        # dict[str, float] makes mypy check the ** unpacking against every
+        # RiskParameters field, including the int and list ones.
         risk_params_kwargs: dict[str, Any] = {
             key: value for key, value in risk_flag_overrides.items() if value is not None
         }
@@ -335,8 +338,10 @@ def _handle(ns: argparse.Namespace) -> int:
             risk_params_kwargs["max_position_size"] = ns.max_position_size
         else:
             # Honor strategy-level max_fraction (e.g., trend-following uses 95%
-            # allocation instead of the default 10% cap) via the seam shared
-            # with ExperimentRunner, so CLI and harness sizing cannot drift.
+            # allocation instead of the ratified cap) via the seam shared with
+            # ExperimentRunner, so CLI and harness sizing cannot drift. When the
+            # strategy declares nothing the key is omitted and RiskParameters
+            # hydrates the ratified value (#986).
             strategy_max_position = resolve_strategy_max_position_size(strategy)
             if strategy_max_position is not None:
                 risk_params_kwargs["max_position_size"] = strategy_max_position
@@ -542,7 +547,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--max-position-size",
         type=float,
         default=None,
-        help="Maximum position size as fraction of balance (0.1 = 10 percent) - default: 0.1",
+        help=(
+            "Maximum position size as fraction of balance (0.1 = 10 percent). "
+            "Default: the strategy's max_fraction if it declares one, otherwise "
+            "the Board-ratified position.max_position_size_pct from "
+            "src/config/risk-limits.json."
+        ),
     )
     p.add_argument(
         "--disable-engine-sl",
