@@ -69,12 +69,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tolerance: `--risk-per-trade` 0.01 -> 0.02, `--max-risk-per-trade` 0.02 -> 0.03,
   `--max-drawdown` 0.5 -> 0.20. Live values are unchanged (constants and the
   ratified JSON already agreed at 0.02 / 0.03 / 0.20).
-- **Live behaviour is unchanged.** The drawdown guard's cap resolves to 0.20
+- **BEHAVIOURAL CHANGE — a bare `Backtester` now caps positions at the ratified
+  20%, not 10%** (#1073 follow-up). `Backtester.max_position_size` used to
+  *report* `DEFAULT_MAX_POSITION_SIZE` (0.10) whenever `risk_parameters is None`,
+  while the entry/exit handlers were built from
+  `risk_manager.params.max_position_size` — which #1073 hydrated to 0.20. The
+  reported cap and the enforced cap therefore disagreed, and the regression guard
+  (`tests/unit/test_backtest_live_parity.py`) kept passing because it compared the
+  reported value against the same 0.10 literal. Measured on
+  `Backtester(strategy, data_provider, initial_balance=10_000)`:
+
+  | | before #1073 | #1073 as merged | now |
+  |---|---|---|---|
+  | `.max_position_size` (reported) | 0.10 | 0.10 | **0.20** |
+  | `risk_manager.params` (enforced) | 0.10 | **0.20** | **0.20** |
+  | entry/exit handler | 0.10 | **0.20** | **0.20** |
+
+  The property now reads `risk_manager.params.max_position_size`
+  unconditionally, so reported == enforced by construction. **0.20 is the
+  intended default**: parity with live is the whole point of the single-source
+  design, and a backtest that silently sizes differently from the ratified live
+  cap is the measurement error this change exists to remove. The parity test now
+  asserts reported == enforced == the loader's value, so it cannot pass vacuously
+  again.
+
+  **Consequence for existing results (relevant to #1081):** any backtest number
+  produced by a bare `Backtester` — no explicit `max_position_size`, and a
+  strategy that declares no `max_fraction` — was produced at a 10% cap and will
+  not reproduce at today's 20%. Auditing `src/strategies/*.py`, every strategy
+  declares `max_fraction` in `get_risk_overrides()` **except `ml_adaptive` and
+  `ensemble_weighted`**; those two are the ones whose default backtests double.
+  `atb backtest` is unaffected for strategies that declare `max_fraction` (the
+  CLI seeds it via `resolve_strategy_max_position_size`).
+- **Live behaviour: the enforced bounds are unchanged, but scale-in accounting
+  and the short-entry cap move.** The drawdown guard's cap resolves to 0.20
   before and after (matching the deployed prod boot log `hard cap=20.0%`), and
   the effective live position bound stays 0.20 (`railway.json` pins
-  `--max-position 0.20`). Bare-default `RiskParameters.max_position_size` moves
-  0.10 -> 0.20 as the design predicted, but no live sizing path is affected: prod's
-  entries are bounded by the engine-level `--max-position` knob, not by this field.
+  `--max-position 0.20`). Two live-reachable paths do read
+  `params.max_position_size`, so "no live sizing path is affected" was too
+  strong:
+  - *Scale-in accounting.* `PortfolioRiskManager.adjust_position_after_scale_in`
+    clamps tracked exposure to `max(0.0, params.max_position_size - current)` and
+    charges the difference to `daily_risk_used`. It is reached from
+    `src/engines/live/execution/exit_handler.py` on every scale-in, and
+    `hyper_growth` configures `scale_in_thresholds` with `max_scale_ins: 2`. With
+    the field moving 0.10 -> 0.20, the *tracked* headroom doubles. Executed size is
+    still clamped by the engine-level `--max-position 0.20`, so this is arguably a
+    fix — the accounting ceiling and the execution ceiling now agree instead of the
+    accounting one under-counting — but it is a live behavioural delta, not a no-op.
+  - *Short entries.* `entry_coordinator` bounds a short by
+    `min(short_fraction, state.max_position_size)` on the branch gated by
+    `overrides.get("position_sizer")`, which `ComponentStrategy.get_risk_overrides()`
+    always populates — so the gate is truthy for every component strategy. The
+    effective short cap therefore moves 0.10 -> 0.20 the moment shorts are
+    re-enabled on a strategy that does not set the field explicitly. This is
+    dormant today only because of #1030's long-only **config flag**, not because of
+    any code guarantee — and long-only's evidence base is itself under
+    re-examination ([D-2026-08-13-06], #1081), so treat it as a near-term state.
 
 ### Added
 - Parity tripwire tests (design §3.9.4): `RiskParameters()` must equal the
