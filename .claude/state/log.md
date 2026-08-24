@@ -1150,3 +1150,31 @@ Ref: PR #1076, #1078, #1074, #1072, #1080, #1073, #1069, #1060; GH #1085/#1084/#
 ## 2026-08-24 12:00 · track-record · live-ops
 Severity: red  Top anomaly: prod close-only mode latched 2026-08-20 16:48 UTC after an SL re-placement failure, undetected for ~4 days — daily-trading-standup ran on schedule every day and reported NOMINAL each time (its "Decision:" cadence check can't see the close-only gate). Book flat throughout, no capital loss, opportunity-cost only. An operator alert *was* sent (Slack webhook, alert_sent=true) — needs human confirmation it was seen.
 Ref: docs/research/ops-snapshots/2026-08-24_1200.md; .claude/state/incidents/2026-08-24T1200-P1-close-only-4day-silent-halt.md; GH #1094, #1095; PR #1093
+
+## 2026-08-24 · track-record · quant-researcher
+Experiment: GH #1081 Step 1 — provenance audit of the July research cluster (no re-runs) →
+**6/15 VERIFIED-CLEAN, 6/15 AT-RISK, 2/15 UNKNOWABLE, 1 label correction**.
+Evidence: docs/research/notes/2026-08-24_1081-provenance-audit.md (PR #1100).
+AT-RISK, highest consequence: `short-suppression-counterfactual` (#1019, sole evidence base for
+the live long-only config, `atb backtest` from a worktree missing #988/#1006's point-in-time
+model pinning that the doc relies on) and `hypergrowth-365d-drawdown-stress-review` (worktree at
+`e1d24239` has PR #838's corrected drawdown accounting; the frozen primary checkout does not —
+concrete mechanism for the already-observed CF-A non-reproduction, 17.01% claimed vs 22.23%
+actual). Also AT-RISK: `kelly-active-evaluation`, `tournament-v2-corrected`,
+`confidence-calibration`, and the 2026-08-09 retrain (#1048).
+VERIFIED-CLEAN by direct evidence (not inference): `input-screening-linear`/`_nonlinear` (#969/#973,
+explicit `sys.path` insertion of the resolved repo root before importing `src`), `exit-geometry-round2`
+(#1012, self-diagnosed and fixed the exact bug class mid-experiment, proved via a 3-row before/after
+table + byte-identical determinism check — also incidentally clears round 1 of this concern),
+`hypergrowth-exit-geometry` (explicit `PYTHONPATH=.`), `capital-sizing-knee` (#1064, pure arithmetic,
+no execution), `max-drawdown-cap-30pct-review` (code-reading + read-only DB only).
+UNKNOWABLE: `parity-gap-investigation` and `live-trade-review` each have one executed `atb backtest`
+number with no worktree declared anywhere in either document — provenance cannot be established
+from the record, reported as such rather than assumed either way.
+**Correction to #1081's own "2026-08-23 retrain: safe (post-shim)" label**: that retrain (PR #1078,
+created 2026-08-23T07:50) predates the robust fix (`#1080`, merged 2026-08-24T09:48) by a day; only
+the informal 2026-08-13 19:23 mitigation (no hard-fail guard) covers it — reclassified
+moderate-confidence-clean, recommend a cheap confirmation re-run rather than trusting the label.
+Ranked Step-2 re-run list delivered in the audit doc, ordered by consequence per the PM's priority,
+controlling for GH #1088's position-cap default change; total estimated sequential cost ~2.5-4h.
+Ref: #1081, #1070, #1080, #1019, #1012, #969, #973, #1064, [D-2026-08-13-06].
