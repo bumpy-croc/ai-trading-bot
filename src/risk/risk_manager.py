@@ -91,25 +91,19 @@ import logging
 import math
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar, cast
 
 import pandas as pd
 
 from src.config.constants import (
     DEFAULT_ATR_PERIOD,
-    DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_BREAKEVEN_BUFFER,
     DEFAULT_BREAKEVEN_THRESHOLD,
     DEFAULT_CORRELATION_THRESHOLD,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
     DEFAULT_EXPOSURE_PRECISION_DECIMALS,
-    DEFAULT_MAX_CORRELATED_EXPOSURE,
     DEFAULT_MAX_CORRELATED_RISK,
-    DEFAULT_MAX_DAILY_RISK,
-    DEFAULT_MAX_DRAWDOWN,
-    DEFAULT_MAX_POSITION_SIZE,
-    DEFAULT_MAX_RISK_PER_TRADE,
     DEFAULT_MAX_SCALE_INS,
     DEFAULT_PARTIAL_EXIT_SIZES,
     DEFAULT_PARTIAL_EXIT_TARGETS,
@@ -119,6 +113,7 @@ from src.config.constants import (
     DEFAULT_TRAILING_DISTANCE_ATR_MULT,
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
+from src.config.risk_limits import get_risk_limits
 from src.tech.indicators.core import calculate_atr
 from src.utils.price_targets import PriceTargetCalculator
 
@@ -130,21 +125,35 @@ VOLATILE_RISK_MULTIPLIER = 0.6  # Decrease risk in volatile markets
 VALID_REGIMES = frozenset({"normal", "trending", "volatile"})
 VALID_SIDES = frozenset({"long", "short"})
 
+# Sentinel default meaning "hydrate this field from the Board-ratified limits in
+# __post_init__". Typed as float so every consumer keeps a non-optional contract:
+# by the time __post_init__ returns, each of these fields holds a real float.
+_FROM_RATIFIED_LIMITS: float = cast(float, None)
+
 
 @dataclass
 class RiskParameters:
-    """Risk management parameters"""
+    """Risk management parameters.
 
-    base_risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE  # 2% risk per trade
-    max_risk_per_trade: float = DEFAULT_MAX_RISK_PER_TRADE  # 3% maximum risk per trade
-    max_position_size: float = (
-        DEFAULT_MAX_POSITION_SIZE  # Maximum position size (fraction of balance)
-    )
-    max_daily_risk: float = DEFAULT_MAX_DAILY_RISK  # 6% maximum daily risk (fraction of balance)
+    The risk-limit fields below default to the Board-ratified values in
+    ``src/config/risk-limits.json``, hydrated at construction via
+    :func:`src.config.risk_limits.get_risk_limits`. A bare ``RiskParameters()``
+    therefore yields ratified values by construction, and an unreadable or
+    invalid limits file fails closed rather than falling back to a literal.
+    Explicit constructor arguments always win — they are caller/strategy intent,
+    clamped downstream by the engines.
+    """
+
+    base_risk_per_trade: float = _FROM_RATIFIED_LIMITS
+    max_risk_per_trade: float = _FROM_RATIFIED_LIMITS
+    max_position_size: float = _FROM_RATIFIED_LIMITS  # fraction of balance
+    max_daily_risk: float = _FROM_RATIFIED_LIMITS
+    # Not a ratified key: the JSON ratifies only max_correlated_exposure_pct.
+    # Unification of the two correlated-limit concepts is design §3.8 (step 6).
     max_correlated_risk: float = (
         DEFAULT_MAX_CORRELATED_RISK  # 10% maximum risk for correlated positions
     )
-    max_drawdown: float = DEFAULT_MAX_DRAWDOWN  # 20% maximum drawdown (fraction)
+    max_drawdown: float = _FROM_RATIFIED_LIMITS
     position_size_atr_multiplier: float = 1.0
     default_take_profit_pct: float | None = None  # if None, engine/strategy may supply
     atr_period: int = DEFAULT_ATR_PERIOD
@@ -169,11 +178,43 @@ class RiskParameters:
     # Correlation control configuration (used by correlation engine/integration)
     correlation_window_days: int = DEFAULT_CORRELATION_WINDOW_DAYS
     correlation_threshold: float = DEFAULT_CORRELATION_THRESHOLD
-    max_correlated_exposure: float = DEFAULT_MAX_CORRELATED_EXPOSURE
+    max_correlated_exposure: float = _FROM_RATIFIED_LIMITS
     correlation_update_frequency_hours: int = DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS
 
+    # field name -> (RiskLimits section, ratified key). The single mapping between
+    # this dataclass and the ratified file; the parity tripwire test asserts it is
+    # complete, so a new hydrated field cannot be added without extending the test.
+    _RATIFIED_FIELD_MAP: ClassVar[dict[str, tuple[str, str]]] = {
+        "base_risk_per_trade": ("position", "base_risk_per_trade_pct"),
+        "max_risk_per_trade": ("position", "max_risk_per_trade_pct"),
+        "max_position_size": ("position", "max_position_size_pct"),
+        "max_daily_risk": ("portfolio", "max_daily_risk_pct"),
+        "max_drawdown": ("portfolio", "max_drawdown_pct"),
+        "max_correlated_exposure": ("portfolio", "max_correlated_exposure_pct"),
+    }
+
+    def _hydrate_ratified_defaults(self) -> None:
+        """Fill sentinel fields from the ratified limits.
+
+        The loader is consulted only when at least one field is still a
+        sentinel, so a fully specified construction needs no file at all.
+        """
+        pending = [
+            name
+            for name in self._RATIFIED_FIELD_MAP
+            if getattr(self, name) is _FROM_RATIFIED_LIMITS
+        ]
+        if not pending:
+            return
+        limits = get_risk_limits()
+        for name in pending:
+            section, key = self._RATIFIED_FIELD_MAP[name]
+            setattr(self, name, getattr(getattr(limits, section), key))
+
     def __post_init__(self):
-        """Validate risk parameters after initialization"""
+        """Hydrate ratified defaults, then validate risk parameters"""
+        self._hydrate_ratified_defaults()
+
         if self.base_risk_per_trade <= 0:
             raise ValueError("base_risk_per_trade must be positive")
         if self.max_risk_per_trade <= 0:

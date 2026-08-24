@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help install deps-dev deps-server clean build
+.PHONY: help install shim shim-check deps-dev deps-server clean build
 
 help:
 	@echo "AI Trading Bot - Makefile Commands"
@@ -22,6 +22,16 @@ help:
 
 install:
 	pip install -e .
+	$(MAKE) shim
+
+# GH #1070: pip's editable install hardcodes the install-time checkout path, so a shared venv
+# silently serves that checkout's code to every git worktree. The shim re-points src/cli at
+# the checkout enclosing the cwd. Cheap, idempotent, no rebuild.
+shim:
+	python tools/install_worktree_shim.py
+
+shim-check:
+	python tools/install_worktree_shim.py --check
 
 deps-dev: install
 	pip install -r requirements.txt

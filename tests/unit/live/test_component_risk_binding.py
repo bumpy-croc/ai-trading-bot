@@ -79,9 +79,13 @@ def test_engine_merges_engine_and_component_parameters(
         max_position_size=0.1,
         default_take_profit_pct=0.04,
     )
+    # 0.15 rather than the ratified 0.20: the merge treats an engine value equal
+    # to the RiskParameters default as "engine did not set this" (see
+    # test_engine_value_equal_to_ratified_default_defers_to_component), so a
+    # ratified-valued engine arg cannot express override intent here.
     engine_params = RiskParameters(
         base_risk_per_trade=0.025,
-        max_position_size=0.2,
+        max_position_size=0.15,
     )
 
     strategy = _build_component_strategy(component_params)
@@ -94,8 +98,38 @@ def test_engine_merges_engine_and_component_parameters(
 
     params = engine.risk_manager.params
     assert params.base_risk_per_trade == pytest.approx(0.025)
-    assert params.max_position_size == pytest.approx(0.2)
+    assert params.max_position_size == pytest.approx(0.15)
     assert params.default_take_profit_pct == pytest.approx(0.04)
+
+
+def test_engine_value_equal_to_ratified_default_defers_to_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Documents a known limitation of the value-based merge heuristic.
+
+    ``merge_risk_parameters`` infers "the engine left this at its default" by
+    comparing against ``RiskParameters()``. It therefore cannot distinguish an
+    engine that explicitly asked for the ratified value from one that passed
+    nothing, and the component's tighter value wins.
+
+    No in-tree strategy hits this: the live runner never passes
+    ``max_position_size`` into ``RiskParameters`` at all (the engine-level
+    ``--max-position`` bound is a separate knob), so the merge outcome is
+    identical before and after ratified-default hydration. Pinned here so the
+    ambiguity is visible rather than latent.
+    """
+    ratified = RiskParameters().max_position_size
+
+    component_params = RiskParameters(max_position_size=0.1)
+    strategy = _build_component_strategy(component_params)
+
+    engine = _build_engine(
+        monkeypatch=monkeypatch,
+        strategy=strategy,
+        risk_parameters=RiskParameters(max_position_size=ratified),
+    )
+
+    assert engine.risk_manager.params.max_position_size == pytest.approx(0.1)
 
 
 def test_engine_preserves_component_overrides_for_default_engine_parameters(
