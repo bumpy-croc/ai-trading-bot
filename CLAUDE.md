@@ -42,6 +42,11 @@ This repo is set up to be operated by a persistent Claude Code daemon (e.g. Clau
 **Hard rules for the daemon:**
 - Never change `.claude/state/charter.md` or `src/config/risk-limits.json` — those are human-owned.
 - Never rewrite history in `log.md` or closed incidents — append-only; corrections are new entries referencing the earlier one.
+  Because it is append-only, `log.md` (and `.claude/skills/weekly-retro/AGENDA.md`) use the `append-only` git merge
+  driver: concurrent appends merge without a conflict — the two sides' contributions ordered by their first entry's
+  timestamp, though not globally sorted — while edits still conflict. The driver is
+  registered by `make install` / `make merge-drivers`; if you hit a conflict on a plain append, run
+  `make merge-drivers-check` — an unregistered driver is silently inert. See `docs/development.md`.
 - Never execute a `board_required: true` action without a human approving the proposal.
 - Model promotion for a live-trading symbol does **not** require human sign-off (per `charter.md`'s autonomy envelope and stated high risk appetite) — but only once the model has cleared the standard promotion bar: held-out temporal eval, per-regime breakdown, calibration check, and >=48h paper-trading validation (see `ml-engineer` agent). Self-certifying against that bar without actually running it does not count as "verified." Log every promotion decision and its evidence in `log.md`.
 - If the charter is missing or invalid, refuse to make material decisions.

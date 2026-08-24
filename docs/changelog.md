@@ -12,6 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Append-only state files no longer conflict on every concurrent append** (#1079;
+  near-loss case #1090). `.claude/state/log.md` is written by every agent and the PM,
+  so two branches that each record something collided at EOF on nearly every PR —
+  ~8 hand-resolutions in one 2026-08-13 session, ~7 more on 2026-08-24, each one
+  mechanically identical and each one a chance to silently drop an entry from a record
+  whose entire purpose is that entries are never dropped. `.gitattributes` now maps
+  `.claude/state/log.md` and `.claude/skills/weekly-retro/AGENDA.md` to a custom
+  `append-only` merge driver (`tools/merge_append_only.py`). It splits each side into
+  entries (H2 heading / top-level bullet), runs git's own three-way merge over them, and
+  re-merges each conflict region at entry granularity: concurrent appends are all kept and
+  ordered by their timestamps, deliberate deletions are honoured (the retro's `AGENDA.md`
+  clear stands, while an item appended during the retro survives it), and **edits still
+  conflict** — entries are identified by their first line, so the same entry with two
+  bodies is an edit, not two appends (a first-line edit, which would otherwise read as a
+  delete plus an add, is caught by pairing the vanished and arrived entries on body
+  similarity). Deliberately not git's built-in `union` driver, which cannot tell those apart.
+  Entry boundaries are guessed from prose, which cannot be done reliably — a quoted header
+  can satisfy every shape rule — so correctness rests on two properties instead: one side's
+  contribution is never reordered or split internally, and the finished result is verified
+  against the inputs (each side's added lines must survive verbatim and unbroken) before it
+  is accepted, falling back to an ordinary conflict otherwise. Measured over 800 randomised
+  merges: zero corruptions; on realistic bodies 393/400 still merge cleanly. The fuzz harness
+  that found the last defect ships as `tools/fuzz_append_only_merge.py`, since code review
+  demonstrably was not a reliable filter for this design. Registration is guarded: git does not write conflict markers when a
+  driver exits non-zero, so a command that cannot run would leave the file as ours' content
+  with no markers, reading as a clean merge; the registered command tests for the script and
+  interpreter and otherwise falls through to `git merge-file`, and the script writes markers
+  before exiting on an internal crash. `docs/changelog.md` is excluded on purpose: entries are prepended
+  into shared `###` sections and `[Unreleased]` is rewritten at release time, so two branches
+  really do edit the same region. Registration is the invisible half — `merge.<name>.driver`
+  is a local config key, and without it git ignores `.gitattributes` **without saying so**
+  (#1077's class), so `tools/install_merge_drivers.py` runs from `make install` alongside the
+  hook and shim installers, and `make merge-drivers-check` reports an unregistered or stale
+  driver as drift.
 - **The `pre-push` hook can now fail** (#1077). It was inert: pytest's output was
   piped into `tail`, so `EXIT_CODE=$?` captured `tail`'s status and the gate exited
   0 no matter what the tests did, and `.venv/bin/python` was resolved relative to

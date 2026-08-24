@@ -151,6 +151,146 @@ To skip deliberately, use git's own escape hatch:
 git push --no-verify
 ```
 
+## Append-only files and the merge driver
+
+`.claude/state/log.md` and `.claude/skills/weekly-retro/AGENDA.md` are written by every agent
+and by the PM. Because entries are appended at the end, two branches that each record something
+collide at EOF — a conflict resolved the same way every time ("keep both, chronological"). That
+toil was measured at ~8 hand-resolutions in one session, and each one is a chance to silently
+drop an entry from a record whose whole point is that entries are never dropped (GH #1079,
+#1090).
+
+`.gitattributes` maps those paths to a custom driver, `tools/merge_append_only.py`:
+
+- it splits each side into **entries** and runs git's own three-way merge over them, so
+  nothing on either side is dropped and the common ancestor is never duplicated. An entry
+  starts at a marker (an H2 heading in `log.md`, a top-level bullet in `AGENDA.md`) that
+  *also* carries a date *and* is preceded by a blank line — a heuristic, because entries are
+  encouraged to quote an earlier entry's header and `log.md` bodies routinely carry column-0
+  markup. **Correctness does not rest on that heuristic**, and it cannot: a quoted header can
+  satisfy every shape rule, as the charter's own correction pattern does. Two downstream
+  properties make a wrong guess harmless instead:
+  - **one side's contribution is never reordered or split internally.** Whatever the driver
+    believes the shape to be, the text one side wrote is emitted contiguously and in written
+    order; ordering happens only *between* contributions;
+  - **the result is verified, not trusted.** Before accepting a merge the driver checks the
+    finished text against the inputs and confirms each side's added lines are present
+    verbatim and unbroken. If not, it abandons the merge for an ordinary conflict. An
+    unknown failure mode therefore costs a conflict, never a mangled record — which matters,
+    because the sixth defect found in this file (two sides quoting the same header, whose
+    identical blocks collapsed to one token and let the diff thread one contribution through
+    the middle of the other) was found by fuzzing, not by review;
+- concurrent **appends** are all kept, de-duplicated, sorted by the timestamp in each entry's
+  first line when every entry in the region carries one;
+- **deletions are honoured**: the retro clearing `AGENDA.md` still clears it, while an item a
+  concurrent branch appended survives the clear;
+- **edits still conflict.** Entries are identified by their first line, so the same entry with
+  two different bodies is an edit, not two appends: it stops the merge with real markers, as
+  does an edit racing a deletion. This is deliberately *not* git's built-in `union` driver,
+  which cannot tell the two apart and would ship both halves of a rewrite.
+
+  Because identity *is* the first line, editing that line would otherwise read as
+  delete-old-add-new and slip past those checks. The driver therefore also pairs a vanished
+  entry with an arrived one by **body** similarity and conflicts on the pair. **Residual
+  carve-out, stated plainly:** an entry whose first line *and* body are both rewritten
+  substantially, or a single-line entry whose only line is edited, is still indistinguishable
+  from a delete plus an unrelated append and will merge as one. Bodies are compared rather
+  than whole entries because whole-entry comparison cannot separate the cases — on real data
+  unrelated entries score 0.66 against 0.89 for a genuine edit, while by body the same cases
+  are 0.38 against 1.00.
+
+A rule requiring entry timestamps never to go backwards was considered and **rejected on
+measurement**: 11 of 94 header transitions in the real `log.md` already go backwards (5 genuine
+out-of-order appends, 6 because 34 headers carry a date but no time). It would therefore fold
+roughly one appended entry in eight into its predecessor and conflict — reintroducing the toil
+this exists to remove.
+
+**Cost of the safety checks, measured.** Over 400 randomised merges of deliberately hostile
+bodies: 0 corruptions, 353 clean, 47 conflicts. Over 400 with realistic bodies: 0 corruptions,
+**393 clean, 7 conflicts**. So the driver removes ~98% of the hand-resolutions on ordinary
+content and fails toward a conflict on the rest.
+
+### Changing the driver: run the fuzz harness
+
+`tools/fuzz_append_only_merge.py` ships with the driver on purpose. Seven content-loss paths
+were found in it across three review rounds, and the last one — two sides quoting the same
+header — was found by this harness *after* careful review by two people had missed it. Both
+reviewers concluded that reading the code is not a reliable filter for this design, so run the
+thing that was:
+
+```bash
+python tools/fuzz_append_only_merge.py                 # 400 hostile cases; non-zero on corruption
+python tools/fuzz_append_only_merge.py --realistic     # ordinary prose; measures the conflict rate
+python tools/fuzz_append_only_merge.py --cases 2000 --start-seed 5000   # longer soak
+```
+
+It checks four oracles per case, two of which exist specifically because the driver's own
+post-condition cannot see them: that no line is *duplicated* (the post-condition checks
+presence, not count) and that ancestor content neither side deleted survives (the
+post-condition only looks at added runs). A fixed-seed subset runs in CI via
+`tests/unit/test_append_only_merge_driver.py`.
+
+Note when extending it that a naive per-line duplication bound is wrong — two *different*
+entries may legitimately share a line and both survive, so the bound is inclusion-exclusion
+against the ancestor. Both this harness and the independent review initially produced false
+positives from getting that wrong.
+
+### Which files qualify
+
+Only files whose existing content is never edited or removed in ordinary work. Adding anything
+else would union-merge changes that should have conflicted. `docs/changelog.md` is deliberately
+**excluded**: new entries are prepended inside shared `### Added` / `### Fixed` sections and the
+`[Unreleased]` section is rewritten at release time, so two branches genuinely edit the same
+region. Incident and proposal files are excluded for the same reason — their `status:`
+frontmatter changes in place.
+
+The rule is enforced twice on purpose. A path must appear in `.gitattributes` **and** in
+`APPEND_ONLY_PATHS` in `tools/merge_append_only.py`; the driver falls back to a normal conflict
+for any path it does not recognise, so a stray `.gitattributes` line cannot quietly union-merge
+a file.
+
+### Installing it, and telling when it is not active
+
+Half of a merge driver cannot be version-controlled: `merge.append-only.driver` is a local git
+config key, and when it is missing git **ignores the `.gitattributes` entry without saying so**
+— the same invisible-absence failure as the inert pre-push hook of GH #1077 above.
+Registration therefore runs from the same place as the hooks and the worktree shim, and has
+its own drift check alongside `make hooks-check`:
+
+```bash
+make install               # registers the driver (along with everything else)
+make merge-drivers         # register / repair on its own
+make merge-drivers-check   # non-zero exit if unregistered or stale
+```
+
+Git config lives in the shared common dir, so registering once per **clone** covers every
+linked worktree. The registered command is *relative* (`python3 tools/merge_append_only.py`),
+unlike the hook installer's primary-checkout rule: git runs a merge driver from the top of the
+worktree doing the merge, so a relative path always matches the code being merged, whereas an
+absolute one would pin every worktree to a single checkout — including the primary, which is
+held on the production branch and does not carry this tool at all until it ships there.
+
+Like `make hooks-check`, `make merge-drivers-check` inspects **this machine's** state, so it is
+not a CI gate: a fresh clone would fail it every run and a post-`make install` clone would pass
+it tautologically. What CI does assert is repository *content* — a unit test requires
+`.gitattributes` and the driver's own allowlist to name the same files, since a path in only
+one of them is silently inert.
+
+The symptom of an unregistered driver is exactly the old behaviour — a conflict in `log.md` on
+an ordinary append, with ordinary markers. If you get one, run `make merge-drivers-check`
+before resolving by hand.
+
+A driver that is registered but cannot *run* is more dangerous, and the registration is shaped
+around it. When a merge driver exits non-zero git records a conflict and stages `UU`, but git
+does **not** write the markers — that is the driver's job. So a command that never runs leaves
+the working-tree file as **ours' content verbatim, with no markers**, which is indistinguishable
+from a clean, complete merge; resolving it with `git add` would drop theirs' entry silently.
+That is reachable precisely because the path is relative (a linked worktree on a branch
+predating the driver has no such script). The registered command is therefore guarded — it
+tests for the script and for `python3` and otherwise falls through to `git merge-file`, which
+does write markers — and the script wraps itself so that an internal crash writes markers
+before exiting. Both paths are covered by tests.
+
 ## Strategy versioning
 
 Run `atb strategies version` after modifying any file in `src/strategies/`. The helper inspects staged changes, prompts for a
