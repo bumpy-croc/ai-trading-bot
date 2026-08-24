@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The `pre-push` hook can now fail** (#1077). It was inert: pytest's output was
+  piped into `tail`, so `EXIT_CODE=$?` captured `tail`'s status and the gate exited
+  0 no matter what the tests did, and `.venv/bin/python` was resolved relative to
+  the cwd, so a push from a linked worktree (which has no `.venv`) fell through to
+  a bare `python` that does not exist on macOS. Every push printed
+  `python: command not found` followed by `All fast tests passed. Pushing...`. The
+  hook now runs pytest unpiped, resolves the repo root via
+  `git rev-parse --show-toplevel` and the primary checkout via
+  `--git-common-dir`, requires an interpreter that can actually import pytest, and
+  **aborts the push when it cannot verify** (documented skip: `git push
+  --no-verify`). It also drops `-p no:randomly`, which conflicted with the
+  `--randomly-seed` in `pytest.ini`'s `addopts` and would have aborted the hook
+  with a usage error even after the other two fixes. Hook sources moved into a
+  tracked `.githooks/` with an installer (`make hooks`, wired into `make install`)
+  so they are reviewable rather than drifting per machine; `tests/unit/test_pre_push_hook.py`
+  proves the hook fails on a broken test, from a subdirectory, and from a worktree.
 - **The primary checkout is now write-protected against agent mutation** (#1082;
   filesystem sibling of #1070). An agent shell's cwd is silently reset to the
   primary checkout mid-task, after which every *relative* path resolves there

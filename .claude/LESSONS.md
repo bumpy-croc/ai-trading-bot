@@ -692,16 +692,21 @@ old"*) could not have said anything else, for two independent reasons:
   model-provider signature; treat *any* ~20-line scheduled transcript as failed-until-proven. Before
   a long autonomous window (a promote, a tournament), check headroom — the `check-usage` skill exists
   for exactly this — because the failure lands *after* the irreversible half of the work.
-- **The `pre-push` hook is inert — do not read "All fast tests passed" as evidence (GH #1077).**
-  `.git/hooks/pre-push` pipes pytest into `tail -5` and then reads `$?`, which is **`tail`'s** exit
-  status, so the failure branch is unreachable and the hook always exits 0. It also probes
-  `.venv/bin/python` *relative to cwd* — absent in every worktree — and falls back to bare `python`,
+- **The `pre-push` hook WAS inert — fixed 2026-08-24, and the fix is the lesson (GH #1077).**
+  The old `.git/hooks/pre-push` piped pytest into `tail -5` and read `$?`, which is **`tail`'s** exit
+  status, so the failure branch was unreachable and the hook always exited 0. It also probed
+  `.venv/bin/python` *relative to cwd* — absent in every worktree — and fell back to bare `python`,
   which does not exist on this machine. Observed printing `python: command not found` and
-  `All fast tests passed.` in consecutive lines. Hooks live in `$GIT_COMMON_DIR/hooks` (shared by all
-  worktrees) and are **not versioned**, so this cannot be fixed by a PR. CI's `unit-tests (1..4)` is
-  the real gate; run `PYTHONPATH=. <venv>/python tests/run_tests.py unit` yourself before pushing
-  money-path code. Same class as §2.12/§5.7: a check that cannot fail is a *disabled* check, and this
-  one is worse than absent because it prints a green line.
+  `All fast tests passed.` in consecutive lines. A third latent bug only surfaced once the first two
+  were fixed: `-p no:randomly` makes `pytest.ini`'s inherited `--randomly-seed` unparseable, so the
+  hook would have aborted with a usage error. The hook source now lives in tracked `.githooks/`
+  (installed by `make install` / `make hooks`), resolves paths from `git rev-parse --show-toplevel`
+  and `--git-common-dir`, and **fails the push when it cannot find an interpreter that imports
+  pytest**.
+  **Rule:** for any safeguard, the acceptance test is *"prove it can fail"*, never *"prove it can
+  pass"* — `tests/unit/test_pre_push_hook.py` runs the real hook against a deliberately broken test.
+  Corollary: a hook that is not version-controlled cannot be reviewed and will drift per machine;
+  track the source and install it, never edit `.git/hooks` by hand. Same class as §2.12/§5.7.
 - **A catch-up burst makes `lastRunAt` lie about punctuality.** Scheduled tasks only fire while the
   app is open; on reopen, every overdue task fires at once. On 2026-08-17 `daily-trading-standup`,
   `weekly-model-retrain` and `weekly-retro` all show `lastRunAt` within **32ms of each other**

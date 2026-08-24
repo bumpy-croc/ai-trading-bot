@@ -107,6 +107,34 @@ The regime regression test (`tests/integration/backtesting/test_regime_regressio
 
 The repository enforces Ruff/Black style in CI, so commit formatted code to avoid failures.
 
+## Git hooks
+
+Hook **sources are tracked in `.githooks/`** and are installed by `make install` (also
+`make deps-dev` / `make deps-server`, which depend on it). To install or repair them on their
+own:
+
+```bash
+make hooks          # symlink .githooks/* into the active hooks directory
+make hooks-check    # report drift; non-zero exit if not installed
+```
+
+The installer respects `core.hooksPath` when set and otherwise targets `$GIT_COMMON_DIR/hooks`,
+which is **shared by every linked worktree** of a checkout — install once per clone, not once
+per worktree. Hooks that this repo does not ship are left untouched.
+
+`pre-push` runs the fast-marked unit tests and blocks the push when they fail. It resolves the
+repository root with `git rev-parse --show-toplevel` (never the cwd) and looks for an
+interpreter that can import pytest, in order: `$ATB_PREPUSH_PYTHON`, this checkout's `.venv`,
+the primary checkout's `.venv` (linked worktrees have none of their own), `$VIRTUAL_ENV`, then
+`python3`/`python` on `PATH`. **If no such interpreter exists the push fails** — a check that
+cannot run must not report success (GH #1077).
+
+To skip deliberately, use git's own escape hatch:
+
+```bash
+git push --no-verify
+```
+
 ## Strategy versioning
 
 Run `atb strategies version` after modifying any file in `src/strategies/`. The helper inspects staged changes, prompts for a
