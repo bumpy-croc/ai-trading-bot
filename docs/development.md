@@ -151,6 +151,61 @@ To skip deliberately, use git's own escape hatch:
 git push --no-verify
 ```
 
+## Append-only files and the merge driver
+
+`.claude/state/log.md` and `.claude/skills/weekly-retro/AGENDA.md` are written by every agent
+and by the PM. Because entries are appended at the end, two branches that each record something
+collide at EOF — a conflict resolved the same way every time ("keep both, chronological"). That
+toil was measured at ~8 hand-resolutions in one session, and each one is a chance to silently
+drop an entry from a record whose whole point is that entries are never dropped (GH #1079,
+#1090).
+
+`.gitattributes` maps those paths to a custom driver, `tools/merge_append_only.py`:
+
+- it splits each side into **entries** (an H2 heading in `log.md`, a top-level bullet in
+  `AGENDA.md`) and runs git's own three-way merge over them, so nothing on either side is
+  dropped and the common ancestor is never duplicated;
+- concurrent **appends** are all kept, de-duplicated, sorted by the timestamp in each entry's
+  first line when every entry in the region carries one;
+- **deletions are honoured**: the retro clearing `AGENDA.md` still clears it, while an item a
+  concurrent branch appended survives the clear;
+- **edits still conflict.** Entries are identified by their first line, so the same entry with
+  two different bodies is an edit, not two appends: it stops the merge with real markers, as
+  does an edit racing a deletion. This is deliberately *not* git's built-in `union` driver,
+  which cannot tell the two apart and would ship both halves of a rewrite.
+
+### Which files qualify
+
+Only files whose existing content is never edited or removed in ordinary work. Adding anything
+else would union-merge changes that should have conflicted. `docs/changelog.md` is deliberately
+**excluded**: new entries are prepended inside shared `### Added` / `### Fixed` sections and the
+`[Unreleased]` section is rewritten at release time, so two branches genuinely edit the same
+region. Incident and proposal files are excluded for the same reason — their `status:`
+frontmatter changes in place.
+
+The rule is enforced twice on purpose. A path must appear in `.gitattributes` **and** in
+`APPEND_ONLY_PATHS` in `tools/merge_append_only.py`; the driver falls back to a normal conflict
+for any path it does not recognise, so a stray `.gitattributes` line cannot quietly union-merge
+a file.
+
+### Installing it, and telling when it is not active
+
+Half of a merge driver cannot be version-controlled: `merge.append-only.driver` is a local git
+config key, and when it is missing git **ignores the `.gitattributes` entry without saying so**
+— the same invisible-absence failure as GH #1077. Registration therefore runs from the same
+place as the hooks and the worktree shim:
+
+```bash
+make install               # registers the driver (along with everything else)
+make merge-drivers         # register / repair on its own
+make merge-drivers-check   # non-zero exit if unregistered or stale
+```
+
+Git config lives in the shared common dir, so registering once per **clone** covers every
+linked worktree. The symptom of an unregistered driver is exactly the old behaviour — a
+conflict in `log.md` on an ordinary append. If you get one, run `make merge-drivers-check`
+before resolving by hand.
+
 ## Strategy versioning
 
 Run `atb strategies version` after modifying any file in `src/strategies/`. The helper inspects staged changes, prompts for a

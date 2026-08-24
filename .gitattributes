@@ -1,0 +1,24 @@
+# Custom merge drivers.
+#
+# `merge=append-only` resolves the append/append case — two branches each adding a new entry —
+# by keeping both, in timestamp order, instead of raising a conflict. It is NOT git's built-in
+# `union`: it performs a real three-way merge over entry blocks, so an edit to existing
+# content, or an edit racing a deletion, still conflicts and still needs a human.
+#
+# Only add a file here if its existing content is never edited or removed in ordinary work.
+# A file that gets rewritten in place (docs/changelog.md, incident/proposal frontmatter,
+# source code) must conflict when two branches touch the same region — union-merging it would
+# quietly ship both halves of an edit. The driver enforces this independently: it refuses any
+# path not listed in APPEND_ONLY_PATHS in tools/merge_append_only.py, so adding a line here is
+# necessary but not sufficient.
+#
+# REGISTRATION IS PER-CLONE. `merge.append-only.driver` is a local git config key and cannot be
+# version-controlled; without it git ignores the lines below without saying so. `make install`
+# (or `make merge-drivers`) registers it; `make merge-drivers-check` reports it as drift.
+
+# Append-only by charter: corrections are new entries referencing the earlier one (.claude/state/README.md).
+.claude/state/log.md                    merge=append-only
+
+# Items are appended by any agent as things are noticed and cleared wholesale by the retro that
+# actions them; deletions merge correctly, so a clear does not resurrect items (GH #1090).
+.claude/skills/weekly-retro/AGENDA.md   merge=append-only

@@ -12,6 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Append-only state files no longer conflict on every concurrent append** (#1079;
+  near-loss case #1090). `.claude/state/log.md` is written by every agent and the PM,
+  so two branches that each record something collided at EOF on nearly every PR —
+  ~8 hand-resolutions in one 2026-08-13 session, ~7 more on 2026-08-24, each one
+  mechanically identical and each one a chance to silently drop an entry from a record
+  whose entire purpose is that entries are never dropped. `.gitattributes` now maps
+  `.claude/state/log.md` and `.claude/skills/weekly-retro/AGENDA.md` to a custom
+  `append-only` merge driver (`tools/merge_append_only.py`). It splits each side into
+  entries (H2 heading / top-level bullet), runs git's own three-way merge over them, and
+  re-merges each conflict region at entry granularity: concurrent appends are all kept and
+  ordered by their timestamps, deliberate deletions are honoured (the retro's `AGENDA.md`
+  clear stands, while an item appended during the retro survives it), and **edits still
+  conflict** — entries are identified by their first line, so the same entry with two
+  bodies is an edit, not two appends. Deliberately not git's built-in `union` driver, which
+  cannot tell those apart. `docs/changelog.md` is excluded on purpose: entries are prepended
+  into shared `###` sections and `[Unreleased]` is rewritten at release time, so two branches
+  really do edit the same region. Registration is the invisible half — `merge.<name>.driver`
+  is a local config key, and without it git ignores `.gitattributes` **without saying so**
+  (#1077's class), so `tools/install_merge_drivers.py` runs from `make install` alongside the
+  hook and shim installers, and `make merge-drivers-check` reports an unregistered or stale
+  driver as drift.
 - **The `pre-push` hook can now fail** (#1077). It was inert: pytest's output was
   piped into `tail`, so `EXIT_CODE=$?` captured `tail`'s status and the gate exited
   0 no matter what the tests did, and `.venv/bin/python` was resolved relative to

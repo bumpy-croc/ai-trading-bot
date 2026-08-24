@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help install shim shim-check hooks hooks-check deps-dev deps-server clean build
+.PHONY: help install shim shim-check hooks hooks-check merge-drivers merge-drivers-check deps-dev deps-server clean build
 
 help:
 	@echo "AI Trading Bot - Makefile Commands"
@@ -8,6 +8,7 @@ help:
 	@echo "Installation:"
 	@echo "  make install         Install CLI in editable mode (pip install -e .)"
 	@echo "  make hooks           Install tracked git hooks from .githooks/"
+	@echo "  make merge-drivers   Register git merge drivers for append-only files"
 	@echo "  make deps-dev        Install development dependencies (includes install)"
 	@echo "  make deps-server     Install server/production dependencies (includes install)"
 	@echo ""
@@ -25,6 +26,7 @@ install:
 	pip install -e .
 	$(MAKE) shim
 	$(MAKE) hooks
+	$(MAKE) merge-drivers
 
 # GH #1070: pip's editable install hardcodes the install-time checkout path, so a shared venv
 # silently serves that checkout's code to every git worktree. The shim re-points src/cli at
@@ -42,6 +44,14 @@ hooks:
 
 hooks-check:
 	python tools/install_git_hooks.py --check
+
+# GH #1079: `merge.<name>.driver` cannot be version-controlled, so an unregistered driver
+# makes .gitattributes silently inert and append-only files conflict by hand on every PR.
+merge-drivers:
+	python tools/install_merge_drivers.py
+
+merge-drivers-check:
+	python tools/install_merge_drivers.py --check
 
 deps-dev: install
 	pip install -r requirements.txt
