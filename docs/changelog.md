@@ -275,6 +275,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Prod boots are unaffected (they reuse the active session, whose peak already
   resolved); the 2026-07-14 staging boot would have armed at the durable
   $1015.98 rather than $1015.84, which flips no historical trip decision.
+  Review round: the in-line pre-order gate (`check_before_new_risk`) now
+  ratchets a provisionally-armed peak too — it previously evaluated against the
+  stale boot balance and could admit the entry that the loop check tripped
+  close-only on moments later, re-opening the one-iteration leak that gate
+  exists to close (the same stale peak also under-throttled `_durable_peak_balance`
+  dynamic sizing). The upgrade retries get their own attempt counter, consumed
+  only by the once-per-iteration loop check, so the several chokepoint calls per
+  iteration cannot burn the 10-attempt budget in seconds. A recovery lookup that
+  RAISES now sets `_history_seed_lookup_failed`, so an undetermined lineage
+  expects history and latches `seed_unavailable` instead of laundering a failed
+  lookup into a legitimate `self_anchored`. `MAX_DRAWDOWN_BREACH` risk events now
+  carry `peak_seed`, matching the breaker, so a breach measured off a provisional
+  peak is distinguishable in `system_events` from one measured off durable
+  history. The legacy `_recovered_inactive_session_id` fallback and its Protocol
+  members are gone, making the decoupling unconditional. Finally, a session-REUSE
+  boot that finds no snapshots no longer logs "durable seeding FAILED … measuring
+  from the depressed value" — there was nothing to seed from, and the wording now
+  says so.
 
 - **Macro-event calendar refilled through Jan 2027** (#1053): `config/macro_events.json`
   had no event newer than 2026-07-14, so the macro de-risk guard had zero upcoming

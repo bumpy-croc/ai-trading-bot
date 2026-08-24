@@ -7,11 +7,17 @@ clears during startup BEFORE the first loop iteration. On the clean-restart /
 new-session boot path (the one a mid-drawdown restart takes) they therefore saw
 an empty value and silently self-anchored to the post-restart balance.
 
-These tests pin the three behaviours that fix requires:
+These tests pin the behaviours that fix requires:
   1. the seeders resolve the prior session AFTER startup has cleared the #668 field,
+     reading ONLY the durable field (no legacy fallback),
   2. an empty-but-successful read is retried when history was EXPECTED (the
-     documented first-snapshot race) instead of latching terminally, and
-  3. a genuinely fresh session with no history still self-anchors, once, silently.
+     documented first-snapshot race) instead of latching terminally,
+  3. a genuinely fresh session with no history still self-anchors, once, silently,
+     while a lookup that FAILED is not mistaken for one,
+  4. the session-REUSE boot (lineage id == live session id — the path prod took on
+     2026-08-13) still expects history and is diagnosed apart from a lost lineage, and
+  5. the in-line pre-order gate ratchets a provisional peak before admitting risk,
+     without consuming the bounded upgrade budget.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.engines.live import recovery as recovery_module
+from src.engines.live.monitoring import drawdown_guard as drawdown_guard_module
 from src.engines.live.monitoring.circuit_breaker_enforcer import CircuitBreakerEnforcer
 from src.engines.live.monitoring.drawdown_guard import (
     MAX_SEED_ATTEMPTS,
@@ -40,6 +48,10 @@ pytestmark = pytest.mark.unit
 
 NEW_SESSION = 23
 PRIOR_SESSION = 22
+
+
+def _raise_lookup_error(*_args, **_kwargs):
+    raise RuntimeError("account_history lookup exploded")
 
 
 class _SeedState:
@@ -62,6 +74,7 @@ class _SeedState:
         self.trading_session_id = session_id
         self._recovered_inactive_session_id = None
         self._history_seed_session_id = history_session_id
+        self._history_seed_lookup_failed = False
         self._close_only_mode = False
         self.events: list[str | None] = []
         self._peaks = list(peaks if peaks is not None else [None])
@@ -288,17 +301,246 @@ def test_breaker_trip_event_reports_truthful_peak_provenance():
     assert enforcer.peak_seed_provenance == PEAK_SEED_UNAVAILABLE
 
 
-def test_seeders_use_the_recovered_id_when_the_durable_field_is_absent():
-    """Back-compat: state objects without the new field seed as before."""
-    state = _SeedState(peaks=[1200.0], history_session_id=None)
-    del state._history_seed_session_id
-    state._recovered_inactive_session_id = PRIOR_SESSION
+def test_seeders_read_the_durable_field_and_ignore_the_legacy_recovered_id():
+    """The seeding contract is the durable field alone — no legacy fallback.
+
+    While the ``_recovered_inactive_session_id`` fallback stood, the guarantee
+    "a future feature cannot break seeding by changing its own field's
+    lifetime" was only conditional. A stale/foreign value in the legacy field
+    must not steer the lineage.
+    """
+    state = _SeedState(peaks=[1200.0], history_session_id=PRIOR_SESSION)
+    state._recovered_inactive_session_id = 999  # stale; must not be consulted
 
     enforcer = _guard_enforcer(state)
     enforcer.check()
 
     assert state.peak_calls == [PRIOR_SESSION]
     assert enforcer.peak_seed_provenance == PEAK_SEED_DB_SESSION_MAX
+
+
+def test_legacy_recovered_id_alone_is_not_a_lineage():
+    state = _SeedState(history_session_id=None)
+    state._recovered_inactive_session_id = PRIOR_SESSION
+
+    lineage = resolve_history_lineage(state)
+
+    assert lineage.fallback_session_id is None
+    assert lineage.history_expected is False
+
+
+# ---------------------------------------------------------------------------
+# 4. Session-REUSE boot: lineage id == live session id ([D-2026-08-13-05])
+# ---------------------------------------------------------------------------
+
+
+def test_session_reuse_boot_expects_history_from_the_reused_session():
+    """Crash recovery reuses the session, so the lineage id IS the live one.
+
+    The path prod actually took on 2026-08-13. It must still EXPECT history
+    (an empty read is retried, not latched as a fresh-account anchor) while
+    being distinguishable from the clean-restart lineage.
+    """
+    state = _SeedState(peaks=[1050.0], history_session_id=NEW_SESSION, session_id=NEW_SESSION)
+
+    lineage = resolve_history_lineage(state)
+    assert lineage.fallback_session_id == NEW_SESSION
+    assert lineage.history_expected is True
+    assert lineage.is_distinct_prior_session is False
+
+    enforcer = _guard_enforcer(state)
+    enforcer.check()
+
+    assert enforcer.guard.peak_balance == pytest.approx(1050.0)
+    assert enforcer.peak_seed_provenance == PEAK_SEED_DB_SESSION_MAX
+
+
+def test_breaker_session_reuse_boot_seeds_from_the_reused_session():
+    snapshot = SimpleNamespace(equity=1010.0, balance=1009.0)
+    state = _SeedState(
+        peaks=[1016.44],
+        snapshots=[snapshot],
+        history_session_id=NEW_SESSION,
+        session_id=NEW_SESSION,
+    )
+    enforcer = _breaker_enforcer(state)
+
+    enforcer.check()
+
+    assert enforcer.breaker.peak == pytest.approx(1016.44)
+    assert enforcer.breaker.daily_baseline == pytest.approx(1010.0)
+    assert enforcer.peak_seed_provenance == PEAK_SEED_DB_SESSION_MAX
+
+
+def test_breaker_reuse_boot_without_snapshots_does_not_claim_seeding_failed(caplog):
+    """A reused session with no rows had nothing to seed from — not a defect.
+
+    Still WARNING-visible, but it must not read as "seeding FAILED … measuring
+    from the depressed value": that is alarming noise on an otherwise healthy
+    restart, and it would misdirect the P4 drill triage.
+    """
+    state = _SeedState(
+        peaks=[None], snapshots=[None], history_session_id=NEW_SESSION, session_id=NEW_SESSION
+    )
+    enforcer = _breaker_enforcer(state)
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(MAX_SEED_ATTEMPTS + 2):
+            enforcer.check()
+
+    assert enforcer.peak_seed_provenance == PEAK_SEED_UNAVAILABLE
+    text = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "seeding FAILED" not in text
+    assert "no durable history to seed from" in text
+    assert f"reused session {NEW_SESSION}" in text
+
+
+# ---------------------------------------------------------------------------
+# 5. Undetermined lineage: a FAILED recovery lookup is not a fresh account
+# ---------------------------------------------------------------------------
+
+
+def test_failed_recovery_lookup_expects_history_instead_of_self_anchoring():
+    state = _SeedState(peaks=[None], history_session_id=None)
+    state._history_seed_lookup_failed = True
+
+    lineage = resolve_history_lineage(state)
+    assert lineage.history_expected is True
+    assert lineage.lookup_failed is True
+
+    enforcer = _guard_enforcer(state)
+    enforcer.check()
+
+    # "could not determine" must never present as "nothing to determine".
+    assert enforcer.peak_seed_provenance == PEAK_SEED_UNAVAILABLE
+
+
+def test_breaker_failed_recovery_lookup_does_not_report_self_anchored():
+    state = _SeedState(peaks=[None], snapshots=[None], history_session_id=None)
+    state._history_seed_lookup_failed = True
+    enforcer = _breaker_enforcer(state)
+
+    enforcer.check()
+
+    assert enforcer.peak_seed_provenance == PEAK_SEED_UNAVAILABLE
+
+
+def test_recovery_flags_a_failed_lookup_on_the_engine_state():
+    """The flag is actually set where the lookup can fail (recovery.py)."""
+    state = SimpleNamespace(
+        db_manager=SimpleNamespace(
+            get_active_session_id=_raise_lookup_error,
+            get_last_session_id=_raise_lookup_error,
+        ),
+        _history_seed_session_id=None,
+        _history_seed_lookup_failed=False,
+        _recovered_inactive_session_id=None,
+        trading_session_id=None,
+        _active_symbol="BTCUSDT",
+        _strategy_name=lambda: "ml_basic",
+    )
+
+    recoverer = recovery_module.LiveSessionRecoverer(state)  # type: ignore[arg-type]
+    assert recoverer.recover_existing_session() is None
+    assert state._history_seed_lookup_failed is True
+    assert resolve_history_lineage(state).history_expected is True
+
+
+# ---------------------------------------------------------------------------
+# 6. The pre-order chokepoint must ratchet too (one-iteration entry leak)
+# ---------------------------------------------------------------------------
+
+
+def test_pre_order_gate_ratchets_the_provisional_peak_before_admitting_risk():
+    """The chokepoint must not evaluate against a stale provisional peak.
+
+    Boot hits the first-snapshot race: iteration 1 arms provisionally at the
+    depressed boot balance. Iteration 2's entry chokepoint has to see the
+    durable peak — otherwise it admits an entry that the loop check trips
+    close-only on moments later, which is exactly the leak it exists to close.
+    """
+    state = _SeedState(balance=800.0, peaks=[None])
+    enforcer = _guard_enforcer(state)
+
+    enforcer.check()  # iteration 1: provisional arm at 800, no breach
+    assert enforcer.guard.peak_balance == pytest.approx(800.0)
+    assert state._close_only_mode is False
+
+    state._peaks = [1000.0]  # the durable row lands
+    enforcer.check_before_new_risk()  # iteration 2: entry chokepoint
+
+    assert enforcer.guard.peak_balance == pytest.approx(1000.0)
+    assert enforcer.peak_seed_provenance == PEAK_SEED_DB_SESSION_MAX
+    assert state._close_only_mode is True  # 20% drawdown binds on THIS iteration
+
+
+def test_pre_order_gate_upgrade_does_not_burn_the_attempt_budget():
+    """Several chokepoint calls per iteration must not forfeit the upgrade.
+
+    ``_upgrade_peak_from_history`` runs on the chokepoint path too, so an
+    unconditional counter would spend the 10-attempt budget within seconds.
+    """
+    state = _SeedState(balance=1000.0, peaks=[None])
+    enforcer = _guard_enforcer(state)
+
+    enforcer.check()  # provisional arm
+    for _ in range(MAX_SEED_ATTEMPTS * 5):
+        enforcer.check_before_new_risk()
+
+    assert enforcer.peak_seed_provenance == PEAK_SEED_UNAVAILABLE  # still trying
+
+    state._peaks = [1200.0]
+    enforcer.check_before_new_risk()
+
+    assert enforcer.peak_seed_provenance == PEAK_SEED_DB_SESSION_MAX
+    assert enforcer.guard.peak_balance == pytest.approx(1200.0)
+
+
+def test_loop_check_still_bounds_the_upgrade_retries():
+    """The budget is owned by the loop check, and the window still closes.
+
+    Chokepoint upgrades read the DB without consuming the budget, so the
+    upgrade window costs more reads than the counted attempts alone — but it
+    is the loop check that ends it, after which nothing reads again.
+    """
+    state = _SeedState(balance=1000.0, peaks=[None])
+    enforcer = _guard_enforcer(state)
+
+    for _ in range(MAX_SEED_ATTEMPTS * 3):
+        enforcer.check()
+        enforcer.check_before_new_risk()
+
+    assert enforcer.peak_seed_provenance == PEAK_SEED_UNAVAILABLE
+    # 1 seeding read + MAX_SEED_ATTEMPTS counted + at most one uncounted
+    # chokepoint read per counted attempt: bounded, and far below the
+    # unbounded hammering an ungated upgrade would produce over 30 iterations.
+    assert len(state.peak_calls) <= 2 * MAX_SEED_ATTEMPTS + 1
+
+    settled = len(state.peak_calls)
+    enforcer.check()
+    enforcer.check_before_new_risk()
+    assert len(state.peak_calls) == settled  # window closed; no further reads
+
+
+def test_breach_event_carries_the_peak_seed_provenance(monkeypatch):
+    """A breach off a provisional peak must be distinguishable in system_events."""
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        drawdown_guard_module,
+        "log_risk_event",
+        lambda event, **kw: captured.append({"event": event, **kw}),
+    )
+    state = _SeedState(balance=1000.0, peaks=[None])
+    enforcer = _guard_enforcer(state)
+
+    enforcer.check()
+    state.current_balance = 700.0
+    enforcer.check()
+
+    assert state._close_only_mode is True
+    assert captured, "breach must emit a risk event"
+    assert captured[-1]["event"] == "max_drawdown_breach"
+    assert captured[-1]["peak_seed"] == PEAK_SEED_UNAVAILABLE
 
 
 def test_now_is_passed_through_for_the_day_window():

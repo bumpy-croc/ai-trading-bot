@@ -61,6 +61,7 @@ from src.engines.live.monitoring.seed_lineage import (
     PEAK_SEED_DB_SESSION_MAX,
     PEAK_SEED_SELF_ANCHORED,
     PEAK_SEED_UNAVAILABLE,
+    HistoryLineage,
     resolve_history_lineage,
 )
 from src.infrastructure.logging.events import log_risk_event
@@ -89,10 +90,11 @@ class CircuitBreakerEngineState(Protocol):
     current_balance: float
     trading_session_id: int | None
     # Durable seeding lineage (#1036): set once at recovery, never cleared.
-    # ``_recovered_inactive_session_id`` is NOT usable here — the #668
-    # carry-forward guard clears it before the first loop iteration.
+    # ``_recovered_inactive_session_id`` is deliberately NOT part of this
+    # contract — the #668 carry-forward guard clears it before the first loop
+    # iteration, and depending on it is what disarmed the seeders.
     _history_seed_session_id: int | None
-    _recovered_inactive_session_id: int | None
+    _history_seed_lookup_failed: bool
     db_manager: DatabaseManager
     _close_only_mode: bool
 
@@ -284,7 +286,7 @@ class CircuitBreakerEnforcer:
         if state.db_manager is None or state.trading_session_id is None:
             if self._seed_attempts >= MAX_SEED_ATTEMPTS:
                 self._finalize_unseeded(
-                    "trading session never resolved", lineage.describe, state.trading_session_id
+                    "trading session never resolved", lineage, state.trading_session_id
                 )
             return
         try:
@@ -302,7 +304,7 @@ class CircuitBreakerEnforcer:
             if self._seed_attempts >= MAX_SEED_ATTEMPTS:
                 self._finalize_unseeded(
                     f"account_history read kept failing ({e})",
-                    lineage.describe,
+                    lineage,
                     state.trading_session_id,
                 )
             return
@@ -324,7 +326,7 @@ class CircuitBreakerEnforcer:
                 )
                 return
             self._finalize_unseeded(
-                "account_history returned no rows", lineage.describe, state.trading_session_id
+                "account_history returned no rows", lineage, state.trading_session_id
             )
             return
 
@@ -359,24 +361,45 @@ class CircuitBreakerEnforcer:
             self._peak_seed_provenance = PEAK_SEED_SELF_ANCHORED
         self._seeded = True
 
-    def _finalize_unseeded(self, reason: str, lineage: str, session_id: int | None) -> None:
+    def _finalize_unseeded(
+        self, reason: str, lineage: HistoryLineage, session_id: int | None
+    ) -> None:
         """Give up on durable seeding and record the miss honestly.
 
         This is NOT the fresh-account self-anchor: durable history was expected
         and could not be obtained, so both halts are now measured from the
-        post-restart equity. It must be loud and it must be visible in the
-        ``peak_seed`` provenance carried on every trip event.
+        post-restart equity. It must be visible in the ``peak_seed`` provenance
+        carried on every trip event.
+
+        Two shapes, deliberately worded apart. On a clean restart the history
+        lives under a DISTINCT prior session, so an empty read means the
+        lineage was lost or the rows are unreachable — a defect, and the
+        message says so. On a session-REUSE boot the lineage session IS the
+        live one; a session that simply has no snapshots yet had nothing to
+        seed from, and calling that "seeding FAILED … measuring from the
+        depressed value" is alarming noise in an otherwise healthy restart.
         """
         self._seeded = True
         self._peak_seed_provenance = PEAK_SEED_UNAVAILABLE
+        if lineage.is_distinct_prior_session or lineage.lookup_failed:
+            logger.warning(
+                "Circuit-breaker durable seeding FAILED after %d attempts (%s; session %s, %s) — "
+                "daily baseline and drawdown peak stay anchored to post-restart equity "
+                "(peak_seed=%s). A mid-drawdown restart is measuring from the depressed value.",
+                self._seed_attempts,
+                reason,
+                session_id,
+                lineage.describe,
+                PEAK_SEED_UNAVAILABLE,
+            )
+            return
         logger.warning(
-            "Circuit-breaker durable seeding FAILED after %d attempts (%s; session %s, %s) — "
-            "daily baseline and drawdown peak stay anchored to post-restart equity "
-            "(peak_seed=%s). A mid-drawdown restart is measuring from the depressed value.",
+            "Circuit-breaker found no durable history to seed from after %d attempts "
+            "(%s; %s) — the reused session has no account_history snapshots, so the daily "
+            "baseline and drawdown peak anchor to current equity (peak_seed=%s).",
             self._seed_attempts,
             reason,
-            session_id,
-            lineage,
+            lineage.describe,
             PEAK_SEED_UNAVAILABLE,
         )
 

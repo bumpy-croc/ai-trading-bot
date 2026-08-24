@@ -310,10 +310,11 @@ class DrawdownEngineState(Protocol):
     current_balance: float
     trading_session_id: int | None
     # Durable seeding lineage (#1036): set once at recovery, never cleared.
-    # ``_recovered_inactive_session_id`` is NOT usable here — the #668
-    # carry-forward guard clears it before the first loop iteration.
+    # ``_recovered_inactive_session_id`` is deliberately NOT part of this
+    # contract — the #668 carry-forward guard clears it before the first loop
+    # iteration, and depending on it is what disarmed the seeders.
     _history_seed_session_id: int | None
-    _recovered_inactive_session_id: int | None
+    _history_seed_lookup_failed: bool
     db_manager: DatabaseManager
     _close_only_mode: bool
 
@@ -346,6 +347,11 @@ class MaxDrawdownEnforcer:
         self._guard = guard
         self._breach_notified = False
         self._seed_attempts = 0
+        # Separate budget from _seed_attempts: the pre-order chokepoint runs the
+        # upgrade too (so it never gates on a stale provisional peak), and several
+        # chokepoint calls land per iteration. Sharing one counter would let them
+        # burn the budget within seconds and forfeit the durable peak.
+        self._upgrade_attempts = 0
         self._peak_seed_provenance = PEAK_SEED_SELF_ANCHORED
         self._history_upgrade_pending = False
 
@@ -373,11 +379,13 @@ class MaxDrawdownEnforcer:
         #807 in-line circuit-breaker gate — so the cap binds on the SAME
         iteration, including the first iteration after a mid-breach restart.
 
-        Identical enforcement, but a deferred seeding attempt is NOT counted
-        against ``MAX_SEED_ATTEMPTS``: the bounded current-balance fallback
-        stays owned by the once-per-iteration loop check, so several
-        chokepoint calls per iteration cannot burn through the deferral
-        budget prematurely.
+        Identical enforcement — including ratcheting a provisionally-armed peak
+        up to the durable one, so the gate never admits an entry against a
+        stale peak the loop check is about to trip on. Neither the deferred
+        seeding attempt nor the upgrade attempt is counted against
+        ``MAX_SEED_ATTEMPTS``: both budgets stay owned by the once-per-iteration
+        loop check, so several chokepoint calls per iteration cannot burn
+        through them prematurely.
         """
         self._run_check(count_seed_deferral=False)
 
@@ -388,12 +396,16 @@ class MaxDrawdownEnforcer:
             was_seeded = self._guard.seeded
             if not was_seeded and not self._try_seed(balance, count_deferral=count_seed_deferral):
                 return  # seeding deferred (DB/session not ready); retry next cycle
-            # Only on a LATER iteration: re-reading the same DB state within the
-            # iteration that just armed provisionally cannot tell us anything new.
-            if was_seeded and self._history_upgrade_pending and count_seed_deferral:
+            # Only once the guard is already armed: re-reading the same DB state
+            # inside the call that just armed provisionally cannot tell us
+            # anything new. The pre-order chokepoint upgrades too — otherwise it
+            # would admit an entry against the stale provisional peak that the
+            # loop check trips on moments later (the very leak it exists to
+            # close) — but without consuming the attempt budget.
+            if was_seeded and self._history_upgrade_pending:
                 # Armed provisionally from the current balance; keep trying to
-                # ratchet up to the durable peak (bounded, loop-check only).
-                self._upgrade_peak_from_history()
+                # ratchet up to the durable peak.
+                self._upgrade_peak_from_history(count_attempt=count_seed_deferral)
             assessment = self._guard.observe(balance)
         except Exception as e:
             # Monitoring must never take down the trading loop.
@@ -426,6 +438,11 @@ class MaxDrawdownEnforcer:
                 peak_balance=assessment.peak_balance,
                 balance=balance,
                 max_drawdown_pct=self._guard.max_drawdown_pct,
+                # Container stdout is ephemeral; without this a breach measured
+                # from a provisional/unseeded peak is indistinguishable in
+                # system_events from one measured off durable history (mirrors
+                # the breaker's `peak_seed` on trip/dry-run payloads).
+                peak_seed=self._peak_seed_provenance,
             )
             state._record_event(
                 EventType.ALERT,
@@ -552,16 +569,21 @@ class MaxDrawdownEnforcer:
             provenance,
         )
 
-    def _upgrade_peak_from_history(self) -> None:
+    def _upgrade_peak_from_history(self, *, count_attempt: bool = True) -> None:
         """Retry the durable peak read after a provisional self-anchored arm.
 
-        Bounded by the shared ``MAX_SEED_ATTEMPTS`` budget. Success ratchets the
-        peak UP (never down) and corrects the provenance; exhaustion stops the
-        retries and leaves a WARNING naming the sessions that were searched, so
-        a silently self-anchored cap is never mistaken for a seeded one.
+        Bounded by ``MAX_SEED_ATTEMPTS`` against its OWN counter, consumed only
+        by the loop check. The pre-order chokepoint calls this with
+        ``count_attempt=False``: it must see the ratcheted peak, but it can run
+        several times per iteration and would otherwise exhaust the budget in
+        seconds. Success ratchets the peak UP (never down) and corrects the
+        provenance; exhaustion stops the retries and leaves a WARNING naming
+        the sessions that were searched, so a silently self-anchored cap is
+        never mistaken for a seeded one.
         """
         state = self._state
-        self._seed_attempts += 1
+        if count_attempt:
+            self._upgrade_attempts += 1
         lineage = resolve_history_lineage(state)
         session_id = state.trading_session_id
         db_peak: float | None = None
@@ -589,13 +611,13 @@ class MaxDrawdownEnforcer:
             )
             return
 
-        if self._seed_attempts >= MAX_SEED_ATTEMPTS:
+        if count_attempt and self._upgrade_attempts >= MAX_SEED_ATTEMPTS:
             self._history_upgrade_pending = False
             logger.warning(
                 "Max-drawdown guard: durable account_history peak never became available "
                 "after %d attempts (session %s, %s) — the cap stays anchored to the "
                 "boot balance $%.2f (peak_seed=%s)",
-                self._seed_attempts,
+                self._upgrade_attempts,
                 session_id,
                 lineage.describe,
                 self._guard.peak_balance,

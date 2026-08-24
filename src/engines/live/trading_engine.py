@@ -653,6 +653,10 @@ class LiveTradingEngine:
         # the #668 carry-forward guard before the first loop iteration, which
         # silently disarmed both seeders on carry-forward boots.
         self._history_seed_session_id: int | None = None
+        # Set when the recovery lookup itself failed: the lineage is undetermined
+        # rather than known-absent, so the seeders must expect history instead of
+        # self-anchoring as if the account were fresh (#1036).
+        self._history_seed_lookup_failed: bool = False
 
     def _init_dynamic_risk_manager(self) -> None:
         """Build the dynamic-risk manager now that the database is available."""

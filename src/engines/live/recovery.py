@@ -86,6 +86,7 @@ class RecoveryEngineState(Protocol):
     _close_only_mode: bool
     _recovered_inactive_session_id: int | None
     _history_seed_session_id: int | None
+    _history_seed_lookup_failed: bool
 
     def _strategy_name(self) -> str: ...
 
@@ -216,6 +217,13 @@ class LiveSessionRecoverer:
             # balance). Propagate so startup fails fast.
             raise
         except Exception as e:
+            # The lineage is now UNDETERMINED, not absent: the lookup could not
+            # prove this is a fresh account. Without this flag the seeders would
+            # read an empty _history_seed_session_id, conclude "no history
+            # exists", and latch `self_anchored` — reporting a failed lookup as
+            # a legitimate fresh-account anchor (#1036). Flagging it makes them
+            # expect history, retry, and latch `seed_unavailable` with a WARNING.
+            state._history_seed_lookup_failed = True
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
             return None
 

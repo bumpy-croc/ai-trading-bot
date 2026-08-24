@@ -2500,7 +2500,17 @@ class DatabaseManager:
         session_id: int | None,
         fallback_session_id: int | None,
     ) -> float | None:
-        """Max of an account_history column across the session(s) (see callers)."""
+        """Max of an account_history column across the session(s) (see callers).
+
+        This is a UNION max over ``session_id IN (session_id, fallback_session_id)``,
+        so a non-``None`` result does NOT prove the fallback session contributed —
+        the new session's own opening snapshot alone produces one. Seeding
+        provenance therefore reads ``db_session_max`` even on a build where the
+        lineage was lost, which is why the #1036 restart drill must assert the
+        seeded peak VALUE against the prior session's max, not the provenance
+        string. Being a max, row ORDER is irrelevant: an early new-session row
+        cannot shadow the prior session's higher peak.
+        """
         session_id = session_id or self._current_session_id
         if not session_id:
             return None
