@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,18 @@ def checkouts(tmp_path: Path) -> tuple[Path, Path]:
     return primary, worktree
 
 
+@pytest.fixture
+def single_clone(tmp_path: Path) -> Path:
+    """An ordinary clone with no worktrees — what every contributor and CI runner has."""
+    clone = tmp_path / "fresh-clone"
+    clone.mkdir()
+    _make_checkout(clone)
+    _git(clone, "init", "-q", "-b", "main")
+    _git(clone, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+    _git(clone, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    return clone
+
+
 def _payload(tool_name: str, tool_input: dict, cwd: Path, session_id: str = "s1") -> dict:
     return {
         "session_id": session_id,
@@ -107,13 +120,25 @@ def _run_hook(payload: dict, env_extra: dict | None = None) -> subprocess.Comple
     )
 
 
+def _pin(worktree: Path, session_id: str = "s1") -> str:
+    """Put the session in agent context: one tool call whose cwd is inside the worktree.
+
+    This is what a dispatched agent does on its first call, and it is the signal the guard
+    keys on — an unpinned session (fresh clone, PM daemon in the primary) is never guarded.
+    """
+    result = _run_hook(_payload("Bash", {"command": "ls"}, cwd=worktree, session_id=session_id))
+    assert result.returncode == 0, result.stderr
+    return session_id
+
+
 # --------------------------------------------------------------------------------------
 # an agent-context write to the primary is refused
 # --------------------------------------------------------------------------------------
 
 
 def test_edit_tool_write_into_primary_is_refused(checkouts):
-    primary, _ = checkouts
+    primary, worktree = checkouts
+    _pin(worktree)
     result = _run_hook(_payload("Edit", {"file_path": str(primary / "CLAUDE.md")}, cwd=primary))
     assert result.returncode == 2
     assert "ATB PRIMARY CHECKOUT WRITE REFUSED (GH #1082)" in result.stderr
@@ -123,21 +148,24 @@ def test_edit_tool_write_into_primary_is_refused(checkouts):
 
 def test_relative_edit_after_cwd_reset_is_refused(checkouts):
     """The exact #1082 shape: a relative path resolving against the reset cwd."""
-    primary, _ = checkouts
+    primary, worktree = checkouts
+    _pin(worktree)
     result = _run_hook(_payload("Edit", {"file_path": "CLAUDE.md"}, cwd=primary))
     assert result.returncode == 2
     assert str(primary / "CLAUDE.md") in result.stderr
 
 
 def test_sed_in_place_into_primary_is_refused(checkouts):
-    primary, _ = checkouts
+    primary, worktree = checkouts
+    _pin(worktree)
     result = _run_hook(_payload("Bash", {"command": "sed -i '' 's/a/b/' CLAUDE.md"}, cwd=primary))
     assert result.returncode == 2
     assert "WRITE REFUSED" in result.stderr
 
 
 def test_redirect_into_primary_is_refused(checkouts):
-    primary, _ = checkouts
+    primary, worktree = checkouts
+    _pin(worktree)
     result = _run_hook(_payload("Bash", {"command": "echo hi > CLAUDE.md"}, cwd=primary))
     assert result.returncode == 2
 
@@ -150,7 +178,8 @@ def test_absolute_write_into_primary_from_a_worktree_is_refused(checkouts):
 
 
 def test_git_working_tree_mutation_in_primary_is_refused(checkouts):
-    primary, _ = checkouts
+    primary, worktree = checkouts
+    _pin(worktree)
     result = _run_hook(_payload("Bash", {"command": "git checkout develop"}, cwd=primary))
     assert result.returncode == 2
 
@@ -231,7 +260,8 @@ def test_writes_outside_any_checkout_are_allowed(checkouts, tmp_path):
 
 
 def test_env_override_allows_the_write(checkouts):
-    primary, _ = checkouts
+    primary, worktree = checkouts
+    _pin(worktree)
     result = _run_hook(
         _payload("Edit", {"file_path": str(primary / "CLAUDE.md")}, cwd=primary),
         env_extra={guard.ALLOW_ENV: "1"},
@@ -295,6 +325,160 @@ def test_unpinned_session_may_read_the_primary_relatively(checkouts):
         _payload("Bash", {"command": "wc -l CLAUDE.md"}, cwd=primary, session_id="s-pm")
     )
     assert result.returncode == 0, result.stderr
+
+
+# --------------------------------------------------------------------------------------
+# P0 regressions: who must NEVER be guarded
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input"),
+    [
+        ("Edit", {"file_path": "CLAUDE.md"}),
+        ("Write", {"file_path": "src/new.py"}),
+        ("Bash", {"command": "touch newfile"}),
+        ("Bash", {"command": "git commit -am wip"}),
+        ("Bash", {"command": "sed -i '' 's/a/b/' CLAUDE.md"}),
+    ],
+)
+def test_single_clone_with_no_worktrees_is_unguarded(single_clone, tool, tool_input):
+    """A fresh clone is structurally 'the primary' but must not write-lock itself.
+
+    `.claude/settings.json` is checked in, so guarding writes unconditionally would reach
+    every contributor and every Claude Code Web session — which clones into a single
+    checkout with no worktrees, and would get a read-only repo plus a banner naming a path
+    that does not exist on their machine.
+    """
+    result = _run_hook(_payload(tool, tool_input, cwd=single_clone, session_id="contributor"))
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input"),
+    [
+        ("Bash", {"command": "echo '- entry' >> .claude/state/log.md"}),
+        ("Write", {"file_path": ".claude/state/incidents/x.md"}),
+        ("Edit", {"file_path": ".claude/state/log.md"}),
+    ],
+)
+def test_pm_daemon_writes_its_own_state_in_the_primary(checkouts, tool, tool_input):
+    """The daemon runs in the primary by design and must append to the tracked state record."""
+    primary, _ = checkouts
+    (primary / ".claude" / "state" / "incidents").mkdir(parents=True)
+    (primary / ".claude" / "state" / "log.md").write_text("# log\n")
+    result = _run_hook(_payload(tool, tool_input, cwd=primary, session_id="pm-daemon"))
+    assert result.returncode == 0, result.stderr
+
+
+# --------------------------------------------------------------------------------------
+# false-positive regressions (session in agent context)
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "chmod +x /tmp/foo.sh",
+        "chmod 755 /tmp/foo.sh",
+        "OUT=/tmp/o.txt; echo hi > $OUT",
+        'echo hi > "$LOG"',
+        "echo hi > ${DIR}/x",
+        'echo x > "logs/x.log"',
+        "cat <<'EOF'\nif a > b then\nEOF",
+        'gh pr create --body "$(cat <<EOF\n- a > b\nEOF\n)"',
+        "cd $SOME_WORKTREE && rm -f CLAUDE.md",
+    ],
+)
+def test_non_path_and_unresolvable_operands_do_not_block(checkouts, command):
+    """A token we cannot resolve must never be guessed as primary-relative."""
+    primary, worktree = checkouts
+    _pin(worktree)
+    result = _run_hook(_payload("Bash", {"command": command}, cwd=primary))
+    assert result.returncode == 0, result.stderr
+
+
+# --------------------------------------------------------------------------------------
+# false-negative regressions
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed -i -e s/a/b/ CLAUDE.md",
+        "sed -i '' -e 's/a/b/' CLAUDE.md",
+        "sed --in-place=.bak 's/a/b/' CLAUDE.md",
+        "rm -- -weird-file",
+    ],
+)
+def test_write_shapes_that_used_to_slip_through(checkouts, command):
+    primary, worktree = checkouts
+    _pin(worktree)
+    (primary / "-weird-file").touch()
+    result = _run_hook(_payload("Bash", {"command": command}, cwd=primary))
+    assert result.returncode == 2, command
+
+
+def test_bsd_sed_banner_names_the_file_not_the_script(checkouts):
+    """The banner's whole job is legibility; naming `<primary>/s/a/b` defeats it."""
+    primary, worktree = checkouts
+    _pin(worktree)
+    result = _run_hook(_payload("Bash", {"command": "sed -i '' 's/a/b/' CLAUDE.md"}, cwd=primary))
+    assert result.returncode == 2
+    target_row = next(line for line in result.stderr.splitlines() if "would write to" in line)
+    assert target_row.endswith(str(primary / "CLAUDE.md"))
+    assert "s/a/b" not in target_row
+
+
+# --------------------------------------------------------------------------------------
+# pin and override lifecycle
+# --------------------------------------------------------------------------------------
+
+
+def test_stale_pin_naming_a_deleted_worktree_is_discarded(checkouts, _isolated_home):
+    """The nightly pruner deletes worktrees; a pin outliving one must not block reads."""
+    primary, worktree = checkouts
+    _pin(worktree, "s-stale")
+    pin_file = _isolated_home / ".cache" / "atb-primary-guard" / "s-stale.worktree"
+    pin_file.write_text(str(primary / ".claude" / "worktrees" / "deleted-one"))
+    result = _run_hook(
+        _payload("Bash", {"command": "wc -l CLAUDE.md"}, cwd=primary, session_id="s-stale")
+    )
+    assert result.returncode == 0, result.stderr
+    assert not pin_file.exists()
+
+
+def test_expired_pin_is_discarded(checkouts, _isolated_home):
+    primary, worktree = checkouts
+    _pin(worktree, "s-old")
+    pin_file = _isolated_home / ".cache" / "atb-primary-guard" / "s-old.worktree"
+    old = time.time() - (guard.PIN_MAX_AGE_SECONDS + 60)
+    os.utime(pin_file, (old, old))
+    result = _run_hook(
+        _payload("Edit", {"file_path": "CLAUDE.md"}, cwd=primary, session_id="s-old")
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_fresh_sentinel_overrides_and_expired_one_does_not(checkouts, _isolated_home):
+    primary, worktree = checkouts
+    _pin(worktree)
+    sentinel = _isolated_home / ".claude" / "atb-allow-primary-write"
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    payload = _payload("Edit", {"file_path": str(primary / "CLAUDE.md")}, cwd=primary)
+    assert _run_hook(payload).returncode == 0
+
+    stale = time.time() - (guard.SENTINEL_MAX_AGE_SECONDS + 60)
+    os.utime(sentinel, (stale, stale))
+    assert _run_hook(payload).returncode == 2
+
+
+def test_git_ignore_probe_fails_open(tmp_path):
+    """Every other failure path allows the call; this one used to be the exception."""
+    missing = tmp_path / "not-a-repo"
+    assert guard._git_ignores(missing, missing / "x") is True
 
 
 # --------------------------------------------------------------------------------------

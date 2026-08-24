@@ -48,6 +48,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 __all__ = [
@@ -63,26 +64,44 @@ __all__ = [
 ALLOW_ENV = "ATB_ALLOW_PRIMARY_WRITE"
 ALLOW_SENTINEL = Path.home() / ".claude" / "atb-allow-primary-write"
 PIN_DIR = Path.home() / ".cache" / "atb-primary-guard"
+# A pin older than this is assumed to belong to a finished session that reused the id
+# (`--resume`/`--continue` keep it), so it must not guard a fresh one forever.
+PIN_MAX_AGE_SECONDS = 12 * 60 * 60
+# The weak override tier is self-expiring: one stray `touch` must not disable the guard
+# for the rest of the machine's life.
+SENTINEL_MAX_AGE_SECONDS = 30 * 60
 
 # Paths under the primary checkout that agent work legitimately writes to.
 UNPROTECTED_PREFIXES = (".git", ".claude/worktrees")
+
+# Always-ignored trees, short-circuited ahead of `git check-ignore` so the common case
+# (the shared venv, logs) costs no subprocess and survives git being slow or absent.
+ALWAYS_IGNORED_PREFIXES = (
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "logs",
+    "node_modules",
+)
 
 FILE_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
 
 # Commands whose non-flag operands are all write targets.
 _WRITE_ALL_OPERANDS = {
-    "chmod",
-    "chown",
-    "dd",
     "mkdir",
     "rm",
     "rmdir",
-    "shred",
     "tee",
     "touch",
     "truncate",
     "unlink",
 }
+# `chmod 755 f` / `chown me f`: the first operand is a mode or an owner, not a path.
+# `dd`, `chown` and `shred` are deliberately absent — they buy almost nothing here and their
+# operand grammars (`of=`, `if=`) produced false "would write to <primary>/if=/dev/zero".
+_WRITE_ALL_OPERANDS_AFTER_FIRST = {"chmod"}
 # Commands where only the final operand is the write target (source args are reads).
 _WRITE_LAST_OPERAND = {"cp", "install", "ln", "mv", "rsync"}
 
@@ -195,6 +214,13 @@ def find_primary_checkout(root: Path) -> Path | None:
 
 
 def _git_ignores(primary: Path, path: Path) -> bool:
+    """True when git ignores ``path`` — i.e. it is safe to write.
+
+    Fails **open** (returns True) when git is missing, slow, or errors. Every other failure
+    path in this module allows the tool call; this one used to be the exception, so a sick
+    machine turned the shared ``.venv`` into protected territory and broke ``make install``
+    exactly when things were already going wrong.
+    """
     try:
         result = subprocess.run(
             ["git", "-C", str(primary), "check-ignore", "-q", "--", str(path)],
@@ -203,7 +229,9 @@ def _git_ignores(primary: Path, path: Path) -> bool:
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
-        return False
+        return True
+    if result.returncode not in (0, 1):
+        return True
     return result.returncode == 0
 
 
@@ -220,7 +248,7 @@ def is_protected(path: Path, primary: Path) -> bool:
     if rel_posix == ".":
         # The checkout root itself — what a `git checkout`/`git reset` in the primary targets.
         return True
-    for prefix in UNPROTECTED_PREFIXES:
+    for prefix in (*UNPROTECTED_PREFIXES, *ALWAYS_IGNORED_PREFIXES):
         if rel_posix == prefix or rel_posix.startswith(prefix + "/"):
             return False
     return not _git_ignores(primary, primary / relative)
@@ -230,16 +258,42 @@ def _override_active() -> str | None:
     if os.environ.get(ALLOW_ENV) == "1":
         return f"{ALLOW_ENV}=1"
     try:
-        if ALLOW_SENTINEL.exists():
-            return str(ALLOW_SENTINEL)
-    except OSError:  # pragma: no cover - defensive
-        pass
-    return None
+        age = time.time() - ALLOW_SENTINEL.stat().st_mtime
+    except OSError:
+        return None
+    if age > SENTINEL_MAX_AGE_SECONDS:
+        return None
+    return f"{ALLOW_SENTINEL} (expires {int((SENTINEL_MAX_AGE_SECONDS - age) / 60)} min from now)"
 
 
 # --------------------------------------------------------------------------------------
 # shell command analysis
 # --------------------------------------------------------------------------------------
+
+
+_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """Remove heredoc bodies before parsing.
+
+    A heredoc body is data, not shell. Left in, its prose becomes commands: a line reading
+    ``if a > b then`` inside a ``cat <<'EOF'`` block parses as a redirect into a file named
+    ``b``. That shape is routine here — every `gh pr create --body "$(cat <<EOF …)"` has one.
+    """
+    lines = command.split("\n")
+    kept: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        kept.append(line)
+        delimiters = [match.group(2) for match in _HEREDOC_RE.finditer(line)]
+        index += 1
+        for delimiter in delimiters:
+            while index < len(lines) and lines[index].strip() != delimiter:
+                index += 1
+            index += 1  # consume the delimiter line itself
+    return "\n".join(kept)
 
 
 def _split_segments(command: str) -> list[str]:
@@ -336,26 +390,54 @@ def _strip_env_prefix(tokens: list[str]) -> list[str]:
 
 
 def _operands(tokens: list[str], *, skip_first: bool = False) -> list[str]:
-    """Non-flag arguments, minus values of flags that take an inline expression."""
+    """Non-flag arguments, minus values of flags that take an inline expression.
+
+    Empty operands are dropped: BSD's ``sed -i '' 's/a/b/' f`` passes an empty backup suffix,
+    which otherwise absorbed ``skip_first`` and made the banner name the sed script instead of
+    the file. After ``--`` every remaining token is an operand, even a ``-``-prefixed one.
+    """
     operands: list[str] = []
     skip_next = False
+    end_of_flags = False
     for token in tokens[1:]:
         if skip_next:
             skip_next = False
             continue
+        if end_of_flags:
+            if token:
+                operands.append(token)
+            continue
         if token == "--":
+            end_of_flags = True
             continue
         if token.startswith("-") and token != "-":
             if token in _FLAGS_TAKING_EXPRESSION:
                 skip_next = True
             continue
-        operands.append(token)
+        if token:
+            operands.append(token)
     if skip_first and operands:
         operands = operands[1:]
     return operands
 
 
-def _resolve(token: str, cwd: Path) -> Path:
+def _unquote(token: str) -> str:
+    """Strip one layer of surrounding quotes left by the raw (non-shlex) redirect scanner."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
+        return token[1:-1]
+    return token
+
+
+def _resolve(token: str, cwd: Path) -> Path | None:
+    """Absolute path for ``token``, or None when it cannot be resolved with confidence.
+
+    An unresolvable token — one carrying a shell variable or a command substitution — must
+    NOT be guessed as primary-relative. Guessing inverted this module's fail-open polarity:
+    ``OUT=/tmp/o.txt; echo hi > $OUT`` was refused as a write to ``<primary>/$OUT``.
+    """
+    token = _unquote(token)
+    if not token or "$" in token or "`" in token:
+        return None
     expanded = os.path.expanduser(token)
     candidate = Path(expanded)
     if not candidate.is_absolute():
@@ -372,7 +454,7 @@ def _cd_target(tokens: list[str], cwd: Path) -> Path | None:
     return _resolve(operands[0], cwd)
 
 
-def _git_cwd(tokens: list[str], cwd: Path) -> Path:
+def _git_cwd(tokens: list[str], cwd: Path) -> Path | None:
     for index, token in enumerate(tokens):
         if token == "-C" and index + 1 < len(tokens):
             return _resolve(tokens[index + 1], cwd)
@@ -393,25 +475,42 @@ def _git_subcommand(tokens: list[str]) -> str | None:
     return None
 
 
+def _sed_in_place_targets(tokens: list[str]) -> list[str]:
+    """Files a ``sed`` invocation edits in place, or [] when it is not an in-place edit.
+
+    ``sed -i -e 's/a/b/' f`` is the common portable form and used to slip through entirely:
+    ``-e`` consumes the script as its flag value, so skipping "the first operand" ate the
+    FILE instead. Only skip the first operand when no ``-e``/``--expression`` was given.
+    """
+    flags = tokens[1:]
+    in_place = any(token.startswith("-i") or token.startswith("--in-place") for token in flags)
+    if not in_place:
+        return []
+    script_given_by_flag = any(
+        token in ("-e", "--expression") or token.startswith("--expression=") for token in flags
+    )
+    return _operands(tokens, skip_first=not script_given_by_flag)
+
+
 def _write_targets(segment: str, tokens: list[str], cwd: Path) -> list[Path]:
     """Paths this shell segment would write to, best-effort."""
-    targets = [_resolve(match, cwd) for match in _redirect_targets(segment)]
-    if not tokens:
-        return targets
-    name = Path(tokens[0]).name
+    candidates = list(_redirect_targets(segment))
+    name = Path(tokens[0]).name if tokens else ""
     if name == "sed":
-        if any(token.startswith("-i") or token == "--in-place" for token in tokens[1:]):
-            targets += [_resolve(token, cwd) for token in _operands(tokens, skip_first=True)]
+        candidates += _sed_in_place_targets(tokens)
     elif name in _WRITE_ALL_OPERANDS:
-        targets += [_resolve(token, cwd) for token in _operands(tokens)]
+        candidates += _operands(tokens)
+    elif name in _WRITE_ALL_OPERANDS_AFTER_FIRST:
+        candidates += _operands(tokens, skip_first=True)
     elif name in _WRITE_LAST_OPERAND:
         operands = _operands(tokens)
         if operands:
-            targets.append(_resolve(operands[-1], cwd))
-    elif name == "git":
-        if _git_subcommand(tokens) in _GIT_MUTATORS:
-            targets.append(_git_cwd(tokens, cwd))
-    return targets
+            candidates.append(operands[-1])
+    elif name == "git" and _git_subcommand(tokens) in _GIT_MUTATORS:
+        git_cwd = _git_cwd(tokens, cwd)
+        return [path for path in (git_cwd,) if path is not None]
+    resolved = (_resolve(candidate, cwd) for candidate in candidates)
+    return [path for path in resolved if path is not None]
 
 
 def _relative_read_operands(tokens: list[str], cwd: Path) -> list[str]:
@@ -506,13 +605,33 @@ def _pin_path(session_id: str) -> Path:
 
 
 def _read_pin(session_id: str | None) -> Path | None:
+    """The worktree this session is working in, or None.
+
+    A pin is discarded when it is stale — the worktree was deleted (the nightly pruner does
+    this routinely) or the pin is old enough that it likely belongs to an earlier run of a
+    resumed session id. A stale pin used to refuse reads forever with the un-followable
+    remedy ``cd <deleted path>``.
+    """
     if not session_id:
         return None
+    path = _pin_path(session_id)
     try:
-        text = _pin_path(session_id).read_text(encoding="utf-8").strip()
+        if time.time() - path.stat().st_mtime > PIN_MAX_AGE_SECONDS:
+            path.unlink(missing_ok=True)
+            return None
+        text = path.read_text(encoding="utf-8").strip()
     except OSError:
         return None
-    return Path(text) if text else None
+    if not text:
+        return None
+    pinned = Path(text)
+    if not pinned.is_dir():
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:  # pragma: no cover - defensive
+            pass
+        return None
+    return pinned
 
 
 def _write_pin(session_id: str | None, worktree: Path) -> None:
@@ -526,7 +645,28 @@ def _write_pin(session_id: str | None, worktree: Path) -> None:
 
 
 def evaluate(payload: dict) -> str | None:
-    """Return a refusal banner for this hook payload, or None to allow the tool call."""
+    """Return a refusal banner for this hook payload, or None to allow the tool call.
+
+    Everything hangs off one signal: **is this session pinned to a worktree?** A session is
+    pinned once any of its tool calls has run with a cwd inside a linked worktree, which for
+    a dispatched agent is its first call. Reads and writes are both guarded on that signal.
+
+    Guarding writes unconditionally instead — the obvious reading of "nothing may write to the
+    primary" — breaks two real users, and both breakages are certain rather than theoretical:
+
+    * an ordinary single clone with no worktrees IS structurally the primary, so every write
+      into it is refused. `.claude/settings.json` is checked in, so that reaches every
+      contributor and every Claude Code Web session (which clones into one checkout);
+    * the PM daemon runs in the primary by design and must append to the tracked, append-only
+      `.claude/state/log.md` on every material action.
+
+    Neither is ever pinned — a fresh clone has no worktrees, and the daemon never works inside
+    one — so pinning is the signal that separates "an agent that has a worktree and is writing
+    to the wrong tree" from "somebody legitimately working in the only tree they have".
+
+    The cost is a cross-checkout write issued before a session's first worktree-cwd tool call,
+    which is no longer caught. That window is narrow and traded against two guaranteed breakages.
+    """
     tool_name = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
     cwd = Path(payload.get("cwd") or os.getcwd())
@@ -543,12 +683,16 @@ def evaluate(payload: dict) -> str | None:
         # cwd is inside a linked worktree: remember it, so a later cwd reset is detectable.
         _write_pin(session_id, root)
 
+    pinned = _read_pin(session_id)
+    if pinned is None or pinned == primary:
+        return None
+
     if tool_name in FILE_TOOLS:
         target = tool_input.get("file_path") or tool_input.get("notebook_path")
         if not target:
             return None
         resolved = _resolve(str(target), cwd)
-        if is_protected(resolved, primary):
+        if resolved is not None and is_protected(resolved, primary):
             return _write_banner(resolved, primary, cwd, f"{tool_name} tool")
         return None
 
@@ -559,12 +703,15 @@ def evaluate(payload: dict) -> str | None:
     if not command.strip():
         return None
 
-    pinned = _read_pin(session_id)
     effective_cwd = cwd
-    for segment in _split_segments(command):
+    for segment in _split_segments(_strip_heredoc_bodies(command)):
         tokens = _strip_env_prefix(_tokenize(segment))
-        moved = _cd_target(tokens, effective_cwd)
-        if moved is not None:
+        if tokens and tokens[0] == "cd":
+            moved = _cd_target(tokens, effective_cwd)
+            if moved is None:
+                # `cd "$WORKTREE" && …`: the rest of the command runs somewhere we cannot
+                # name, so guarding it would mean guessing. Fail open, as everywhere else.
+                return None
             effective_cwd = moved
             continue
 
@@ -574,7 +721,7 @@ def evaluate(payload: dict) -> str | None:
                     target, primary, effective_cwd, f"shell command `{segment.strip()}`"
                 )
 
-        if pinned is not None and pinned != primary and effective_cwd == primary:
+        if effective_cwd == primary:
             operands = _relative_read_operands(tokens, effective_cwd)
             if operands:
                 return _cwd_reset_banner(pinned, primary, operands)

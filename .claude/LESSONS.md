@@ -534,8 +534,18 @@ defect was to hit — the primary checkout had been frozen since 2026-07-04, so 
     `.claude/settings.json`. It refuses any `Edit`/`Write` or write-shaped `Bash` command
     (`sed -i`, `>`/`>>`, `rm`/`mv`/`cp`/`touch`/`tee`, working-tree-mutating `git` subcommands)
     whose target resolves into the primary checkout's working tree, and — separately — refuses a
-    *relative read* issued with cwd back at the primary checkout once the session has pinned a
-    worktree, which catches the cwd reset itself rather than only its writes.
+    *relative read* issued with cwd back at the primary checkout, which catches the cwd reset
+    itself rather than only its writes.
+    **Both are gated on ONE signal: has this session actually worked inside a worktree?**
+    (Recorded per session id, on the first tool call whose cwd is in one.) The first draft
+    guarded writes unconditionally, and review caught two certain breakages: a fresh single
+    clone *is* structurally "the primary", so it write-locked itself for every contributor and
+    every Claude Code Web session; and the PM daemon runs in the primary by design and could no
+    longer append to the tracked, append-only `.claude/state/log.md`. Neither is ever pinned, so
+    pinning is what separates "an agent with a worktree writing to the wrong tree" from
+    "somebody working legitimately in the only tree they have". **General lesson: a rule stated
+    as an absolute ("nothing may write to the primary") is almost always false at the edges —
+    enumerate who legitimately lives in the place you are about to lock before locking it.**
     **Why a hook and not `chmod`/ACLs:** agents run as Alex's uid on Alex's machine, so no
     filesystem permission can tell an agent write from a human one. A Claude Code hook can,
     exactly and by construction — it does not exist outside a Claude Code session. It is also
@@ -545,10 +555,16 @@ defect was to hit — the primary checkout had been frozen since 2026-07-04, so 
     (shared `.venv`, `logs/`, caches). **Human override:** `ATB_ALLOW_PRIMARY_WRITE=1` at launch
     (an agent cannot set it for its own hook process), or `touch ~/.claude/atb-allow-primary-write`.
     **Limits, stated honestly:** shell parsing is best-effort — a write hidden inside `python -c`,
-    a heredoc script, `xargs`, or a `make` target is not detected; and reads are only guarded once
-    the session has actually worked inside a worktree. Absolute worktree paths remain the rule; the
-    guard is a net under it, not a replacement for it. The guard fails **open** by design — a
-    guard that bricks every tool call gets switched off, and then protects nothing.
+    a heredoc script, `xargs`, `find -exec` or a `make` target is not detected; nothing is guarded
+    before the session's first worktree-cwd tool call; and an agent can simply delete the hook
+    from its own worktree's `.claude/settings.json` (a bigger hole than the override sentinel, and
+    unavoidable for any in-repo registration). Absolute worktree paths remain the rule; the guard
+    is a net under it, not a replacement for it. The guard fails **open** everywhere — unexpected
+    error, unresolvable token (`> $OUT`), missing/slow `git` — by design: a guard that bricks tool
+    calls gets switched off, and then protects nothing. Two review rounds' worth of false positives
+    all came from resolving an ambiguous token *toward* blocking (`chmod +x` → `<primary>/+x`,
+    `> $OUT` → `<primary>/$OUT`, heredoc prose `a > b` → `<primary>/b`); **an input you cannot
+    resolve must be resolved toward allowing, or the fail-open polarity is a fiction.**
   - Sibling GH #999 covers the script-path shadowing variant; GH #1024 (the "just add a warning" P3
     framing) is superseded — a warning would have been ignored exactly like the wrong number was.
 - **`ls ~/.claude/scheduled-tasks` is NOT the task list — the scheduler registry is.** The directory

@@ -34,7 +34,9 @@ file read and write** — a shell's cwd can be reset to the primary checkout mid
 a relative `grep`/`sed`/`cat` silently reads (or `sed -i` writes) the wrong tree.
 
 A `PreToolUse` hook (`tools/primary_checkout_guard.py`) refuses such writes, and refuses a
-relative read issued from the primary checkout once the session has been working in a worktree.
+relative read issued from the primary checkout — both only once your session has actually
+worked inside a worktree, so a plain single clone and the PM daemon in the primary are
+unaffected.
 If you hit its banner, the fix is an absolute path under your worktree — not the override. The
 override exists for the human: `ATB_ALLOW_PRIMARY_WRITE=1` at launch, or
 `touch ~/.claude/atb-allow-primary-write`. Background: GH #1082, `.claude/LESSONS.md` §3.

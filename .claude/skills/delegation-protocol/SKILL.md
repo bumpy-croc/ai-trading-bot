@@ -46,8 +46,11 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
    if you see its banner, the fix is an absolute path under YOUR worktree, never the override.
    The override (`ATB_ALLOW_PRIMARY_WRITE=1` at launch, or `touch
    ~/.claude/atb-allow-primary-write`) belongs to the human; do not reach for it in a dispatch.
-   The hook is best-effort on shell parsing — a write inside `python -c`, a heredoc, `xargs` or a
-   `make` target is not caught — so absolute paths remain the rule, not a fallback.
+   The hook only fires once your session has worked inside a worktree, and is best-effort on
+   shell parsing — a write inside `python -c`, a heredoc, `xargs` or a `make` target is not
+   caught — so absolute paths remain the rule, not a fallback. Never "fix" a block by deleting
+   the hook from your worktree's `.claude/settings.json`; that is a reportable finding, not a
+   remedy.
    **Any agent reporting a number must state, in its report, which code path actually executed
    it.**
 3. **Compute discipline.** Heavy jobs (training, backtests) STRICTLY SEQUENTIAL — one at a

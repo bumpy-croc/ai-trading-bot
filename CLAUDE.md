@@ -234,7 +234,14 @@ own working copy. Agent sessions never write to it: all agent work happens in a 
 a shell's cwd gets reset to the primary checkout mid-task, and every subsequent *relative* path
 then resolves there instead of in your worktree.
 
-It refuses, with a banner naming both paths and the remedy:
+**It fires only for a session that has actually worked inside a worktree** (a "pinned"
+session — pinned on the first tool call whose cwd is in one). An unpinned session is by
+definition somebody working legitimately in the only tree they have: the PM daemon, which runs
+in the primary and must append to `.claude/state/log.md`; a fresh single clone with no
+worktrees, which every contributor and every Claude Code Web session has. Those are never
+guarded.
+
+For a pinned session it refuses, with a banner naming both paths and the remedy:
 
 - any `Edit`/`Write`/`NotebookEdit` whose path lands in the primary checkout's working tree;
 - a `Bash` write into it (`sed -i`, `>`/`>>`, `rm`, `mv`, `cp`, `touch`, `tee`, `chmod`, and
@@ -254,9 +261,13 @@ ATB_ALLOW_PRIMARY_WRITE=1 claude          # preferred: an agent cannot set this 
 touch ~/.claude/atb-allow-primary-write   # for a session already running
 ```
 
-The guard fails **open**: any unexpected error allows the tool call, so a bug in it can never
-brick a session. Complements — does not replace — the #1070 import guard (`src/_source_root.py`),
-which covers `import`, not the filesystem.
+The sentinel is **self-expiring** (30 minutes) so one stray `touch` cannot disable the guard
+indefinitely.
+
+The guard fails **open**: any unexpected error, an unresolvable path (`> $OUT`), or a missing
+`git` allows the tool call, so a bug in it can never brick a session. Complements — does not
+replace — the #1070 import guard (`src/_source_root.py`), which covers `import`, not the
+filesystem.
 
 ## What To Read For Your Task
 

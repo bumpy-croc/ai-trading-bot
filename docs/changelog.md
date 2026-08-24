@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PreToolUse` hook (registered in `.claude/settings.json`) and refuses, with a
   banner naming both paths and the remedy, any `Edit`/`Write` or write-shaped
   `Bash` command targeting the primary checkout's working tree, plus a relative
-  read issued from the primary checkout once the session has worked in a
-  worktree. `<primary>/.git/**`, `<primary>/.claude/worktrees/**` and git-ignored
+  read issued from the primary checkout. Both are gated on whether the session
+  has actually worked inside a worktree, so an ordinary single clone (every
+  contributor, Claude Code Web) and the PM daemon writing `.claude/state/log.md`
+  in the primary are never guarded. `<primary>/.git/**`, `<primary>/.claude/worktrees/**` and git-ignored
   paths (shared `.venv`, `logs/`) stay writable. A hook — not `chmod`/ACLs —
   because agents run as the human's uid, so only "am I inside a Claude Code
   session?" separates the two; the human's editor and terminal are unaffected.
